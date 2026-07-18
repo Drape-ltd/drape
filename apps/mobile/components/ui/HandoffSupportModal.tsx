@@ -78,7 +78,7 @@ export function HandoffSupportModal({
       animationType="slide"
       onRequestClose={handleClose}
     >
-      <View style={styles.overlay}>
+      <View style={styles.overlay} accessibilityViewIsModal>
         <View style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title}>Log handoff help</Text>
@@ -150,7 +150,7 @@ export function HandoffSupportModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(17, 22, 19, 0.32)',
+    backgroundColor: 'rgba(0,0,0,0.36)',
     justifyContent: 'flex-end',
   },
   sheet: {

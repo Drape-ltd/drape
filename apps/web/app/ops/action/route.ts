@@ -805,6 +805,7 @@ async function submitVerificationDecision(input: {
   tailorUserId: string
   decision: string
   reason: string | null
+  rejectionCode?: string | null
   performedBy: string
   performedRole: string
 }) {
@@ -849,6 +850,8 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
     case 'bypass-review':
     case 'application-status':
     case 'verification-decision':
+    case 'profile-change-decision':
+    case 'payout-change-decision':
     case 'deletion-status':
     case 'review-visibility':
     case 'conversation-access':
@@ -1102,6 +1105,7 @@ export async function POST(request: Request) {
       const tailorUserId = readString(formData, 'tailorUserId')
       const decision = readString(formData, 'decision').toUpperCase()
       const reason = readString(formData, 'reason') || readString(formData, 'note')
+      const rejectionCode = readString(formData, 'rejectionCode').toUpperCase()
 
       if (!tailorUserId || !VERIFICATION_DECISIONS.has(decision)) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
@@ -1111,6 +1115,7 @@ export async function POST(request: Request) {
         tailorUserId,
         decision,
         reason: reason.length > 0 ? reason : null,
+        rejectionCode: rejectionCode.length > 0 ? rejectionCode : null,
         performedBy: session.email ?? session.role,
         performedRole: session.role.toUpperCase(),
       })
@@ -1132,6 +1137,57 @@ export async function POST(request: Request) {
         'notice',
         decision === 'APPROVE' ? 'verification-approved' : 'verification-rejected',
       )
+    }
+
+    if (kind === 'profile-change-decision') {
+      const requestId = readString(formData, 'requestId')
+      const decision = readString(formData, 'decision').toUpperCase()
+      const reason = readString(formData, 'reason') || readString(formData, 'note')
+      const rejectionCode = readString(formData, 'rejectionCode').toUpperCase()
+
+      if (!requestId || !VERIFICATION_DECISIONS.has(decision)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { error } = await client.rpc('ops_decide_profile_change_request', {
+        p_request_id: requestId,
+        p_decision: decision,
+        p_field_statuses: {},
+        p_rejection_code: rejectionCode.length > 0 ? rejectionCode : null,
+        p_reason: reason.length > 0 ? reason : null,
+        p_reviewed_by: session.email ?? session.role,
+      })
+
+      if (error) {
+        return redirectWithMessage(request, redirectTo, 'error', isConflictError(error) ? 'conflict' : 'save-failed', error.message)
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', decision === 'APPROVE' ? 'profile-change-approved' : 'profile-change-rejected')
+    }
+
+    if (kind === 'payout-change-decision') {
+      const requestId = readString(formData, 'requestId')
+      const decision = readString(formData, 'decision').toUpperCase()
+      const reason = readString(formData, 'reason') || readString(formData, 'note')
+      const rejectionCode = readString(formData, 'rejectionCode').toUpperCase()
+
+      if (!requestId || !VERIFICATION_DECISIONS.has(decision)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { error } = await client.rpc('ops_decide_payout_change_request', {
+        p_request_id: requestId,
+        p_decision: decision,
+        p_rejection_code: rejectionCode.length > 0 ? rejectionCode : null,
+        p_reason: reason.length > 0 ? reason : null,
+        p_reviewed_by: session.email ?? session.role,
+      })
+
+      if (error) {
+        return redirectWithMessage(request, redirectTo, 'error', isConflictError(error) ? 'conflict' : 'save-failed', error.message)
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', decision === 'APPROVE' ? 'payout-change-approved' : 'payout-change-rejected')
     }
 
     if (kind === 'deletion-status') {

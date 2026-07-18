@@ -1987,7 +1987,7 @@ Deno.serve(async (req) => {
         quoteBreakdown: cleanBreakdown,
       }
 
-      const { error } = await supabase
+      const { data: quotedOrder, error } = await supabase
         .from('orders')
         .update({
           stage: 'QUOTE_SENT',
@@ -2020,10 +2020,41 @@ Deno.serve(async (req) => {
           stage_updated_at: new Date().toISOString(),
         })
         .eq('id', orderId)
+        .eq('tailor_id', caller.id)
+        .in('stage', ['PENDING_QUOTE', 'CONSULTATION'])
+        .select('id')
+        .maybeSingle()
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
         return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      if (!quotedOrder?.id) {
+        const { data: freshOrder, error: freshOrderError } = await supabase
+          .from('orders')
+          .select('stage')
+          .eq('id', orderId)
+          .eq('tailor_id', caller.id)
+          .maybeSingle()
+
+        if (freshOrderError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: freshOrderError.message, surface: 'orders.stage_after_quote_race' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+
+        if ((freshOrder as { stage?: string | null } | null)?.stage === 'QUOTE_SENT') {
+          return new Response(JSON.stringify({ ok: true, idempotent: true }), {
+            headers: { ...cors, 'Content-Type': 'application/json' },
+          })
+        }
+
+        return jsonErrorResponse(
+          cors,
+          409,
+          'ORDER_STATE_CHANGED',
+          'This order changed while the quote was being sent. Refresh the order before sending another quote.',
+        )
       }
 
       await releaseConsultationSlot(supabase, orderId, 'COMPLETED')
@@ -3073,14 +3104,50 @@ Deno.serve(async (req) => {
         updates.collection_code_last_attempt_at = null
       }
 
-      const { error } = await supabase
+      const { data: advancedOrder, error } = await supabase
         .from('orders')
         .update(updates)
         .eq('id', orderId)
+        .eq('tailor_id', caller.id)
+        .in('stage', validFrom)
+        .select('id, collection_code')
+        .maybeSingle()
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, target_stage: targetStage, error: error.message })
         return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      if (!advancedOrder?.id) {
+        const { data: freshOrder, error: freshOrderError } = await supabase
+          .from('orders')
+          .select('stage, collection_code')
+          .eq('id', orderId)
+          .eq('tailor_id', caller.id)
+          .maybeSingle()
+
+        if (freshOrderError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, target_stage: targetStage, error: freshOrderError.message, surface: 'orders.stage_after_advance_race' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+
+        const fresh = freshOrder as { stage?: string | null; collection_code?: string | null } | null
+        if (fresh?.stage === targetStage) {
+          const retryBody: Record<string, unknown> = { ok: true, idempotent: true }
+          if (targetStage === 'READY_FOR_COLLECTION' && fresh.collection_code) {
+            retryBody.collectionCode = fresh.collection_code
+          }
+          return new Response(JSON.stringify(retryBody), {
+            headers: { ...cors, 'Content-Type': 'application/json' },
+          })
+        }
+
+        return jsonErrorResponse(
+          cors,
+          409,
+          'ORDER_STATE_CHANGED',
+          'This order changed while the stage update was being saved. Refresh the order before advancing it again.',
+        )
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -3167,7 +3234,7 @@ Deno.serve(async (req) => {
       // Return the collection_code so the UI can display it immediately
       const responseBody: Record<string, unknown> = { ok: true }
       if (targetStage === 'READY_FOR_COLLECTION') {
-        responseBody.collectionCode = updates.collection_code
+        responseBody.collectionCode = (advancedOrder as { collection_code?: string | null }).collection_code ?? updates.collection_code
       }
 
       return new Response(JSON.stringify(responseBody), {

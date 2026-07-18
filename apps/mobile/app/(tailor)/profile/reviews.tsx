@@ -97,34 +97,33 @@ export default function TailorReviewsScreen() {
   const [replyWarning, setReplyWarning] = useState(false)
   const [replySubmitting, setReplySubmitting] = useState(false)
 
-  useFocusEffect(useCallback(() => {
-    async function load() {
-      if (!userId) {
-        setReviews([])
-        setFetchError(false)
-        setLoading(false)
-        return
-      }
-      setLoading(true)
+  const load = useCallback(async () => {
+    if (!userId) {
+      setReviews([])
       setFetchError(false)
-      const { data, error } = await supabase
-        .from('reviews')
-        .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(display_name, avatar_url))')
-        .eq('tailor_id', userId)
-        .order('created_at', { ascending: false })
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setFetchError(false)
+    const { data, error } = await supabase
+      .from('reviews')
+      .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(display_name, avatar_url))')
+      .eq('tailor_id', userId)
+      .order('created_at', { ascending: false })
 
-      if (error) {
-        setFetchError(true)
-        setReviews([])
-        setLoading(false)
-        return
-      }
+    if (error) {
+      setFetchError(true)
+      setReviews([])
+      setLoading(false)
+      return
+    }
 
-      setReviews(
-        ((data ?? []) as ReviewQueryRow[]).map((r) => {
-          const order = firstJoinedRow(r.orders)
-          const customerProfile = firstJoinedRow(order?.customer_profiles)
-          return {
+    setReviews(
+      ((data ?? []) as ReviewQueryRow[]).map((r) => {
+        const order = firstJoinedRow(r.orders)
+        const customerProfile = firstJoinedRow(order?.customer_profiles)
+        return {
           id: r.id,
           rating: r.rating ?? 0,
           tags: asStringList(r.tags),
@@ -135,14 +134,13 @@ export default function TailorReviewsScreen() {
           response: r.tailor_response ?? null,
           publishedAt: r.published_at ?? null,
           flagged: !!r.flagged,
-          }
-        })
-      )
-      setLoading(false)
-    }
+        }
+      })
+    )
+    setLoading(false)
+  }, [userId])
 
-    void load()
-  }, [userId]))
+  useFocusEffect(useCallback(() => { void load() }, [load]))
 
   function openReply(reviewId: string, existing: string | null) {
     setReplyOpen(reviewId)
@@ -157,7 +155,7 @@ export default function TailorReviewsScreen() {
   }
 
   async function submitReply(reviewId: string) {
-    if (!replyText.trim()) return
+    if (!replyText.trim() || replyWarning) return
     setReplySubmitting(true)
     const { error } = await supabase
       .from('reviews')
@@ -200,28 +198,25 @@ export default function TailorReviewsScreen() {
         </View>
       ) : fetchError ? (
         <View style={styles.stateWrap}>
-          <Text style={styles.stateTitle}>Couldn’t load reviews.</Text>
+          <Text style={styles.stateTitle}>Couldn't load reviews.</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { void load() }}>
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-            {reviews.length > 0 ? reviews.map((review) => (
+            {reviews.length > 0 ? reviews.map((review) => {
+              const visibility = reviewVisibilityMeta(review)
+              return (
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
-                  {review.reviewerAvatarUrl ? (
-                    <AvatarImage
-                      uri={review.reviewerAvatarUrl}
-                      initials={review.reviewerName}
-                      size={40}
-                      style={styles.reviewAvatarImage}
-                    />
-                  ) : (
-                    <View style={styles.reviewAvatar}>
-                      <Text style={styles.reviewInitial}>
-                        {review.reviewerName.split(' ').map((p) => p[0]).slice(0, 2).join('')}
-                      </Text>
-                    </View>
-                  )}
+                  <AvatarImage
+                    uri={review.reviewerAvatarUrl}
+                    initials={review.reviewerName}
+                    size={40}
+                    style={styles.reviewAvatarImage}
+                  />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.reviewerName}>{review.reviewerName}</Text>
                     <Text style={styles.reviewDate}>
@@ -231,34 +226,29 @@ export default function TailorReviewsScreen() {
                   <Text style={styles.reviewStars}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</Text>
                 </View>
 
-                {(() => {
-                  const visibility = reviewVisibilityMeta(review)
-                  return (
-                    <View
-                      style={[
-                        styles.visibilityPill,
-                        visibility.tone === 'public'
-                          ? styles.visibilityPillPublic
-                          : visibility.tone === 'held'
-                            ? styles.visibilityPillHeld
-                            : styles.visibilityPillPending,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.visibilityPillText,
-                          visibility.tone === 'public'
-                            ? styles.visibilityPillTextPublic
-                            : visibility.tone === 'held'
-                              ? styles.visibilityPillTextHeld
-                              : styles.visibilityPillTextPending,
-                        ]}
-                      >
-                        {visibility.label}
-                      </Text>
-                    </View>
-                  )
-                })()}
+                <View
+                  style={[
+                    styles.visibilityPill,
+                    visibility.tone === 'public'
+                      ? styles.visibilityPillPublic
+                      : visibility.tone === 'held'
+                        ? styles.visibilityPillHeld
+                        : styles.visibilityPillPending,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.visibilityPillText,
+                      visibility.tone === 'public'
+                        ? styles.visibilityPillTextPublic
+                        : visibility.tone === 'held'
+                          ? styles.visibilityPillTextHeld
+                          : styles.visibilityPillTextPending,
+                    ]}
+                  >
+                    {visibility.label}
+                  </Text>
+                </View>
 
                 {review.tags.length > 0 ? (
                   <View style={styles.reviewTags}>
@@ -271,7 +261,7 @@ export default function TailorReviewsScreen() {
                 ) : null}
 
                 {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
-                <Text style={styles.reviewVisibilityText}>{reviewVisibilityMeta(review).description}</Text>
+                <Text style={styles.reviewVisibilityText}>{visibility.description}</Text>
 
                 {review.response && replyOpen !== review.id ? (
                   <View style={styles.responseWrap}>
@@ -321,7 +311,8 @@ export default function TailorReviewsScreen() {
                   </TouchableOpacity>
                 ) : null}
               </View>
-            )) : (
+              )
+            }) : (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyTitle}>No customer reviews yet.</Text>
                 <Text style={styles.emptyText}>Completed orders with reviews will appear here with their visibility state and your response history.</Text>
@@ -349,19 +340,15 @@ const styles = StyleSheet.create({
   backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   content: { padding: Spacing.lg, gap: Spacing.md },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
-  guidanceCard: {
-    backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '25',
-    gap: 4,
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl, gap: Spacing.md },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display, textAlign: 'center' },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
   },
-  guidanceEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  guidanceTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold, lineHeight: 22, fontFamily: Fonts.display },
-  guidanceText: { fontSize: FontSize.xs, lineHeight: 18, color: Colors.inkLight },
+  retryBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   emptyCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -376,12 +363,7 @@ const styles = StyleSheet.create({
     padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm,
   },
   reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  reviewAvatar: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
-  },
   reviewAvatarImage: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.lightGrey },
-  reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning },

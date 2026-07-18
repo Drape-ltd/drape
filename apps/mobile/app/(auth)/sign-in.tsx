@@ -19,6 +19,7 @@ import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { colors } from '@drape/shared/design-system'
 
 type RoleIntent = 'CUSTOMER' | 'TAILOR'
@@ -137,22 +138,27 @@ export default function SignInScreen() {
 
   async function contactAccountSupport() {
     const normalizedEmail = email.trim().toLowerCase()
-    const subject = encodeURIComponent('Account access help')
-    const body = encodeURIComponent(
+    const emailSubject = encodeURIComponent('Account access help')
+    const emailBody = encodeURIComponent(
       normalizedEmail
         ? `Hi Drapeon support,\n\nI cannot access my account. The email I tried is ${normalizedEmail}.\n\nWhat I need help with:\n`
         : 'Hi Drapeon support,\n\nI cannot access my account.\n\nWhat I need help with:\n'
     )
-    const url = `mailto:support@drapeon.co?subject=${subject}&body=${body}`
+    const emailUrl = `mailto:${CONTACTS.support}?subject=${emailSubject}&body=${emailBody}`
+    const whatsappUrl = buildWhatsAppSupportUrl(
+      normalizedEmail
+        ? `Hi Drapeon, I cannot access my account. The email I tried is ${normalizedEmail}.`
+        : 'Hi Drapeon, I cannot access my account.',
+    )
     try {
-      const supported = await Linking.canOpenURL(url)
+      const supported = await Linking.canOpenURL(whatsappUrl)
       if (!supported) {
-        Alert.alert('Contact support', 'Email support@drapeon.co for account access help.')
+        await Linking.openURL(emailUrl)
         return
       }
-      await Linking.openURL(url)
+      await Linking.openURL(whatsappUrl)
     } catch {
-      Alert.alert('Contact support', 'Email support@drapeon.co for account access help.')
+      Alert.alert('Contact support', `Message Drapeon on WhatsApp or email ${CONTACTS.support} for account access help.`)
     }
   }
 

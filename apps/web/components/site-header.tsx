@@ -1,11 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import type { Route } from 'next'
 import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
-import { clearWebSessionScope } from '../lib/web-session-scope'
+import { signOutWebSession } from '../lib/web-auth-session'
 
 const navItems: Array<{ href: Route; label: string }> = [
   { href: '/vision', label: 'Drapeon Vision' },
@@ -21,7 +21,6 @@ const actionItems: Array<{ href: Route; label: string; primary: boolean }> = [
 
 export function SiteHeader(): React.JSX.Element {
   const pathname = usePathname()
-  const router = useRouter()
   const [signedIn, setSignedIn] = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
   const [signingOut, setSigningOut] = useState(false)
@@ -70,20 +69,20 @@ export function SiteHeader(): React.JSX.Element {
     if (signingOut) return
     setSigningOut(true)
     try {
-      const supabase = createClient()
-      await supabase.auth.signOut()
+      await signOutWebSession({
+        reason: 'manual',
+        redirectTo: '/sign-in',
+        scope: 'local',
+      })
     } catch (error) {
       console.warn('[site-header] Sign out failed.', error)
     }
-    clearWebSessionScope()
     setSignedIn(false)
     setSigningOut(false)
-    router.replace('/sign-in')
-    router.refresh()
   }
 
   return (
-    <header className="flex flex-col gap-3 rounded-[1rem] border border-ink/8 bg-white/90 px-4 py-3 shadow-[0_10px_34px_rgba(22,28,24,0.05)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
+    <header className="flex flex-col gap-3 rounded-lg border border-ink/8 bg-white/90 px-4 py-3 shadow-[0_10px_34px_rgba(22,28,24,0.05)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
       <Link href="/" className="shrink-0 text-2xl font-semibold text-needle">
         Drapeon
       </Link>

@@ -15,3 +15,18 @@ export function decodeDisplayText(value: string): string {
 
   return current
 }
+
+export function formatDatabaseEnumLabel(
+  value: string | null | undefined,
+  fallback = 'Not set',
+): string {
+  if (!value?.trim()) return fallback
+
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/[_\s-]+/u)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}

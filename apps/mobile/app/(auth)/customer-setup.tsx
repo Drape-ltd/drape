@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -6,9 +6,14 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   ActivityIndicator,
+  Modal,
+  TextInput,
+  UIManager,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -21,7 +26,16 @@ import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isDuplicatePhoneError, isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { resetTo } from '@/lib/navigation'
+import {
+  checkAccountPhoneAvailability,
+  DUPLICATE_PHONE_MESSAGE,
+  sendAccountPhoneOtp,
+  verifyAccountPhoneOtp,
+} from '@/lib/account-profile-actions'
 import { Sentry } from '@/lib/sentry'
+import { useKeyboardState } from '@/lib/useKeyboardState'
+import { hapticSuccess, hapticWarning } from '@/lib/haptics'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import {
   SUPPORTED_CURRENCIES,
@@ -69,6 +83,14 @@ const GARMENT_OPTIONS: Array<{ value: GarmentContext; label: string; hint: strin
   },
 ]
 
+const PHONE_AVAILABILITY_DEBOUNCE_MS = 650
+const ERROR_SCROLL_TOP_OFFSET = 92
+const ERROR_SCROLL_DELAY_MS = 140
+
+if (Platform.OS === 'android') {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true)
+}
+
 function normalizeGarmentContext(value: unknown): GarmentContext | null {
   if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
   if (
@@ -96,16 +118,36 @@ export default function CustomerSetupScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const keyboard = useKeyboardState()
+  const scrollRef = useRef<ScrollView | null>(null)
+  const fieldYRef = useRef<Record<'displayName' | 'phone' | 'garmentContext', number>>({
+    displayName: 0,
+    phone: 0,
+    garmentContext: 0,
+  })
   const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
 
   // Pre-fill display name from OAuth metadata if available
   const oauthName = user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? ''
   const oauthPhone = typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : ''
+  const oauthVerifiedPhone =
+    typeof user?.user_metadata?.verified_phone === 'string'
+      ? user.user_metadata.verified_phone
+      : typeof user?.user_metadata?.phone_verified_at === 'string'
+        ? oauthPhone
+        : ''
 
   const [displayName, setDisplayName] = useState(oauthName)
   const [nameError, setNameError] = useState('')
   const [phone, setPhone] = useState(oauthPhone)
   const [phoneError, setPhoneError] = useState('')
+  const [phoneAvailabilityChecking, setPhoneAvailabilityChecking] = useState(false)
+  const [phoneOtpVisible, setPhoneOtpVisible] = useState(false)
+  const [phoneOtpCode, setPhoneOtpCode] = useState('')
+  const [phoneOtpError, setPhoneOtpError] = useState('')
+  const [phoneOtpSending, setPhoneOtpSending] = useState(false)
+  const [phoneOtpVerifying, setPhoneOtpVerifying] = useState(false)
+  const [verifiedPhone, setVerifiedPhone] = useState(() => normalizePhoneForStorage(oauthVerifiedPhone))
   const [unit, setUnit] = useState<Unit>('in')
   const [garmentContext, setGarmentContext] = useState<GarmentContext | null>(null)
   const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(detectedCurrency.currency)
@@ -115,8 +157,14 @@ export default function CustomerSetupScreen() {
   const [garmentSheetOpen, setGarmentSheetOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [validationNotice, setValidationNotice] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [focusedTextField, setFocusedTextField] = useState<string | null>(null)
+  const latestPhoneRef = useRef(phone)
+  const phoneAvailabilityRequestRef = useRef(0)
+  const verifiedPhoneRef = useRef(verifiedPhone)
+  const phoneOtpAfterVerifyRef = useRef<'save' | null>(null)
 
   useEffect(() => {
     if (!user?.id) return
@@ -242,35 +290,234 @@ export default function CustomerSetupScreen() {
     return !err
   }
 
-  function validatePhone(value: string) {
+  const phoneValidationMessage = useCallback((value: string) => {
     if (!value.trim()) {
-      setPhoneError('Enter a valid phone number for order updates and account recovery.')
-      return false
+      return 'Enter a valid phone number for order updates and account recovery.'
     }
 
     const error = validatePhoneForProfile(value)
     if (error) {
-      setPhoneError('Enter a valid phone number for order updates and account recovery.')
-      return false
+      return 'Enter a valid phone number for order updates and account recovery.'
     }
-    setPhoneError('')
-    return true
+    return ''
+  }, [])
+
+  function validatePhone(value: string) {
+    const error = phoneValidationMessage(value)
+    setPhoneError(error)
+    return !error
   }
 
-  async function save() {
-    if (saving) return
-    if (!validateName(displayName)) return
-    if (!validatePhone(phone)) return
-    if (!garmentContext) {
-      Alert.alert('Almost there', 'Please select what you typically order.')
+  const rememberFieldY = useCallback((field: 'displayName' | 'phone' | 'garmentContext') => {
+    return (event: { nativeEvent: { layout: { y: number } } }) => {
+      fieldYRef.current[field] = event.nativeEvent.layout.y
+    }
+  }, [])
+
+  const focusValidationError = useCallback(
+    (field: 'displayName' | 'phone' | 'garmentContext', message: string) => {
+      setValidationNotice(message)
+      Keyboard.dismiss()
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+      setFocusedTextField(null)
+      hapticWarning()
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({
+          y: Math.max(0, fieldYRef.current[field] - ERROR_SCROLL_TOP_OFFSET),
+          animated: true,
+        })
+      }, ERROR_SCROLL_DELAY_MS)
+    },
+    []
+  )
+
+  async function validatePhoneAvailability(value: string) {
+    const formatError = phoneValidationMessage(value)
+    const normalizedPhone = normalizePhoneForStorage(value)
+    const requestId = phoneAvailabilityRequestRef.current + 1
+    phoneAvailabilityRequestRef.current = requestId
+
+    if (formatError) {
+      setPhoneAvailabilityChecking(false)
+      setPhoneError(formatError)
+      return formatError
+    }
+
+    setPhoneAvailabilityChecking(true)
+    const result = await checkAccountPhoneAvailability(normalizedPhone)
+
+    if (
+      requestId !== phoneAvailabilityRequestRef.current ||
+      normalizePhoneForStorage(latestPhoneRef.current) !== normalizedPhone
+    ) {
+      return result.error ?? ''
+    }
+
+    setPhoneAvailabilityChecking(false)
+    const availabilityError = result.available ? '' : result.error || DUPLICATE_PHONE_MESSAGE
+    setPhoneError(availabilityError)
+    return availabilityError
+  }
+
+  function markPhoneVerified(value: string) {
+    const normalizedPhone = normalizePhoneForStorage(value)
+    verifiedPhoneRef.current = normalizedPhone
+    setVerifiedPhone(normalizedPhone)
+    setPhoneError('')
+    setPhoneOtpError('')
+  }
+
+  function isCurrentPhoneVerified(value = phone) {
+    const normalizedPhone = normalizePhoneForStorage(value)
+    return !!normalizedPhone && verifiedPhoneRef.current === normalizedPhone
+  }
+
+  async function ensurePhoneVerifiedForSave() {
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    if (isCurrentPhoneVerified(normalizedPhone)) return true
+
+    setPhoneOtpSending(true)
+    const result = await sendAccountPhoneOtp(normalizedPhone)
+    setPhoneOtpSending(false)
+
+    if (result.error) {
+      setPhoneError(result.error)
+      focusValidationError('phone', result.error)
+      return false
+    }
+
+    if (result.bypassed) {
+      markPhoneVerified(normalizedPhone)
+      setValidationNotice('Phone check passed for this environment.')
+      return true
+    }
+
+    phoneOtpAfterVerifyRef.current = 'save'
+    setPhoneOtpCode('')
+    setPhoneOtpError('')
+    setPhoneOtpVisible(true)
+    setValidationNotice('We sent a 6-digit code to verify your phone.')
+    return false
+  }
+
+  async function verifyPhoneOtpCode() {
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    const code = phoneOtpCode.replace(/\D/g, '')
+    if (code.length !== 6) {
+      setPhoneOtpError('Enter the 6-digit code from the SMS.')
+      hapticWarning()
       return
     }
 
+    setPhoneOtpVerifying(true)
+    const result = await verifyAccountPhoneOtp({ phone: normalizedPhone, code })
+    setPhoneOtpVerifying(false)
+
+    if (result.error) {
+      setPhoneOtpError(result.error)
+      hapticWarning()
+      return
+    }
+
+    const shouldSave = phoneOtpAfterVerifyRef.current === 'save'
+    phoneOtpAfterVerifyRef.current = null
+    markPhoneVerified(normalizedPhone)
+    setPhoneOtpVisible(false)
+    setPhoneOtpCode('')
+    setValidationNotice(result.bypassed ? 'Phone check passed for this environment.' : 'Phone number verified.')
+    hapticSuccess()
+
+    if (shouldSave) {
+      requestAnimationFrame(() => {
+        void save()
+      })
+    }
+  }
+
+  async function resendPhoneOtpCode() {
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    setPhoneOtpSending(true)
+    const result = await sendAccountPhoneOtp(normalizedPhone)
+    setPhoneOtpSending(false)
+
+    if (result.error) {
+      setPhoneOtpError(result.error)
+      hapticWarning()
+      return
+    }
+
+    if (result.bypassed) {
+      markPhoneVerified(normalizedPhone)
+      setPhoneOtpVisible(false)
+      setPhoneOtpCode('')
+      setValidationNotice('Phone check passed for this environment.')
+      requestAnimationFrame(() => {
+        void save()
+      })
+      return
+    }
+
+    setPhoneOtpError('')
+    setValidationNotice('Code resent.')
+  }
+
+  useEffect(() => {
+    latestPhoneRef.current = phone
+
+    const formatError = phoneValidationMessage(phone)
+    const requestId = phoneAvailabilityRequestRef.current + 1
+    phoneAvailabilityRequestRef.current = requestId
+
+    if (!phone.trim() || formatError) {
+      return undefined
+    }
+
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    const timer = setTimeout(() => {
+      setPhoneAvailabilityChecking(true)
+      void checkAccountPhoneAvailability(normalizedPhone).then((result) => {
+        if (
+          requestId !== phoneAvailabilityRequestRef.current ||
+          normalizePhoneForStorage(latestPhoneRef.current) !== normalizedPhone
+        ) {
+          return
+        }
+
+        setPhoneAvailabilityChecking(false)
+        setPhoneError(result.available ? '' : result.error || DUPLICATE_PHONE_MESSAGE)
+      })
+    }, PHONE_AVAILABILITY_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [phone, phoneValidationMessage])
+
+  async function save() {
+    if (saving) return
+    const nextNameError = validateDisplayName(displayName)
+    if (nextNameError) {
+      setNameError(nextNameError)
+      focusValidationError('displayName', nextNameError)
+      return
+    }
+    const nextPhoneError = await validatePhoneAvailability(phone)
+    if (nextPhoneError) {
+      focusValidationError('phone', nextPhoneError)
+      return
+    }
+    if (!garmentContext) {
+      focusValidationError('garmentContext', 'Choose what you typically order to continue.')
+      return
+    }
+    const phoneVerifiedForSave = await ensurePhoneVerifiedForSave()
+    if (!phoneVerifiedForSave) return
+
     setSaveError('')
+    setValidationNotice('')
     setSaving(true)
     const now = new Date().toISOString()
 
     const normalizedPhone = normalizePhoneForStorage(phone)
+    const phoneVerifiedAt = isCurrentPhoneVerified(normalizedPhone) ? now : null
 
     const { error } = await supabase.from('customer_profiles').upsert(
       {
@@ -296,6 +543,7 @@ export default function CustomerSetupScreen() {
         data: {
           display_name: displayName.trim(),
           phone: normalizedPhone,
+          ...(phoneVerifiedAt ? { phone_verified_at: phoneVerifiedAt, verified_phone: normalizedPhone } : {}),
         },
       })
 
@@ -358,106 +606,138 @@ export default function CustomerSetupScreen() {
       garment_context: garmentContext,
       unit,
     })
-    // RouteGuard will now detect the profile is complete and navigate to (customer)
-    router.replace('/(customer)')
+    resetTo(router, { pathname: '/(auth)/onboarding', params: { role: 'CUSTOMER', userId: user?.id ?? '' } })
+  }
+
+  const editingLayoutActive = keyboard.visible || focusedTextField !== null
+  const ctaBottomPadding = editingLayoutActive
+    ? Math.max(insets.bottom + Spacing.xs, Spacing.sm)
+    : Math.max(insets.bottom + Spacing.sm, Spacing.xl)
+  const scrollBottomPadding = editingLayoutActive ? 96 : 144
+
+  const animateEditingLayout = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+  }
+
+  const focusTextField = (field: string) => {
+    animateEditingLayout()
+    setFocusedTextField(field)
+  }
+
+  const blurTextField = (field: string) => {
+    animateEditingLayout()
+    setFocusedTextField((current) => (current === field ? null : current))
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={styles.keyboardAvoider}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          ref={scrollRef}
+          style={styles.scroll}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.content}>
-            <AuthEntryHeader
-              eyebrow="Finish customer setup"
-              title="Set up your side of Drapeon."
-              body="These basics shape your fit profile, order updates, account currency, and first booking."
-              showWordmark={false}
-            />
+            {!editingLayoutActive ? (
+              <AuthEntryHeader
+                eyebrow="Finish customer setup"
+                title="Set up your side of Drapeon."
+                body="These basics shape your fit profile, order updates, account currency, and first booking."
+                showWordmark={false}
+              />
+            ) : null}
 
             <View style={styles.formCard}>
-              <View style={styles.sectionIntro}>
-                <Text style={styles.sectionEyebrow}>Your profile</Text>
-                <Text style={styles.sectionTitle}>Basics that shape every order.</Text>
-              </View>
-
-              <View style={styles.guideCard}>
-                <Text style={styles.guideTitle}>Best use</Text>
-                <Text style={styles.guideText}>
-                  Keep this simple and accurate. You can refine the rest later.
-                </Text>
-              </View>
-
-              <View style={styles.photoCard}>
-                <TouchableOpacity
-                  style={styles.avatarTap}
-                  onPress={handleAvatarPress}
-                  disabled={uploadingAvatar}
-                  accessibilityRole="button"
-                  accessibilityLabel="Add profile photo"
-                >
-                  <AvatarImage
-                    uri={avatarUrl}
-                    initials={displayName || user?.email}
-                    size={76}
-                    shadow
-                  />
-                  {uploadingAvatar ? (
-                    <View style={styles.avatarUploading}>
-                      <ActivityIndicator color={Colors.textInverse} size="small" />
-                    </View>
-                  ) : null}
-                </TouchableOpacity>
-                <View style={styles.photoCopy}>
-                  <Text style={styles.photoTitle}>Add a profile photo</Text>
-                  <Text style={styles.photoText}>
-                    Optional, but it helps tailors recognise you in orders and messages.
-                  </Text>
+              {!editingLayoutActive ? (
+                <View style={styles.photoCard}>
                   <TouchableOpacity
+                    style={styles.avatarTap}
                     onPress={handleAvatarPress}
                     disabled={uploadingAvatar}
                     accessibilityRole="button"
-                    accessibilityLabel={avatarUrl ? 'Change profile photo' : 'Add profile photo'}
+                    accessibilityLabel="Add profile photo"
                   >
-                    <Text style={styles.photoAction}>
-                      {avatarUrl ? 'Change photo' : 'Take or choose photo'}
-                    </Text>
+                    <AvatarImage
+                      uri={avatarUrl}
+                      initials={displayName || user?.email}
+                      size={76}
+                      shadow
+                    />
+                    {uploadingAvatar ? (
+                      <View style={styles.avatarUploading}>
+                        <ActivityIndicator color={Colors.textInverse} size="small" />
+                      </View>
+                    ) : null}
                   </TouchableOpacity>
+                  <View style={styles.photoCopy}>
+                    <Text style={styles.photoTitle}>Add a profile photo</Text>
+                    <Text style={styles.photoText}>
+                      Optional, but it helps tailors recognise you in orders and messages.
+                    </Text>
+                    <TouchableOpacity
+                      onPress={handleAvatarPress}
+                      disabled={uploadingAvatar}
+                      accessibilityRole="button"
+                      accessibilityLabel={avatarUrl ? 'Change profile photo' : 'Add profile photo'}
+                    >
+                      <Text style={styles.photoAction}>
+                        {avatarUrl ? 'Change photo' : 'Take or choose photo'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
+              ) : null}
+
+              <View onLayout={rememberFieldY('displayName')}>
+                <Input
+                  label="Your name"
+                  placeholder="e.g. John Doe"
+                  value={displayName}
+                  onChangeText={(v) => {
+                    setDisplayName(v)
+                    setValidationNotice('')
+                    if (nameError) validateName(v)
+                  }}
+                  onFocus={() => focusTextField('displayName')}
+                  onBlur={() => {
+                    blurTextField('displayName')
+                    validateName(displayName)
+                  }}
+                  error={nameError}
+                  required
+                  autoCapitalize="words"
+                  hint="This is shown to tailors on your orders."
+                />
               </View>
 
-              <Input
-                label="Your name"
-                placeholder="John Doe"
-                value={displayName}
-                onChangeText={(v) => {
-                  setDisplayName(v)
-                  if (nameError) validateName(v)
-                }}
-                onBlur={() => validateName(displayName)}
-                error={nameError}
-                required
-                autoCapitalize="words"
-                hint="This is shown to tailors on your orders."
-              />
-
-              <Input
-                label="Phone number"
-                placeholder="For order updates and account recovery"
-                value={phone}
-                onChangeText={(v) => {
-                  setPhone(v)
-                  if (phoneError) validatePhone(v)
-                }}
-                onBlur={() => validatePhone(phone)}
-                error={phoneError}
-                required
-                keyboardType="phone-pad"
-                autoCapitalize="none"
-                hint={PHONE_STORAGE_HINT}
-              />
+              <View onLayout={rememberFieldY('phone')}>
+                <Input
+                  label="Phone number"
+                  placeholder="For order updates and account recovery"
+                  value={phone}
+                  onChangeText={(v) => {
+                    setPhone(v)
+                    setValidationNotice('')
+                    if (phoneValidationMessage(v)) setPhoneAvailabilityChecking(false)
+                    if (phoneError) validatePhone(v)
+                  }}
+                  onFocus={() => focusTextField('phone')}
+                  onBlur={() => {
+                    blurTextField('phone')
+                    void validatePhoneAvailability(phone)
+                  }}
+                  error={phoneError}
+                  required
+                  keyboardType="phone-pad"
+                  autoCapitalize="none"
+                  hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
+                />
+              </View>
 
               <View>
                 <Text style={styles.fieldLabel}>
@@ -525,14 +805,7 @@ export default function CustomerSetupScreen() {
               </View>
             </View>
 
-            <View style={styles.formCard}>
-              <View style={styles.sectionIntro}>
-                <Text style={styles.sectionEyebrow}>Fit context</Text>
-                <Text style={styles.sectionTitle}>
-                  Help tailors understand what you usually order.
-                </Text>
-              </View>
-
+            <View style={styles.formCard} onLayout={rememberFieldY('garmentContext')}>
               <Text style={styles.fieldLabel}>
                 What do you typically order? <Text style={styles.required}>*</Text>
               </Text>
@@ -560,27 +833,42 @@ export default function CustomerSetupScreen() {
           </View>
         </ScrollView>
 
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
-          <View style={styles.nextCard}>
-            <Text style={styles.nextEyebrow}>What happens next</Text>
-            <Text style={styles.nextTitle}>You’ll land in customer home ready to start.</Text>
-          </View>
-          {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
+        <View style={[styles.cta, editingLayoutActive && styles.ctaCompact, { paddingBottom: ctaBottomPadding }]}>
+          {saveError && !editingLayoutActive ? <Text style={styles.saveError}>{saveError}</Text> : null}
+          {validationNotice ? <Text style={styles.saveError}>{validationNotice}</Text> : null}
           <Button
             label="Continue to Drapeon"
             onPress={save}
-            loading={saving}
+            loading={saving || phoneOtpSending || phoneOtpVerifying}
             disabled={
               saving ||
               uploadingAvatar ||
-              !displayName.trim() ||
-              !phone.trim() ||
-              !!nameError ||
-              !!phoneError ||
-              !garmentContext
+              phoneAvailabilityChecking ||
+              phoneOtpSending ||
+              phoneOtpVerifying
             }
           />
         </View>
+        <PhoneOtpModal
+          visible={phoneOtpVisible}
+          phone={normalizePhoneForStorage(phone)}
+          code={phoneOtpCode}
+          error={phoneOtpError}
+          sending={phoneOtpSending}
+          verifying={phoneOtpVerifying}
+          onChangeCode={(value) => {
+            setPhoneOtpCode(value.replace(/\D/g, '').slice(0, 6))
+            if (phoneOtpError) setPhoneOtpError('')
+          }}
+          onVerify={verifyPhoneOtpCode}
+          onResend={resendPhoneOtpCode}
+          onClose={() => {
+            phoneOtpAfterVerifyRef.current = null
+            setPhoneOtpVisible(false)
+            setPhoneOtpCode('')
+            setPhoneOtpError('')
+          }}
+        />
         <ChoiceSheet
           visible={currencySheetOpen}
           title="Choose currency"
@@ -614,6 +902,7 @@ export default function CustomerSetupScreen() {
           onClose={() => setGarmentSheetOpen(false)}
           onSelect={(value) => {
             setGarmentContext(value as GarmentContext)
+            setValidationNotice('')
             setGarmentSheetOpen(false)
           }}
         />
@@ -622,9 +911,158 @@ export default function CustomerSetupScreen() {
   )
 }
 
+function PhoneOtpModal({
+  visible,
+  phone,
+  code,
+  error,
+  sending,
+  verifying,
+  onChangeCode,
+  onVerify,
+  onResend,
+  onClose,
+}: {
+  visible: boolean
+  phone: string
+  code: string
+  error: string
+  sending: boolean
+  verifying: boolean
+  onChangeCode: (value: string) => void
+  onVerify: () => void
+  onResend: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.otpOverlay}>
+        <TouchableOpacity style={styles.otpScrim} activeOpacity={1} onPress={onClose} />
+        <View style={styles.otpCard}>
+          <View style={styles.otpHeader}>
+            <View style={styles.otpIcon}>
+              <Feather name="shield" size={18} color={Colors.needleGreen} />
+            </View>
+            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityLabel="Close phone verification">
+              <Feather name="x" size={20} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.otpTitle}>Verify phone number</Text>
+          <Text style={styles.otpBody}>
+            Enter the 6-digit code sent to {phone}. This keeps random numbers off Drapeon accounts.
+          </Text>
+          <TextInput
+            value={code}
+            onChangeText={onChangeCode}
+            placeholder="000000"
+            placeholderTextColor={Colors.midGrey}
+            keyboardType="number-pad"
+            textContentType="oneTimeCode"
+            autoComplete="sms-otp"
+            maxLength={6}
+            style={[styles.otpInput, !!error && styles.otpInputError]}
+            editable={!verifying}
+            autoFocus
+          />
+          {!!error && <Text style={styles.otpError}>{error}</Text>}
+          <View style={styles.otpActions}>
+            <Button
+              label="Verify code"
+              onPress={onVerify}
+              loading={verifying}
+              disabled={verifying || sending || code.length !== 6}
+            />
+            <Button
+              label={sending ? 'Sending...' : 'Resend code'}
+              onPress={onResend}
+              variant="secondary"
+              size="md"
+              loading={sending}
+              disabled={sending || verifying}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
+  otpOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: Spacing.xl,
+  },
+  otpScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(12, 12, 11, 0.38)',
+  },
+  otpCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.md,
+  },
+  otpHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  otpIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  otpClose: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  otpTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  otpBody: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  otpInput: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.lg,
+    fontSize: 24,
+    letterSpacing: 4,
+    color: Colors.ink,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    backgroundColor: Colors.white,
+  },
+  otpInputError: {
+    borderColor: Colors.kanteRust,
+  },
+  otpError: {
+    color: Colors.kanteRust,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  otpActions: {
+    gap: Spacing.sm,
+  },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 120 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
@@ -848,6 +1286,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderTopWidth: 1,
     borderTopColor: Colors.lightGrey,
+  },
+  ctaCompact: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.xs,
   },
   nextCard: {
     backgroundColor: Colors.bone,

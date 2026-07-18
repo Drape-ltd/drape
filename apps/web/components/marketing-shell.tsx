@@ -69,7 +69,7 @@ export function MarketingCard({
   body: string
 }): React.JSX.Element {
   return (
-    <div className="rounded-[1.75rem] border border-ink/6 bg-white/80 p-6 shadow-sm">
+    <div className="rounded-lg border border-ink/6 bg-white/80 p-6 shadow-sm">
       <h3 className="text-2xl text-ink">{title}</h3>
       <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
     </div>

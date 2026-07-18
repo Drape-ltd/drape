@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
   },
   secondaryAction: {
     minWidth: 180,
-    minHeight: 54,
+    minHeight: 56,
     marginTop: Spacing.lg,
     borderRadius: 14,
     borderWidth: 1,

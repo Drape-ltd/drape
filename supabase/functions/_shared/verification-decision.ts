@@ -11,6 +11,11 @@ export const VERIFICATION_STATUSES = {
 export const VERIFICATION_REJECTION_REASON_REQUIRED = 'REJECTION_REASON_REQUIRED'
 export const DEFAULT_VERIFICATION_REJECTION_REASON =
   'We could not verify the submitted ID document. Please upload a clear photo of a valid government-issued ID and submit again.'
+export const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+export const PROFILE_IMAGE_REJECTION_REASON =
+  'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
+export const VERIFICATION_REJECTION_CODES = [INVALID_PROFILE_IMAGE_REJECTION_CODE] as const
+export type VerificationRejectionCode = typeof VERIFICATION_REJECTION_CODES[number]
 export const VERIFICATION_ISSUE_TYPE = 'TAILOR_VERIFICATION'
 export const VERIFICATION_SOURCE_OPS_DASHBOARD = 'ops_dashboard'
 export const VERIFICATION_SOURCE_SIGNED_LINK = 'signed_email_link'
@@ -34,10 +39,32 @@ export type VerificationEmailMessage = {
 
 export type VerificationEmailSender = (message: VerificationEmailMessage) => Promise<void>
 
+export type VerificationPushMessage = {
+  title: string
+  body: string
+  data?: Record<string, string>
+  sound?: string
+  channelId?: string
+  interruptionLevel?: 'passive' | 'active' | 'timeSensitive' | 'critical'
+}
+
+export type VerificationPushResult = {
+  status: 'SENT' | 'SKIPPED' | 'ERROR'
+  reason?: string
+}
+
+export type VerificationPushSender = (
+  userId: string,
+  message: VerificationPushMessage,
+) => Promise<VerificationPushResult | void>
+
+export type VerificationUserEmailLookup = (userId: string) => Promise<string | null>
+
 export type VerificationDecisionRequest = {
   tailorUserId: string
   decision: string
   reason?: string | null
+  rejectionCode?: string | null
   performedBy?: string | null
   performedRole?: string | null
   source?: string | null
@@ -51,6 +78,8 @@ export type VerificationDecisionResult =
       status: string
       emailSent: boolean
       emailError: string | null
+      pushStatus: VerificationPushResult['status'] | null
+      pushError: string | null
     }
   | {
       ok: false
@@ -74,9 +103,21 @@ export function normalizeVerificationDecision(value: string | null | undefined):
     : null
 }
 
-export function resolveVerificationReason(decision: VerificationDecision, reason: string | null | undefined) {
+export function normalizeVerificationRejectionCode(value: string | null | undefined): VerificationRejectionCode | null {
+  const normalized = trim(value).toUpperCase()
+  return VERIFICATION_REJECTION_CODES.includes(normalized as VerificationRejectionCode)
+    ? normalized as VerificationRejectionCode
+    : null
+}
+
+export function resolveVerificationReason(
+  decision: VerificationDecision,
+  reason: string | null | undefined,
+  rejectionCode?: VerificationRejectionCode | null,
+) {
   const trimmed = trim(reason)
   if (decision === 'APPROVE') return trimmed || null
+  if (rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE) return trimmed || PROFILE_IMAGE_REJECTION_REASON
   return trimmed || null
 }
 
@@ -84,11 +125,15 @@ export function buildVerificationDecisionEmail(input: {
   displayName: string
   approved: boolean
   reason?: string | null
+  rejectionCode?: VerificationRejectionCode | null
   appUrl?: string | null
 }) {
   const appUrl = trim(input.appUrl) || DEFAULT_APP_URL
   const displayName = escapeHtml(input.displayName || 'there')
   const reason = trim(input.reason) || DEFAULT_VERIFICATION_REJECTION_REASON
+  const recoveryCopy = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
+    ? 'Please upload a replacement profile photo. You do not need to retake your live ID selfie unless the review team asks for it.'
+    : 'Please update your ID document and submit your profile again when you are ready.'
 
   if (input.approved) {
     return {
@@ -114,13 +159,51 @@ export function buildVerificationDecisionEmail(input: {
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">We could not approve your ID verification yet.</p>
   <p style="color:#555;line-height:1.6"><strong>Reason:</strong> ${escapeHtml(reason)}</p>
-  <p style="color:#555;line-height:1.6">Please update your ID document and submit your profile again when you are ready.</p>
+  <p style="color:#555;line-height:1.6">${escapeHtml(recoveryCopy)}</p>
   <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
 </div>`,
   }
 }
 
+export function buildVerificationDecisionPush(input: {
+  displayName: string
+  approved: boolean
+  status: string
+  profileId: string
+}) {
+  const displayName = trim(input.displayName) || 'Your tailor profile'
+
+  if (input.approved) {
+    return {
+      title: 'You are live on Drape',
+      body: displayName + ' has been verified. Customers can now discover your work.',
+      data: {
+        type: 'tailor_verification_decision',
+        decision: 'APPROVE',
+        status: input.status,
+        profileId: input.profileId,
+      },
+      sound: 'default',
+      channelId: 'account-updates',
+      interruptionLevel: 'active' as const,
+    }
+  }
+
+  return {
+    title: 'Verification update',
+    body: 'Your verification needs one more update before your tailor profile can go live.',
+    data: {
+      type: 'tailor_verification_decision',
+      decision: 'REJECT',
+      status: input.status,
+      profileId: input.profileId,
+    },
+    sound: 'default',
+    channelId: 'account-updates',
+    interruptionLevel: 'active' as const,
+  }
+}
 export function createResendVerificationEmailSender(options?: {
   apiKey?: string | null
   from?: string | null
@@ -160,11 +243,41 @@ async function safeInsert(
   return error?.message ?? null
 }
 
+async function syncApprovedPortfolioPhotoUrls(
+  supabase: VerificationSupabaseClient,
+  tailorProfileId: string,
+) {
+  try {
+    const { data, error } = await supabase
+      .from('portfolio_items')
+      .select('image_url')
+      .eq('tailor_profile_id', tailorProfileId)
+      .order('sort_order', { ascending: true })
+
+    if (error) return error.message ?? 'Portfolio item lookup failed.'
+
+    const nextUrls = ((data ?? []) as Array<{ image_url?: string | null }>)
+      .map((row) => row.image_url)
+      .filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+
+    const { error: updateError } = await supabase
+      .from('tailor_profiles')
+      .update({ portfolio_photo_urls: nextUrls, updated_at: new Date().toISOString() })
+      .eq('id', tailorProfileId)
+
+    return updateError?.message ?? null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Portfolio photo sync failed.'
+  }
+}
+
 export async function performVerificationDecision(
   supabase: VerificationSupabaseClient,
   input: VerificationDecisionRequest,
   options: {
     sendEmail: VerificationEmailSender
+    sendPush?: VerificationPushSender
+    lookupUserEmail?: VerificationUserEmailLookup
     appUrl?: string | null
     now?: () => Date
   },
@@ -174,7 +287,8 @@ export async function performVerificationDecision(
   const performedBy = trim(input.performedBy) || 'ops-session'
   const performedRole = trim(input.performedRole) || 'OPS'
   const source = trim(input.source) || VERIFICATION_SOURCE_OPS_DASHBOARD
-  const reason = decision ? resolveVerificationReason(decision, input.reason) : null
+  const rejectionCode = decision ? normalizeVerificationRejectionCode(input.rejectionCode) : null
+  const reason = decision ? resolveVerificationReason(decision, input.reason, rejectionCode) : null
 
   if (!tailorUserId || !decision) {
     return {
@@ -196,7 +310,7 @@ export async function performVerificationDecision(
 
   const { data: profile, error: profileError } = await supabase
     .from('tailor_profiles')
-    .select('id, user_id, display_name, id_verification_status, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id')
+    .select('id, user_id, display_name, id_verification_status, id_selfie_document_url, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id')
     .eq('user_id', tailorUserId)
     .maybeSingle()
 
@@ -247,6 +361,7 @@ export async function performVerificationDecision(
     if (!trim(profile.display_name)) missing.push('display_name')
     if (!trim(user?.phone)) missing.push('phone')
     if (!trim(profile.avatar_url)) missing.push('profile_photo')
+    if (!trim(profile.id_selfie_document_url) || !trim(profile.id_selfie_document_url).includes('/selfie_')) missing.push('live_identity_selfie')
     if (arrayCount(profile.specialty_tags) < 1) missing.push('specialties')
     if (arrayCount(profile.portfolio_photo_urls) + arrayCount(profile.portfolio_video_urls) < 1) missing.push('portfolio')
     if (profile.payout_account_verified !== true || profile.payout_reverification_required === true) missing.push('verified_payout_account')
@@ -262,10 +377,14 @@ export async function performVerificationDecision(
     }
   }
 
-  const { data: rpcData, error: rpcError } = await supabase.rpc('ops_decide_verification', {
+  const verificationRpcArgs: Record<string, unknown> = {
     p_tailor_user_id: tailorUserId,
     p_decision: decision,
-  })
+    p_reason: reason,
+  }
+  if (rejectionCode) verificationRpcArgs.p_rejection_code = rejectionCode
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('ops_decide_verification', verificationRpcArgs)
 
   if (rpcError) {
     return {
@@ -285,6 +404,16 @@ export async function performVerificationDecision(
     decisionRow && typeof decisionRow === 'object' && 'status' in decisionRow
       ? String(decisionRow.status)
       : VERIFICATION_STATUSES[decision]
+
+  let portfolioSyncError: string | null = null
+  if (decision === 'APPROVE') {
+    await supabase
+      .from('media_assets')
+      .update({ moderation_status: 'AUTO_ALLOWED', status: 'ACTIVE' })
+      .eq('owner_user_id', tailorUserId)
+      .eq('moderation_status', 'PENDING')
+    portfolioSyncError = await syncApprovedPortfolioPhotoUrls(supabase, profileId)
+  }
 
   const { data: verificationIssue } = await supabase
     .from('ops_issues')
@@ -325,14 +454,23 @@ export async function performVerificationDecision(
         assigned_to: performedBy,
         resolved_at: resolvedAt,
         decision,
+        rejection_code: rejectionCode,
       },
     })
   }
 
   let emailSent = false
   let emailError: string | null = null
-  const email = typeof user?.email === 'string' ? user.email.trim() : ''
+  let email = typeof user?.email === 'string' ? user.email.trim() : ''
   const displayName = user?.display_name ?? profile.display_name ?? 'there'
+
+  if (!email && options.lookupUserEmail) {
+    try {
+      email = await options.lookupUserEmail(tailorUserId) ?? ''
+    } catch (error) {
+      emailError = error instanceof Error ? error.message : 'Auth email lookup failed.'
+    }
+  }
 
   if (email) {
     try {
@@ -340,6 +478,7 @@ export async function performVerificationDecision(
         displayName,
         approved: decision === 'APPROVE',
         reason,
+        rejectionCode,
         appUrl: options.appUrl,
       })
       await options.sendEmail({ to: email, ...message })
@@ -348,7 +487,28 @@ export async function performVerificationDecision(
       emailError = error instanceof Error ? error.message : 'Email send failed.'
     }
   } else {
-    emailError = 'Tailor user has no email address.'
+    emailError = emailError ?? 'Tailor user has no email address.'
+  }
+
+  let pushStatus: VerificationPushResult['status'] | null = null
+  let pushError: string | null = null
+  if (options.sendPush) {
+    try {
+      const pushResult = await options.sendPush(tailorUserId, buildVerificationDecisionPush({
+        displayName,
+        approved: decision === 'APPROVE',
+        status,
+        profileId,
+      }))
+      pushStatus = pushResult?.status ?? 'SENT'
+      pushError = pushResult && pushResult.status !== 'SENT' ? pushResult.reason ?? pushResult.status : null
+    } catch (error) {
+      pushStatus = 'ERROR'
+      pushError = error instanceof Error ? error.message : 'Push send failed.'
+    }
+  } else {
+    pushStatus = 'SKIPPED'
+    pushError = 'Push sender not configured.'
   }
 
   await safeInsert(supabase, 'audit_logs', {
@@ -361,11 +521,15 @@ export async function performVerificationDecision(
       decision,
       status,
       reason,
+      rejection_code: rejectionCode,
       performed_by: performedBy,
       performed_role: performedRole,
       source,
       email_sent: emailSent,
       email_error: emailError,
+      push_status: pushStatus,
+      push_error: pushError,
+      portfolio_sync_error: portfolioSyncError,
     },
   })
 
@@ -376,5 +540,7 @@ export async function performVerificationDecision(
     status,
     emailSent,
     emailError,
+    pushStatus,
+    pushError,
   }
 }

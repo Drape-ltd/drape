@@ -93,6 +93,7 @@ export function OpsPulseAlerts({
   const originalTitleRef = useRef<string | null>(null)
   const webPushSaveAttemptedRef = useRef(false)
 
+
   useEffect(() => {
     if (!window.sessionStorage.getItem('drapeon:ops:pulse:fingerprint') && initialFingerprint) {
       window.sessionStorage.setItem('drapeon:ops:pulse:fingerprint', initialFingerprint)
@@ -286,7 +287,7 @@ export function OpsPulseAlerts({
     permission === 'denied'
 
   return (
-    <div className="mt-4 flex flex-col gap-3 rounded-[1.1rem] border border-needle/14 bg-white/82 px-4 py-3 text-sm text-ink shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+    <div className="mt-4 flex flex-col gap-3 rounded-[8px] border border-needle/14 bg-white/82 px-4 py-3 text-sm text-ink shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
       <div className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">Live Ops pulse</p>
         <p className="mt-1 text-sm leading-6 text-ink/66">{status}</p>

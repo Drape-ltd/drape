@@ -29,6 +29,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { verifyPayload, escapeHtml } from '../_shared/hmac.ts'
 import { log } from '../_shared/logger.ts'
+import { sendPushToUser } from '../_shared/notify.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import {
   createResendVerificationEmailSender,
@@ -78,6 +79,18 @@ function constantTimeEqual(a: string, b: string) {
   return diff === 0
 }
 
+async function lookupAuthUserEmail(
+  supabase: { auth: { admin: { getUserById: (userId: string) => Promise<{ data: { user?: { email?: string | null } | null }; error: { message: string } | null }> } } },
+  userId: string,
+) {
+  const { data, error } = await supabase.auth.admin.getUserById(userId)
+  if (error) {
+    log('warn', FN, 'auth_email_lookup.failed', { user_id: userId, error: error.message })
+    return null
+  }
+  return data.user?.email?.trim() || null
+}
+
 function isServiceRoleRequest(req: Request) {
   const serviceRoleKey = getServiceRoleKey()
   const bearerToken = readBearerToken(req)
@@ -101,6 +114,7 @@ async function handleOpsDashboardPost(req: Request) {
     tailorUserId?: string
     decision?: string
     reason?: string | null
+    rejectionCode?: string | null
     performedBy?: string | null
     performedRole?: string | null
   } | null
@@ -116,13 +130,16 @@ async function handleOpsDashboardPost(req: Request) {
       tailorUserId: body.tailorUserId ?? '',
       decision: body.decision ?? '',
       reason: body.reason ?? null,
+      rejectionCode: body.rejectionCode ?? null,
       performedBy: body.performedBy ?? null,
       performedRole: body.performedRole ?? 'OPS',
       source: VERIFICATION_SOURCE_OPS_DASHBOARD,
     },
     {
       appUrl: Deno.env.get('SITE_URL') ?? Deno.env.get('NEXT_PUBLIC_SITE_URL') ?? null,
+      lookupUserEmail: (userId) => lookupAuthUserEmail(supabase, userId),
       sendEmail: createResendVerificationEmailSender(),
+      sendPush: (userId, message) => sendPushToUser(supabase, userId, message),
     },
   )
 
@@ -140,6 +157,9 @@ async function handleOpsDashboardPost(req: Request) {
     decision: body.decision,
     source: VERIFICATION_SOURCE_OPS_DASHBOARD,
     email_sent: result.emailSent,
+    email_error: result.emailError,
+    push_status: result.pushStatus,
+    push_error: result.pushError,
   })
 
   return jsonResponse(result, 200, corsHeaders)
@@ -204,7 +224,9 @@ async function handleSignedGet(req: Request) {
     },
     {
       appUrl: Deno.env.get('SITE_URL') ?? Deno.env.get('NEXT_PUBLIC_SITE_URL') ?? null,
+      lookupUserEmail: (userId) => lookupAuthUserEmail(supabase, userId),
       sendEmail: createResendVerificationEmailSender(),
+      sendPush: (userId, message) => sendPushToUser(supabase, userId, message),
     },
   )
 
@@ -229,6 +251,9 @@ async function handleSignedGet(req: Request) {
     decision,
     source: VERIFICATION_SOURCE_SIGNED_LINK,
     email_sent: result.emailSent,
+    email_error: result.emailError,
+    push_status: result.pushStatus,
+    push_error: result.pushError,
   })
 
   const displayName = result.displayName || 'This tailor'
@@ -237,7 +262,7 @@ async function handleSignedGet(req: Request) {
       'Tailor approved',
       `<h1 style="color:#2F6844">Approved</h1>
        <p><strong>${escapeHtml(displayName)}</strong> is now live on Drape.</p>
-       <p style="font-size:13px;margin-top:16px">They will receive an email confirmation shortly.</p>`,
+       <p style="font-size:13px;margin-top:16px">They will receive an app notification and email confirmation shortly when delivery is available.</p>`,
     )
   }
 

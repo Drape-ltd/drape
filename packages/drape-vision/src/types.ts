@@ -17,6 +17,10 @@ export type DrapeVisionMeasurementField =
   | 'kneeCircumference'
   | 'bicepCircumference'
   | 'wristCircumference'
+  | 'palmWidth'
+  | 'palmLength'
+  | 'sleeveOpening'
+  | 'banglePassOver'
   | 'headCircumference'
   | 'hatBandLine'
   | 'headLength'
@@ -26,6 +30,7 @@ export type DrapeVisionMeasurementField =
   | 'filaHeight'
   | 'height'
   | 'torsoLength'
+  | 'ankleHemOpening'
 
 export type DrapeVisionCircumferenceField =
   | 'chest'

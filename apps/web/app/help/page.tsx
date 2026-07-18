@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { CONTACTS, DRAPE_EXCEPTION_BUCKETS, DRAPE_HELP_FAQ } from '@drape/shared'
+import { CONTACTS, DRAPE_EXCEPTION_BUCKETS, DRAPE_HELP_FAQ, buildWhatsAppSupportUrl } from '@drape/shared'
 import Link from 'next/link'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -54,6 +54,14 @@ export default function HelpPage(): React.JSX.Element {
             Contact customer support
           </a>
           <a
+            href={buildWhatsAppSupportUrl('Hi Drapeon, I need support.')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center rounded-full border border-needle/15 bg-white px-5 py-3 text-sm font-semibold text-needle"
+          >
+            WhatsApp support
+          </a>
+          <a
             href={`mailto:${CONTACTS.tailors}?subject=Tailor%20support%20request`}
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
           >
@@ -70,7 +78,7 @@ export default function HelpPage(): React.JSX.Element {
         />
         <div className="mt-10 grid gap-4">
           {FAQ.map((item) => (
-            <div key={item.question} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={item.question} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <h3 className="text-2xl text-ink">{item.question}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{item.answer}</p>
             </div>
@@ -86,7 +94,7 @@ export default function HelpPage(): React.JSX.Element {
         />
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {DRAPE_EXCEPTION_BUCKETS.map((bucket) => (
-            <div key={bucket.id} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+            <div key={bucket.id} className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
                 {bucket.title}
               </p>
@@ -117,7 +125,7 @@ export default function HelpPage(): React.JSX.Element {
               'When the normal flow is no longer enough, support works better when the order history is already preserved in one place.',
             ],
           ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={title} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{title}</p>
               <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
             </div>
@@ -132,6 +140,16 @@ export default function HelpPage(): React.JSX.Element {
           description="Go straight to the right inbox."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+          <a
+            href={buildWhatsAppSupportUrl('Hi Drapeon, I need help.')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">WhatsApp support</p>
+            <h3 className="mt-3 text-2xl text-ink">Message Drapeon</h3>
+            <p className="mt-3 text-sm leading-7 text-ink/68">Quick human routing for launch support and general help.</p>
+          </a>
           {[
             ['Customer support', CONTACTS.support, 'Customer help and order questions.'],
             ['Tailor support', CONTACTS.tailors, 'Tailor help and application questions.'],
@@ -143,7 +161,7 @@ export default function HelpPage(): React.JSX.Element {
             <a
               key={String(email)}
               href={`mailto:${email}`}
-              className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+              className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
               <h3 className="mt-3 text-2xl text-ink">{email}</h3>

@@ -95,6 +95,9 @@ verify_jwt = false
 [functions.handle-verification-decision]
 verify_jwt = false
 
+[functions.identity-handoff-action]
+verify_jwt = false
+
 [functions.notify-ops-verification]
 verify_jwt = false
 

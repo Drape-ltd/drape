@@ -10,6 +10,7 @@ const config: Config = {
     extend: {
       colors: {
         // Drapeon brand palette
+        'drape-green': '#2D6A4F',
         needle: {
           DEFAULT: '#2D6A4F',
           50: '#E8F5EF',
@@ -38,6 +39,13 @@ const config: Config = {
         },
         bone: '#F5F0E8',
         ink: '#1A1A1A',
+        ui: {
+          canvas: '#F7F8F7',
+          surface: '#FFFFFF',
+          muted: '#F1F3F1',
+          border: '#DDE2DE',
+          subtle: '#667069',
+        },
       },
       fontFamily: {
         sans: ['var(--font-body)', 'system-ui', 'sans-serif'],

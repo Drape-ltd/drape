@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, Platform } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, TextInput, Alert, ActivityIndicator, Animated, Modal, PanResponder, Platform, Vibration, useWindowDimensions, KeyboardAvoidingView } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { RemoteImage } from '@/components/ui'
+import { PortfolioVideoPreview, RemoteImage } from '@/components/ui'
 import {
   draftToSizeInventory,
   formatSizeInventorySummary,
@@ -37,6 +37,22 @@ import { Button } from '@/components/ui'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { Sentry } from '@/lib/sentry'
+import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
+import {
+  isVideoPickerAsset as isReadyMadeVideoAsset,
+  pickerVideoContentType as readyMadeVideoContentType,
+  pickerVideoExtension as readyMadeVideoExtension,
+  validateVideoPickerAsset,
+} from '@/lib/video-asset'
+import {
+  ALLOWED_READY_MADE_ITEM_CONTENT_TYPES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  VIDEO_DURATION_LIMIT_MESSAGE,
+  isVideoMediaUrl,
+} from '@drape/shared/media-policy'
+import { getOnboardingProofItemIssues } from '@drape/shared/onboarding-proof-item'
 
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
@@ -46,12 +62,15 @@ const MUTED_GREY = Colors.midGrey
 const CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const
 const ITEM_CATEGORIES = ['Agbada', 'Kaftan', 'Suit', 'Dress', 'Crochet', 'Ready-made', 'Two-piece Set', 'Native Wear', 'Fila', 'Gele', 'Headwear'] as const
 const COMMON_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'One size'] as const
-const MAX_ITEM_PHOTOS = 6
+const MAX_ITEM_MEDIA = 6
+const MAX_READY_MADE_VIDEO_BYTES = MEDIA_LIMITS_BYTES.readyMadeItemVideo
+const MAX_READY_MADE_VIDEO_SECONDS = MEDIA_LIMITS_SECONDS.readyMadeItemVideo
 const PRODUCT_PHOTO_ASPECT_RATIO = 4 / 5
 type ItemCategory = (typeof ITEM_CATEGORIES)[number]
 type CurrencyCode = (typeof CURRENCIES)[number]
 type ListingSheetMode =
-  | 'photo'
+  | 'media'
+  | 'portfolio-videos'
   | 'template'
   | 'category'
   | 'sizes'
@@ -88,6 +107,7 @@ type TailorShopDefaultsRow = {
   payout_reverification_required: boolean | null
   payout_account_verified: boolean | null
   payout_account_type: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  portfolio_video_urls: unknown
 }
 
 type SellerItemDraftRow = {
@@ -125,7 +145,7 @@ function fallbackInventoryQuantity(item: { stock_status?: string | null; is_live
   return 1
 }
 
-function describeInventoryState(input: { inventoryQuantity: number | null; isLive: boolean; sizes: string[] }) {
+function describeInventoryState(input: { inventoryQuantity: number | null; isLive: boolean; sizes: string[]; isOnboarding?: boolean }) {
   if (input.inventoryQuantity == null || Number.isNaN(input.inventoryQuantity) || input.inventoryQuantity < 0) {
     return 'Choose sizes first, then add how many units are ready in each size.'
   }
@@ -135,6 +155,12 @@ function describeInventoryState(input: { inventoryQuantity: number | null; isLiv
   }
 
   if (!input.isLive) {
+    if (input.isOnboarding) {
+      if (input.inventoryQuantity === 0) {
+        return 'Add units to at least one size so this item can count toward setup.'
+      }
+      return `${input.inventoryQuantity} unit${input.inventoryQuantity === 1 ? '' : 's'} across your selected sizes will be saved for setup and hidden from buyers for now.`
+    }
     if (input.inventoryQuantity === 0) {
       return 'This draft has no sellable stock yet. Add units to at least one size before you publish it.'
     }
@@ -154,7 +180,7 @@ function describeInventoryState(input: { inventoryQuantity: number | null; isLiv
 
 function buildLiveReadinessChecks(input: {
   category: string
-  photoCount: number
+  mediaCount: number
   sizes: string[]
   hasFitGuide: boolean
   description: string
@@ -170,9 +196,9 @@ function buildLiveReadinessChecks(input: {
       blockingMessage: 'Before this item can go live, choose a category so buyers know where it belongs.',
     },
     {
-      label: input.photoCount > 0 ? `${input.photoCount} photo${input.photoCount === 1 ? '' : 's'} added` : 'At least 1 photo',
-      ready: input.photoCount > 0,
-      blockingMessage: 'Before this item can go live, add at least one clear photo so buyers can see the piece.',
+      label: input.mediaCount > 0 ? `${input.mediaCount} media item${input.mediaCount === 1 ? '' : 's'} added` : 'At least 1 media item',
+      ready: input.mediaCount > 0,
+      blockingMessage: 'Before this item can go live, add at least one clear photo or video so buyers can see the piece.',
     },
     {
       label: input.sizes.length > 0 ? `${input.sizes.length} size option${input.sizes.length === 1 ? '' : 's'} added` : 'At least 1 size',
@@ -219,10 +245,84 @@ function formatMissingChecksForAlert(missingChecks: Array<{ blockingMessage: str
   return missingChecks.map((check) => `• ${check.blockingMessage}`).join('\n')
 }
 
-type ItemPhotoSource = 'camera' | 'library'
+function parseItemPriceAmount(value: string) {
+  const parsed = Number(value)
+  if (!value.trim() || Number.isNaN(parsed) || parsed <= 0) return null
+  return Math.round(parsed * 100)
+}
+
+type ItemMediaSource = 'camera-photo' | 'camera-video' | 'library'
+
+type ReadyMadeMediaItem = { type: 'photo' | 'video'; url: string }
+type ReadyMadeMediaGridEntry = { item: ReadyMadeMediaItem; originalIndex: number }
+
+function readyMadeMediaItemFromUrl(url: string): ReadyMadeMediaItem {
+  return { type: isVideoMediaUrl(url) ? 'video' : 'photo', url }
+}
+
+function getReadyMadeMediaDropTargetIndex(fromIndex: number, dx: number, dy: number, itemCount: number) {
+  if (itemCount <= 1) return fromIndex
+  const columns = 3
+  const columnShift = Math.round(dx / 104)
+  const rowShift = Math.round(dy / 104) * columns
+  return Math.max(0, Math.min(itemCount - 1, fromIndex + columnShift + rowShift))
+}
+
+function previewReadyMadeMediaGridEntries(
+  items: ReadyMadeMediaItem[],
+  dragIndex: number | null,
+  hoverIndex: number | null,
+): ReadyMadeMediaGridEntry[] {
+  const entries = items.map((item, originalIndex) => ({ item, originalIndex }))
+  if (
+    dragIndex == null ||
+    hoverIndex == null ||
+    dragIndex < 0 ||
+    hoverIndex < 0 ||
+    dragIndex >= entries.length ||
+    hoverIndex >= entries.length ||
+    dragIndex === hoverIndex
+  ) {
+    return entries
+  }
+
+  const next = [...entries]
+  const [dragged] = next.splice(dragIndex, 1)
+  if (!dragged) return entries
+  next.splice(hoverIndex, 0, dragged)
+  return next
+}
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  }
+  if (typeof value === 'string' && value.trim().length > 0) return [value.trim()]
+  return []
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function validateReadyMadeVideoAsset(asset: ImagePicker.ImagePickerAsset) {
+  return validateVideoPickerAsset(asset, {
+    maxBytes: MAX_READY_MADE_VIDEO_BYTES,
+    maxSeconds: MAX_READY_MADE_VIDEO_SECONDS,
+    maxBytesMessage: `Choose videos under ${Math.round(MAX_READY_MADE_VIDEO_BYTES / (1024 * 1024))} MB.`,
+    durationMessage: VIDEO_DURATION_LIMIT_MESSAGE,
+  })
+}
 
 export default function NewShopItemScreen() {
-  const params = useLocalSearchParams<{ itemId?: string; filter?: string; intent?: string }>()
+  const params = useLocalSearchParams<{
+    itemId?: string | string[]
+    filter?: string | string[]
+    intent?: string | string[]
+    returnTo?: string | string[]
+    historyChain?: string | string[]
+    onboarding?: string | string[]
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -246,8 +346,13 @@ export default function NewShopItemScreen() {
   const [fitNotes, setFitNotes] = useState('')
   const [stretchNotes, setStretchNotes] = useState('')
   const [sizeAdvice, setSizeAdvice] = useState<ReadyMadeSizeGuideAdvice>('ASK_SELLER')
-  const [photoUrls, setPhotoUrls] = useState<string[]>([])
-  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [mediaUrls, setMediaUrls] = useState<string[]>([])
+  const [portfolioVideoUrls, setPortfolioVideoUrls] = useState<string[]>([])
+  const [uploadingMedia, setUploadingMedia] = useState(false)
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState<number | null>(null)
+  const [mediaReplaceIndex, setMediaReplaceIndex] = useState<number | null>(null)
+  const [mediaDragIndex, setMediaDragIndex] = useState<number | null>(null)
+  const [mediaHoverIndex, setMediaHoverIndex] = useState<number | null>(null)
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
@@ -255,17 +360,45 @@ export default function NewShopItemScreen() {
   const [sellerStatus, setSellerStatus] = useState<(TailorReadinessInput & { supportsReadyMade?: boolean | null }) | null>(null)
   const [hasPickupAddress, setHasPickupAddress] = useState(false)
   const [listingSheetMode, setListingSheetMode] = useState<ListingSheetMode>(null)
-  const itemId = typeof params.itemId === 'string' && params.itemId.length > 0 ? params.itemId : null
-  const returnFilter = typeof params.filter === 'string' && params.filter.length > 0 ? params.filter : null
-  const isRestockIntent = params.intent === 'restock'
+  const rawItemId = firstParam(params.itemId)
+  const rawFilter = firstParam(params.filter)
+  const rawIntent = firstParam(params.intent)
+  const rawHistoryChain = firstParam(params.historyChain)
+  const rawReturnTo = firstParam(params.returnTo)
+  const itemId = typeof rawItemId === 'string' && rawItemId.length > 0 ? rawItemId : null
+  const returnFilter = typeof rawFilter === 'string' && rawFilter.length > 0 ? rawFilter : null
+  const isRestockIntent = rawIntent === 'restock'
   const isEditing = !!itemId
   const isDraftEditor = isEditing && returnFilter !== 'SOLD' && !isRestockIntent
+  const isOnboardingSetupItem = firstParam(params.onboarding) === 'tailor_setup'
+  const anchoredHistoryChainRef = useRef<string | undefined>(undefined)
+  const anchoredReturnTargetRef = useRef<string | undefined>(undefined)
+
+  if (!anchoredHistoryChainRef.current && rawHistoryChain) {
+    anchoredHistoryChainRef.current = rawHistoryChain
+  }
+  if (!anchoredReturnTargetRef.current) {
+    anchoredReturnTargetRef.current = pickSafeReturnTo(rawHistoryChain, rawReturnTo)
+  }
+
+  function anchoredReturnTarget() {
+    return anchoredReturnTargetRef.current ?? pickSafeReturnTo(rawHistoryChain, rawReturnTo)
+  }
+
+  function anchoredHistorySeed() {
+    return anchoredHistoryChainRef.current ?? anchoredReturnTarget()
+  }
 
   function goBack() {
-    goBackOrFallback(router, navigation, {
-      pathname: '/(tailor)/shop',
-      params: returnFilter ? { filter: returnFilter } : undefined,
-    })
+    goBackOrReturnTo(
+      router,
+      navigation,
+      anchoredReturnTarget(),
+      {
+        pathname: '/(tailor)/shop',
+        params: returnFilter ? { filter: returnFilter } : undefined,
+      },
+    )
   }
 
   useEffect(() => {
@@ -311,7 +444,7 @@ export default function NewShopItemScreen() {
     if (!userId) return
     const { data } = await supabase
       .from('tailor_profiles')
-      .select('currency, supports_ready_made, profile_completed, id_verification_status, is_live, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
+      .select('currency, supports_ready_made, profile_completed, id_verification_status, is_live, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, portfolio_video_urls')
       .eq('user_id', userId)
       .maybeSingle()
 
@@ -322,6 +455,7 @@ export default function NewShopItemScreen() {
       .maybeSingle()
 
     const defaults = data as TailorShopDefaultsRow | null
+    setPortfolioVideoUrls(asStringList(defaults?.portfolio_video_urls))
     if (
       defaults?.currency &&
       CURRENCIES.includes(defaults.currency as (typeof CURRENCIES)[number])
@@ -426,7 +560,7 @@ export default function NewShopItemScreen() {
       if (itemData.currency && CURRENCIES.includes(itemData.currency as (typeof CURRENCIES)[number])) {
         setCurrency(itemData.currency as (typeof CURRENCIES)[number])
       }
-      setPhotoUrls(Array.isArray(itemData.photo_urls) ? itemData.photo_urls.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [])
+      setMediaUrls(asStringList(itemData.photo_urls))
       const normalizedGuide = normalizeReadyMadeSizeGuide(itemData.size_guide, resolvedSizes)
       setFitGuideUnit(normalizedGuide.unit)
       setFitGuideFields(normalizedGuide.fields)
@@ -500,6 +634,7 @@ export default function NewShopItemScreen() {
         mode: 'size_guide_scan',
         itemId,
         returnTo: `/(tailor)/shop/new?itemId=${itemId}`,
+        historyChain: appendToHistory(anchoredHistorySeed(), `/(tailor)/shop/new?itemId=${itemId}`),
       },
     } as never)
   }
@@ -531,97 +666,216 @@ export default function NewShopItemScreen() {
     setSizeInventoryDraft((current) => ({ ...current, [size]: sanitized }))
   }
 
-  function openAddPhotoSheet() {
-    const remainingSlots = MAX_ITEM_PHOTOS - photoUrls.length
+  function openAddMediaSheet() {
+    setMediaReplaceIndex(null)
+    const remainingSlots = MAX_ITEM_MEDIA - mediaUrls.length
     if (remainingSlots <= 0) {
-      Alert.alert('Photo limit reached', `You can add up to ${MAX_ITEM_PHOTOS} product photos for one item.`)
+      Alert.alert('Media limit reached', `You can add up to ${MAX_ITEM_MEDIA} product media files for one item.`)
       return
     }
-    setListingSheetMode('photo')
+    setListingSheetMode('media')
   }
 
-  async function addPhoto(source: ItemPhotoSource) {
-    if (!user?.id || uploadingPhoto) return
-    const remainingSlots = MAX_ITEM_PHOTOS - photoUrls.length
+  function openMediaReplacePicker(index: number) {
+    if (index < 0 || index >= mediaUrls.length) return
+    setSelectedMediaIndex(null)
+    setMediaReplaceIndex(index)
+    setListingSheetMode('media')
+  }
+
+  async function addMedia(source: ItemMediaSource) {
+    if (!user?.id || uploadingMedia) return
+    const replacingIndex =
+      mediaReplaceIndex != null && mediaReplaceIndex >= 0 && mediaReplaceIndex < mediaUrls.length
+        ? mediaReplaceIndex
+        : null
+    const isReplacing = replacingIndex != null
+    const remainingSlots = isReplacing ? 1 : MAX_ITEM_MEDIA - mediaUrls.length
     if (remainingSlots <= 0) {
-      Alert.alert('Photo limit reached', `You can add up to ${MAX_ITEM_PHOTOS} product photos for one item.`)
+      Alert.alert('Media limit reached', `You can add up to ${MAX_ITEM_MEDIA} product media files for one item.`)
+      setMediaReplaceIndex(null)
       return
     }
 
     const permission =
-      source === 'camera'
+      source === 'camera-photo' || source === 'camera-video'
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (!permission.granted) {
       Alert.alert(
         'Permission needed',
-        source === 'camera'
-          ? 'Allow camera access to take item photos.'
-          : 'Allow photo access to choose item photos.',
+        source === 'camera-photo' || source === 'camera-video'
+          ? 'Allow camera access to capture item media.'
+          : 'Allow photo access to choose item photos or videos.',
       )
+      setMediaReplaceIndex(null)
       return
     }
 
-    const result =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85,
-            allowsEditing: true,
-            aspect: [4, 5],
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85,
-            allowsMultipleSelection: remainingSlots > 1,
-            selectionLimit: remainingSlots,
-          })
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera-photo'
+          ? ImagePicker.launchCameraAsync({
+              mediaTypes: 'images',
+              quality: 0.85,
+              allowsEditing: true,
+              aspect: [4, 5],
+            })
+          : source === 'camera-video'
+            ? ImagePicker.launchCameraAsync({
+                mediaTypes: 'videos',
+                quality: 0.8,
+                videoMaxDuration: MAX_READY_MADE_VIDEO_SECONDS,
+              })
+            : ImagePicker.launchImageLibraryAsync(
+                preferCompatibleVideoRepresentation({
+                  mediaTypes: ['images', 'videos'],
+                  quality: 0.85,
+                  allowsMultipleSelection: !isReplacing && remainingSlots > 1,
+                  selectionLimit: remainingSlots,
+                  videoMaxDuration: MAX_READY_MADE_VIDEO_SECONDS,
+                })
+              ),
+      {
+        context: 'tailor_ready_made_item_media_picker',
+        mediaLabel: 'product media file',
+        extra: { source, userId: user?.id },
+      }
+    )
+    if (!result) {
+      setMediaReplaceIndex(null)
+      return
+    }
 
-    if (result.canceled || !result.assets[0]) return
+    if (result.canceled || !result.assets[0]) {
+      setMediaReplaceIndex(null)
+      return
+    }
     const selectedAssets = result.assets.slice(0, remainingSlots)
+    const invalidVideoMessage = selectedAssets
+      .map((asset) => (isReadyMadeVideoAsset(asset) ? validateReadyMadeVideoAsset(asset) : null))
+      .find((message): message is string => typeof message === 'string' && message.length > 0)
 
-    setUploadingPhoto(true)
+    if (invalidVideoMessage) {
+      Alert.alert('Video not added', invalidVideoMessage)
+      setMediaReplaceIndex(null)
+      return
+    }
+
+    setUploadingMedia(true)
     try {
       const uploadedUrls: string[] = []
 
       for (const [index, asset] of selectedAssets.entries()) {
-        const cleanUri = await stripExif(asset.uri, {
-          maxWidth: 1200,
-          cropAspectRatio: PRODUCT_PHOTO_ASPECT_RATIO,
-          sourceWidth: asset.width,
-          sourceHeight: asset.height,
-        })
-        const filename = `shop/${user.id}/${Date.now()}-${index}.jpg`
+        const isVideo = isReadyMadeVideoAsset(asset)
+        const contentType = isVideo ? readyMadeVideoContentType(asset) : 'image/jpeg'
+        const uploadUri = isVideo
+          ? asset.uri
+          : await stripExif(asset.uri, {
+              maxWidth: 1200,
+              cropAspectRatio: PRODUCT_PHOTO_ASPECT_RATIO,
+              sourceWidth: asset.width,
+              sourceHeight: asset.height,
+            })
+        const extension = isVideo ? readyMadeVideoExtension(asset) : 'jpg'
+        const filename = `shop/${user.id}/${isVideo ? 'videos' : 'photos'}/${Date.now()}-${index}.${extension}`
         const publicUrl = await uploadPublicStorageImage({
           bucket: 'seller-item-media',
           path: filename,
-          uri: cleanUri,
-          contentType: 'image/jpeg',
-          maxBytes: 10 * 1024 * 1024,
+          uri: uploadUri,
+          contentType,
+          maxBytes: isVideo ? MAX_READY_MADE_VIDEO_BYTES : MEDIA_LIMITS_BYTES.image,
+          allowedContentTypes: isVideo ? ALLOWED_VIDEO_CONTENT_TYPES : ALLOWED_READY_MADE_ITEM_CONTENT_TYPES,
+          purpose: 'READY_MADE_ITEM',
         })
         uploadedUrls.push(publicUrl)
       }
 
-      setPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, MAX_ITEM_PHOTOS))
+      setMediaUrls((prev) => {
+        if (!isReplacing || replacingIndex == null) return [...prev, ...uploadedUrls].slice(0, MAX_ITEM_MEDIA)
+        const replacement = uploadedUrls[0]
+        if (!replacement) return prev
+        return prev.map((url, index) => (index === replacingIndex ? replacement : url))
+      })
+      if (isReplacing && replacingIndex != null) setSelectedMediaIndex(replacingIndex)
     } catch (error) {
       Sentry.captureException(error, {
         extra: {
-          context: 'tailor_shop_photo_upload',
+          context: 'tailor_shop_media_upload',
           source,
           userId: user.id,
-          existingPhotoCount: photoUrls.length,
+          existingMediaCount: mediaUrls.length,
           selectedCount: selectedAssets.length,
         },
       })
       Alert.alert(
         'Upload failed',
         isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. We could not upload this photo yet. Retry when the signal improves.'
-          : 'Could not upload this photo right now. Please try again in a moment.',
+          ? 'Connection looks weak. We could not upload this media yet. Retry when the signal improves.'
+          : 'Could not upload this media right now. Please try again in a moment.',
       )
     } finally {
-      setUploadingPhoto(false)
+      setUploadingMedia(false)
+      setMediaReplaceIndex(null)
     }
+  }
+
+  function attachPortfolioVideo(videoUrl: string) {
+    if (mediaUrls.length >= MAX_ITEM_MEDIA) {
+      Alert.alert('Media limit reached', `You can add up to ${MAX_ITEM_MEDIA} product media files for one item.`)
+      return
+    }
+    setMediaUrls((current) => {
+      if (current.includes(videoUrl)) return current
+      return [...current, videoUrl].slice(0, MAX_ITEM_MEDIA)
+    })
+    setListingSheetMode(null)
+  }
+
+  function moveMediaItem(fromIndex: number, toIndex: number) {
+    let nextSelectedIndex = toIndex
+    setMediaUrls((prev) => {
+      if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex >= prev.length ||
+        fromIndex === toIndex
+      ) {
+        nextSelectedIndex = fromIndex
+        return prev
+      }
+      const next = [...prev]
+      const [item] = next.splice(fromIndex, 1)
+      if (!item) return prev
+      next.splice(toIndex, 0, item)
+      return next
+    })
+    setSelectedMediaIndex(nextSelectedIndex)
+    setMediaDragIndex(null)
+    setMediaHoverIndex(null)
+  }
+
+  function handleMediaDragMove(fromIndex: number, dx: number, dy: number) {
+    const targetIndex = getReadyMadeMediaDropTargetIndex(fromIndex, dx, dy, mediaUrls.length)
+    setMediaHoverIndex((current) => current === targetIndex ? current : targetIndex)
+  }
+
+  function handleMediaDragEnd(fromIndex: number, dx: number, dy: number) {
+    const targetIndex = getReadyMadeMediaDropTargetIndex(fromIndex, dx, dy, mediaUrls.length)
+    if (targetIndex !== fromIndex) {
+      moveMediaItem(fromIndex, targetIndex)
+      return
+    }
+    setMediaDragIndex(null)
+    setMediaHoverIndex(null)
+  }
+
+  function removeMediaItem(index: number) {
+    setMediaUrls((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+    setSelectedMediaIndex(null)
+    setMediaDragIndex(null)
+    setMediaHoverIndex(null)
   }
 
   async function saveItem(nextIsLive = isLive) {
@@ -638,22 +892,40 @@ export default function NewShopItemScreen() {
     })
     const parsedInventoryQuantity = sumSizeInventory(nextSizeInventory)
 
-    if (!title.trim()) {
-      Alert.alert('Missing title', 'Give this item a simple name customers can understand.')
-      return
-    }
-    if (!Number.isInteger(parsedInventoryQuantity) || parsedInventoryQuantity < 0) {
-      Alert.alert('Missing stock', 'Add how many units are ready in each size.')
-      return
-    }
-    if (!price.trim() || Number.isNaN(Number(price)) || Number(price) <= 0) {
-      Alert.alert('Missing price', 'Add a valid price before saving this item.')
-      return
-    }
-    if (nextIsLive) {
-      if (missingLiveReadinessChecks.length > 0) {
-        Alert.alert('Still missing before go live', missingLiveReadinessChecks[0].blockingMessage)
+    const priceAmount = parseItemPriceAmount(price)
+    const requestedIsLive = isOnboardingSetupItem ? false : nextIsLive
+
+    if (isOnboardingSetupItem) {
+      const proofIssues = getOnboardingProofItemIssues({
+        title,
+        category,
+        description,
+        mediaCount: mediaUrls.length,
+        sizes,
+        inventoryQuantity: parsedInventoryQuantity,
+      })
+      if (proofIssues.length > 0) {
+        Alert.alert('Still missing for setup', proofIssues[0]?.message ?? 'Finish the required setup item details.')
         return
+      }
+    } else {
+      if (!title.trim()) {
+        Alert.alert('Missing title', 'Give this item a simple name customers can understand.')
+        return
+      }
+      if (!Number.isInteger(parsedInventoryQuantity) || parsedInventoryQuantity < 0) {
+        Alert.alert('Missing stock', 'Add how many units are ready in each size.')
+        return
+      }
+      if (priceAmount == null) {
+        Alert.alert('Missing price', 'Add a valid price before saving this item.')
+        return
+      }
+      if (nextIsLive) {
+        if (missingLiveReadinessChecks.length > 0) {
+          Alert.alert('Still missing before go live', missingLiveReadinessChecks[0].blockingMessage)
+          return
+        }
       }
     }
 
@@ -676,15 +948,16 @@ export default function NewShopItemScreen() {
           description: description.trim() || null,
           sizes,
           sizeInventory: nextSizeInventory,
-          sizeGuide: nextSizeGuide,
-          priceAmount: Math.round(Number(price) * 100),
+          sizeGuide: isOnboardingSetupItem ? null : nextSizeGuide,
+          priceAmount: isOnboardingSetupItem ? null : priceAmount ?? 0,
           currency,
-          photoUrls,
+          photoUrls: mediaUrls,
           inventoryQuantity: parsedInventoryQuantity,
-          pickupAvailable,
-          deliveryAvailable,
-          shippingAvailable,
-          isLive: nextIsLive,
+          pickupAvailable: isOnboardingSetupItem ? false : pickupAvailable,
+          deliveryAvailable: isOnboardingSetupItem ? false : deliveryAvailable,
+          shippingAvailable: isOnboardingSetupItem ? false : shippingAvailable,
+          isLive: requestedIsLive,
+          onboarding: isOnboardingSetupItem,
         },
       })
 
@@ -692,7 +965,7 @@ export default function NewShopItemScreen() {
           const message = isLikelyConnectivityIssue(error)
             ? 'Connection looks weak. We could not save this item yet. Your details are still here, so retry when the signal improves.'
             : await readFunctionErrorMessage(error, 'Could not save this item right now. Please try again in a moment.')
-          Alert.alert(nextIsLive ? 'Not live yet' : 'Could not save draft', message)
+          Alert.alert(requestedIsLive ? 'Not live yet' : isOnboardingSetupItem ? 'Could not add item' : 'Could not save draft', message)
           return
         }
 
@@ -703,13 +976,30 @@ export default function NewShopItemScreen() {
               ? 'LIVE'
               : 'DRAFTS'
 
-        const moveToNextScreen = () =>
+        const moveToNextScreen = () => {
+          const returnTarget = anchoredReturnTarget()
+          if (returnTarget) {
+            goBackOrReturnTo(
+              router,
+              navigation,
+              returnTarget,
+              { pathname: '/(tailor)/shop', params: { filter: nextFilter } },
+            )
+            return
+          }
+
           router.replace({
             pathname: '/(tailor)/shop',
             params: { filter: nextFilter },
           })
+        }
 
-        if (!nextIsLive && missingLiveReadinessChecks.length > 0) {
+        if (isOnboardingSetupItem) {
+          moveToNextScreen()
+          return
+        }
+
+        if (!requestedIsLive && missingLiveReadinessChecks.length > 0) {
           Alert.alert(
             'Draft saved',
             `This draft saved fine. Before it can go live, you still need:\n${formatMissingChecksForAlert(missingLiveReadinessChecks)}`,
@@ -724,7 +1014,7 @@ export default function NewShopItemScreen() {
       }
     }
 
-    if (nextIsLive) {
+    if (requestedIsLive) {
       Alert.alert(
         isEditing ? 'Go live with this item?' : 'Publish this item live?',
         'Buyers will be able to discover and pay for this item. Make sure the photos, title, description, sizes, size stock, and delivery choices all look right.',
@@ -791,7 +1081,7 @@ export default function NewShopItemScreen() {
   const hasFitGuide = hasReadyMadeSizeGuide(draftSizeGuide, sizes)
   const liveReadinessChecks = buildLiveReadinessChecks({
     category,
-    photoCount: photoUrls.length,
+    mediaCount: mediaUrls.length,
     sizes,
     hasFitGuide,
     description,
@@ -800,14 +1090,35 @@ export default function NewShopItemScreen() {
     hasPickupAddress,
     pickupEnabled: pickupAvailable,
   })
+  const onboardingProofReadinessChecks = [
+    {
+      label: title.trim() && category.trim() && description.trim() ? 'Item details ready' : 'Title, category, and description',
+      ready: Boolean(title.trim() && category.trim() && description.trim()),
+    },
+    {
+      label: mediaUrls.length > 0 ? `${mediaUrls.length} media item${mediaUrls.length === 1 ? '' : 's'} added` : 'At least 1 media item',
+      ready: mediaUrls.length > 0,
+    },
+    {
+      label: sizes.length > 0 ? `${sizes.length} size option${sizes.length === 1 ? '' : 's'} added` : 'At least 1 size',
+      ready: sizes.length > 0,
+    },
+    {
+      label: parsedInventoryQuantity >= 1 ? `${parsedInventoryQuantity} unit${parsedInventoryQuantity === 1 ? '' : 's'} across sizes` : 'At least 1 unit across sizes',
+      ready: parsedInventoryQuantity >= 1,
+    },
+  ]
+  const activeReadinessChecks = isOnboardingSetupItem ? onboardingProofReadinessChecks : liveReadinessChecks
   const missingLiveReadinessChecks = liveReadinessChecks.filter((check) => !check.ready)
-  const visibleReadinessChecks = missingLiveReadinessChecks.length > 0
-    ? missingLiveReadinessChecks.slice(0, 3)
-    : liveReadinessChecks.filter((check) => check.ready).slice(0, 3)
+  const missingReadinessChecks = activeReadinessChecks.filter((check) => !check.ready)
+  const visibleReadinessChecks = missingReadinessChecks.length > 0
+    ? missingReadinessChecks.slice(0, 3)
+    : activeReadinessChecks.filter((check) => check.ready).slice(0, 3)
   const inventoryStateHint = describeInventoryState({
     inventoryQuantity: parsedInventoryQuantity,
     isLive,
     sizes,
+    isOnboarding: isOnboardingSetupItem,
   })
   const selectedTemplateLabel = ITEM_TEMPLATES.some((template) => template.title === title && template.category === category)
     ? title
@@ -832,8 +1143,8 @@ export default function NewShopItemScreen() {
     ? 'Set head and crown ranges so buyers know how this piece should sit before they order.'
     : "Drapeon can recommend a size from the customer's saved measurements when you set real body ranges here."
   const visionSizeGuideCopy = isHeadwearCategory
-    ? 'Capture headwear fit ranges so shoppers can match their Fit Passport to this listing.'
-    : 'Capture real fit ranges so shoppers can match their Fit Passport to this listing.'
+    ? 'Capture headwear fit ranges so shoppers can match their fit profile to this listing.'
+    : 'Capture real fit ranges so shoppers can match their fit profile to this listing.'
   const fitNotePlaceholder = isHeadwearCategory
     ? 'Fit note, e.g. Structured crown with a firm band. Best when head circumference is within range.'
     : 'Fit note, e.g. Fitted through the bust with a little ease at the waist.'
@@ -851,60 +1162,85 @@ export default function NewShopItemScreen() {
       : deliveryAvailable
         ? 'Use delivery for local handoff after confirming the fee.'
         : 'Pickup uses the private address saved in Profile.'
-    : 'Pick at least one before publishing live.'
+    : isOnboardingSetupItem
+      ? 'Pick at least one so this item can count toward setup.'
+      : 'Pick at least one before publishing live.'
+  const mediaItems = useMemo(() => mediaUrls.map(readyMadeMediaItemFromUrl), [mediaUrls])
+  const mediaGridEntries = useMemo(
+    () => previewReadyMadeMediaGridEntries(mediaItems, mediaDragIndex, mediaHoverIndex),
+    [mediaDragIndex, mediaHoverIndex, mediaItems],
+  )
+  const selectedMediaItem =
+    selectedMediaIndex != null && selectedMediaIndex >= 0 && selectedMediaIndex < mediaItems.length
+      ? mediaItems[selectedMediaIndex]
+      : null
+
   const renderMediaField = () => (
-    <Field label="Photos">
+    <Field label="Media">
       <View style={styles.photoGrid}>
-        {photoUrls.map((url, index) => (
-          <View key={url} style={styles.photoThumbWrap}>
-            <RemoteImage
-              uri={url}
-              bucket="seller-item-media"
-              style={styles.photoThumb}
-              contentFit="cover"
-              transition={180}
-              surface="tailor_shop_new_photo_preview"
-            />
-            <TouchableOpacity
-              style={styles.photoRemove}
-              onPress={() => setPhotoUrls((prev) => prev.filter((_, i) => i !== index))}
-            >
-              <Text style={styles.photoRemoveText}>✕</Text>
-            </TouchableOpacity>
-          </View>
+        {mediaGridEntries.map(({ item, originalIndex }, visualIndex) => (
+          <ReadyMadeMediaSortableTile
+            key={`${item.url}-${originalIndex}`}
+            item={item}
+            index={visualIndex}
+            isCover={visualIndex === 0}
+            dragging={mediaDragIndex === originalIndex}
+            onOpen={() => setSelectedMediaIndex(originalIndex)}
+            onDelete={() => removeMediaItem(originalIndex)}
+            onDragStart={() => {
+              setMediaDragIndex(originalIndex)
+              setMediaHoverIndex(originalIndex)
+            }}
+            onDragMove={(dx, dy) => handleMediaDragMove(originalIndex, dx, dy)}
+            onDragEnd={(dx, dy) => handleMediaDragEnd(originalIndex, dx, dy)}
+          />
         ))}
-        {photoUrls.length < MAX_ITEM_PHOTOS ? (
+        {mediaUrls.length < MAX_ITEM_MEDIA ? (
           <TouchableOpacity
-            style={[styles.photoAdd, photoUrls.length === 0 && styles.photoAddEmpty]}
-            onPress={openAddPhotoSheet}
-            disabled={uploadingPhoto}
+            style={[styles.photoAdd, mediaUrls.length === 0 && styles.photoAddEmpty]}
+            onPress={openAddMediaSheet}
+            disabled={uploadingMedia}
           >
-            {uploadingPhoto ? (
+            {uploadingMedia ? (
               <ActivityIndicator color={Colors.needleGreen} />
             ) : (
               <>
                 <View style={styles.photoAddIconWrap}>
                   <Feather name="image" size={22} color={PRIMARY_GREEN} />
                 </View>
-                <Text style={styles.photoAddText}>{photoUrls.length === 0 ? 'Add photos' : 'Add more'}</Text>
-                {photoUrls.length === 0 ? (
-                  <Text style={styles.photoAddHint}>Use garment-centred 4:5 photos on a plain background. Avoid scenery or screenshots.</Text>
+                <Text style={styles.photoAddText}>{mediaUrls.length === 0 ? 'Add media' : 'Add more'}</Text>
+                {mediaUrls.length === 0 ? (
+                  <Text style={styles.photoAddHint}>Use clear garment-centred photos or videos. Videos must be 30 seconds or less.</Text>
                 ) : null}
               </>
             )}
           </TouchableOpacity>
         ) : null}
       </View>
+      {portfolioVideoUrls.length > 0 && mediaUrls.length < MAX_ITEM_MEDIA ? (
+        <TouchableOpacity
+          style={styles.portfolioVideoButton}
+          onPress={() => setListingSheetMode('portfolio-videos')}
+          activeOpacity={0.78}
+        >
+          <Feather name="video" size={16} color={PRIMARY_GREEN} />
+          <Text style={styles.portfolioVideoButtonText}>Choose from Portfolio Videos</Text>
+        </TouchableOpacity>
+      ) : null}
       <Text style={styles.fieldHint}>
-        {photoUrls.length > 0
-          ? `${photoUrls.length}/${MAX_ITEM_PHOTOS} photo${photoUrls.length === 1 ? '' : 's'} ready. Live items need at least 1.`
-          : 'Drafts can save without media. Add at least 1 clear, garment-centred photo before you go live.'}
+        {mediaUrls.length > 0
+          ? isOnboardingSetupItem
+            ? `${mediaUrls.length}/${MAX_ITEM_MEDIA} media item${mediaUrls.length === 1 ? '' : 's'} ready for setup.`
+            : `${mediaUrls.length}/${MAX_ITEM_MEDIA} media item${mediaUrls.length === 1 ? '' : 's'} ready. Live items need at least 1.`
+          : isOnboardingSetupItem
+            ? 'Add at least 1 clear photo or video so this item can count toward setup.'
+            : 'Drafts can save without media. Add at least 1 clear photo or video before you go live.'}
       </Text>
     </Field>
   )
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerBackButton} onPress={goBack}>
           <Feather name="arrow-left" size={22} color={Colors.ink} />
@@ -913,16 +1249,17 @@ export default function NewShopItemScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       {loadingItem ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={Colors.needleGreen} size="large" />
           <Text style={styles.loadingText}>Opening your item…</Text>
         </View>
       ) : (
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} scrollEnabled={mediaDragIndex === null}>
         {renderMediaField()}
 
-        {sellerStatus && (!sellerStatus.supportsReadyMade || !readiness.canPublishPaidItems || (pickupAvailable && !hasPickupAddress)) ? (
+        {!isOnboardingSetupItem && sellerStatus && (!sellerStatus.supportsReadyMade || !readiness.canPublishPaidItems || (pickupAvailable && !hasPickupAddress)) ? (
           <View
             style={[
               styles.readinessCard,
@@ -962,23 +1299,35 @@ export default function NewShopItemScreen() {
             style={[
               styles.readinessCard,
               styles.readinessCardCompact,
-              missingLiveReadinessChecks.length === 0 ? styles.readinessCardSuccess : styles.readinessCardWarning,
+              missingReadinessChecks.length === 0 ? styles.readinessCardSuccess : styles.readinessCardWarning,
             ]}
           >
             <View style={styles.readinessHeaderRow}>
-              <Text style={styles.readinessTitle}>{missingLiveReadinessChecks.length === 0 ? 'Ready to go live' : 'Go-live checks'}</Text>
-              <View style={[styles.readinessCountPill, missingLiveReadinessChecks.length === 0 && styles.readinessCountPillReady]}>
-                <Text style={[styles.readinessCountText, missingLiveReadinessChecks.length === 0 && styles.readinessCountTextReady]}>
-                  {missingLiveReadinessChecks.length === 0
+              <Text style={styles.readinessTitle}>
+                {isOnboardingSetupItem
+                  ? missingReadinessChecks.length === 0
+                    ? 'Ready for setup'
+                    : 'Setup item checks'
+                  : missingReadinessChecks.length === 0
+                    ? 'Ready to go live'
+                    : 'Go-live checks'}
+              </Text>
+              <View style={[styles.readinessCountPill, missingReadinessChecks.length === 0 && styles.readinessCountPillReady]}>
+                <Text style={[styles.readinessCountText, missingReadinessChecks.length === 0 && styles.readinessCountTextReady]}>
+                  {missingReadinessChecks.length === 0
                     ? 'Ready'
-                    : `${missingLiveReadinessChecks.length} missing`}
+                    : `${missingReadinessChecks.length} missing`}
                 </Text>
               </View>
             </View>
             <Text style={styles.readinessBody}>
-              {missingLiveReadinessChecks.length === 0
-                ? 'This item can be published once the details still look right.'
-                : 'Finish these before publishing. You can save a draft anytime.'}
+              {isOnboardingSetupItem
+                ? missingReadinessChecks.length === 0
+                  ? 'This item can count toward setup. It stays hidden from buyers for now.'
+                  : 'Finish these so this item can count toward setup. It stays hidden from buyers for now.'
+                : missingReadinessChecks.length === 0
+                  ? 'This item can be published once the details still look right.'
+                  : 'Finish these before publishing. You can save a draft anytime.'}
             </Text>
             <View style={styles.checkList}>
               {visibleReadinessChecks.map((check) => (
@@ -991,23 +1340,25 @@ export default function NewShopItemScreen() {
                   <Text style={[styles.checkText, check.ready && styles.checkTextReady]}>{check.label}</Text>
                 </View>
               ))}
-              {missingLiveReadinessChecks.length > visibleReadinessChecks.length ? (
+              {missingReadinessChecks.length > visibleReadinessChecks.length ? (
                 <Text style={styles.readinessMeta}>
-                  +{missingLiveReadinessChecks.length - visibleReadinessChecks.length} more checked when you tap Review and go live.
+                  +{missingReadinessChecks.length - visibleReadinessChecks.length} more checked {isOnboardingSetupItem ? 'before this can count toward setup.' : 'before public publishing.'}
                 </Text>
               ) : null}
             </View>
           </View>
         ) : null}
 
-        <Field label="Quick start">
-          <SelectorCard
-            title="Listing starter"
-            value={selectedTemplateLabel}
-            hint="Optional. Starts title, category, and common sizes for this item."
-            onPress={() => setListingSheetMode('template')}
-          />
-        </Field>
+        {!isOnboardingSetupItem ? (
+          <Field label="Quick start">
+            <SelectorCard
+              title="Listing starter"
+              value={selectedTemplateLabel}
+              hint="Optional. Starts title, category, and common sizes for this item."
+              onPress={() => setListingSheetMode('template')}
+            />
+          </Field>
+        ) : null}
 
         <Field label="Title">
           <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="e.g. Crochet Two-piece Set" placeholderTextColor={Colors.midGrey} />
@@ -1017,7 +1368,7 @@ export default function NewShopItemScreen() {
           <SelectorCard
             title="Category"
             value={category || 'Choose category'}
-            hint="Helps buyers understand the piece and unlocks fit defaults."
+            hint={isOnboardingSetupItem ? 'Helps reviewers understand the piece.' : 'Helps buyers understand the piece and unlocks fit defaults.'}
             warning={!category}
             onPress={() => setListingSheetMode('category')}
           />
@@ -1044,6 +1395,7 @@ export default function NewShopItemScreen() {
           />
         </Field>
 
+        {!isOnboardingSetupItem ? (
         <Field label="Fit guide">
           <View style={styles.fitGuideCard}>
             <Text style={styles.fitGuideTitle}>Help buyers understand what each size means.</Text>
@@ -1157,14 +1509,19 @@ export default function NewShopItemScreen() {
             <Text style={styles.fieldHint}>
               {hasFitGuide
                 ? 'Fit guide ready. Drapeon can now suggest a size when the buyer has saved measurements.'
-                : 'Drafts can save without a fit guide, but live items require one so buyers know what each size means.'}
+                : isOnboardingSetupItem
+                  ? 'Add a fit guide so this item can count toward setup.'
+                  : 'Drafts can save without a fit guide, but live items require one so buyers know what each size means.'}
             </Text>
           </View>
         </Field>
+        ) : null}
 
+        {!isOnboardingSetupItem ? (
         <Field label="Price">
           <TextInput style={styles.input} value={price} onChangeText={setPrice} placeholder="e.g. 85000" placeholderTextColor={Colors.midGrey} keyboardType="decimal-pad" />
         </Field>
+        ) : null}
 
         <Field label="Units by size">
           {sizes.length === 0 ? (
@@ -1196,6 +1553,7 @@ export default function NewShopItemScreen() {
           ) : null}
         </Field>
 
+        {!isOnboardingSetupItem ? (
         <Field label="Currency">
           <SelectorCard
             title="Listing currency"
@@ -1204,7 +1562,9 @@ export default function NewShopItemScreen() {
             onPress={() => setListingSheetMode('currency')}
           />
         </Field>
+        ) : null}
 
+        {!isOnboardingSetupItem ? (
         <Field label="Fulfillment">
           <SelectorCard
             title="Receiving this item"
@@ -1218,73 +1578,107 @@ export default function NewShopItemScreen() {
               ? pickupAvailable
                 ? 'Pickup address stays private until you mark the order ready for collection.'
                 : 'Buyers will see the options you turned on here.'
-              : 'Drafts can save without fulfillment chosen yet. Pick at least 1 before you go live.'}
+              : isOnboardingSetupItem
+                ? 'Pick at least 1 fulfillment option so this item can count toward setup.'
+                : 'Drafts can save without fulfillment chosen yet. Pick at least 1 before you go live.'}
           </Text>
         </Field>
+        ) : null}
 
       </ScrollView>
       )}
 
+      {selectedMediaItem ? (
+        <ReadyMadeMediaManagerModal
+          items={mediaItems}
+          index={selectedMediaIndex ?? 0}
+          onIndexChange={setSelectedMediaIndex}
+          onClose={() => setSelectedMediaIndex(null)}
+          onReplace={() => {
+            if (selectedMediaIndex != null) openMediaReplacePicker(selectedMediaIndex)
+          }}
+          onDelete={() => {
+            if (selectedMediaIndex != null) removeMediaItem(selectedMediaIndex)
+          }}
+        />
+      ) : null}
+
       <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
         <View style={styles.footerButtons}>
-          <Button
-            label={
-              saving
-                ? 'Saving…'
-                : isEditing
-                  ? isRestockIntent
-                    ? 'Save stock changes'
-                    : 'Save draft changes'
-                  : 'Save draft'
-            }
-            onPress={() => { void saveItem(false) }}
-            disabled={saving || loadingItem}
-            size="md"
-            fullWidth={false}
-            style={styles.footerPrimaryButton}
-          />
-          <Button
-            label={
-              saving
-                ? 'Saving…'
-                : isEditing
-                  ? isRestockIntent
-                    ? 'Save and relist'
-                    : 'Review and go live'
-                  : 'Review and go live'
-            }
-            variant="secondary"
-            onPress={() => {
-              if (!canPublishLive) {
-                Alert.alert(
-                  'Live publishing unavailable',
-                  sellerStatus?.supportsReadyMade
-                    ? readiness.body
-                    : 'Enable Shop now on your tailor profile before publishing items live.',
-                )
-                return
-              }
-              void saveItem(true)
-            }}
-            disabled={saving || loadingItem}
-            size="md"
-            fullWidth={false}
-            style={styles.footerSecondaryButton}
-          />
-          {isDraftEditor ? (
+          {isOnboardingSetupItem ? (
             <Button
-              label="Delete draft"
-              variant="ghost"
-              onPress={confirmDeleteDraft}
+              label={saving ? 'Adding item…' : 'Add item to setup'}
+              onPress={() => { void saveItem(false) }}
               disabled={saving || loadingItem}
-              size="sm"
+              size="md"
+              fullWidth
+              style={styles.footerSingleButton}
             />
-          ) : null}
+          ) : (
+            <>
+              <Button
+                label={
+                  saving
+                    ? 'Saving…'
+                    : isEditing
+                      ? isRestockIntent
+                        ? 'Save stock changes'
+                        : 'Save draft changes'
+                      : 'Save draft'
+                }
+                onPress={() => { void saveItem(false) }}
+                disabled={saving || loadingItem}
+                size="md"
+                fullWidth={false}
+                style={styles.footerPrimaryButton}
+              />
+              <Button
+                label={
+                  saving
+                    ? 'Saving…'
+                    : isEditing
+                      ? isRestockIntent
+                        ? 'Save and relist'
+                        : 'Review and go live'
+                      : 'Review and go live'
+                }
+                variant="secondary"
+                onPress={() => {
+                  if (!canPublishLive) {
+                    Alert.alert(
+                      'Live publishing unavailable',
+                      sellerStatus?.supportsReadyMade
+                        ? readiness.body
+                        : 'Enable Shop now on your tailor profile before publishing items live.',
+                    )
+                    return
+                  }
+                  void saveItem(true)
+                }}
+                disabled={saving || loadingItem}
+                size="md"
+                fullWidth={false}
+                style={styles.footerSecondaryButton}
+              />
+              {isDraftEditor ? (
+                <Button
+                  label="Delete draft"
+                  variant="ghost"
+                  onPress={confirmDeleteDraft}
+                  disabled={saving || loadingItem}
+                  size="sm"
+                />
+              ) : null}
+            </>
+          )}
         </View>
       </View>
+      </KeyboardAvoidingView>
       <ListingChoiceSheet
         mode={listingSheetMode}
-        photoRemainingSlots={MAX_ITEM_PHOTOS - photoUrls.length}
+        mediaRemainingSlots={mediaReplaceIndex != null ? 1 : MAX_ITEM_MEDIA - mediaUrls.length}
+        portfolioVideoUrls={portfolioVideoUrls}
+        attachedMediaUrls={mediaUrls}
         templates={ITEM_TEMPLATES}
         selectedTemplateTitle={selectedTemplateLabel}
         category={category}
@@ -1292,11 +1686,15 @@ export default function NewShopItemScreen() {
         pickupAvailable={pickupAvailable}
         deliveryAvailable={deliveryAvailable}
         shippingAvailable={shippingAvailable}
-        onClose={() => setListingSheetMode(null)}
-        onPhotoSource={(source) => {
+        onClose={() => {
           setListingSheetMode(null)
-          void addPhoto(source)
+          setMediaReplaceIndex(null)
         }}
+        onMediaSource={(source) => {
+          setListingSheetMode(null)
+          void addMedia(source)
+        }}
+        onPortfolioVideo={attachPortfolioVideo}
         onTemplate={(template) => {
           applyTemplate(template)
           setListingSheetMode(null)
@@ -1334,6 +1732,270 @@ export default function NewShopItemScreen() {
         }}
       />
     </SafeAreaView>
+  )
+}
+
+function ReadyMadeMediaSortableTile({
+  item,
+  index,
+  isCover,
+  dragging,
+  onOpen,
+  onDelete,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+}: {
+  item: ReadyMadeMediaItem
+  index: number
+  isCover: boolean
+  dragging: boolean
+  onOpen: () => void
+  onDelete: () => void
+  onDragStart: () => void
+  onDragMove: (dx: number, dy: number) => void
+  onDragEnd: (dx: number, dy: number) => void
+}) {
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dragActiveRef = useRef(false)
+  const scaleAnim = useRef(new Animated.Value(1)).current
+  const opacityAnim = useRef(new Animated.Value(1)).current
+  const onDragStartRef = useRef(onDragStart)
+  const onDragMoveRef = useRef(onDragMove)
+  const onDragEndRef = useRef(onDragEnd)
+  const onOpenRef = useRef(onOpen)
+  onDragStartRef.current = onDragStart
+  onDragMoveRef.current = onDragMove
+  onDragEndRef.current = onDragEnd
+  onOpenRef.current = onOpen
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    }
+  }, [])
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          dragActiveRef.current = false
+          longPressTimerRef.current = setTimeout(() => {
+            dragActiveRef.current = true
+            Vibration.vibrate(30)
+            onDragStartRef.current()
+            Animated.spring(scaleAnim, { toValue: 1.05, useNativeDriver: true, friction: 6, tension: 200 }).start()
+            Animated.spring(opacityAnim, { toValue: 0.7, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          }, 400)
+        },
+        onPanResponderMove: (_, gesture) => {
+          if (!dragActiveRef.current && (Math.abs(gesture.dx) > 5 || Math.abs(gesture.dy) > 5)) {
+            if (longPressTimerRef.current) {
+              clearTimeout(longPressTimerRef.current)
+              longPressTimerRef.current = null
+            }
+            return
+          }
+          if (dragActiveRef.current) onDragMoveRef.current(gesture.dx, gesture.dy)
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+          }
+          const wasDrag = dragActiveRef.current
+          dragActiveRef.current = false
+          Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          Animated.spring(opacityAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          if (wasDrag) {
+            onDragEndRef.current(gesture.dx, gesture.dy)
+          } else {
+            onOpenRef.current()
+          }
+        },
+        onPanResponderTerminate: (_, gesture) => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+          }
+          const wasDrag = dragActiveRef.current
+          dragActiveRef.current = false
+          Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          Animated.spring(opacityAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          if (wasDrag) onDragEndRef.current(gesture.dx, gesture.dy)
+        },
+      }),
+    [opacityAnim, scaleAnim],
+  )
+
+  return (
+    <View style={styles.photoThumbWrap}>
+      <Animated.View
+        style={[
+          styles.photoThumbPress,
+          dragging && styles.photoThumbDragging,
+          { transform: [{ scale: scaleAnim }], opacity: opacityAnim },
+        ]}
+        {...panResponder.panHandlers}
+        accessibilityRole="button"
+        accessibilityLabel={`Open product media ${index + 1}`}
+      >
+        {item.type === 'video' ? (
+          <View style={[styles.photoThumb, styles.videoThumb]}>
+            <PortfolioVideoPreview uri={item.url} style={styles.photoThumb} autoplay={false} />
+            <View style={styles.mediaTypeBadge}>
+              <Feather name="play" size={11} color={Colors.textInverse} />
+            </View>
+          </View>
+        ) : (
+          <RemoteImage
+            uri={item.url}
+            bucket="seller-item-media"
+            style={styles.photoThumb}
+            contentFit="cover"
+            transition={180}
+            surface="tailor_shop_new_media_preview"
+          />
+        )}
+        {isCover ? (
+          <View style={styles.coverBadge}>
+            <Text style={styles.coverBadgeText}>Cover</Text>
+          </View>
+        ) : null}
+        {dragging ? (
+          <View style={styles.mediaDragBadge}>
+            <Text style={styles.mediaDragBadgeText}>Drop to reorder</Text>
+          </View>
+        ) : null}
+      </Animated.View>
+      <TouchableOpacity
+        style={styles.photoRemove}
+        onPress={onDelete}
+        accessibilityRole="button"
+        accessibilityLabel="Remove product media"
+      >
+        <Text style={styles.photoRemoveText}>x</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+function ReadyMadeMediaManagerModal({
+  items,
+  index,
+  onIndexChange,
+  onClose,
+  onReplace,
+  onDelete,
+}: {
+  items: ReadyMadeMediaItem[]
+  index: number
+  onIndexChange: (index: number | null) => void
+  onClose: () => void
+  onReplace: () => void
+  onDelete: () => void
+}) {
+  const insets = useSafeAreaInsets()
+  const { width } = useWindowDimensions()
+  const pageWidth = Math.max(280, width - Spacing.lg * 2)
+  const activeIndex = Math.max(0, Math.min(index, items.length - 1))
+  const activeItem = items[activeIndex] ?? null
+  const listRef = useRef<FlatList<ReadyMadeMediaItem> | null>(null)
+
+  useEffect(() => {
+    if (!activeItem) return
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: activeIndex, animated: false })
+    })
+  }, [activeIndex, activeItem, pageWidth])
+
+  if (!activeItem) return null
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.mediaManagerOverlay}>
+        <TouchableOpacity style={styles.mediaManagerScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.mediaManagerSheet, { paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl) }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.mediaManagerHeader}>
+            <View>
+              <Text style={styles.mediaManagerEyebrow}>Product media</Text>
+              <Text style={styles.mediaManagerTitle}>
+                {activeIndex === 0 ? 'Cover media' : `Media ${activeIndex + 1} of ${items.length}`}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose} accessibilityLabel="Close media preview">
+              <Text style={styles.sheetCloseText}>x</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.mediaManagerPreview, { width: pageWidth }]}>
+            <FlatList
+              ref={listRef}
+              data={items}
+              keyExtractor={(item, itemIndex) => `${item.type}-${item.url}-${itemIndex}`}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              initialScrollIndex={activeIndex}
+              getItemLayout={(_, itemIndex) => ({ length: pageWidth, offset: pageWidth * itemIndex, index: itemIndex })}
+              onScrollToIndexFailed={() => undefined}
+              onMomentumScrollEnd={(event) => {
+                const nextIndex = Math.round(event.nativeEvent.contentOffset.x / pageWidth)
+                onIndexChange(Math.max(0, Math.min(items.length - 1, nextIndex)))
+              }}
+              renderItem={({ item, index: itemIndex }) => (
+                <View style={[styles.mediaManagerCarouselPage, { width: pageWidth }]}>
+                  {item.type === 'video' ? (
+                    <PortfolioVideoPreview
+                      uri={item.url}
+                      style={styles.mediaManagerPreviewMedia}
+                      contentFit="contain"
+                      nativeControls
+                      autoplay={itemIndex === activeIndex}
+                    />
+                  ) : (
+                    <RemoteImage
+                      uri={item.url}
+                      bucket="seller-item-media"
+                      containerStyle={styles.mediaManagerPreviewMedia}
+                      style={styles.mediaManagerPreviewMedia}
+                      contentFit="cover"
+                      contentPosition="top"
+                      transition={120}
+                      surface="tailor_shop_item_media_manager"
+                    />
+                  )}
+                </View>
+              )}
+            />
+          </View>
+
+          <View style={styles.mediaManagerDots}>
+            {items.map((item, itemIndex) => (
+              <View
+                key={`${item.type}-${item.url}-${itemIndex}-dot`}
+                style={[styles.mediaManagerDot, itemIndex === activeIndex && styles.mediaManagerDotActive]}
+              />
+            ))}
+          </View>
+
+          <Text style={styles.mediaManagerHint}>Drag thumbnails in the grid to change the cover and order.</Text>
+
+          <View style={styles.mediaManagerActions}>
+            <TouchableOpacity style={[styles.mediaManagerAction, styles.mediaManagerActionCompact]} onPress={onReplace} activeOpacity={0.82}>
+              <Feather name="refresh-cw" size={16} color={Colors.needleGreen} />
+              <Text style={styles.mediaManagerActionText}>Replace</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.mediaManagerAction, styles.mediaManagerActionCompact, styles.mediaManagerActionDestructive]} onPress={onDelete} activeOpacity={0.82}>
+              <Feather name="trash-2" size={16} color={Colors.kanteRust} />
+              <Text style={[styles.mediaManagerActionText, styles.mediaManagerActionTextDestructive]}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -1406,7 +2068,9 @@ function InlineSelectorRow({
 
 function ListingChoiceSheet({
   mode,
-  photoRemainingSlots,
+  mediaRemainingSlots,
+  portfolioVideoUrls,
+  attachedMediaUrls,
   templates,
   selectedTemplateTitle,
   category,
@@ -1420,7 +2084,8 @@ function ListingChoiceSheet({
   deliveryAvailable,
   shippingAvailable,
   onClose,
-  onPhotoSource,
+  onMediaSource,
+  onPortfolioVideo,
   onTemplate,
   onCategory,
   onCurrency,
@@ -1434,7 +2099,9 @@ function ListingChoiceSheet({
   onToggleFulfillment,
 }: {
   mode: ListingSheetMode
-  photoRemainingSlots: number
+  mediaRemainingSlots: number
+  portfolioVideoUrls: string[]
+  attachedMediaUrls: string[]
   templates: typeof ITEM_TEMPLATES
   selectedTemplateTitle: string
   category: ItemCategory | ''
@@ -1448,7 +2115,8 @@ function ListingChoiceSheet({
   deliveryAvailable: boolean
   shippingAvailable: boolean
   onClose: () => void
-  onPhotoSource: (source: ItemPhotoSource) => void
+  onMediaSource: (source: ItemMediaSource) => void
+  onPortfolioVideo: (url: string) => void
   onTemplate: (template: (typeof ITEM_TEMPLATES)[number]) => void
   onCategory: (value: ItemCategory) => void
   onCurrency: (value: CurrencyCode) => void
@@ -1473,9 +2141,11 @@ function ListingChoiceSheet({
       ? READY_MADE_FIT_FIELDS
       : READY_MADE_FIT_FIELDS.filter((field) => recommendedFitFieldKeys.includes(field.key) || fitGuideFields.includes(field.key))
   const title =
-    mode === 'photo'
-      ? 'Add product photos'
-      : mode === 'template'
+    mode === 'media'
+      ? 'Add product media'
+      : mode === 'portfolio-videos'
+        ? 'Portfolio videos'
+        : mode === 'template'
         ? 'Choose a starter'
         : mode === 'category'
           ? 'Choose category'
@@ -1501,10 +2171,12 @@ function ListingChoiceSheet({
             <View style={styles.sheetTitleWrap}>
               <Text style={styles.sheetTitle}>{title}</Text>
               <Text style={styles.sheetSubtitle}>
-                {mode === 'photo'
-                  ? photoRemainingSlots === 1
-                    ? 'One photo slot left. Drapeon crops product photos to 4:5 so cards look consistent.'
-                    : `${photoRemainingSlots} photo slots left. Drapeon crops product photos to 4:5 so cards look consistent.`
+                {mode === 'media'
+                  ? mediaRemainingSlots === 1
+                    ? 'One media slot left. Add a photo, record a short video, or choose one from your library.'
+                    : `${mediaRemainingSlots} media slots left. Photos and videos stay in this item's media list.`
+                  : mode === 'portfolio-videos'
+                    ? 'Attach an existing portfolio video without uploading it again.'
                   : mode === 'sizes'
                     ? 'Add standard sizes or create one custom size.'
                     : mode === 'fit-fields'
@@ -1537,21 +2209,45 @@ function ListingChoiceSheet({
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-          {mode === 'photo' ? (
+          {mode === 'media' ? (
             <>
               <SheetOption
                 icon="camera"
                 title="Take photo"
                 body="Best for a front or detail shot on a clean background."
-                onPress={() => onPhotoSource('camera')}
+                onPress={() => onMediaSource('camera-photo')}
+              />
+              <SheetOption
+                icon="video"
+                title="Record video"
+                body="Use a clear 30 second or shorter clip showing movement, texture, or fit."
+                onPress={() => onMediaSource('camera-video')}
               />
               <SheetOption
                 icon="image"
-                title={photoRemainingSlots > 1 ? 'Choose photos' : 'Choose photo'}
-                body="Choose front, back, fit, or detail photos. We will crop them consistently."
-                onPress={() => onPhotoSource('library')}
+                title={mediaRemainingSlots > 1 ? 'Choose media' : 'Choose media'}
+                body="Choose photos or videos from your library. Videos must be 30 seconds or less."
+                onPress={() => onMediaSource('library')}
               />
             </>
+          ) : null}
+
+          {mode === 'portfolio-videos' ? (
+            <View style={styles.sheetRows}>
+              {portfolioVideoUrls.length > 0 ? (
+                portfolioVideoUrls.map((url, index) => (
+                  <SheetChoiceRow
+                    key={url}
+                    title={`Portfolio video ${index + 1}`}
+                    body={attachedMediaUrls.includes(url) ? 'Already attached to this item.' : 'Attach this video to the item media list.'}
+                    selected={attachedMediaUrls.includes(url)}
+                    onPress={() => onPortfolioVideo(url)}
+                  />
+                ))
+              ) : (
+                <Text style={styles.sheetEmptyText}>No portfolio videos yet.</Text>
+              )}
+            </View>
           ) : null}
 
           {mode === 'template' ? (
@@ -1814,9 +2510,6 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 19, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: Fonts.display },
   scroll: { flex: 1 },
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.xs, gap: Spacing.sm, paddingBottom: 150 },
-  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 6, ...Shadow.sm },
-  bestUseEyebrow: { fontSize: FontSize.xs, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  bestUseText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 6, ...Shadow.sm },
   readinessCardCompact: { gap: 8 },
   readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
@@ -1854,7 +2547,43 @@ const styles = StyleSheet.create({
   multiline: { minHeight: 88, textAlignVertical: 'top' },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   photoThumbWrap: { width: 92, height: 92, borderRadius: Radius.md, overflow: 'hidden', position: 'relative', backgroundColor: Colors.lightGrey },
+  photoThumbPress: { width: '100%', height: '100%', overflow: 'hidden', borderRadius: Radius.md },
+  photoThumbDragging: { borderWidth: 2, borderColor: PRIMARY_GREEN, opacity: 0.78 },
   photoThumb: { width: '100%', height: '100%' },
+  videoThumb: { backgroundColor: Colors.ink },
+  coverBadge: {
+    position: 'absolute',
+    left: 6,
+    top: 6,
+    borderRadius: Radius.full,
+    backgroundColor: PRIMARY_GREEN,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  coverBadgeText: { fontSize: 9, color: Colors.textInverse, fontWeight: FontWeight.bold, textTransform: 'uppercase' },
+  mediaDragBadge: {
+    position: 'absolute',
+    left: 6,
+    right: 6,
+    bottom: 6,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(17,17,17,0.72)',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  mediaDragBadgeText: { color: Colors.textInverse, fontSize: 9, fontWeight: FontWeight.semibold },
+  mediaTypeBadge: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(17,17,17,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoRemove: {
     position: 'absolute',
     top: 6,
@@ -1887,7 +2616,6 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     gap: 8,
   },
-  photoAddIcon: { fontSize: 22, color: MUTED_GREY },
   photoAddIconWrap: {
     width: 44,
     height: 44,
@@ -1898,7 +2626,74 @@ const styles = StyleSheet.create({
   },
   photoAddText: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textAlign: 'center' },
   photoAddHint: { fontSize: 12, color: Colors.inkLight, lineHeight: 18, textAlign: 'center' },
-  rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  portfolioVideoButton: {
+    alignSelf: 'flex-start',
+    minHeight: 42,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: PRIMARY_GREEN + '55',
+    backgroundColor: Colors.white,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  portfolioVideoButtonText: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  mediaManagerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(17,17,17,0.48)',
+  },
+  mediaManagerScrim: { ...StyleSheet.absoluteFillObject },
+  mediaManagerSheet: {
+    backgroundColor: HOME_BG,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    gap: Spacing.sm,
+    maxHeight: '88%',
+  },
+  mediaManagerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  mediaManagerEyebrow: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.bold, textTransform: 'uppercase' },
+  mediaManagerTitle: { marginTop: 2, fontSize: 18, color: CHARCOAL, fontWeight: FontWeight.bold, fontFamily: Fonts.display },
+  mediaManagerPreview: {
+    alignSelf: 'center',
+    aspectRatio: 4 / 5,
+    maxHeight: 430,
+    overflow: 'hidden',
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.boneDeep,
+  },
+  mediaManagerPreviewMedia: { width: '100%', height: '100%' },
+  mediaManagerCarouselPage: { height: '100%' },
+  mediaManagerDots: { flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  mediaManagerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.lightGrey },
+  mediaManagerDotActive: { width: 18, backgroundColor: PRIMARY_GREEN },
+  mediaManagerHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 17, textAlign: 'center' },
+  mediaManagerActions: { flexDirection: 'row', gap: Spacing.sm },
+  mediaManagerAction: {
+    minHeight: 44,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: PRIMARY_GREEN + '30',
+    backgroundColor: Colors.white,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  mediaManagerActionCompact: { flex: 1 },
+  mediaManagerActionDestructive: { borderColor: Colors.kanteRust + '28' },
+  mediaManagerActionText: { color: PRIMARY_GREEN, fontSize: 13, fontWeight: FontWeight.semibold },
+  mediaManagerActionTextDestructive: { color: Colors.kanteRust },
   selectorCard: {
     minHeight: 76,
     backgroundColor: Colors.white,
@@ -1986,8 +2781,6 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  customSizeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  customSizeInput: { flex: 1 },
   stockHelperCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -2026,17 +2819,6 @@ const styles = StyleSheet.create({
     color: CHARCOAL,
     fontSize: 14,
   },
-  customSizeBtn: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 10,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  customSizeBtnText: { color: CHARCOAL, fontSize: 13, fontWeight: FontWeight.semibold },
   fitGuideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -2120,15 +2902,9 @@ const styles = StyleSheet.create({
   fitGuideRangeRow: { flex: 1, flexDirection: 'row', gap: 8 },
   fitGuideInput: { flex: 1, minHeight: 44, paddingHorizontal: 10, paddingVertical: 8 },
   fitGuideNotesInput: { minHeight: 72 },
-  selectedSizeChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  selectedSizeText: { color: PRIMARY_GREEN, fontSize: 11, fontWeight: FontWeight.medium },
   footer: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey },
   footerButtons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  footerSingleButton: { flex: 1, borderRadius: Radius.full },
   footerPrimaryButton: { flex: 1.05, borderRadius: Radius.full },
   footerSecondaryButton: { flex: 1, borderRadius: Radius.full },
   sheetOverlay: {
@@ -2189,6 +2965,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.bone,
   },
+  sheetCloseText: { color: Colors.ink, fontSize: 16, fontWeight: FontWeight.bold },
   sheetBody: {
     flexGrow: 0,
   },
@@ -2199,6 +2976,7 @@ const styles = StyleSheet.create({
   sheetRows: {
     gap: Spacing.sm,
   },
+  sheetEmptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   sheetOption: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -12,8 +12,14 @@ import {
   currencyDisplayLabel,
   currencySymbol,
   detectCurrencyPreference,
+  getTailorPriceLimitMessage,
+  getTailorPriceMaxMajor,
+  getTailorPriceMinimumMessage,
+  getTailorPriceMinMajor,
   normalizePhoneForStorage,
+  parseTailorPriceMajor,
   SUPPORTED_ACCOUNT_CURRENCIES,
+  TAILOR_SETUP_VALIDATION,
   validatePhoneForProfile,
   type AccountCurrencyCode,
   type CurrencySource,
@@ -147,9 +153,7 @@ function browserLocale() {
 }
 
 function parseMajorAmountToMinor(value: string) {
-  const normalized = value.replace(/,/g, '').trim()
-  if (!normalized) return null
-  const amount = Number(normalized)
+  const amount = parseTailorPriceMajor(value)
   if (!Number.isFinite(amount) || amount <= 0) return null
   return Math.round(amount * 100)
 }
@@ -191,7 +195,7 @@ function ChipInput({
   return (
     <div className="grid gap-2 text-sm font-semibold text-ink">
       <span>{label}</span>
-      <div className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-3 py-2 transition focus-within:border-needle">
+      <div className="min-h-12 rounded-lg border border-ink/10 bg-white px-3 py-2 transition focus-within:border-needle">
         <div className="flex flex-wrap gap-1.5">
           {values.map((v) => (
             <span
@@ -378,10 +382,12 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     const languages = tailorLanguagesList
     const specialties = tailorSpecialtiesList
+    const priceMinMajor = parseTailorPriceMajor(priceMin)
+    const priceMaxMajor = parseTailorPriceMajor(priceMax)
     const priceRangeMin = parseMajorAmountToMinor(priceMin)
     const priceRangeMax = parseMajorAmountToMinor(priceMax)
     if (tailorLocation.trim().length < 2) {
-      setError('Add your city or base location.')
+      setError(TAILOR_SETUP_VALIDATION.LOCATION_REQUIRED_MESSAGE)
       return null
     }
     const contactLeakError =
@@ -393,23 +399,31 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       return null
     }
     if (languages.length === 0) {
-      setError('Add at least one language you work in.')
+      setError(TAILOR_SETUP_VALIDATION.LANGUAGE_REQUIRED_MESSAGE)
       return null
     }
     if (specialties.length === 0) {
-      setError('Add at least one specialty, like Agbada, alterations, bridal, or Ankara.')
+      setError(TAILOR_SETUP_VALIDATION.SPECIALTY_REQUIRED_MESSAGE)
       return null
     }
-    if (!priceRangeMin || !priceRangeMax || priceRangeMax < priceRangeMin) {
-      setError('Add a valid starting and high-end price range.')
+    if (!priceRangeMin || !priceRangeMax || priceRangeMax < priceRangeMin || !Number.isFinite(priceMinMajor) || !Number.isFinite(priceMaxMajor)) {
+      setError(TAILOR_SETUP_VALIDATION.PRICE_REQUIRED_MESSAGE)
+      return null
+    }
+    if (priceMinMajor < getTailorPriceMinMajor(defaultCurrency)) {
+      setError(getTailorPriceMinimumMessage(defaultCurrency))
+      return null
+    }
+    if (priceMaxMajor > getTailorPriceMaxMajor(defaultCurrency)) {
+      setError(getTailorPriceLimitMessage(defaultCurrency))
       return null
     }
     if (!supportsCustomOrders && !supportsReadyMade) {
-      setError('Choose custom orders, ready-made items, or both.')
+      setError(TAILOR_SETUP_VALIDATION.ORDER_MODE_REQUIRED_MESSAGE)
       return null
     }
     if (fulfillment.length === 0) {
-      setError('Choose at least one fulfillment option.')
+      setError(TAILOR_SETUP_VALIDATION.FULFILLMENT_REQUIRED_MESSAGE)
       return null
     }
 
@@ -600,7 +614,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   // ─── Post-signup confirmation screen ───────────────────────────────────────
   if (isSignUp && pendingConfirmationEmail) {
     return (
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)] text-center">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)] text-center">
         <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-needle/10">
           <svg
             viewBox="0 0 24 24"
@@ -642,7 +656,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           Use a different email
         </button>
         {error ? (
-          <p className="mt-4 rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
+          <p className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
             {error}
           </p>
         ) : null}
@@ -653,7 +667,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   // ─── Sign-in form ──────────────────────────────────────────────────────────
   if (!isSignUp) {
     return (
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Sign in</p>
           <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
@@ -680,7 +694,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               placeholder="you@example.com"
               type="email"
               autoComplete="email"
-              className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
             />
           </label>
 
@@ -704,12 +718,12 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 type={showPassword ? 'text' : 'password'}
                 autoComplete="current-password"
                 maxLength={MAX_PASSWORD_LENGTH}
-                className="min-h-12 w-full rounded-[1rem] border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                className="min-h-12 w-full rounded-lg border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((current) => !current)}
-                className="absolute inset-y-1.5 right-1.5 rounded-[0.8rem] px-3 text-xs font-semibold text-needle transition hover:bg-bone"
+                className="absolute inset-y-1.5 right-1.5 rounded-lg px-3 text-xs font-semibold text-needle transition hover:bg-bone"
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? 'Hide' : 'Show'}
@@ -718,13 +732,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           </div>
 
           {error ? (
-            <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+            <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
               {error}
             </div>
           ) : null}
 
           {pendingConfirmationEmail ? (
-            <div className="grid gap-3 rounded-[1rem] border border-ink/8 bg-white/72 px-4 py-3 text-sm leading-6 text-ink">
+            <div className="grid gap-3 rounded-lg border border-ink/8 bg-white/72 px-4 py-3 text-sm leading-6 text-ink">
               <p className="text-ink/66">
                 Need a fresh link for{' '}
                 <span className="font-semibold text-ink">{pendingConfirmationEmail}</span>?
@@ -781,7 +795,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   // ─── Sign-up multi-step form ───────────────────────────────────────────────
 
   return (
-    <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
+    <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
       {/* Step indicator */}
       <div className="mb-6 flex items-center gap-2">
         {([1, 2, 3] as const).map((n) => (
@@ -813,9 +827,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Your name"
+                placeholder="e.g. John Doe"
                 autoComplete="name"
-                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
               />
             </label>
 
@@ -827,7 +841,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 placeholder="+2348012345678"
                 type="tel"
                 autoComplete="tel"
-                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
               />
               <span className="text-xs font-normal leading-5 text-ink/52">
                 Used for order updates, account recovery, and critical trust-chain alerts.
@@ -845,7 +859,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 placeholder="you@example.com"
                 type="email"
                 autoComplete="email"
-                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
               />
             </label>
 
@@ -860,12 +874,12 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="new-password"
                   maxLength={MAX_PASSWORD_LENGTH}
-                  className="min-h-12 w-full rounded-[1rem] border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                  className="min-h-12 w-full rounded-lg border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((current) => !current)}
-                  className="absolute inset-y-1.5 right-1.5 rounded-[0.8rem] px-3 text-xs font-semibold text-needle transition hover:bg-bone"
+                  className="absolute inset-y-1.5 right-1.5 rounded-lg px-3 text-xs font-semibold text-needle transition hover:bg-bone"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? 'Hide' : 'Show'}
@@ -887,7 +901,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </div>
 
             {error ? (
-              <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
                 {error}
               </div>
             ) : null}
@@ -935,7 +949,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <button
               type="button"
               onClick={() => setRole('CUSTOMER')}
-              className={`rounded-[1.2rem] border p-5 text-left transition ${
+              className={`rounded-[8px] border p-5 text-left transition ${
                 role === 'CUSTOMER'
                   ? 'border-needle/30 bg-needle/6 ring-2 ring-needle/20'
                   : 'border-ink/10 bg-white hover:bg-bone/60'
@@ -968,7 +982,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <button
               type="button"
               onClick={() => setRole('TAILOR')}
-              className={`rounded-[1.2rem] border p-5 text-left transition ${
+              className={`rounded-[8px] border p-5 text-left transition ${
                 role === 'TAILOR'
                   ? 'border-needle/30 bg-needle/6 ring-2 ring-needle/20'
                   : 'border-ink/10 bg-white hover:bg-bone/60'
@@ -999,7 +1013,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           </p>
 
           {error ? (
-            <div role="alert" aria-live="polite" className="mt-4 rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+            <div role="alert" aria-live="polite" className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
               {error}
             </div>
           ) : null}
@@ -1057,7 +1071,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                   setCurrencySource('USER_SELECTED')
                   setRegionCode(regionCode || detectedCurrency.regionCode || 'ZZ')
                 }}
-                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition focus:border-needle"
+                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition focus:border-needle"
               >
                 {SUPPORTED_CURRENCIES.map((option) => (
                   <option key={option.code} value={option.code}>
@@ -1099,8 +1113,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                         onClick={() => setGarmentContext(option.value)}
                         className={
                           garmentContext === option.value
-                            ? 'rounded-[1rem] border border-needle/20 bg-needle/8 px-4 py-3 text-left'
-                            : 'rounded-[1rem] border border-ink/8 bg-white px-4 py-3 text-left transition hover:bg-white/80'
+                            ? 'rounded-lg border border-needle/20 bg-needle/8 px-4 py-3 text-left'
+                            : 'rounded-lg border border-ink/8 bg-white px-4 py-3 text-left transition hover:bg-white/80'
                         }
                       >
                         <span className="block text-sm font-semibold text-ink">{option.label}</span>
@@ -1119,7 +1133,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                     onChange={(event) => setTailorLocation(event.target.value)}
                     placeholder="Lagos, London, Atlanta..."
                     autoComplete="address-level2"
-                    className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                    className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                   />
                 </label>
 
@@ -1147,7 +1161,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                       onChange={(event) => setPriceMin(event.target.value)}
                       placeholder="50000"
                       inputMode="decimal"
-                      className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                      className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                     />
                   </label>
                   <label className="grid gap-2 text-sm font-semibold text-ink">
@@ -1157,7 +1171,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                       onChange={(event) => setPriceMax(event.target.value)}
                       placeholder="250000"
                       inputMode="decimal"
-                      className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                      className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                     />
                   </label>
                 </div>
@@ -1221,13 +1235,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             )}
 
             {error ? (
-              <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
                 {error}
               </div>
             ) : null}
 
             {message ? (
-              <div className="rounded-[1rem] border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
+              <div className="rounded-lg border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
                 {message}
               </div>
             ) : null}

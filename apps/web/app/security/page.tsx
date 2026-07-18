@@ -85,7 +85,7 @@ export default function SecurityPage(): React.JSX.Element {
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
           <a
             href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             aria-label={`Email security at ${CONTACTS.security}`}
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
@@ -96,7 +96,7 @@ export default function SecurityPage(): React.JSX.Element {
           </a>
           <a
             href={`mailto:${CONTACTS.privacy}?subject=Drapeon%20privacy%20question`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             aria-label={`Email privacy at ${CONTACTS.privacy}`}
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>

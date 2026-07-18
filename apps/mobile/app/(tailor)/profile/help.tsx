@@ -12,7 +12,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { CONTACTS, DRAPE_TAILOR_GUIDE_TOPICS } from '@drape/shared'
+import { CONTACTS, DRAPE_TAILOR_GUIDE_TOPICS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
 
 const FAQ: Array<{ q: string; a: string }> = [
@@ -186,7 +186,7 @@ export default function TailorHelpScreen() {
               icon="message-circle"
               title="WhatsApp"
               sub="Chat with the tailor success team"
-              onPress={() => { void openExternal('https://wa.me/message/drapeon') }}
+              onPress={() => { void openExternal(buildWhatsAppSupportUrl('Hi Drapeon, I need tailor support.')) }}
             />
             <View style={styles.divider} />
             <ContactRow
@@ -257,7 +257,7 @@ function alertOpenFailed(url: string) {
   }
 
   if (url.startsWith('https://wa.me/')) {
-    Alert.alert('Unable to open link', `Please open WhatsApp and message us directly, or email ${CONTACTS.tailors} with the subject "Tailor support request". Keep the live order as the source of truth while you wait.`)
+    Alert.alert('Unable to open link', `Please open WhatsApp and message Drapeon, or email ${CONTACTS.tailors} with the subject "Tailor support request". Keep the live order as the source of truth while you wait.`)
     return
   }
 

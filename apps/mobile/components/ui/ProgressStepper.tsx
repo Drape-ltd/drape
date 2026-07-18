@@ -69,8 +69,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.lightGrey,
   },
   segmentDone: {
-    backgroundColor: Colors.needleGreen,
-    opacity: 0.5,
+    backgroundColor: Colors.needleGreenLight,
   },
   segmentActive: {
     backgroundColor: Colors.needleGreen,
@@ -88,7 +87,7 @@ const styles = StyleSheet.create({
   },
   stepLabelDone: {
     color: Colors.needleGreen,
-    opacity: 0.6,
+    fontWeight: FontWeight.medium,
   },
   stepLabelActive: {
     color: Colors.needleGreen,

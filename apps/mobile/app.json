@@ -53,8 +53,12 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Drapeon uses your camera to upload reference photos, progress updates, and Drapeon Vision scans.",
-        "NSPhotoLibraryUsageDescription": "Drapeon accesses your photo library for order references and portfolio photos.",
+        "UIBackgroundModes": [
+          "fetch",
+          "remote-notification"
+        ],
+        "NSCameraUsageDescription": "Drapeon uses your camera to upload reference photos, portfolio videos, progress updates, and Drapeon Vision scans.",
+        "NSPhotoLibraryUsageDescription": "Drapeon accesses your photo library for order references and portfolio photos or videos.",
         "NSMicrophoneUsageDescription": "Drapeon uses your microphone for voice note messages.",
         "NSMotionUsageDescription": "Drapeon uses device motion to keep Drapeon Vision scans calibrated while you turn.",
         "NSFaceIDUsageDescription": "Drapeon uses Face ID to quickly and securely verify your identity when you return to the app."
@@ -83,6 +87,11 @@
             },
             {
               "scheme": "https",
+              "host": "drapeon.co",
+              "pathPrefix": "/verify-handoff"
+            },
+            {
+              "scheme": "https",
               "host": "www.drapeon.co",
               "pathPrefix": "/auth"
             },
@@ -90,6 +99,11 @@
               "scheme": "https",
               "host": "www.drapeon.co",
               "pathPrefix": "/payments"
+            },
+            {
+              "scheme": "https",
+              "host": "www.drapeon.co",
+              "pathPrefix": "/verify-handoff"
             }
           ],
           "category": [
@@ -125,8 +139,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Drapeon uses your photo library so you can upload portfolio photos and order references. Your photos are only accessed when you choose to upload.",
-          "cameraPermission": "Drapeon uses your camera to take portfolio photos and order references."
+          "photosPermission": "Drapeon uses your photo library so you can upload portfolio photos, videos, and order references. Your media is only accessed when you choose to upload.",
+          "cameraPermission": "Drapeon uses your camera to take portfolio photos, videos, and order references."
         }
       ],
       [
@@ -140,7 +154,9 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#2D6A4F",
-          "sounds": []
+          "defaultChannel": "default",
+          "sounds": [],
+          "enableBackgroundRemoteNotifications": true
         }
       ],
       [

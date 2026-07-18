@@ -6,6 +6,7 @@ import { audit, log } from '../_shared/logger.ts'
 import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { isoDate, parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'order-call-action'
@@ -141,6 +142,21 @@ Deno.serve(async (req) => {
     }
     if (!READY_MADE_CALL_STAGES.includes(order.stage as typeof READY_MADE_CALL_STAGES[number])) {
       return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.')
+    }
+
+    if (note?.trim()) {
+      const contactBlock = await rejectIfBlockedContact({
+        supabase,
+        fn: FN,
+        cors: corsHeaders as Record<string, string>,
+        actorId: caller.id,
+        actorRole,
+        surface: 'order_call_note',
+        text: note,
+        message: 'Your note contains contact information not allowed outside Drape. Remove any phone numbers, handles, or links.',
+        orderId,
+      })
+      if (contactBlock) return contactBlock
     }
 
     const supportMeta = parseOrderSupportMeta(order.special_note)

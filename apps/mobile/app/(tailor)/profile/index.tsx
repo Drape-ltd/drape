@@ -21,9 +21,10 @@ import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { useTailorDashboard, useTailorPublic } from '@/lib/queries'
+import { useTailorDashboard, useTailorPublic, useTailorNotifCount } from '@/lib/queries'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { shareTailorProfile, inviteTailorColleague, inviteCustomerFromTailor } from '@/lib/invite'
+import { appendToHistory, resetTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
@@ -42,6 +43,8 @@ type TailorProfile = {
   specialtyTags: string[]
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
+  acceptsCustomOrdersNow: boolean
+  shopPaused: boolean
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
@@ -106,6 +109,8 @@ export default function TailorProfileScreen() {
       specialtyTags: publicProfile?.specialtyTags ?? [],
       supportsCustomOrders: publicProfile?.supportsCustomOrders ?? true,
       supportsReadyMade: publicProfile?.supportsReadyMade ?? false,
+      acceptsCustomOrdersNow: publicProfile?.acceptsCustomOrdersNow ?? true,
+      shopPaused: publicProfile?.shopPaused ?? false,
       pickupAvailable: publicProfile?.pickupAvailable ?? false,
       deliveryAvailable: publicProfile?.deliveryAvailable ?? false,
       shippingAvailable: publicProfile?.shippingAvailable ?? false,
@@ -132,7 +137,9 @@ export default function TailorProfileScreen() {
         ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
         : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.'
       : ''
-  const pendingQuoteCount = dashboardStats?.pendingQuotes ?? 0
+  const lastTailorNotifCheck =
+    user?.user_metadata?.last_tailor_notif_check ?? new Date(0).toISOString()
+  const { data: tailorNotifCount = 0 } = useTailorNotifCount(userId, lastTailorNotifCheck)
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     const supported = await Linking.canOpenURL(url)
@@ -248,7 +255,7 @@ export default function TailorProfileScreen() {
                   Alert.alert('Could not switch modes', error)
                   return
                 }
-                router.replace('/(customer)')
+                resetTo(router, '/(customer)')
               })
               .finally(() => setSwitchingRole(false))
           },
@@ -338,10 +345,10 @@ export default function TailorProfileScreen() {
               activeOpacity={0.7}
             >
               <Feather name="bell" size={20} color={Colors.ink} />
-              {pendingQuoteCount > 0 && (
+              {tailorNotifCount > 0 && (
                 <View style={styles.bellBadge}>
                   <Text style={styles.bellBadgeText}>
-                    {pendingQuoteCount > 9 ? '9+' : String(pendingQuoteCount)}
+                    {tailorNotifCount > 9 ? '9+' : String(tailorNotifCount)}
                   </Text>
                 </View>
               )}
@@ -447,6 +454,14 @@ export default function TailorProfileScreen() {
                   ].filter(Boolean).join(' + ') || 'No offers enabled'}
                 />
                 <CapabilityRow
+                  icon="clock"
+                  label="Order status"
+                  value={[
+                    profile.supportsCustomOrders ? profile.acceptsCustomOrdersNow ? 'Custom open' : 'Custom paused' : null,
+                    profile.supportsReadyMade ? profile.shopPaused ? 'Shop paused' : 'Shop open' : null,
+                  ].filter(Boolean).join(' · ') || 'No order switches enabled'}
+                />
+                <CapabilityRow
                   icon="map-pin"
                   label="Fulfillment"
                   value={[
@@ -524,7 +539,13 @@ export default function TailorProfileScreen() {
                   label="Orders"
                   value={String(profile.totalOrders)}
                   onPress={() =>
-                    router.push({ pathname: '/(tailor)/orders', params: { tab: 'completed' } })
+                    router.push({
+                      pathname: '/(tailor)/orders',
+                      params: {
+                        tab: 'completed',
+                        historyChain: appendToHistory(undefined, '/(tailor)/profile'),
+                      },
+                    })
                   }
                 />
               </View>
@@ -785,8 +806,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
   bellBadge: {
     position: 'absolute',
@@ -810,8 +830,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
     borderRadius: 18,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -824,8 +842,6 @@ const styles = StyleSheet.create({
     height: 76,
     borderRadius: 38,
     backgroundColor: Colors.needleGreenLight,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -834,8 +850,6 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 38,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     overflow: 'hidden',
   },
   avatarText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.needleGreen },
@@ -1035,8 +1049,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   trustStatusIcon: {

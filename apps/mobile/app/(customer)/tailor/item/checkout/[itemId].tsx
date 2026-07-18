@@ -26,7 +26,7 @@ import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/addres
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button, ChoiceSheet, DisclosureSection, PaymentTrustCard } from '@/components/ui'
-import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import {
   ORDER_CANCELLATION_ACK_COPY,
@@ -113,7 +113,11 @@ function fulfillmentLabel(value: FulfillmentOption | null) {
 }
 
 export default function ReadyMadeCheckoutScreen() {
-  const { itemId, returnTo } = useLocalSearchParams<{ itemId: string; returnTo?: string }>()
+  const { itemId, returnTo, historyChain } = useLocalSearchParams<{
+    itemId: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -159,7 +163,12 @@ export default function ReadyMadeCheckoutScreen() {
   }, 0)
 
   function goBack() {
-    goBackOrReturnToIfNeeded(router, navigation, returnTo, `/(customer)/tailor/item/${itemId}`)
+    goBackOrReturnTo(
+      router,
+      navigation,
+      pickSafeReturnTo(historyChain, returnTo),
+      `/(customer)/tailor/item/${itemId}`,
+    )
   }
 
   useEffect(() => {
@@ -365,7 +374,7 @@ export default function ReadyMadeCheckoutScreen() {
     ? quantityForSize(activeItem.sizeInventory, selectedSize || null, activeItem.inventoryQuantity)
     : 0
   const sellerUnavailable = activeItem
-    ? activeItem.sellerAvailability === 'FULLY_BOOKED' || !activeItem.sellerLive
+    ? activeItem.shopPaused || !activeItem.sellerLive
     : false
   const maxCheckoutQuantity = activeItem
     ? Math.min(
@@ -563,7 +572,7 @@ export default function ReadyMadeCheckoutScreen() {
 
         if (existingOrderId) {
           Alert.alert('Checkout already saved', errorMessage)
-          router.replace({
+          resetTo(router, {
             pathname: '/(customer)/orders/[id]',
             params: { id: existingOrderId, tab: 'active' },
           })
@@ -600,14 +609,14 @@ export default function ReadyMadeCheckoutScreen() {
           Alert.alert('Payment unavailable', paymentResult.message)
         }
 
-        router.replace({
+        resetTo(router, {
           pathname: '/(customer)/orders/[id]',
           params: { id: data.orderId, tab: 'active' },
         })
         return
       }
 
-      router.replace({
+      resetTo(router, {
         pathname: '/(customer)/orders/[id]',
         params: { id: data.orderId, tab: 'active', placed: '1' },
       })
@@ -628,7 +637,7 @@ export default function ReadyMadeCheckoutScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -739,7 +748,15 @@ export default function ReadyMadeCheckoutScreen() {
                       <Button
                         label="Add measurements"
                         variant="secondary"
-                        onPress={() => router.push('/(customer)/profile/measurements')}
+                        onPress={() =>
+                          router.replace({
+                            pathname: '/(customer)/profile/measurements',
+                            params: {
+                              returnTo: `/(customer)/tailor/item/checkout/${itemId}`,
+                              historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/checkout/${itemId}`),
+                            },
+                          })
+                        }
                       />
                     </View>
                   ) : null}
@@ -781,15 +798,19 @@ export default function ReadyMadeCheckoutScreen() {
                   <TouchableOpacity
                     style={styles.quantityBtn}
                     onPress={() => setQuantity((value) => Math.max(1, value - 1))}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Decrease quantity, currently ${quantity}`}
                   >
                     <Text style={styles.quantityBtnText}>−</Text>
                   </TouchableOpacity>
-                  <Text style={styles.quantityValue}>{quantity}</Text>
+                  <Text style={styles.quantityValue} accessibilityLabel={`Quantity: ${quantity}`}>{quantity}</Text>
                   <TouchableOpacity
                     style={styles.quantityBtn}
                     onPress={() =>
                       setQuantity((value) => Math.min(Math.max(1, maxCheckoutQuantity), value + 1))
                     }
+                    accessibilityRole="button"
+                    accessibilityLabel={`Increase quantity, currently ${quantity}`}
                   >
                     <Text style={styles.quantityBtnText}>+</Text>
                   </TouchableOpacity>
@@ -1150,7 +1171,7 @@ export default function ReadyMadeCheckoutScreen() {
         {activeItem ? (
           <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
             <Button
-              label={saving ? 'Preparing payment…' : 'Pay now'}
+              label={saving ? 'Preparing payment…' : 'Buy now'}
               size="md"
               onPress={createOrder}
               disabled={
@@ -1633,38 +1654,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     fontFamily: Fonts.display,
   },
-  bestUseCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  bestUseEyebrow: {
-    fontSize: 11,
-    color: PRIMARY_GREEN,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   bestUseText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  policyCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  policyTitle: {
-    fontSize: 15,
-    fontWeight: FontWeight.semibold,
-    color: CHARCOAL,
-    fontFamily: Fonts.display,
-  },
   policyList: { gap: 8 },
   policyRow: { gap: 4 },
   policyRowTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },

@@ -19,8 +19,10 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { appendToHistory } from '@/lib/navigation'
 import { AvatarImage, SkeletonBlock, StateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import { CUSTOMER_ACTIVE_ORDER_STAGES } from '@/lib/order-flow'
@@ -155,7 +157,7 @@ export default function MessagesInboxScreen() {
         )
         .eq('customer_id', userId)
         .order('created_at', { ascending: false })
-        .limit(20)
+        .limit(60)
 
       if (error) throw error
 
@@ -274,7 +276,12 @@ export default function MessagesInboxScreen() {
     return (
       <TouchableOpacity
         style={styles.row}
-        onPress={() => router.push(`/(customer)/messages/${item.orderId}`)}
+        onPress={() =>
+          router.push({
+            pathname: '/(customer)/messages/[orderId]',
+            params: { orderId: item.orderId, historyChain: appendToHistory(undefined, '/(customer)/messages') },
+          })
+        }
         activeOpacity={0.7}
       >
         <AvatarImage
@@ -337,7 +344,10 @@ export default function MessagesInboxScreen() {
           activeOpacity={0.75}
           onPress={() => {
             if (singleThread && latest) {
-              router.push(`/(customer)/messages/${latest.orderId}`)
+              router.push({
+                pathname: '/(customer)/messages/[orderId]',
+                params: { orderId: latest.orderId, historyChain: appendToHistory(undefined, '/(customer)/messages') },
+              })
               return
             }
             if (mode === 'open') {
@@ -621,97 +631,94 @@ export default function MessagesInboxScreen() {
 }
 
 function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
-  const SUPPORT_EMAIL = 'support@drapeon.co'
-  type SupportTopicKey = 'order' | 'payments' | 'report' | 'guide'
+  const SUPPORT_EMAIL = CONTACTS.support
+  type SupportTopicKey = 'order' | 'payments' | 'report'
+  type QuickAnswerKey = 'late' | 'refund' | 'no_response'
+
   const [selectedTopic, setSelectedTopic] = useState<SupportTopicKey | null>(null)
-  const supportTopics: Record<
-    SupportTopicKey,
+  const [expandedQuickAnswer, setExpandedQuickAnswer] = useState<QuickAnswerKey | null>(null)
+
+  const quickAnswers: {
+    key: QuickAnswerKey
+    title: string
+    answer: string
+    actionLabel?: string
+    onAction?: () => void
+  }[] = [
     {
-      icon: keyof typeof Feather.glyphMap
-      title: string
-      body: string
-      details: string[]
-      primaryLabel?: string
-      onPrimary?: () => void
-    }
-  > = {
-    order: {
+      key: 'late',
+      title: 'My order is late',
+      answer:
+        'Open the order thread and ask your tailor for a production update. Most delays resolve there. If you have not heard back within 48 hours, email support with the order name.',
+    },
+    {
+      key: 'refund',
+      title: 'I need a refund',
+      answer:
+        'Refund requests are reviewed with the original order and payment record. Email support with the order name and what changed after checkout.',
+      actionLabel: 'Email support',
+      onAction: () => { void openSupportEmail('Refund request') },
+    },
+    {
+      key: 'no_response',
+      title: 'My tailor is not responding',
+      answer:
+        'Give tailors up to 48 hours to reply on working days. If your deadline is at risk, email support with the order name and the last message timestamp.',
+      actionLabel: 'Email support',
+      onAction: () => { void openSupportEmail('Unresponsive tailor') },
+    },
+  ]
+
+  const supportTopics: {
+    key: SupportTopicKey
+    icon: keyof typeof Feather.glyphMap
+    title: string
+    body: string
+    details: string[]
+    primaryLabel: string
+    onPrimary: () => void
+  }[] = [
+    {
+      key: 'order',
       icon: 'package',
       title: 'Order help',
-      body: 'Keep live order questions attached to the right thread so the tailor and support team see the same context.',
+      body: 'Quotes, production updates, pickup, and delivery questions belong in the order thread so the tailor and support team share the same record.',
       details: [
-        'Open the order conversation for quote, pickup, delivery, or stage questions.',
-        'Use the order detail screen for timelines, payments, and production photos.',
+        'Open the order conversation for any question tied to a live order.',
+        'Use the order detail screen for timelines, payments, and photos.',
       ],
       primaryLabel: 'Open order threads',
       onPrimary: onOpenMessages,
     },
-    payments: {
+    {
+      key: 'payments',
       icon: 'credit-card',
       title: 'Payments and refunds',
-      body: 'For payment issues, include the order name, receipt, and what changed after checkout.',
+      body: 'Include the order name, receipt, and what changed after checkout when you contact support.',
       details: [
         'Payment questions stay tied to the order before support steps in.',
         'Refund reviews need the original order and payment provider record.',
       ],
       primaryLabel: 'Email support',
-      onPrimary: () => {
-        void openSupportEmail('Payment or refund help')
-      },
+      onPrimary: () => { void openSupportEmail('Payment or refund help') },
     },
-    report: {
+    {
+      key: 'report',
       icon: 'flag',
       title: 'Report a problem',
-      body: 'Share what happened, when it happened, and attach screenshots if they help explain the issue.',
+      body: 'For bugs, account issues, or anything that feels off — email support with the screen name, steps, and screenshots if helpful.',
       details: [
         'For active orders, keep the order thread updated first.',
-        'For bugs or account issues, email support with the screen name and steps.',
+        'For bugs or account issues, include the screen name and steps to reproduce.',
       ],
       primaryLabel: 'Email support',
-      onPrimary: () => {
-        void openSupportEmail('Report a problem')
-      },
-    },
-    guide: {
-      icon: 'book-open',
-      title: 'Help guide',
-      body: 'Quick paths for the moments customers usually need help with.',
-      details: [
-        'Custom order questions: open the order thread.',
-        'Payment or refund questions: include the order and receipt.',
-        'Account or app issues: email support with screenshots.',
-      ],
-      primaryLabel: 'Open order threads',
-      onPrimary: onOpenMessages,
-    },
-  }
-  const helpOptions = [
-    {
-      key: 'order' as const,
-      title: 'Order help',
-      body: 'Questions about quotes, pickup, delivery, or production updates.',
-    },
-    {
-      key: 'payments' as const,
-      title: 'Payments and refunds',
-      body: 'What to include before support reviews the payment record.',
-    },
-    {
-      key: 'report' as const,
-      title: 'Report a problem',
-      body: 'App issues, account problems, or anything that feels off.',
-    },
-    {
-      key: 'guide' as const,
-      title: 'Help guide',
-      body: 'Fast answers for common customer support moments.',
+      onPrimary: () => { void openSupportEmail('Report a problem') },
     },
   ]
 
   async function openSupportEmail(subject?: string) {
     const fallbackSubject = subject ?? 'Drapeon support request'
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(fallbackSubject)}`
-
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
       Alert.alert(
@@ -720,7 +727,6 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
       )
       return
     }
-
     try {
       await Linking.openURL(url)
     } catch {
@@ -731,94 +737,160 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
     }
   }
 
+  async function openSupportWhatsApp() {
+    const url = buildWhatsAppSupportUrl('Hi Drapeon, I need customer support.')
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert(
+        'Unable to open WhatsApp',
+        `Please message Drapeon on WhatsApp, or email ${SUPPORT_EMAIL} if this is about an account issue.`,
+      )
+      return
+    }
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert(
+        'Unable to open WhatsApp',
+        `Please message Drapeon on WhatsApp, or email ${SUPPORT_EMAIL} if this is about an account issue.`,
+      )
+    }
+  }
+
   return (
     <ScrollView
       style={styles.supportScroll}
       contentContainerStyle={styles.supportContent}
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.supportHeroCard}>
-        <View style={styles.supportHeroIcon}>
-          <Feather name="life-buoy" size={22} color={Colors.needleGreen} />
+      <View style={styles.supportHeader}>
+        <View style={styles.supportHeaderIcon}>
+          <Feather name="headphones" size={26} color={Colors.needleGreen} />
         </View>
-        <View style={styles.supportHeroCopy}>
-          <Text style={styles.supportHeroTitle}>How can we help?</Text>
-          <Text style={styles.supportHeroSub}>
-            For live orders, start from the order thread. For everything else, email support and include screenshots when useful.
-          </Text>
-        </View>
+        <Text style={styles.supportHeaderTitle}>How can we help?</Text>
+        <Text style={styles.supportHeaderSub}>
+          For live orders, start from the order thread. For everything else, we're here.
+        </Text>
       </View>
 
-      {selectedTopic ? (
-        <View style={styles.supportTopicCard}>
-          <View style={styles.supportTopicHeader}>
-            <View style={styles.supportTopicIcon}>
-              <Feather name={supportTopics[selectedTopic].icon} size={18} color={Colors.needleGreen} />
-            </View>
-            <View style={styles.supportTopicTitleWrap}>
-              <Text style={styles.supportTopicTitle}>{supportTopics[selectedTopic].title}</Text>
-              <Text style={styles.supportTopicBody}>{supportTopics[selectedTopic].body}</Text>
-            </View>
-          </View>
-          <View style={styles.supportTopicDetails}>
-            {supportTopics[selectedTopic].details.map((detail) => (
-              <View key={detail} style={styles.supportTopicDetailRow}>
-                <Feather name="check-circle" size={15} color={Colors.needleGreen} />
-                <Text style={styles.supportTopicDetailText}>{detail}</Text>
+      <View style={styles.supportGroup}>
+        <Text style={styles.supportGroupLabel}>Common questions</Text>
+        <View style={styles.supportCard}>
+          {quickAnswers.map((qa, index) => {
+            const isOpen = expandedQuickAnswer === qa.key
+            const isLast = index === quickAnswers.length - 1
+            return (
+              <View key={qa.key}>
+                <TouchableOpacity
+                  style={[styles.supportCardRow, (isLast && !isOpen) && styles.supportCardRowLast]}
+                  onPress={() => setExpandedQuickAnswer(isOpen ? null : qa.key)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.supportCardRowTitle, isOpen && styles.supportCardRowTitleActive]}>
+                    {qa.title}
+                  </Text>
+                  <Feather
+                    name={isOpen ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={isOpen ? Colors.needleGreen : Colors.midGrey}
+                  />
+                </TouchableOpacity>
+                {isOpen ? (
+                  <View style={[styles.supportExpandBody, isLast && styles.supportExpandBodyLast]}>
+                    <Text style={styles.supportExpandText}>{qa.answer}</Text>
+                    {qa.actionLabel && qa.onAction ? (
+                      <TouchableOpacity style={styles.supportExpandAction} onPress={qa.onAction} activeOpacity={0.8}>
+                        <Text style={styles.supportExpandActionText}>{qa.actionLabel}</Text>
+                        <Feather name="arrow-right" size={14} color={Colors.needleGreen} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
-            ))}
-          </View>
-          {supportTopics[selectedTopic].primaryLabel && supportTopics[selectedTopic].onPrimary ? (
-            <TouchableOpacity
-              style={styles.supportTopicButton}
-              activeOpacity={0.8}
-              onPress={supportTopics[selectedTopic].onPrimary}
-            >
-              <Text style={styles.supportTopicButtonText}>
-                {supportTopics[selectedTopic].primaryLabel}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+            )
+          })}
         </View>
-      ) : null}
-
-      <View style={styles.supportActionList}>
-        {helpOptions.map(({ key, title, body }, index) => {
-          const topic = supportTopics[key]
-          return (
-          <TouchableOpacity
-            key={title}
-            style={[styles.supportActionRow, index === helpOptions.length - 1 && styles.supportActionRowLast]}
-            onPress={() => setSelectedTopic(selectedTopic === key ? null : key)}
-            activeOpacity={0.75}
-          >
-            <View style={styles.supportActionIcon}>
-              <Feather name={topic.icon} size={20} color={Colors.needleGreen} />
-            </View>
-            <View style={styles.supportActionCopy}>
-              <Text style={styles.supportActionTitle}>{title}</Text>
-              <Text style={styles.supportActionText}>{body}</Text>
-            </View>
-            <Feather
-              name={selectedTopic === key ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={Colors.midGrey}
-            />
-          </TouchableOpacity>
-          )
-        })}
       </View>
 
-      <TouchableOpacity
-        style={styles.supportEmailCard}
-        activeOpacity={0.8}
-        onPress={() => {
-          void openSupportEmail()
-        }}
-      >
-        <Text style={styles.supportEmailTitle}>Email Drapeon Support</Text>
-        <Text style={styles.supportEmailText}>{SUPPORT_EMAIL} · replies usually arrive within a few hours</Text>
-      </TouchableOpacity>
+      <View style={styles.supportGroup}>
+        <Text style={styles.supportGroupLabel}>Get help with</Text>
+        <View style={styles.supportCard}>
+          {supportTopics.map((topic, index) => {
+            const isOpen = selectedTopic === topic.key
+            const isLast = index === supportTopics.length - 1
+            return (
+              <View key={topic.key}>
+                <TouchableOpacity
+                  style={[styles.supportCardRow, (isLast && !isOpen) && styles.supportCardRowLast]}
+                  onPress={() => setSelectedTopic(isOpen ? null : topic.key)}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.supportTopicRowIcon}>
+                    <Feather name={topic.icon} size={16} color={Colors.needleGreen} />
+                  </View>
+                  <Text style={[styles.supportCardRowTitle, isOpen && styles.supportCardRowTitleActive]}>
+                    {topic.title}
+                  </Text>
+                  <Feather
+                    name={isOpen ? 'chevron-up' : 'chevron-right'}
+                    size={16}
+                    color={isOpen ? Colors.needleGreen : Colors.midGrey}
+                  />
+                </TouchableOpacity>
+                {isOpen ? (
+                  <View style={[styles.supportExpandBody, isLast && styles.supportExpandBodyLast]}>
+                    <Text style={styles.supportExpandText}>{topic.body}</Text>
+                    <View style={styles.supportTopicChecks}>
+                      {topic.details.map((detail) => (
+                        <View key={detail} style={styles.supportTopicCheckRow}>
+                          <Feather name="check-circle" size={14} color={Colors.needleGreen} />
+                          <Text style={styles.supportTopicCheckText}>{detail}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <TouchableOpacity style={styles.supportTopicCta} onPress={topic.onPrimary} activeOpacity={0.82}>
+                      <Text style={styles.supportTopicCtaText}>{topic.primaryLabel}</Text>
+                      <Feather name="arrow-right" size={15} color={Colors.textInverse} />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            )
+          })}
+        </View>
+      </View>
+
+      <View style={styles.supportGroup}>
+        <Text style={styles.supportGroupLabel}>Get in touch</Text>
+        <TouchableOpacity
+          style={styles.contactPrimary}
+          activeOpacity={0.82}
+          onPress={() => { void openSupportEmail() }}
+        >
+          <View style={styles.contactPrimaryIcon}>
+            <Feather name="mail" size={20} color={Colors.textInverse} />
+          </View>
+          <View style={styles.contactCopy}>
+            <Text style={styles.contactPrimaryTitle}>Email support</Text>
+            <Text style={styles.contactPrimarySub}>Usually within a few hours</Text>
+          </View>
+          <Feather name="arrow-right" size={18} color={Colors.textInverse} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.contactSecondary}
+          activeOpacity={0.82}
+          onPress={() => { void openSupportWhatsApp() }}
+        >
+          <View style={styles.contactSecondaryIcon}>
+            <Feather name="message-circle" size={20} color={Colors.needleGreen} />
+          </View>
+          <View style={styles.contactCopy}>
+            <Text style={styles.contactSecondaryTitle}>WhatsApp</Text>
+            <Text style={styles.contactSecondarySub}>Fastest for quick help</Text>
+          </View>
+          <Feather name="arrow-right" size={18} color={Colors.needleGreen} />
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   )
 }
@@ -904,32 +976,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
-  guideCard: {
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideClose: { fontSize: 22, lineHeight: 22, color: Colors.midGrey },
-  guideTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.medium,
-    color: Colors.ink,
-    lineHeight: 20,
-  },
   syncNoticeCard: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.sm,
@@ -1075,7 +1121,6 @@ const styles = StyleSheet.create({
   },
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
-  separator: { height: 1, backgroundColor: Colors.lightGrey },
   listContent: { paddingBottom: Spacing.xxxl },
 
   row: {
@@ -1086,18 +1131,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     gap: 12,
   },
-  avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: Colors.boneDeep,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarActive: { backgroundColor: Colors.needleGreenLight },
-  avatarText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.midGrey },
-  avatarTextActive: { color: Colors.needleGreen },
-
   content: { flex: 1, gap: 4 },
   contentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   contentBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -1133,20 +1166,6 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xxl,
   },
   emptyWrap: { flex: 1, justifyContent: 'center' },
-  retryBtn: {
-    marginTop: Spacing.xs,
-    backgroundColor: Colors.needleGreen,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: 10,
-    borderRadius: Radius.full,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  retryBtnText: {
-    fontSize: FontSize.sm,
-    color: Colors.textInverse,
-    fontWeight: FontWeight.semibold,
-  },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
@@ -1162,86 +1181,176 @@ const styles = StyleSheet.create({
   // Support tab
   supportScroll: { flex: 1 },
   supportContent: { paddingBottom: Spacing.xxxl, gap: Spacing.sm },
-  supportHeroCard: {
+  supportHeader: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.lg,
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: 16,
-    gap: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
-  supportHeroIcon: {
-    width: 44,
-    height: 44,
+  supportHeaderIcon: {
+    width: 54,
+    height: 54,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  supportHeroCopy: { flex: 1, gap: 4 },
-  supportHeroTitle: {
-    fontSize: FontSize.lg,
+  supportHeaderTitle: {
+    fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 24,
+    textAlign: 'center',
   },
-  supportHeroSub: {
+  supportHeaderSub: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 20,
+    textAlign: 'center',
   },
-  supportGuideCard: {
+  supportGroup: {
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    marginTop: Spacing.md,
+    gap: Spacing.sm,
   },
-  supportGuideTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
+  supportGroupLabel: {
+    fontSize: FontSize.xs,
     color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  supportGuideBody: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
-  },
-  supportAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  supportActionList: {
-    marginHorizontal: Spacing.lg,
+  supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     overflow: 'hidden',
     ...Shadow.sm,
   },
-  supportActionRow: {
-    minHeight: 76,
+  supportCardRow: {
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
+    paddingVertical: Spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
   },
-  supportActionRowLast: { borderBottomWidth: 0 },
-  supportActionIcon: {
+  supportCardRowLast: { borderBottomWidth: 0 },
+  supportCardRowTitle: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 20,
+  },
+  supportCardRowTitleActive: { color: Colors.needleGreen },
+  supportExpandBody: {
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+  },
+  supportExpandBodyLast: { borderBottomWidth: 0 },
+  supportExpandText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  supportExpandAction: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  supportExpandActionText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  supportTopicRowIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportTopicChecks: { gap: Spacing.xs },
+  supportTopicCheckRow: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    alignItems: 'flex-start',
+  },
+  supportTopicCheckText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
+  supportTopicCta: {
+    minHeight: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+  },
+  supportTopicCtaText: {
+    fontSize: FontSize.sm,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
+  contactPrimary: {
+    minHeight: 72,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.needleGreen,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    ...Shadow.sm,
+  },
+  contactPrimaryIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactCopy: { flex: 1, gap: 3 },
+  contactPrimaryTitle: {
+    fontSize: FontSize.md,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.bold,
+  },
+  contactPrimarySub: {
+    fontSize: FontSize.xs,
+    color: Colors.textInverse,
+    opacity: 0.86,
+  },
+  contactSecondary: {
+    minHeight: 68,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  contactSecondaryIcon: {
     width: 42,
     height: 42,
     borderRadius: Radius.full,
@@ -1249,119 +1358,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  supportActionCopy: { flex: 1, gap: 3 },
-  supportActionTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
-  supportActionText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  supportTopicCard: {
-    marginHorizontal: Spacing.lg,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  supportTopicHeader: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'flex-start',
-  },
-  supportTopicIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  supportTopicTitleWrap: { flex: 1, gap: 4 },
-  supportTopicTitle: {
+  contactSecondaryTitle: {
     fontSize: FontSize.md,
     color: Colors.ink,
-    fontWeight: FontWeight.semibold,
+    fontWeight: FontWeight.bold,
   },
-  supportTopicBody: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
-  },
-  supportTopicDetails: { gap: Spacing.sm },
-  supportTopicDetailRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'flex-start',
-  },
-  supportTopicDetailText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
-  },
-  supportTopicButton: {
-    minHeight: 48,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreen,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
-  },
-  supportTopicButtonText: {
-    fontSize: FontSize.sm,
-    color: Colors.textInverse,
-    fontWeight: FontWeight.semibold,
-  },
-  supportEmailCard: {
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.xs,
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
-  supportEmailText: { fontSize: FontSize.xs, color: Colors.textInverse, lineHeight: 18 },
-  supportDivider: {
-    height: 1,
-    backgroundColor: Colors.lightGrey,
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.xs,
-  },
-  supportSectionLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.inkLight,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.sm,
-  },
-  helpGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-  },
-  helpCard: {
-    width: '47%',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    minHeight: 96,
-  },
-  helpIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  helpLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  supportFootnote: {
+  contactSecondarySub: {
     fontSize: FontSize.xs,
     color: Colors.midGrey,
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: Spacing.xl,
-    marginTop: Spacing.xl,
   },
 })

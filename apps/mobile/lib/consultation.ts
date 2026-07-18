@@ -4,6 +4,9 @@ import { invokeFunction } from '@/lib/supabase'
 
 type ConsultationAudience = 'customer' | 'tailor' | 'generic'
 type ConsultationCallType = 'audio' | 'video'
+type ConsultationRoomOptions = {
+  notifyCounterpart?: boolean
+}
 
 type ConsultationRoomResponse = {
   url?: string | null
@@ -65,9 +68,10 @@ export async function openConsultationCallUrl(
 export async function createConsultationRoom(
   orderId: string,
   callType: ConsultationCallType,
+  options?: ConsultationRoomOptions,
 ) {
   const { data, error } = await invokeFunction<ConsultationRoomResponse>('create-consultation-room', {
-    body: { orderId, callType },
+    body: { orderId, callType, notifyCounterpart: options?.notifyCounterpart ?? true },
   })
 
   if (!error && data?.url) {

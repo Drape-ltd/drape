@@ -1,7 +1,7 @@
 import type { AccountCurrencyCode } from './currency-config.ts'
 
 export const TAILOR_SETUP_VALIDATION = {
-  ID_DOCUMENT_REQUIRED_MESSAGE: 'Please upload a valid ID document to continue',
+  ID_DOCUMENT_REQUIRED_MESSAGE: 'Capture Identity Selfie & Link Payout Account to Go Live.',
   DISPLAY_NAME_REQUIRED_MESSAGE: 'Add your public display name to continue',
   PHONE_REQUIRED_MESSAGE: 'Add a valid phone number for order updates and account recovery',
   PROFILE_PHOTO_REQUIRED_MESSAGE: 'Add a clear profile photo so customers know who they are booking',
@@ -13,6 +13,9 @@ export const TAILOR_SETUP_VALIDATION = {
   SPECIALTY_LIMIT_MESSAGE: 'Choose up to 20 specialties',
   PRICE_REQUIRED_MESSAGE: 'Set a valid price range to continue',
   PORTFOLIO_REQUIRED_MESSAGE: 'Add at least 1 photo or video of your work to continue',
+  READY_MADE_PROOF_REQUIRED_MESSAGE: 'Add at least 1 ready-made item to continue',
+  PUBLIC_PROOF_REQUIRED_MESSAGE: 'Add a portfolio sample or ready-made item to continue',
+  HYBRID_PROOF_REQUIRED_MESSAGE: 'Add portfolio media and at least 1 ready-made item to continue',
   ORDER_MODE_REQUIRED_MESSAGE: 'Choose at least one way customers can order from you',
   FULFILLMENT_REQUIRED_MESSAGE: 'Choose at least one way customers receive orders',
   PICKUP_ADDRESS_REQUIRED_MESSAGE: 'Add a fuller pickup address before offering pickup',
@@ -119,6 +122,8 @@ export type TailorSetupProgressInput = {
   priceMax: string
   currency?: AccountCurrencyCode | string | null
   portfolioItemCount: number
+  readyMadeItemCount?: number
+  sellerType?: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP' | string | null
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
   pickupAvailable: boolean
@@ -224,7 +229,15 @@ export function deriveTailorSetupProgress(input: TailorSetupProgressInput): Tail
     pushError(stepErrors[1], 'priceRange', getTailorPriceLimitMessage(input.currency))
   }
 
-  if (input.portfolioItemCount < 1) {
+  const sellerType = typeof input.sellerType === 'string' ? input.sellerType.trim().toUpperCase() : 'TAILOR'
+  const readyMadeItemCount = input.readyMadeItemCount ?? 0
+  const hasPortfolioProof = input.portfolioItemCount >= 1
+  const hasReadyMadeProof = readyMadeItemCount >= 1
+  if (sellerType === 'BOUTIQUE') {
+    if (!hasReadyMadeProof) pushError(stepErrors[2], 'portfolio', TAILOR_SETUP_VALIDATION.READY_MADE_PROOF_REQUIRED_MESSAGE)
+  } else if (sellerType === 'TAILOR_SHOP') {
+    if (!hasPortfolioProof || !hasReadyMadeProof) pushError(stepErrors[2], 'portfolio', TAILOR_SETUP_VALIDATION.HYBRID_PROOF_REQUIRED_MESSAGE)
+  } else if (!hasPortfolioProof) {
     pushError(stepErrors[2], 'portfolio', TAILOR_SETUP_VALIDATION.PORTFOLIO_REQUIRED_MESSAGE)
   }
 

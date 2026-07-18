@@ -15,46 +15,20 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import {
+  CALL_SCHEDULING_POLICY,
+  callSchedulingDefaultStartDate,
+  callSchedulingReasonFor,
+  callSchedulingStartsAtMinDate,
+  isCallSchedulingStartValid,
+} from '@drape/shared/call-scheduling-policy'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { invokeFunction } from '@/lib/supabase'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { scheduleCallStartLocalNotification } from '@/lib/notifications'
 import type { OrderCallMeta, OrderCallReason } from '@/lib/order-support'
 import { Button } from './Button'
 import { Input } from './Input'
-
-type ReasonOption = {
-  value: OrderCallReason
-  label: string
-  detail: string
-}
-
-const REASONS: ReasonOption[] = [
-  {
-    value: 'PICKUP_OR_DELIVERY',
-    label: 'Pickup or delivery',
-    detail: 'Handoff timing, tracking, address clarity, or collection details.',
-  },
-  {
-    value: 'SIZE_OR_FIT',
-    label: 'Size or fit',
-    detail: 'Fit, size guide, alterations, or how the item should sit.',
-  },
-  {
-    value: 'ITEM_CONDITION',
-    label: 'Item condition',
-    detail: 'Fabric, color, photos, or a quick visual confirmation.',
-  },
-  {
-    value: 'TIMELINE',
-    label: 'Timing',
-    detail: 'When the order will be ready, dispatched, or collected.',
-  },
-  {
-    value: 'OTHER',
-    label: 'Other',
-    detail: 'Anything else that needs a quick Drapeon-held conversation.',
-  },
-]
 
 type Props = {
   visible: boolean
@@ -67,13 +41,11 @@ type Props = {
 }
 
 function defaultStartAt() {
-  const next = new Date(Date.now() + 45 * 60 * 1000)
-  next.setSeconds(0, 0)
-  return next
+  return callSchedulingDefaultStartDate()
 }
 
 function minimumStartAt() {
-  return new Date(Date.now() + 30 * 60 * 1000)
+  return callSchedulingStartsAtMinDate()
 }
 
 function formatStart(value: Date | string | null | undefined) {
@@ -95,10 +67,6 @@ function currentTimezone() {
   } catch {
     return undefined
   }
-}
-
-function reasonFor(value: OrderCallReason) {
-  return REASONS.find((reason) => reason.value === value) ?? REASONS[0]
 }
 
 export function OrderCallScheduleModal({
@@ -132,7 +100,7 @@ export function OrderCallScheduleModal({
     setShowPicker(false)
   }
 
-  const selectedReason = reasonFor(reason)
+  const selectedReason = callSchedulingReasonFor(reason)
   const title = existingOrderCall?.status === 'SCHEDULED' ? 'Reschedule order call' : 'Schedule order call'
   const submitLabel = existingOrderCall?.status === 'SCHEDULED' ? 'Reschedule call' : 'Schedule call'
 
@@ -142,9 +110,9 @@ export function OrderCallScheduleModal({
       'Choose the main reason so the conversation starts with the right context.',
       [
         { text: 'Cancel', style: 'cancel' },
-        ...REASONS.map((option) => ({
+        ...CALL_SCHEDULING_POLICY.reasons.map((option) => ({
           text: option.label,
-          onPress: () => setReason(option.value),
+          onPress: () => setReason(option.value as OrderCallReason),
         })),
       ]
     )
@@ -152,9 +120,8 @@ export function OrderCallScheduleModal({
 
   async function scheduleCall() {
     if (saving) return
-    const startsAtMs = scheduledAt.getTime()
-    if (!Number.isFinite(startsAtMs) || startsAtMs < Date.now() + 30 * 60 * 1000) {
-      Alert.alert('Pick a later time', 'Choose a call time at least 30 minutes from now.')
+    if (!isCallSchedulingStartValid(scheduledAt)) {
+      Alert.alert('Pick a later time', `Choose a call time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
       return
     }
 
@@ -192,6 +159,12 @@ export function OrderCallScheduleModal({
       'Call scheduled',
       `The order call is set for ${formatStart(scheduledAt)}. Drapeon will send reminders, and the call stays inside Messages.`
     )
+    void scheduleCallStartLocalNotification({
+      orderId,
+      callKind: 'ready-made',
+      scheduledStartAt: scheduledAt,
+      counterpartName,
+    }).catch(() => {})
     onScheduled?.(data?.orderCall ?? null)
     onClose()
   }
@@ -207,6 +180,7 @@ export function OrderCallScheduleModal({
       <KeyboardAvoidingView
         style={styles.keyboard}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        accessibilityViewIsModal
       >
         <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
           <View style={styles.header}>
@@ -249,7 +223,9 @@ export function OrderCallScheduleModal({
               </View>
               <Feather name="calendar" size={20} color={Colors.needleGreen} />
             </Pressable>
-            <Text style={styles.helperText}>Pick a time at least 30 minutes from now. The room opens shortly before the slot.</Text>
+            <Text style={styles.helperText}>
+              Pick a time at least {CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now. The room opens {CALL_SCHEDULING_POLICY.opensBeforeMinutes} minutes before the slot and closes {CALL_SCHEDULING_POLICY.expiresAfterMinutes} minutes after.
+            </Text>
             {showPicker ? (
               <DateTimePicker
                 value={scheduledAt}

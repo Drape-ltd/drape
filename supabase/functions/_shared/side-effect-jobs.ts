@@ -14,6 +14,9 @@ type PushJobInput = {
     body: string
     data?: Record<string, string>
     preferenceKey?: string
+    channelId?: string
+    sound?: string
+    interruptionLevel?: string
   }
   source: string
   idempotencyKey: string

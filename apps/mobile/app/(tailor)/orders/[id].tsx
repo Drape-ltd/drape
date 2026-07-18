@@ -4,18 +4,19 @@ import {
   Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
   type ImageStyle, type StyleProp, type ViewStyle,
 } from 'react-native'
-import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation, type Href } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { ResizeMode, Video } from 'expo-av'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
 import {
   getFulfillmentStagePreflightError,
   normalizeContactPhoneInput,
@@ -83,13 +84,15 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui'
+import { Button, HandoffSupportModal, Input, MediaLightboxModal, PortfolioVideoPreview, RemoteImage, type MediaLightboxItem } from '@/components/ui'
+import { BottomSheetScaffold } from '@/components/ui/BottomSheetScaffold'
 import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
-import { currencySymbol } from '@drape/shared'
+import { buildBriefDossier, currencySymbol } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-brief-dossier'
 import {
   CANCELLATION_REFUND_COMPONENT_LABELS,
   deriveCancellationPolicy,
@@ -98,6 +101,13 @@ import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/cu
 import { stageColor } from '@/lib/stageColors'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
 import { hapticSuccess } from '@/lib/haptics'
+import {
+  ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
+} from '@drape/shared/media-policy'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -271,6 +281,9 @@ type StageMedia = {
   uri: string
   type: StageMediaType
   fingerprint: string
+  duration?: number | null
+  fileSize?: number | null
+  mimeType?: string | null
 }
 
 type OrderDetail = {
@@ -330,6 +343,9 @@ function isVideoUri(uri: string | null | undefined) {
   return typeof uri === 'string' && /\.(mp4|mov|m4v|webm)(?:[?#].*)?$/iu.test(uri)
 }
 
+const ORDER_EVIDENCE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.orderUpdateVideo
+const ORDER_EVIDENCE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.orderUpdateVideo
+
 function stageMediaFromAsset(asset: ImagePicker.ImagePickerAsset): StageMedia {
   const type: StageMediaType = asset.type === 'video' ? 'video' : 'image'
   const fingerprintParts = [
@@ -345,6 +361,9 @@ function stageMediaFromAsset(asset: ImagePicker.ImagePickerAsset): StageMedia {
   return {
     uri: asset.uri,
     type,
+    duration: asset.duration ?? null,
+    fileSize: asset.fileSize ?? null,
+    mimeType: asset.mimeType ?? null,
     fingerprint: fingerprintParts.length > 0 ? fingerprintParts.join('|') : `${type}|${asset.uri}`,
   }
 }
@@ -353,16 +372,44 @@ function stageMediaExtension(media: StageMedia) {
   if (media.type === 'image') return 'jpg'
   const match = media.uri.match(/\.([a-z0-9]+)(?:[?#].*)?$/iu)
   const extension = match?.[1]?.toLowerCase()
-  if (extension === 'mov' || extension === 'm4v' || extension === 'webm') return extension
+  if (extension === 'mov') return extension
   return 'mp4'
 }
 
 function stageMediaContentType(media: StageMedia) {
   if (media.type === 'image') return 'image/jpeg'
+  const normalizedMimeType = media.mimeType?.split(';')[0]?.trim().toLowerCase()
+  if (normalizedMimeType && (ALLOWED_VIDEO_CONTENT_TYPES as readonly string[]).includes(normalizedMimeType)) {
+    return normalizedMimeType
+  }
   const extension = stageMediaExtension(media)
   if (extension === 'mov') return 'video/quicktime'
-  if (extension === 'webm') return 'video/webm'
   return 'video/mp4'
+}
+
+function stageMediaDurationSeconds(media: StageMedia) {
+  if (typeof media.duration !== 'number' || !Number.isFinite(media.duration) || media.duration <= 0) return null
+  return media.duration > 1000 ? media.duration / 1000 : media.duration
+}
+
+function validateStageMedia(media: StageMedia) {
+  if (media.type !== 'video') return null
+
+  const contentType = stageMediaContentType(media)
+  if (!(ALLOWED_VIDEO_CONTENT_TYPES as readonly string[]).includes(contentType)) {
+    return 'That video type is not supported here. Please choose an MP4 or MOV video.'
+  }
+
+  if (typeof media.fileSize === 'number' && media.fileSize > ORDER_EVIDENCE_VIDEO_MAX_BYTES) {
+    return `Choose videos under ${Math.round(ORDER_EVIDENCE_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`
+  }
+
+  const durationSeconds = stageMediaDurationSeconds(media)
+  if (durationSeconds && durationSeconds > ORDER_EVIDENCE_VIDEO_MAX_SECONDS) {
+    return OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE
+  }
+
+  return null
 }
 
 function StageMediaPreview({
@@ -379,11 +426,12 @@ function StageMediaPreview({
   const isVideo = mediaType === 'video' || isVideoUri(uri)
   if (isVideo) {
     return (
-      <Video
-        source={{ uri }}
+      <PortfolioVideoPreview
+        uri={uri}
         style={style as StyleProp<ViewStyle>}
-        useNativeControls
-        resizeMode={ResizeMode.CONTAIN}
+        contentFit="contain"
+        nativeControls
+        autoplay={false}
         isLooping={false}
       />
     )
@@ -392,12 +440,26 @@ function StageMediaPreview({
   return (
     <RemoteImage
       uri={uri}
+      bucket="order-photos"
       style={style}
       contentFit="cover"
       transition={120}
       surface={surface}
     />
   )
+}
+
+function normalizeExternalHref(value: string) {
+  return /^https?:\/\//iu.test(value) ? value : `https://${value}`
+}
+
+function dossierMediaItems(label: string, mediaUrls: string[]): MediaLightboxItem[] {
+  return mediaUrls.slice(0, 6).map((uri, index) => ({
+    uri,
+    label: `${label} ${index + 1}`,
+    kind: isVideoUri(uri) ? 'video' : 'photo',
+    bucket: isVideoUri(uri) ? undefined : 'order-photos',
+  }))
 }
 
 function labelShippingPreference(value: string | null | undefined) {
@@ -519,6 +581,19 @@ function displayStageChoiceLabel(targetStage: OrderStage, orderKind: 'CUSTOM' | 
   if (orderKind === 'READY_MADE' && targetStage === 'FINISHING') return 'Preparing order'
   if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drapeon dispatch'
   return STAGE_LABELS[targetStage]
+}
+
+function stageChoiceDetail(targetStage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
+  if (orderKind === 'READY_MADE' && targetStage === 'FINISHING') {
+    return 'Pack, check, and prepare the item for handoff.'
+  }
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+    return 'Signal that the packed order is ready for Drapeon-managed dispatch.'
+  }
+  if (targetStage === 'READY_FOR_COLLECTION') {
+    return 'Mark the order ready for customer pickup and code verification.'
+  }
+  return `Move this order into ${displayStageChoiceLabel(targetStage, orderKind).toLowerCase()} once the real work state has changed.`
 }
 
 function refundCoverageLabel(components: string[]) {
@@ -803,7 +878,11 @@ const BODY_SHAPE_LABELS: Record<string, string> = {
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function TailorOrderDetailScreen() {
-  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
+  const { id, returnTo, historyChain } = useLocalSearchParams<{
+    id: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -818,21 +897,21 @@ export default function TailorOrderDetailScreen() {
     if (!order) return
     router.navigate({
       pathname: '/(tailor)/messages/[orderId]',
-      params: { orderId: order.id, returnTo: `/(tailor)/orders/${order.id}` },
+      params: {
+        orderId: order.id,
+        returnTo: `/(tailor)/orders/${order.id}`,
+        historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
+      },
     })
   }
 
   function goBack() {
-    if (returnTo === 'tailor-notifications') {
-      router.push('/(tailor)/profile/notifications')
-      return
-    }
-    if (returnTo) {
-      router.replace(returnTo as Href)
-      return
-    }
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/orders')
+    goBackOrReturnTo(
+      router,
+      navigation,
+      pickSafeReturnTo(historyChain, returnTo),
+      '/(tailor)/orders',
+    )
   }
 
   const [order, setOrder] = useState<OrderDetail | null>(null)
@@ -853,6 +932,10 @@ export default function TailorOrderDetailScreen() {
   const [showDeliveryReviewModal, setShowDeliveryReviewModal] = useState(false)
   const [showScopeChangeModal, setShowScopeChangeModal] = useState(false)
   const [showHandoffSupport, setShowHandoffSupport] = useState(false)
+  const [showDossierSheet, setShowDossierSheet] = useState(false)
+  const [showMeasurementSheet, setShowMeasurementSheet] = useState(false)
+  const [showFlexibleStageSheet, setShowFlexibleStageSheet] = useState(false)
+  const [mediaPreview, setMediaPreview] = useState<{ items: MediaLightboxItem[]; index: number } | null>(null)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
   const [startingOrderCall, setStartingOrderCall] = useState<'audio' | 'video' | null>(null)
   const [confirmingFabricReceived, setConfirmingFabricReceived] = useState(false)
@@ -864,6 +947,18 @@ export default function TailorOrderDetailScreen() {
   const [uploadingAdvanceReceiptId, setUploadingAdvanceReceiptId] = useState<string | null>(null)
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const purgedTerminalOrderRef = useRef<string | null>(null)
+
+  const openDossierLink = useCallback(async (href: string) => {
+    try {
+      await Linking.openURL(normalizeExternalHref(href))
+    } catch {
+      Alert.alert('Could not open link', 'Please try again in a moment.')
+    }
+  }, [])
+
+  const openMediaPreview = useCallback((items: MediaLightboxItem[], index: number) => {
+    setMediaPreview({ items, index })
+  }, [])
 
   const hasActiveMaterialAdvance = materialAdvances.some((advance) =>
     ['REQUESTED', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'PAID', 'OPS_REVIEW', 'BLOCKED'].includes(advance.status)
@@ -1274,6 +1369,47 @@ export default function TailorOrderDetailScreen() {
   const fabricHandoffLabel =
     order.supportMeta.fabricHandoffLabel ??
     (fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null)
+  const briefDossier = buildBriefDossier(
+    {
+      orderKind: order.orderKind,
+      garmentType: order.garmentType,
+      garmentDescription: order.garmentDescription,
+      itemTitle: order.itemTitle,
+      itemSize: order.itemSize,
+      itemQuantity: order.itemQuantity,
+      occasion: order.occasion,
+      stage: order.stage,
+      quotedAmount: baseAmount(order),
+      quotedCurrency: order.quotedCurrency,
+      quotedCompletionDate: order.quotedCompletionDate,
+      deadline: order.deadline,
+      fabricSource: order.fabricSource,
+      deliveryMethod: order.deliveryMethod,
+      deliveryAddress: order.deliveryAddress,
+      recipientName: order.recipientName,
+      recipientPhone: order.recipientPhone,
+      trackingNumber: order.trackingNumber,
+      carrier: order.carrier,
+      fulfillmentProvider: order.fulfillmentProvider,
+      fulfillmentReference: order.fulfillmentReference,
+      fulfillmentContactName: order.fulfillmentContactName,
+      fulfillmentContactPhone: order.fulfillmentContactPhone,
+      collectionCode: order.collectionCode,
+      referencePhotos: visibleReferencePhotos,
+      proofMediaUrls: order.stageUpdates.map((update) => update.photoUrl).filter((url): url is string => !!url),
+      supportMeta: order.supportMeta as unknown as Record<string, unknown>,
+      customDetail: order.customDetail,
+      measurementSnapshot: order.measurements as Record<string, unknown> | null,
+      measurementSourceLabel: measurementSource ? MEASUREMENT_SOURCE_LABELS[measurementSource] ?? String(measurementSource) : null,
+      fitConfidenceLabel: fitConfidence ? FIT_CONFIDENCE_LABELS[fitConfidence] ?? String(fitConfidence) : null,
+      measurementAgeLabel: measurementAgeText,
+      wearerLabel,
+    },
+    {
+      money: (amount, currency) => amount == null ? 'Quote pending' : formatAmount(amount, (currency ?? order.quotedCurrency) as CurrencyCode, (currency ?? order.quotedCurrency) as CurrencyCode, STATIC_FALLBACK_RATES),
+    },
+  )
+  const referenceMediaItems = dossierMediaItems('Reference photo', visibleReferencePhotos)
   const materialIssue = order.supportMeta.materialIssue ?? null
   const materialIssueOpen = hasOpenMaterialIssue(order.supportMeta)
   const materialIssueNeedsCustomerDecision = materialIssue?.status === 'OPEN'
@@ -1347,7 +1483,7 @@ export default function TailorOrderDetailScreen() {
   const cuttingBlockerMessage = measurementConfirmationNeeded
     ? 'The customer still needs to confirm measurements before cutting can start.'
     : fitProfileReviewNeeded
-      ? 'Review the guided fit intake or request measurement confirmation before cutting starts.'
+      ? 'Review the fit notes or request measurement confirmation before cutting starts.'
       : materialIssueOpen
         ? 'There is an open material issue that needs a customer decision first.'
         : order.fabricSource === 'CUSTOMER_SUPPLIES' &&
@@ -1499,6 +1635,7 @@ export default function TailorOrderDetailScreen() {
         orderId: order.id,
         ...(diaryId ? { diaryId } : {}),
         returnTo: `/(tailor)/orders/${order.id}`,
+        historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
       },
     } as never)
   }
@@ -1536,7 +1673,7 @@ export default function TailorOrderDetailScreen() {
     if (startingOrderCall) return
     setStartingOrderCall(callType)
     try {
-      const room = await createOrderCallRoom(order.id, callType)
+      const room = await createOrderCallRoom(order.id, callType, 'tailor')
       if (room?.fallback === 'MESSAGES') {
         await fetchOrder()
         openOrderMessages()
@@ -1544,7 +1681,7 @@ export default function TailorOrderDetailScreen() {
       }
       if (!room?.url) return
       await fetchOrder()
-      await openDrapeCallUrl(room.url)
+      await openDrapeCallUrl(room.url, 'tailor')
     } finally {
       setStartingOrderCall(null)
     }
@@ -1714,19 +1851,7 @@ export default function TailorOrderDetailScreen() {
       openStageModal(flexibleNextStages[0])
       return
     }
-    Alert.alert(
-      'Choose next stage',
-      order.orderKind === 'READY_MADE'
-        ? 'Move this item to its next handoff step.'
-        : 'Design and sourcing can happen in a flexible order. Pick the real next stage for this order.',
-      [
-        ...flexibleNextStages.map((target) => ({
-          text: displayStageChoiceLabel(target, order.orderKind),
-          onPress: () => openStageModal(target),
-        })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ],
-    )
+    setShowFlexibleStageSheet(true)
   }
 
   async function markHandoffIssueResolved() {
@@ -1848,6 +1973,7 @@ export default function TailorOrderDetailScreen() {
       params: {
         orderId: order.id,
         returnTo: '/(tailor)/orders',
+        historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
       },
     })
   }
@@ -1937,7 +2063,10 @@ export default function TailorOrderDetailScreen() {
               onPress={() =>
                 router.push({
                   pathname: '/(tailor)/clients/[clientId]',
-                  params: { clientId: order.customerId },
+                  params: {
+                    clientId: order.customerId,
+                    historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
+                  },
                 })
               }
             />
@@ -1957,7 +2086,11 @@ export default function TailorOrderDetailScreen() {
                     onPress={() =>
                       router.push({
                         pathname: '/(tailor)/messages/[orderId]',
-                        params: { orderId: order.id, returnTo: `/(tailor)/orders/${order.id}` },
+                        params: {
+                          orderId: order.id,
+                          returnTo: `/(tailor)/orders/${order.id}`,
+                          historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
+                        },
                       })
                     }
                   />
@@ -2605,7 +2738,7 @@ export default function TailorOrderDetailScreen() {
 
               {fitProfile ? (
                 <View style={styles.supportCard}>
-                  <Text style={styles.supportCardTitle}>Guided fit intake</Text>
+                  <Text style={styles.supportCardTitle}>Fit notes</Text>
                   <View style={styles.supportMetaList}>
                     {fitProfile.status ? (
                       <BriefRow label="Status" value={MEASUREMENT_SCAN_STATUS_LABELS[fitProfile.status]} />
@@ -2648,7 +2781,7 @@ export default function TailorOrderDetailScreen() {
                   ) : fitProfile.tailorMeasurementOverride ? (
                     <View style={[styles.supportBadge, styles.supportBadgeSuccess]}>
                       <Text style={[styles.supportBadgeText, styles.supportBadgeTextSuccess]}>
-                        Guided fit intake reviewed
+                        Fit notes reviewed
                       </Text>
                     </View>
                   ) : null}
@@ -2842,132 +2975,37 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          {/* Body profile card — visible as soon as measurements are attached to the order */}
-          {hasMeasurementContent(order.measurements) && (
-            <BodyProfileCard measurements={order.measurements} />
-          )}
+          {hasMeasurementContent(order.measurements) ? (
+            <View style={styles.section}>
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>Measurement profile</Text>
+                <Text style={styles.supportHint}>
+                  Review saved body context, fit flags, and garment-specific values in one focused view before you cut, confirm readiness, or ask the customer to verify anything.
+                </Text>
+                <Button
+                  label="Review measurements"
+                  variant="secondary"
+                  onPress={() => setShowMeasurementSheet(true)}
+                />
+              </View>
+            </View>
+          ) : null}
 
           {/* Brief details */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{order.orderKind === 'READY_MADE' ? 'Purchase' : 'Brief'}</Text>
-            {order.garmentDescription && (
-              <Text style={styles.briefText}>{order.garmentDescription}</Text>
-            )}
-            <View style={styles.briefMeta}>
-              {order.orderKind === 'CUSTOM' ? <BriefRow label="Garment" value={garmentOther || order.garmentType} /> : null}
-              {order.orderKind === 'CUSTOM' && garmentOther && order.garmentType === 'Other' ? (
-                <BriefRow label="Selected type" value="Other" />
-              ) : null}
-              {order.orderKind === 'CUSTOM' && genderPresentation ? (
-                <BriefRow label="Fit category" value={genderPresentation} />
-              ) : null}
-              {order.orderKind === 'READY_MADE' && order.itemTitle ? <BriefRow label="Item" value={order.itemTitle} /> : null}
-              {order.orderKind === 'READY_MADE' && order.itemSize ? <BriefRow label="Size" value={order.itemSize} /> : null}
-              {order.orderKind === 'READY_MADE' ? <BriefRow label="Quantity" value={`${order.itemQuantity}`} /> : null}
-              {baseAmount(order) != null && order.orderKind === 'READY_MADE' ? (
-                <BriefRow
-                  label="Item price"
-                  value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
-                />
-              ) : null}
-              {baseAmount(order) != null && order.orderKind !== 'READY_MADE' ? (
-                <BriefRow
-                  label="Quote amount"
-                  value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
-                />
-              ) : null}
-              {order.orderKind === 'READY_MADE' && order.fulfillmentOption ? (
-                <BriefRow
-                  label="Fulfillment"
-                  value={order.fulfillmentOption === 'PICKUP' ? 'Pickup' : order.fulfillmentOption === 'DELIVERY' ? 'Delivery' : order.fulfillmentOption === 'SHIPPING' ? 'Shipping' : order.fulfillmentOption}
-                />
-              ) : null}
-              {order.occasion && <BriefRow label="Occasion" value={order.occasion} />}
-              {targetDeliveryDate && (
-                <BriefRow
-                  label="Target delivery"
-                  value={new Date(targetDeliveryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                />
-              )}
-              <BriefRow label="Fabric" value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'You source'} />
-              <BriefRow
-                label="Delivery"
-                value={
-                  order.deliveryMethod === 'LOCAL_COLLECTION'
-                    ? 'Local collection'
-                    : order.deliveryMethod === 'LOCAL_DELIVERY'
-                      ? 'Local delivery'
-                      : 'Shipping'
-                }
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>{briefDossier.title}</Text>
+              <Text style={styles.supportHint}>
+                {briefDossier.sections.length === 1
+                  ? '1 section is ready for review.'
+                  : briefDossier.sections.length + ' sections are ready for review.'} Open the focused dossier to inspect style references, fabric planning, fulfillment, and long-form notes without crowding the main order screen.
+              </Text>
+              <Button
+                label="Open brief dossier"
+                variant="secondary"
+                onPress={() => setShowDossierSheet(true)}
               />
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientName ? (
-                <BriefRow label="Recipient" value={order.recipientName} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientPhone ? (
-                <BriefRow label="Recipient phone" value={order.recipientPhone} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.deliveryAddress ? (
-                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to'} value={order.deliveryAddress} />
-              ) : null}
-              {order.deliveryMethod === 'SHIPPING' && shippingPreference ? (
-                <BriefRow label="Shipping preference" value={shippingPreference} />
-              ) : null}
-              {deliveryInstructions ? (
-                <BriefRow label="Delivery instructions" value={deliveryInstructions} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && (order.fulfillmentProvider || order.carrier) ? (
-                <BriefRow label="Partner" value={order.fulfillmentProvider ?? order.carrier ?? ''} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && dispatchRecord?.serviceLevel ? (
-                <BriefRow label="Service level" value={DISPATCH_SERVICE_LEVEL_LABELS[dispatchRecord.serviceLevel]} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentReference ? (
-                <BriefRow label="Reference" value={order.fulfillmentReference} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentContactName ? (
-                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery contact' : 'Shipping contact'} value={order.fulfillmentContactName} />
-              ) : null}
-              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentContactPhone ? (
-                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery phone' : 'Shipping phone'} value={order.fulfillmentContactPhone} />
-              ) : null}
-              {order.deliveryMethod === 'SHIPPING' && order.trackingNumber && (
-                <>
-                  <BriefRow
-                    label="Tracking"
-                    value={order.fulfillmentProvider ? `${order.trackingNumber} · ${order.fulfillmentProvider}` : order.carrier ? `${order.trackingNumber} · ${order.carrier}` : order.trackingNumber}
-                  />
-                  <Button
-                    label="Open tracking page"
-                    variant="secondary"
-                    onPress={() => {
-                      void openTrackingPage({
-                        trackingNumber: order.trackingNumber!,
-                        carrier: order.fulfillmentProvider ?? order.carrier,
-                        audience: 'tailor',
-                      })
-                    }}
-                  />
-                </>
-              )}
             </View>
-            {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
-              <View style={styles.supportCard}>
-                <Text style={styles.supportCardTitle}>
-                  {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery proof' : 'Shipping proof'}
-                </Text>
-                <Text style={styles.supportHint}>
-                  {order.deliveryMethod === 'LOCAL_DELIVERY'
-                    ? 'Only mark this order out for delivery after a rider or local delivery partner has accepted it. Keep the delivery partner, contact, and dispatch proof inside Drapeon so support can follow the same timeline if the handoff stalls.'
-                    : 'Only mark this order as shipped after the parcel has been accepted for dispatch. Keep the tracking or shipment reference, dispatch proof, and any customs or duties updates inside Drapeon so support can follow the same timeline if the shipment stalls.'}
-                </Text>
-              </View>
-            ) : null}
-            {bodyNote && (
-              <View style={styles.fitNote}>
-                <Text style={styles.fitNoteLabel}>Body note from customer</Text>
-                <Text style={styles.fitNoteText}>"{bodyNote}"</Text>
-              </View>
-            )}
 
             {activeOrderCallAvailable ? (
               <View style={styles.supportCard}>
@@ -3039,66 +3077,30 @@ export default function TailorOrderDetailScreen() {
               <Text style={styles.sectionTitle}>Reference photos</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={{ flexDirection: 'row', gap: Spacing.md }}>
-                  {visibleReferencePhotos.map((url, i) => (
-                    <RemoteImage
-                      key={i}
-                      uri={url}
-                      bucket="order-photos"
-                      style={styles.refPhoto}
-                      contentFit="contain"
-                      transition={120}
-                      surface="tailor_order_reference_photo"
-                      onLoadError={() => {
-                        setFailedReferencePhotos((prev) => prev.includes(url) ? prev : [...prev, url])
-                      }}
-                    />
+                  {referenceMediaItems.map((item, index, items) => (
+                    <TouchableOpacity
+                      key={item.uri}
+                      onPress={() => openMediaPreview(items, index)}
+                      activeOpacity={0.9}
+                      accessibilityRole="imagebutton"
+                      accessibilityLabel={`Open ${item.label}`}
+                    >
+                      <RemoteImage
+                        uri={item.uri}
+                        bucket="order-photos"
+                        style={styles.refPhoto}
+                        contentFit="contain"
+                        transition={120}
+                        surface="tailor_order_reference_photo"
+                        onLoadError={() => {
+                          setFailedReferencePhotos((prev) => prev.includes(item.uri) ? prev : [...prev, item.uri])
+                        }}
+                      />
+                    </TouchableOpacity>
                   ))}
                 </View>
               </ScrollView>
             </View>
-          )}
-
-          {(styleReferenceLinks.length > 0 || styleAttributes.length > 0 || styleNotes) && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Style references</Text>
-              <View style={styles.supportCard}>
-                {styleAttributes.length > 0 ? (
-                  <View style={styles.styleChipRow}>
-                    {styleAttributes.map((item) => (
-                      <View key={item} style={styles.styleChip}>
-                        <Text style={styles.styleChipText}>{item}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-                {styleNotes ? (
-                  <Text style={styles.supportBodyText}>{styleNotes}</Text>
-                ) : null}
-                {styleReferenceLinks.length > 0 ? (
-                  <View style={styles.referenceLinkList}>
-                    {styleReferenceLinks.map((link) => (
-                      <TouchableOpacity
-                        key={link}
-                        style={styles.referenceLinkRow}
-                        onPress={() => {
-                          void Linking.openURL(link).catch(() => {
-                            Alert.alert('Could not open link', 'Copy the reference link from the customer brief and try it in your browser.')
-                          })
-                        }}
-                      >
-                        <Text style={styles.referenceLinkHost}>{linkHostLabel(link)}</Text>
-                        <Text style={styles.referenceLinkText} numberOfLines={1}>{link}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          )}
-
-          {/* Measurements */}
-          {hasMeasurementContent(order.measurements) && (
-            <MeasurementsSection measurements={order.measurements} />
           )}
 
           {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
@@ -3165,6 +3167,94 @@ export default function TailorOrderDetailScreen() {
           void fetchOrder()
         }}
       />
+
+      <BottomSheetScaffold
+        visible={showDossierSheet}
+        title={briefDossier.title}
+        subtitle="Summary, style refs, fabric plan, fulfillment, and proof in one focused review surface."
+        onDismiss={() => setShowDossierSheet(false)}
+        scrollable
+      >
+        <View style={styles.sheetSectionStack}>
+          {briefDossier.sections.map((section) => (
+            <BriefDossierCard
+              key={section.id}
+              section={section}
+              onOpenLink={openDossierLink}
+              onOpenMedia={openMediaPreview}
+            />
+          ))}
+        </View>
+      </BottomSheetScaffold>
+
+      <MediaLightboxModal
+        items={mediaPreview?.items ?? []}
+        activeIndex={mediaPreview?.index ?? null}
+        onDismiss={() => setMediaPreview(null)}
+      />
+
+      <BottomSheetScaffold
+        visible={showMeasurementSheet}
+        title="Measurement profile"
+        subtitle="Review body context and garment-specific values before the next production step."
+        onDismiss={() => setShowMeasurementSheet(false)}
+        scrollable
+      >
+        {hasMeasurementContent(order.measurements) ? (
+          <View style={styles.sheetSectionStack}>
+            <BodyProfileCard measurements={order.measurements} />
+            <MeasurementsSection measurements={order.measurements} />
+            {measurementConfirmationNeeded ? (
+              <Button
+                label="Request measurement confirmation"
+                variant="secondary"
+                onPress={() => {
+                  setShowMeasurementSheet(false)
+                  setShowMeasurementRequestModal(true)
+                }}
+              />
+            ) : null}
+            {fitProfileReviewNeeded ? (
+              <Button
+                label="Confirm fit and cutting readiness"
+                variant="secondary"
+                onPress={() => {
+                  setShowMeasurementSheet(false)
+                  setShowFitReadinessModal(true)
+                }}
+              />
+            ) : null}
+          </View>
+        ) : (
+          <Text style={styles.supportHint}>No measurement profile is attached to this order yet.</Text>
+        )}
+      </BottomSheetScaffold>
+
+      <BottomSheetScaffold
+        visible={showFlexibleStageSheet}
+        title="Choose next stage"
+        subtitle={order.orderKind === 'READY_MADE'
+          ? 'Move this item through its real handoff state.'
+          : 'Design, fabric, and production can move in a flexible order. Pick the true next step.'}
+        onDismiss={() => setShowFlexibleStageSheet(false)}
+        enableDynamicSizing
+        secondaryAction={{ label: 'Cancel', onPress: () => setShowFlexibleStageSheet(false), tone: 'secondary' }}
+      >
+        <View style={styles.stageChoiceList}>
+          {flexibleNextStages?.map((target) => (
+            <SelectableSettingRow
+              key={target}
+              label={displayStageChoiceLabel(target, order.orderKind)}
+              detail={stageChoiceDetail(target, order.orderKind)}
+              active={false}
+              onPress={() => {
+                setShowFlexibleStageSheet(false)
+                openStageModal(target)
+              }}
+            />
+          ))}
+        </View>
+      </BottomSheetScaffold>
 
       {/* Quote modal */}
       {showQuoteModal ? (
@@ -3931,7 +4021,7 @@ function FitReadinessModal({ visible, orderId, onClose, onSent }: {
             <View style={styles.supportWarningCard}>
               <Text style={styles.supportWarningTitle}>Clear this only after review</Text>
               <Text style={styles.supportWarningText}>
-                Use this once you have reviewed the guided fit intake and are comfortable moving the order toward cutting.
+                Use this once you have reviewed the fit notes and are comfortable moving the order toward cutting.
               </Text>
             </View>
 
@@ -4979,13 +5069,27 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
       Alert.alert('Camera access needed', 'Allow camera access to take fresh production proof for this stage.')
       return
     }
-    const res = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.8,
-      videoMaxDuration: 25,
-    })
+    const res = await launchImagePickerSafely(
+      () =>
+        ImagePicker.launchCameraAsync({
+          mediaTypes: ['images', 'videos'],
+          quality: 0.8,
+          videoMaxDuration: ORDER_EVIDENCE_VIDEO_MAX_SECONDS,
+        }),
+      {
+        context: 'tailor_order_stage_camera_picker',
+        mediaLabel: 'stage proof media',
+        extra: { slot, orderId: order?.id },
+      }
+    )
+    if (!res) return
     if (!res.canceled && res.assets[0]) {
       const media = stageMediaFromAsset(res.assets[0])
+      const mediaError = validateStageMedia(media)
+      if (mediaError) {
+        Alert.alert('Video not added', mediaError)
+        return
+      }
       if (slot === 'secondary') setSecondMedia(media)
       else setPrimaryMedia(media)
     }
@@ -4993,13 +5097,29 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
 
   async function pickStageMediaFromLibrary(slot: 'primary' | 'secondary') {
     if (updating) return
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.8,
-      videoMaxDuration: 25,
-    })
+    const res = await launchImagePickerSafely(
+      () =>
+        ImagePicker.launchImageLibraryAsync(
+          preferCompatibleVideoRepresentation({
+            mediaTypes: ['images', 'videos'],
+            quality: 0.8,
+            videoMaxDuration: ORDER_EVIDENCE_VIDEO_MAX_SECONDS,
+          })
+        ),
+      {
+        context: 'tailor_order_stage_library_picker',
+        mediaLabel: 'stage proof media file',
+        extra: { slot, orderId: order?.id },
+      }
+    )
+    if (!res) return
     if (!res.canceled && res.assets[0]) {
       const media = stageMediaFromAsset(res.assets[0])
+      const mediaError = validateStageMedia(media)
+      if (mediaError) {
+        Alert.alert('Video not added', mediaError)
+        return
+      }
       if (slot === 'secondary') setSecondMedia(media)
       else setPrimaryMedia(media)
     }
@@ -5069,7 +5189,9 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
           path: filename,
           uri: uploadUri,
           contentType: stageMediaContentType(media),
-          maxBytes: media.type === 'video' ? 50 * 1024 * 1024 : 10 * 1024 * 1024,
+          maxBytes: media.type === 'video' ? ORDER_EVIDENCE_VIDEO_MAX_BYTES : MEDIA_LIMITS_BYTES.image,
+          allowedContentTypes: ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
+          purpose: 'PRODUCTION_STAGE',
         })
         photoUrls.push(publicUrl)
         mediaFingerprints.push(media.fingerprint)
@@ -5713,6 +5835,112 @@ function BriefRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+function BriefDossierRowView({
+  row,
+  onOpenLink,
+  onOpenMedia,
+}: {
+  row: BriefDossierRow
+  onOpenLink: (href: string) => void
+  onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+}) {
+  if (row.presentation === 'chips' && row.values?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.briefRowLabel}>{row.label}</Text>
+        <View style={styles.styleChipRow}>
+          {row.values.map((value) => (
+            <View key={value} style={styles.styleChip}>
+              <Text style={styles.styleChipText}>{decodeDisplayText(value)}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
+  if (row.presentation === 'links' && row.hrefs?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.briefRowLabel}>{row.label}</Text>
+        {row.hrefs.map((href) => (
+          <TouchableOpacity
+            key={href}
+            onPress={() => void onOpenLink(href)}
+            accessibilityRole="link"
+            accessibilityLabel={`Open ${decodeDisplayText(href)}`}
+          >
+            <Text style={styles.dossierLinkText}>{decodeDisplayText(href)}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    )
+  }
+
+  if (row.presentation === 'media' && row.mediaUrls?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <View style={styles.dossierRowHeader}>
+          <Text style={styles.briefRowLabel}>{row.label}</Text>
+          {row.value ? <Text style={styles.supportHint}>{row.value}</Text> : null}
+        </View>
+        <View style={styles.dossierMediaGrid}>
+          {dossierMediaItems(row.label, row.mediaUrls).map((item, index, items) => (
+            <TouchableOpacity
+              key={item.uri + '-' + index}
+              style={styles.dossierMediaTile}
+              onPress={() => onOpenMedia(items, index)}
+              activeOpacity={0.9}
+              accessibilityRole="imagebutton"
+              accessibilityLabel={`Open ${item.label}`}
+            >
+              <StageMediaPreview uri={item.uri} style={styles.dossierMediaImage} surface="tailor_order_dossier_media" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
+  if (row.presentation === 'stacked') {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.briefRowLabel}>{row.label}</Text>
+        <Text style={styles.dossierStackedText}>{decodeDisplayText(row.value ?? '')}</Text>
+      </View>
+    )
+  }
+
+  return <BriefRow label={row.label} value={row.value ?? 'Not set'} />
+}
+
+function BriefDossierCard({
+  section,
+  onOpenLink,
+  onOpenMedia,
+}: {
+  section: BriefDossierSection
+  onOpenLink: (href: string) => void
+  onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+}) {
+  return (
+    <View style={styles.supportCard}>
+      <Text style={styles.supportCardTitle}>{section.title}</Text>
+      {section.summary ? <Text style={styles.supportHint}>{section.summary}</Text> : null}
+      <View style={styles.supportMetaList}>
+        {section.rows.map((row) => (
+          <BriefDossierRowView
+            key={row.id}
+            row={row}
+            onOpenLink={onOpenLink}
+            onOpenMedia={onOpenMedia}
+          />
+        ))}
+      </View>
+    </View>
+  )
+}
+
 function SelectableSettingRow({
   label,
   detail,
@@ -5768,27 +5996,6 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
@@ -5796,17 +6003,6 @@ const styles = StyleSheet.create({
 
   heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginTop: Spacing.sm },
   stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
@@ -5892,6 +6088,16 @@ const styles = StyleSheet.create({
   briefRow: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.md },
   briefRowLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   briefRowValue: { flex: 1, textAlign: 'right', fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
+  dossierList: { gap: Spacing.sm },
+  sheetSectionStack: { gap: Spacing.md },
+  stageChoiceList: { gap: Spacing.sm },
+  dossierRowStacked: { gap: 6 },
+  dossierRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.sm },
+  dossierStackedText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
+  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreen, lineHeight: 20 },
+  dossierMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  dossierMediaTile: { width: '31%', aspectRatio: 1, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
+  dossierMediaImage: { width: '100%', height: '100%' },
   supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,

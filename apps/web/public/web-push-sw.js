@@ -16,6 +16,18 @@ self.addEventListener('push', (event) => {
   })()
 
   const defaultUrl = scopePath.startsWith('/ops') ? '/ops?view=workflow-issues' : '/account/orders'
+  const data = payload && typeof payload.data === 'object' && payload.data !== null ? payload.data : {}
+  const orderId = typeof data.orderId === 'string' && data.orderId.trim() ? data.orderId.trim() : null
+  const derivedUrl = (() => {
+    if (!orderId || scopePath.startsWith('/ops')) return null
+    if (data.target === 'call-join') {
+      return `/account/call-join?orderId=${encodeURIComponent(orderId)}`
+    }
+    if (data.target === 'messages') {
+      return `/account/messages?orderId=${encodeURIComponent(orderId)}`
+    }
+    return `/account/orders/${encodeURIComponent(orderId)}`
+  })()
   const title = typeof payload?.title === 'string' && payload.title.trim()
     ? payload.title.trim()
     : 'Drapeon update'
@@ -24,7 +36,7 @@ self.addEventListener('push', (event) => {
     : 'Open Drapeon to review the latest activity.'
   const targetUrl = typeof payload?.url === 'string' && payload.url.startsWith('/')
     ? payload.url
-    : defaultUrl
+    : derivedUrl ?? defaultUrl
 
   event.waitUntil(
     self.registration.showNotification(title, {

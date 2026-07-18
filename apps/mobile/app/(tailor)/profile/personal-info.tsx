@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator,
+  TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -168,6 +168,7 @@ export default function TailorPersonalInfoScreen() {
         <Text style={styles.headerTitle}>Personal information</Text>
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
         <View style={styles.card}>
           <View style={styles.field}>
@@ -190,7 +191,7 @@ export default function TailorPersonalInfoScreen() {
                 if (nameError) validateName(value)
               }}
               onBlur={() => validateName(displayName)}
-              placeholder="John Doe"
+              placeholder="e.g. John Doe"
               placeholderTextColor={Colors.midGrey}
               maxLength={50}
               autoCorrect={false}
@@ -281,6 +282,7 @@ export default function TailorPersonalInfoScreen() {
           }
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }

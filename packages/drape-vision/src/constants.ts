@@ -53,6 +53,10 @@ export const DRAPE_VISION_MEASUREMENT_RANGES_CM: Record<DrapeVisionMeasurementFi
   kneeCircumference: { min: 20, max: 75 },
   bicepCircumference: { min: 15, max: 70 },
   wristCircumference: { min: 10, max: 35 },
+  palmWidth: { min: 4, max: 16 },
+  palmLength: { min: 10, max: 28 },
+  sleeveOpening: { min: 10, max: 35 },
+  banglePassOver: { min: 15, max: 45 },
   headCircumference: { min: 40, max: 75 },
   hatBandLine: { min: 40, max: 75 },
   headLength: { min: 12, max: 30 },
@@ -62,4 +66,5 @@ export const DRAPE_VISION_MEASUREMENT_RANGES_CM: Record<DrapeVisionMeasurementFi
   filaHeight: { min: 3, max: 40 },
   height: { min: 90, max: 230 },
   torsoLength: { min: 25, max: 95 },
+  ankleHemOpening: { min: 10, max: 40 },
 }

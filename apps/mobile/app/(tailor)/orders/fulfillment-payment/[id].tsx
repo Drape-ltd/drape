@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import type { OrderStage } from '@drape/shared/order-machine'
@@ -77,7 +77,7 @@ function fulfillmentLabel(deliveryMethod: string) {
 }
 
 export default function FulfillmentPaymentRequestScreen() {
-  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
+  const { id, returnTo, historyChain } = useLocalSearchParams<{ id: string; returnTo?: string; historyChain?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -89,7 +89,7 @@ export default function FulfillmentPaymentRequestScreen() {
   const [saving, setSaving] = useState(false)
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/orders')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/orders')
   }
 
   useEffect(() => {
@@ -209,7 +209,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <ActivityIndicator color={Colors.needleGreen} size="large" />
           <Text style={styles.stateText}>Loading fulfillment request…</Text>
@@ -220,7 +220,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (!order) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Order unavailable</Text>
           <Text style={styles.stateText}>We could not load this order right now.</Text>
@@ -232,7 +232,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (order.deliveryMethod === 'LOCAL_COLLECTION') {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Pickup orders do not need this step</Text>
           <Text style={styles.stateText}>The customer receives a collection code when the order is ready, so no delivery or shipping fee is needed.</Text>
@@ -244,7 +244,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (!order.fulfillmentPaymentRequestedAt || order.fulfillmentFee > 0) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Dispatch fee is already handled</Text>
           <Text style={styles.stateText}>
@@ -258,7 +258,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (order.fulfillmentPaymentPaidAt) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>{order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery payment already handled' : 'Shipping payment already handled'}</Text>
           <Text style={styles.stateText}>This order is ready for handoff once the parcel or rider is actually booked.</Text>
@@ -270,7 +270,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   if (order.stage !== 'FINISHING') {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Not ready yet</Text>
           <Text style={styles.stateText}>Move the order to Preparing order first. Once it is packed and checked, you can request the exact {fulfillmentLabel(order.deliveryMethod)} amount here.</Text>
@@ -287,7 +287,7 @@ export default function FulfillmentPaymentRequestScreen() {
     : `Request ${fulfillmentLabel(order.deliveryMethod)} payment`
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack}>
           <Text style={styles.backText}>← Back</Text>

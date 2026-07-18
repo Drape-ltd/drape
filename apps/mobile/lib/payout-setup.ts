@@ -166,7 +166,7 @@ export async function confirmPaystackPayoutAccount(input: {
   accountNumber: string
   accountName: string
 }) {
-  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus }>('payout-account-action', {
+  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean }>('payout-account-action', {
     body: {
       action: 'confirm-paystack-account',
       payoutCurrency: input.payoutCurrency,
@@ -178,15 +178,17 @@ export async function confirmPaystackPayoutAccount(input: {
     },
   })
 
-  if (error || !data?.account) {
+  if (error || (!data?.account && data?.pendingReview !== true)) {
     return {
       account: null,
+      pendingReview: false,
       error: await edgeError(error, 'We could not save this payout account right now.'),
     }
   }
 
   return {
-    account: data.account,
+    account: data.account ?? null,
+    pendingReview: data.pendingReview === true,
     error: null,
   }
 }
@@ -199,7 +201,7 @@ export async function submitManualBankEntry(input: {
   accountNumber: string
   accountName: string
 }) {
-  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus }>('payout-account-action', {
+  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean }>('payout-account-action', {
     body: {
       action: 'submit-manual-bank-entry',
       payoutCurrency: input.payoutCurrency,
@@ -211,15 +213,17 @@ export async function submitManualBankEntry(input: {
     },
   })
 
-  if (error || !data?.account) {
+  if (error || (!data?.account && data?.pendingReview !== true)) {
     return {
       account: null,
+      pendingReview: false,
       error: await edgeError(error, 'We could not submit these manual bank details right now.'),
     }
   }
 
   return {
-    account: data.account,
+    account: data.account ?? null,
+    pendingReview: data.pendingReview === true,
     error: null,
   }
 }
@@ -266,6 +270,7 @@ export async function startStripeConnectOnboarding(input: {
 export async function refreshStripeConnectPayoutStatus() {
   const { data, error } = await invokeFunction<{
     ok?: boolean
+    pendingReview?: boolean
     account?: {
       provider: 'STRIPE'
       stripeConnectAccountId: string
@@ -281,15 +286,17 @@ export async function refreshStripeConnectPayoutStatus() {
     body: { action: 'refresh-stripe-connect-status' },
   })
 
-  if (error || !data?.account) {
+  if (error || (!data?.account && data?.pendingReview !== true)) {
     return {
       account: null,
+      pendingReview: false,
       error: await edgeError(error, 'We could not refresh the Stripe payout status right now.'),
     }
   }
 
   return {
-    account: data.account,
+    account: data.account ?? null,
+    pendingReview: data.pendingReview === true,
     error: null,
   }
 }

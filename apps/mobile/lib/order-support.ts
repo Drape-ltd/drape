@@ -38,6 +38,10 @@ export type MeasurementFieldKey =
   | 'kneeCircumference'
   | 'bicepCircumference'
   | 'wristCircumference'
+  | 'palmWidth'
+  | 'palmLength'
+  | 'sleeveOpening'
+  | 'banglePassOver'
   | 'headCircumference'
   | 'hatBandLine'
   | 'headLength'
@@ -46,6 +50,7 @@ export type MeasurementFieldKey =
   | 'frontToBackOverCrown'
   | 'filaHeight'
   | 'torsoLength'
+  | 'ankleHemOpening'
 
 export type FitIntent = 'FITTED' | 'BALANCED' | 'RELAXED'
 
@@ -86,6 +91,10 @@ export const MEASUREMENT_FIELD_KEYS: MeasurementFieldKey[] = [
   'kneeCircumference',
   'bicepCircumference',
   'wristCircumference',
+  'palmWidth',
+  'palmLength',
+  'sleeveOpening',
+  'banglePassOver',
   'headCircumference',
   'hatBandLine',
   'headLength',
@@ -94,6 +103,7 @@ export const MEASUREMENT_FIELD_KEYS: MeasurementFieldKey[] = [
   'frontToBackOverCrown',
   'filaHeight',
   'torsoLength',
+  'ankleHemOpening',
 ]
 
 export type FabricHandoffMode =
@@ -174,6 +184,7 @@ export type ConsultationMeta = {
   declineReason?: string | null
   reminder30SentAt?: string | null
   reminder5SentAt?: string | null
+  reminderStartSentAt?: string | null
   followUpSentAt?: string | null
   expiredAt?: string | null
 }
@@ -203,6 +214,7 @@ export type OrderCallMeta = {
   reminderEnabled?: boolean | null
   reminder30SentAt?: string | null
   reminder5SentAt?: string | null
+  reminderStartSentAt?: string | null
   completedAt?: string | null
   expiredAt?: string | null
 }
@@ -600,9 +612,9 @@ export const FIT_CONFIDENCE_LABELS: Record<MeasurementFitConfidence, string> = {
 }
 
 export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptureMethod, string> = {
-  GUIDED_MANUAL_BASELINE: 'Guided fit intake',
-  GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
-  TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
+  GUIDED_MANUAL_BASELINE: 'Fit notes',
+  GUIDED_HELPER_BASELINE: 'Fit notes with helper',
+  TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit notes',
   DRAPE_VISION_ROTATION: 'Drapeon Vision scan',
   DRAPE_VISION_SPECIALIST_SCAN: 'Drapeon Vision specialist scan',
   TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drapeon Vision scan',
@@ -631,6 +643,10 @@ export const MEASUREMENT_FIELD_LABELS: Record<MeasurementFieldKey, string> = {
   kneeCircumference: 'Knee',
   bicepCircumference: 'Bicep',
   wristCircumference: 'Wrist',
+  palmWidth: 'Palm width',
+  palmLength: 'Palm length',
+  sleeveOpening: 'Sleeve opening',
+  banglePassOver: 'Bangle pass-over',
   headCircumference: 'Head circumference',
   hatBandLine: 'Hat band line',
   headLength: 'Head length',
@@ -639,6 +655,7 @@ export const MEASUREMENT_FIELD_LABELS: Record<MeasurementFieldKey, string> = {
   frontToBackOverCrown: 'Front to back over crown',
   filaHeight: 'Fila height',
   torsoLength: 'Torso length',
+  ankleHemOpening: 'Ankle / hem opening',
 }
 
 export const FIT_INTENT_LABELS: Record<FitIntent, string> = {
@@ -739,6 +756,10 @@ export const MEASUREMENT_FIELD_GUIDES: Record<string, string> = {
   underBust: 'Measure directly under the bust where a bra band would sit.',
   bicepCircumference: 'Measure around the fullest part of the upper arm.',
   wristCircumference: 'Measure around the wrist bone.',
+  palmWidth: 'Measure across the widest part of the palm.',
+  palmLength: 'Measure from the wrist crease to the tip of the middle finger.',
+  sleeveOpening: 'Measure the finished sleeve or cuff opening.',
+  banglePassOver: 'Measure around the widest point the bangle must pass over.',
   headCircumference: 'Measure around the forehead, above the ears, and the fullest back of the head.',
   hatBandLine: 'Measure around the exact line where the hat or fila should sit.',
   headLength: 'Measure from the forehead to the fullest back of the head.',
@@ -746,6 +767,7 @@ export const MEASUREMENT_FIELD_GUIDES: Record<string, string> = {
   earToEarOverCrown: 'Measure from one ear base over the crown to the other ear base.',
   frontToBackOverCrown: 'Measure from front band line over the crown to back band line.',
   filaHeight: 'Measure or describe how tall the fila should stand before shaping or folding.',
+  ankleHemOpening: 'Measure the finished ankle or hem opening.',
   'Round bust': 'Measure around the fullest part of the bust, keeping the tape level across the back.',
   'High bust': 'Measure above the bust, under the arms, and across the upper back.',
   'Under bust': 'Measure directly under the bust where a bra band would sit.',
@@ -809,6 +831,7 @@ export const MEASUREMENT_METADATA_KEYS = new Set<string>([
   'fitFlags',
   'bodyNote',
   'captureMethod',
+  'captureMethodLabel',
   'captureVersion',
   'capturedAt',
   'visionPipelineVersion',

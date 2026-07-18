@@ -6,26 +6,66 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  View, Text, StyleSheet, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Keyboard,
+  PanResponder, Animated, Vibration, AppState,
 } from 'react-native'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
+import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload } from '@/lib/storage-upload'
 import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
+import * as FileSystem from 'expo-file-system'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
+import {
+  groupMessageMediaClusters,
+  type ClusterPosition,
+} from '@drape/shared/message-thread-clusters'
+import {
+  callSchedulingReasonFor,
+  formatCallCountdown,
+  getCallLifecycleState,
+} from '@drape/shared/call-scheduling-policy'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { RemoteImage } from '@/components/ui/RemoteImage'
+import { PortfolioVideoPreview } from '@/components/ui/PortfolioVideoPreview'
+import { BottomSheetScaffold } from './BottomSheetScaffold'
+import { MediaLightboxModal, type MediaLightboxItem } from './MediaLightboxModal'
+import {
+  ALLOWED_IMAGE_CONTENT_TYPES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
+  isVideoMediaUrl,
+} from '@drape/shared/media-policy'
 
 type MessageType = 'TEXT' | 'PHOTO' | 'VOICE'
-type MessagePhotoSource = 'camera' | 'library'
+type MessageMediaSource = 'camera-photo' | 'camera-video' | 'library'
 type ThreadNotice = { tone: 'warning' | 'error'; text: string }
+type CallLifecycleEvent = {
+  kind: 'consultation' | 'ready-made'
+  scheduledStartAt: string | null | undefined
+  timezone?: string | null
+  reason?: string | null
+  status?: string | null
+  paymentRequired?: boolean
+  paymentPaid?: boolean
+  actionLoading?: boolean
+  onJoinVideo?: () => void
+  onReschedule?: () => void
+  rescheduleLabel?: string
+  paymentActionLabel?: string | null
+  onPressPayment?: () => void
+}
 
 type Message = {
   id: string
@@ -39,6 +79,9 @@ type Message = {
   voice_url: string | null
   created_at: string
   read_at: string | null
+  is_deleted: boolean
+  edited_at: string | null
+  reply_to_id: string | null
 }
 
 type MessageReaction = {
@@ -48,6 +91,11 @@ type MessageReaction = {
   user_id: string
   emoji: string
   created_at: string | null
+}
+
+type MessageMediaPreview = {
+  items: MediaLightboxItem[]
+  index: number
 }
 
 interface Props {
@@ -64,11 +112,43 @@ interface Props {
   callLoading?: boolean
   onPressCall?: () => void
   callAccessibilityLabel?: string
+  callBlocked?: boolean
+  callGateMessage?: string | null
+  callGateActionLabel?: string | null
+  onPressCallGateAction?: () => void
+  callLifecycleEvent?: CallLifecycleEvent | null
 }
 
 // Rate limit: max 8 sends in 30 seconds
 const RATE_LIMIT_COUNT = 8
 const RATE_LIMIT_WINDOW_MS = 30_000
+const MESSAGE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.messageVideo
+const MESSAGE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.messageVideo
+const MESSAGE_MEDIA_TILE_SIZE = 216
+const MESSAGE_MEDIA_MOSAIC_GAP = 4
+const MESSAGE_MEDIA_MOSAIC_TILE_SIZE = (MESSAGE_MEDIA_TILE_SIZE - MESSAGE_MEDIA_MOSAIC_GAP) / 2
+const VOICE_NOTE_MIN_WIDTH = 220
+const VOICE_NOTE_MAX_WIDTH = 272
+const MESSAGE_SIGNED_URL_CACHE_WINDOW_MS = 50 * 60 * 1000
+const messageSignedUrlCache = new Map<string, { url: string; expiresAt: number }>()
+
+function cachedMessageSignedUrl(path: string) {
+  const cached = messageSignedUrlCache.get(path)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    messageSignedUrlCache.delete(path)
+    return null
+  }
+  return cached.url
+}
+
+function cacheMessageSignedUrl(path: string, url: string) {
+  messageSignedUrlCache.set(path, {
+    url,
+    expiresAt: Date.now() + MESSAGE_SIGNED_URL_CACHE_WINDOW_MS,
+  })
+}
+const COMPOSER_CONTEXT_BAR_MIN_HEIGHT = 56
 
 const MSG_PAGE_SIZE = 50
 const MESSAGE_REACTION_OPTIONS = ['👍', '❤️', '😂', '😮', '🙏'] as const
@@ -83,12 +163,65 @@ const CONNECTIVITY_PATTERNS = [
   'internet connection appears to be offline',
 ]
 
+function isWithin15Minutes(isoString: string) {
+  const raw = /\dT\d/.test(isoString) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(isoString) ? `${isoString}Z` : isoString
+  const date = new Date(raw)
+  return !Number.isNaN(date.getTime()) && Date.now() - date.getTime() < 15 * 60 * 1000
+}
+
 function isAbsoluteMediaUrl(value: string) {
   return /^(https?:|file:|blob:|data:)/i.test(value)
 }
 
 function messageMediaPath(value: string) {
   return value.trim().replace(/^\/+/, '').replace(/^message-media\//, '')
+}
+
+function extensionFromAsset(asset: ImagePicker.ImagePickerAsset) {
+  const raw = asset.fileName || asset.uri.split('?')[0]?.split('/').pop() || ''
+  return raw.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || ''
+}
+
+function isMessageVideoAsset(asset: ImagePicker.ImagePickerAsset) {
+  const mimeType = asset.mimeType?.split(';')[0]?.trim().toLowerCase() ?? ''
+  return asset.type === 'video' || mimeType.startsWith('video/') || /\.(mp4|mov|m4v)(?:$|\?)/iu.test(asset.uri)
+}
+
+function messageVideoContentType(asset: ImagePicker.ImagePickerAsset) {
+  const normalizedMime = asset.mimeType?.split(';')[0]?.trim().toLowerCase()
+  if (normalizedMime && ALLOWED_VIDEO_CONTENT_TYPES.includes(normalizedMime as (typeof ALLOWED_VIDEO_CONTENT_TYPES)[number])) {
+    return normalizedMime
+  }
+  const extension = extensionFromAsset(asset)
+  if (extension === 'mov' || extension === 'qt') return 'video/quicktime'
+  if (extension === 'mp4' || extension === 'm4v') return 'video/mp4'
+  return normalizedMime ?? 'video/mp4'
+}
+
+function messageVideoExtension(asset: ImagePicker.ImagePickerAsset) {
+  const extension = extensionFromAsset(asset)
+  if (extension === 'mov' || extension === 'qt') return 'mov'
+  return 'mp4'
+}
+
+function messageVideoDurationSeconds(asset: ImagePicker.ImagePickerAsset) {
+  if (typeof asset.duration !== 'number' || !Number.isFinite(asset.duration) || asset.duration <= 0) return null
+  return asset.duration > 1000 ? asset.duration / 1000 : asset.duration
+}
+
+function validateMessageVideoAsset(asset: ImagePicker.ImagePickerAsset) {
+  const contentType = messageVideoContentType(asset)
+  if (!ALLOWED_VIDEO_CONTENT_TYPES.includes(contentType as (typeof ALLOWED_VIDEO_CONTENT_TYPES)[number])) {
+    return 'Choose an MP4 or MOV video.'
+  }
+  if (typeof asset.fileSize === 'number' && asset.fileSize > MESSAGE_VIDEO_MAX_BYTES) {
+    return `Choose videos under ${Math.round(MESSAGE_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`
+  }
+  const durationSeconds = messageVideoDurationSeconds(asset)
+  if (durationSeconds != null && durationSeconds > MESSAGE_VIDEO_MAX_SECONDS) {
+    return OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE
+  }
+  return null
 }
 
 function useMessageMediaUrl(value: string | null | undefined) {
@@ -105,13 +238,16 @@ function useMessageMediaUrl(value: string | null | undefined) {
 
   useEffect(() => {
     if (!storagePath) return undefined
+    if (cachedMessageSignedUrl(storagePath)) return undefined
     let cancelled = false
     supabase.storage
       .from('message-media')
       .createSignedUrl(storagePath, 60 * 60)
       .then(({ data, error }) => {
         if (cancelled) return
-        setSignedUrl({ path: storagePath, url: error ? null : data?.signedUrl ?? null })
+        const url = error ? null : data?.signedUrl ?? null
+        if (url) cacheMessageSignedUrl(storagePath, url)
+        setSignedUrl({ path: storagePath, url })
       })
 
     return () => {
@@ -121,7 +257,88 @@ function useMessageMediaUrl(value: string | null | undefined) {
 
   if (immediateUrl) return immediateUrl
   if (!storagePath) return null
+  const cachedUrl = cachedMessageSignedUrl(storagePath)
+  if (cachedUrl) return cachedUrl
   return signedUrl?.path === storagePath ? signedUrl.url : null
+}
+
+function useMessageMediaUrls(messages: Message[]) {
+  const signature = messages.map((message) => `${message.id}:${message.photo_url ?? ''}`).join('|')
+  const [resolvedBatch, setResolvedBatch] = useState<{ signature: string; urls: Map<string, string> } | null>(null)
+
+  useEffect(() => {
+    const immediateUrls = new Map<string, string>()
+    const unresolvedPaths: string[] = []
+    const messageIdByPath = new Map<string, string>()
+
+    for (const message of messages) {
+      const raw = message.photo_url?.trim()
+      if (!raw) continue
+      if (isAbsoluteMediaUrl(raw)) {
+        immediateUrls.set(message.id, raw)
+        continue
+      }
+      const path = messageMediaPath(raw)
+      const cachedUrl = cachedMessageSignedUrl(path)
+      if (cachedUrl) {
+        immediateUrls.set(message.id, cachedUrl)
+      } else {
+        unresolvedPaths.push(path)
+        messageIdByPath.set(path, message.id)
+      }
+    }
+
+    if (unresolvedPaths.length === 0) {
+      setResolvedBatch({ signature, urls: immediateUrls })
+      return undefined
+    }
+
+    let cancelled = false
+    setResolvedBatch({ signature, urls: immediateUrls })
+    supabase.storage
+      .from('message-media')
+      .createSignedUrls(unresolvedPaths, 60 * 60)
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return
+        const urls = new Map(immediateUrls)
+        for (const result of data) {
+          if (!result.path || !result.signedUrl) continue
+          cacheMessageSignedUrl(result.path, result.signedUrl)
+          const messageId = messageIdByPath.get(result.path)
+          if (messageId) urls.set(messageId, result.signedUrl)
+        }
+        setResolvedBatch({ signature, urls })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [messages, signature])
+
+  return resolvedBatch?.signature === signature ? resolvedBatch.urls : new Map<string, string>()
+}
+
+function messageMediaPreviewItems(
+  messages: Message[],
+  resolvedMessageId?: string,
+  resolvedUri?: string | null,
+) {
+  const mediaMessages = messages.filter((message) => message.type === 'PHOTO' && !!message.photo_url)
+
+  return mediaMessages
+    .map((message, index) => {
+      const uri = message.photo_url!
+      const isVideo = isVideoMediaUrl(uri)
+      return {
+        uri,
+        resolvedUri: message.id === resolvedMessageId ? resolvedUri ?? undefined : undefined,
+        label: `${isVideo ? 'Video' : 'Photo'} ${index + 1} of ${mediaMessages.length}`,
+        contextId: message.id,
+        kind: isVideo ? 'video' : 'photo',
+        bucket: 'message-media',
+        requiresSignedUrl: !isAbsoluteMediaUrl(uri),
+      } satisfies MediaLightboxItem
+    })
 }
 
 function parseDateValue(value: string | null | undefined) {
@@ -235,24 +452,48 @@ function resolveThreadLoadError(error: unknown, hasCachedMessages: boolean) {
   return 'Could not load this conversation right now. Refresh the thread or reopen the order.'
 }
 
-function resolveMediaFailure(kind: 'photo' | 'voice', error: unknown) {
+function formatVoiceDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatPresenceTime(isoString: string): string {
+  const date = parseDateValue(isoString)
+  if (!date) return 'recently'
+  const diffMs = Date.now() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60_000)
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function resolveMediaFailure(kind: 'photo' | 'video' | 'voice', error: unknown) {
+  const label = kind === 'voice' ? 'Voice note' : kind === 'video' ? 'Video' : 'Photo'
   if (isLikelyConnectivityIssue(error)) {
+    const message =
+      kind === 'voice'
+        ? 'Your connection looks weak. Retry this voice note when the signal improves.'
+        : kind === 'video'
+          ? 'Your connection looks weak. Retry this video when the signal improves.'
+          : 'Your connection looks weak. Retry this upload when the signal improves.'
     return {
-      title: kind === 'photo' ? 'Photo not sent' : 'Voice note not sent',
-      message:
-        kind === 'photo'
-          ? 'Your connection looks weak. Retry this upload when the signal improves.'
-          : 'Your connection looks weak. Retry this voice note when the signal improves.',
+      title: `${label} not sent`,
+      message,
       connectivity: true,
     }
   }
 
   return {
-    title: kind === 'photo' ? 'Photo not sent' : 'Voice note not sent',
+    title: `${label} not sent`,
     message:
-      kind === 'photo'
-        ? 'Could not send this photo right now. Please try again in a moment.'
-        : 'Could not send this voice note right now. Please try again in a moment.',
+      kind === 'voice'
+        ? 'Could not send this voice note right now. Please try again in a moment.'
+        : kind === 'video'
+          ? 'Could not send this video right now. Please try again in a moment.'
+          : 'Could not send this photo right now. Please try again in a moment.',
     connectivity: false,
   }
 }
@@ -271,9 +512,18 @@ export function MessageThread({
   callLoading = false,
   onPressCall,
   callAccessibilityLabel = 'Open Drapeon call options',
+  callBlocked = false,
+  callGateMessage,
+  callGateActionLabel,
+  onPressCallGateAction,
+  callLifecycleEvent,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
+  const [contextMenuMessage, setContextMenuMessage] = useState<Message | null>(null)
+  const [mediaPreview, setMediaPreview] = useState<MessageMediaPreview | null>(null)
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [reactions, setReactions] = useState<MessageReaction[]>([])
   const [reactionsAvailable, setReactionsAvailable] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -288,12 +538,62 @@ export function MessageThread({
   const [textError, setTextError] = useState('')
   const [sending, setSending] = useState(false)
   const [rateLimited, setRateLimited] = useState(false)
-  const [recording, setRecording] = useState<Audio.Recording | null>(null)
   const [isRecording, setIsRecording] = useState(false)
-  const flatListRef = useRef<FlatList>(null)
+  const [showCancelHint, setShowCancelHint] = useState(false)
+  const recordingRef = useRef<Audio.Recording | null>(null)
+  const recordingStartingRef = useRef(false)
+  const recordingStoppingRef = useRef(false)
+  const recordingGestureActiveRef = useRef(false)
+  const isCancelledRef = useRef(false)
+  const sendingRef = useRef(false)
+  const channelRef = useRef<RealtimeChannel | null>(null)
+  const typingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const appStateRef = useRef(AppState.currentState)
+  const [counterpartyIsTyping, setCounterpartyIsTyping] = useState(false)
+  const [counterpartyPresence, setCounterpartyPresence] = useState<{ online: boolean; lastSeen: string | null }>({ online: false, lastSeen: null })
+  // PanResponder is created once; callbacks read only from refs so stale closures are safe
+  const micPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !sendingRef.current,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        recordingGestureActiveRef.current = true
+        void startRecording()
+      },
+      onPanResponderMove: (_, g) => {
+        if (g.dx < -60 && !isCancelledRef.current) {
+          isCancelledRef.current = true
+          setShowCancelHint(true)
+          Vibration.vibrate(40)
+        }
+      },
+      onPanResponderRelease: () => {
+        recordingGestureActiveRef.current = false
+        void stopRecording()
+      },
+      onPanResponderTerminate: () => {
+        recordingGestureActiveRef.current = false
+        isCancelledRef.current = true
+        void stopRecording()
+      },
+    })
+  ).current
+  const flatListRef = useRef<FlashListRef<Message[]>>(null)
+  const composerInputRef = useRef<TextInput>(null)
   const sendTimestamps = useRef<number[]>([])
   const insets = useSafeAreaInsets()
   const composerBottomPadding = Math.max(insets.bottom + Spacing.sm, Spacing.md)
+  const replyingToMediaUrl = useMessageMediaUrl(
+    replyingTo?.type === 'PHOTO' ? replyingTo.photo_url : null,
+  )
+  const replyingToMediaIsVideo = isVideoMediaUrl(replyingTo?.photo_url)
+
+  // Keep sending ref in sync so PanResponder can gate on it without stale closure
+  sendingRef.current = sending
+
+  const messagesById = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
+  const messageGroups = useMemo(() => groupMessageMediaClusters(messages), [messages])
 
   const reactionsByMessageId = useMemo(() => {
     const grouped = new Map<string, MessageReaction[]>()
@@ -449,13 +749,50 @@ export function MessageThread({
           setReactions((prev) => prev.filter((reaction) => reaction.id !== old.id))
         }
       )
-      .subscribe()
+      .on('broadcast', { event: 'typing' }, ({ payload }: { payload: { userId: string; isTyping: boolean } }) => {
+        if (payload.userId === currentUserId) return
+        setCounterpartyIsTyping(!!payload.isTyping)
+        if (typingClearRef.current) clearTimeout(typingClearRef.current)
+        if (payload.isTyping) {
+          typingClearRef.current = setTimeout(() => setCounterpartyIsTyping(false), 4000)
+        }
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState<{ userId: string }>()
+        const others = Object.values(state).flat().filter((p) => p.userId !== currentUserId)
+        const isOnline = others.length > 0
+        setCounterpartyPresence((prev) => ({
+          online: isOnline,
+          lastSeen: isOnline ? null : (prev.online ? new Date().toISOString() : prev.lastSeen),
+        }))
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ userId: currentUserId, threadStatus: 'open' })
+        }
+      })
+
+    channelRef.current = channel
+
+    // Untrack when app backgrounds, re-track when it returns
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (appStateRef.current === 'active' && nextState !== 'active') {
+        void channel.untrack()
+      } else if (appStateRef.current !== 'active' && nextState === 'active') {
+        void channel.track({ userId: currentUserId, threadStatus: 'open' })
+      }
+      appStateRef.current = nextState
+    })
 
     return () => {
       clearTimeout(initialLoad)
+      appStateSub.remove()
+      if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current)
+      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+      channelRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [fetchMessages, orderId])
+  }, [fetchMessages, orderId, currentUserId])
 
   // Mark incoming messages as read
   useEffect(() => {
@@ -503,9 +840,32 @@ export function MessageThread({
 
   async function sendText() {
     if (!text.trim() || !validateText(text)) return
-    if (!checkRateLimit()) return
+    if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current)
+    void channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, isTyping: false } })
     setSending(true)
     setThreadNotice(null)
+
+    if (editingMessage) {
+      const { error } = await invokeFunction('message-action', {
+        body: { action: 'edit', messageId: editingMessage.id, body: text.trim() },
+      })
+      if (error) {
+        const failure = await resolveMessageSendFailure(error, 'Could not edit this message. Please try again.')
+        if (failure.inlineMessage) setTextError(failure.inlineMessage)
+        if (failure.showAlert !== false) Alert.alert(failure.title, failure.message)
+      } else {
+        const now = new Date().toISOString()
+        setMessages((prev) => prev.map((m) => m.id === editingMessage.id ? { ...m, body: text.trim(), edited_at: now } : m))
+        messagesRef.current = messagesRef.current.map((m) => m.id === editingMessage.id ? { ...m, body: text.trim(), edited_at: now } : m)
+        setText('')
+        setTextError('')
+        setEditingMessage(null)
+      }
+      setSending(false)
+      return
+    }
+
+    if (!checkRateLimit()) { setSending(false); return }
 
     const { error } = await invokeFunction('message-action', {
       body: {
@@ -513,6 +873,7 @@ export function MessageThread({
         orderId,
         type: 'TEXT',
         body: text.trim(),
+        ...(replyingTo ? { replyToId: replyingTo.id } : {}),
       },
     })
 
@@ -537,6 +898,7 @@ export function MessageThread({
     } else {
       setText('')
       setTextError('')
+      setReplyingTo(null)
       await fetchMessages({ silent: true })
       Keyboard.dismiss()
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
@@ -544,105 +906,256 @@ export function MessageThread({
     setSending(false)
   }
 
+  async function performUnsend(message: Message) {
+    const { error } = await invokeFunction('message-action', {
+      body: { action: 'unsend', messageId: message.id },
+    })
+    if (error) {
+      const payload = await readFunctionErrorPayload(error)
+      const code = readPayloadString(payload, 'code')
+      if (code === 'UNSEND_WINDOW_EXPIRED') {
+        Alert.alert('Cannot unsend', 'Messages can only be unsent within 15 minutes of sending.')
+      } else {
+        Alert.alert('Could not unsend', 'Something went wrong. Please try again.')
+      }
+      return
+    }
+    setMessages((prev) => prev.map((m) => m.id === message.id ? { ...m, is_deleted: true, body: null } : m))
+    messagesRef.current = messagesRef.current.map((m) => m.id === message.id ? { ...m, is_deleted: true, body: null } : m)
+    if (editingMessage?.id === message.id) { setEditingMessage(null); setText('') }
+  }
+
   function openPhotoSourceSheet() {
-    Alert.alert('Send photo', 'Take a photo now or choose one from your library.', [
-      { text: 'Take photo', onPress: () => void sendPhotoFromSource('camera') },
-      { text: 'Choose from library', onPress: () => void sendPhotoFromSource('library') },
+    Alert.alert('Send media', 'Take a photo, record a short video, or choose media from your library.', [
+      { text: 'Take photo', onPress: () => void sendMediaFromSource('camera-photo') },
+      { text: 'Record video', onPress: () => void sendMediaFromSource('camera-video') },
+      { text: 'Choose from library', onPress: () => void sendMediaFromSource('library') },
       { text: 'Cancel', style: 'cancel' },
     ])
   }
 
-  async function pickMessagePhoto(source: MessagePhotoSource) {
+  async function pickMessageMedia(source: MessageMediaSource) {
     const permission =
-      source === 'camera'
+      source === 'camera-photo' || source === 'camera-video'
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync()
 
     if (!permission.granted) {
       Alert.alert(
         'Permission needed',
-        source === 'camera'
-          ? 'Allow camera access to send a photo.'
-          : 'Allow photo access to send an image.',
+        source === 'camera-photo' || source === 'camera-video'
+          ? 'Allow camera access to send media.'
+          : 'Allow photo access to send media.',
       )
       return null
     }
 
-    const pickerOptions = {
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
+    if (source === 'camera-photo') {
+      return launchImagePickerSafely(
+        () =>
+          ImagePicker.launchCameraAsync({
+            mediaTypes: 'images',
+            quality: 0.8,
+          }),
+        {
+          context: 'message_camera_photo_picker',
+          mediaLabel: 'message photo',
+          extra: { source, orderId, senderId: currentUserId },
+        }
+      )
     }
-
-    return source === 'camera'
-      ? ImagePicker.launchCameraAsync(pickerOptions)
-      : ImagePicker.launchImageLibraryAsync(pickerOptions)
+    if (source === 'camera-video') {
+      return launchImagePickerSafely(
+        () =>
+          ImagePicker.launchCameraAsync({
+            mediaTypes: 'videos',
+            quality: 0.8,
+            videoMaxDuration: MESSAGE_VIDEO_MAX_SECONDS,
+          }),
+        {
+          context: 'message_camera_video_picker',
+          mediaLabel: 'message video',
+          extra: { source, orderId, senderId: currentUserId },
+        }
+      )
+    }
+    return launchImagePickerSafely(
+      () =>
+        ImagePicker.launchImageLibraryAsync(
+          preferCompatibleVideoRepresentation({
+            mediaTypes: ['images', 'videos'],
+            quality: 0.8,
+            videoMaxDuration: MESSAGE_VIDEO_MAX_SECONDS,
+            allowsMultipleSelection: true,
+            selectionLimit: 6,
+          })
+        ),
+      {
+        context: 'message_library_media_picker',
+        mediaLabel: 'message media file',
+        extra: { source, orderId, senderId: currentUserId },
+      }
+    )
   }
 
-  async function sendPhotoFromSource(source: MessagePhotoSource) {
+  async function sendMediaFromSource(source: MessageMediaSource) {
     if (!checkRateLimit()) return
-    const result = await pickMessagePhoto(source)
+    const result = await pickMessageMedia(source)
     if (!result) return
-    if (result.canceled || !result.assets[0]) return
+    const assets = result.assets ?? []
+    if (result.canceled || assets.length === 0) return
+
+    for (const asset of assets) {
+      const isVideo = isMessageVideoAsset(asset)
+      const videoValidationError = isVideo ? validateMessageVideoAsset(asset) : null
+      if (videoValidationError) {
+        Alert.alert('Video not sent', videoValidationError)
+        return
+      }
+    }
 
     setSending(true)
     setThreadNotice(null)
-    const cleanUri = await stripExif(result.assets[0].uri)
-    const ext = 'jpg' // stripExif always outputs JPEG
-    const filename = `messages/${orderId}/${Date.now()}.${ext}`
+    const replyTargetId = replyingTo?.id ?? null
+    let sentCount = 0
+    let failure: { kind: 'photo' | 'video'; error: unknown } | null = null
 
     try {
-      const payload = await createValidatedUploadPayload(cleanUri, {
-        maxBytes: 10 * 1024 * 1024,
-        contentType: 'image/jpeg',
-        purpose: 'MESSAGE_MEDIA',
-      })
-      const { error: uploadError } = await supabase.storage
-        .from('message-media')
-        .upload(filename, payload.data, { contentType: 'image/jpeg' })
-      if (uploadError) throw uploadError
+      for (let index = 0; index < assets.length; index += 1) {
+        const asset = assets[index]
+        const isVideo = isMessageVideoAsset(asset)
+        try {
+          const uploadUri = isVideo ? asset.uri : await stripExif(asset.uri)
+          const contentType = isVideo ? messageVideoContentType(asset) : 'image/jpeg'
+          const extension = isVideo ? messageVideoExtension(asset) : 'jpg'
+          const filename = `messages/${orderId}/${Date.now()}-${index}.${extension}`
+          const payload = await createValidatedUploadPayload(uploadUri, {
+            maxBytes: isVideo ? MESSAGE_VIDEO_MAX_BYTES : MEDIA_LIMITS_BYTES.image,
+            contentType,
+            allowedContentTypes: isVideo ? ALLOWED_VIDEO_CONTENT_TYPES : ALLOWED_IMAGE_CONTENT_TYPES,
+            purpose: 'MESSAGE_MEDIA',
+          })
+          const { error: uploadError } = await supabase.storage
+            .from('message-media')
+            .upload(filename, payload.data, { contentType })
+          if (uploadError) throw uploadError
 
-      const { error: insertError } = await invokeFunction('message-action', {
-        body: {
-          action: 'send-message',
-          orderId,
-          type: 'PHOTO',
-          photoUrl: filename,
-        },
-      })
-      if (insertError) throw insertError
-      await fetchMessages()
-    } catch (error) {
-      const failure = resolveMediaFailure('photo', error)
-      if (failure.connectivity) {
-        setThreadNotice({
-          tone: 'warning',
-          text: 'Connection looks weak. Photo uploads can take longer, so retry when the signal improves.',
-        })
+          const { error: insertError } = await invokeFunction('message-action', {
+            body: {
+              action: 'send-message',
+              orderId,
+              type: 'PHOTO',
+              photoUrl: filename,
+              ...(replyTargetId ? { replyToId: replyTargetId } : {}),
+            },
+          })
+          if (insertError) throw insertError
+          sentCount += 1
+        } catch (error) {
+          failure = { kind: isVideo ? 'video' : 'photo', error }
+          break
+        }
       }
-      Alert.alert(failure.title, failure.message)
+
+      if (sentCount > 0) {
+        setReplyingTo(null)
+        await fetchMessages({ silent: true })
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 120)
+      }
+
+      if (failure) {
+        const resolved = resolveMediaFailure(failure.kind, failure.error)
+        if (resolved.connectivity) {
+          setThreadNotice({
+            tone: 'warning',
+            text: 'Connection looks weak. Some media may need another try when the signal improves.',
+          })
+        }
+        if (assets.length > 1 && sentCount > 0) {
+          Alert.alert('Some media were not sent', `${sentCount} of ${assets.length} items were sent. ${resolved.message}`)
+        } else {
+          Alert.alert(resolved.title, resolved.message)
+        }
+      }
+    } finally {
+      setSending(false)
     }
-    setSending(false)
   }
 
   async function startRecording() {
+    if (
+      recordingStartingRef.current ||
+      recordingStoppingRef.current ||
+      recordingRef.current ||
+      sendingRef.current
+    ) return
+
+    recordingStartingRef.current = true
+    isCancelledRef.current = false
+    setShowCancelHint(false)
     try {
-      await Audio.requestPermissionsAsync()
+      const permission = await Audio.requestPermissionsAsync()
+      if (!permission.granted) {
+        if (recordingGestureActiveRef.current) {
+          Alert.alert('Microphone unavailable', 'Drapeon could not access your microphone. Check your phone permissions and try again.')
+        }
+        return
+      }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true })
       const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY)
-      setRecording(rec)
+
+      if (!recordingGestureActiveRef.current) {
+        await rec.stopAndUnloadAsync().catch(() => undefined)
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => undefined)
+        return
+      }
+
+      recordingRef.current = rec
       setIsRecording(true)
-    } catch {
-      Alert.alert('Microphone unavailable', 'Drapeon could not access your microphone. Check your phone permissions and try again.')
+    } catch (error) {
+      if (__DEV__) console.warn('[drape] Could not start voice recording.', error)
+      if (recordingGestureActiveRef.current) {
+        Alert.alert('Recording unavailable', 'Drapeon could not start a voice note right now. Please try again.')
+      }
+    } finally {
+      recordingStartingRef.current = false
     }
   }
 
   async function stopRecording() {
-    if (!recording) return
+    const rec = recordingRef.current
+    if (!rec || recordingStoppingRef.current) return
+    recordingStoppingRef.current = true
+    recordingRef.current = null
     setIsRecording(false)
-    await recording.stopAndUnloadAsync()
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: false })
-    const uri = recording.getURI()
-    setRecording(null)
+    setShowCancelHint(false)
+
+    let durationSeconds = 0
+    let uri: string | null = null
+    try {
+      const status = await rec.getStatusAsync()
+      durationSeconds = Math.round((status.durationMillis ?? 0) / 1000)
+      await rec.stopAndUnloadAsync()
+      uri = rec.getURI()
+    } catch (error) {
+      if (__DEV__) console.warn('[drape] Could not finalize voice recording.', error)
+    } finally {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => undefined)
+      recordingStoppingRef.current = false
+    }
+
+    // Cancelled via swipe: discard silently
+    if (isCancelledRef.current) {
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true })
+      return
+    }
+
+    // Too short: discard and show inline hint
+    if (durationSeconds < 1) {
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true })
+      setThreadNotice({ tone: 'warning', text: 'Hold to record, swipe left to cancel.' })
+      return
+    }
 
     if (!uri) return
 
@@ -665,9 +1178,12 @@ export function MessageThread({
           orderId,
           type: 'VOICE',
           voiceUrl: filename,
+          voiceDuration: durationSeconds,
+          ...(replyingTo ? { replyToId: replyingTo.id } : {}),
         },
       })
       if (insertError) throw insertError
+      setReplyingTo(null)
       await fetchMessages()
     } catch (error) {
       const failure = resolveMediaFailure('voice', error)
@@ -733,46 +1249,73 @@ export function MessageThread({
     )))
   }
 
-  function openReactionSheet(message: Message) {
-    if (!reactionsAvailable) return
-    const messageReactions = reactionsByMessageId.get(message.id) ?? []
-    Alert.alert('React to message', undefined, [
-      ...MESSAGE_REACTION_OPTIONS.map((emoji) => {
-        const selected = messageReactions.some((reaction) => reaction.user_id === currentUserId && reaction.emoji === emoji)
-        const count = messageReactions.filter((reaction) => reaction.emoji === emoji).length
-        return {
-          text: `${selected ? 'Remove ' : ''}${emoji}${count > 0 ? ` ${count}` : ''}`,
-          onPress: () => { void toggleReaction(message, emoji) },
-        }
-      }),
-      { text: 'Cancel', style: 'cancel' },
-    ])
+  function focusComposer() {
+    setTimeout(() => composerInputRef.current?.focus(), 24)
+  }
+
+  function openReplyComposer(message: Message) {
+    setEditingMessage(null)
+    setReplyingTo(message)
+    focusComposer()
+  }
+
+  function openEditComposer(message: Message) {
+    setReplyingTo(null)
+    setEditingMessage(message)
+    setText(message.body ?? '')
+    focusComposer()
+  }
+
+  function openContextMenu(message: Message) {
+    setContextMenuMessage(message)
   }
 
   const otherName = currentUserRole === 'CUSTOMER' ? tailorName : customerName
   const otherAvatarUrl = currentUserRole === 'CUSTOMER' ? tailorAvatarUrl : customerAvatarUrl
+  const hasListHeader = hasEarlier || !!callLifecycleEvent
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
 
   return (
     <View style={styles.container}>
-      <FlatList
+      {/* Presence bar — shown at top when counterparty is tracked in this thread */}
+      {(counterpartyPresence.online || counterpartyPresence.lastSeen) ? (
+        <View style={styles.presenceBar}>
+          {counterpartyPresence.online ? (
+            <>
+              <View style={styles.presenceDotOnline} />
+              <Text style={styles.presenceTextOnline}>Active now</Text>
+            </>
+          ) : (
+            <Text style={styles.presenceTextMuted}>
+              Last viewed {formatPresenceTime(counterpartyPresence.lastSeen!)}
+            </Text>
+          )}
+        </View>
+      ) : null}
+
+      <FlashList
         ref={flatListRef}
-        data={messages}
-        keyExtractor={(m) => m.id}
+        data={messageGroups}
+        keyExtractor={(group) => group.map((message) => message.id).join(':')}
+        drawDistance={420}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-        ListHeaderComponent={
-          hasEarlier ? (
-            <TouchableOpacity style={styles.loadEarlierBtn} onPress={loadEarlier} disabled={loadingEarlier}>
-              {loadingEarlier
-                ? <ActivityIndicator size="small" color={Colors.needleGreen} />
-                : <Text style={styles.loadEarlierText}>↑ Load earlier messages</Text>
-              }
-            </TouchableOpacity>
-          ) : null
-        }
+        ListHeaderComponent={hasListHeader ? (
+          <View style={styles.listHeaderStack}>
+            {hasEarlier ? (
+              <TouchableOpacity style={styles.loadEarlierBtn} onPress={loadEarlier} disabled={loadingEarlier}>
+                {loadingEarlier
+                  ? <ActivityIndicator size="small" color={Colors.needleGreen} />
+                  : <Text style={styles.loadEarlierText}>↑ Load earlier messages</Text>
+                }
+              </TouchableOpacity>
+            ) : null}
+            {callLifecycleEvent ? <CallLifecycleEventCard event={callLifecycleEvent} /> : null}
+          </View>
+        ) : null}
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyCard}>
@@ -801,18 +1344,37 @@ export function MessageThread({
             </View>
           </View>
         }
-        renderItem={({ item }) => (
-          <MessageBubble
-            message={item}
-            isOwn={item.sender_id === currentUserId}
-            avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
-            reactions={reactionsByMessageId.get(item.id) ?? []}
-            currentUserId={currentUserId}
-            reactionsAvailable={reactionsAvailable}
-            onOpenReactions={() => openReactionSheet(item)}
-            onToggleReaction={(emoji) => { void toggleReaction(item, emoji) }}
-          />
-        )}
+        renderItem={({ item: group }) => {
+          const item = group[0]
+          if (!item) return null
+          if (group.length > 1) {
+            return (
+              <MediaMessageCluster
+                messages={group}
+                isOwn={item.sender_id === currentUserId}
+                avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
+                onOpenContextMenu={openContextMenu}
+                onOpenMedia={setMediaPreview}
+                replyMessage={item.reply_to_id ? (messagesById.get(item.reply_to_id) ?? null) : null}
+              />
+            )
+          }
+          return (
+            <MessageBubble
+              message={item}
+              isOwn={item.sender_id === currentUserId}
+              avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
+              reactions={reactionsByMessageId.get(item.id) ?? []}
+              currentUserId={currentUserId}
+              reactionsAvailable={reactionsAvailable}
+              onOpenContextMenu={() => openContextMenu(item)}
+              onOpenMedia={setMediaPreview}
+              onToggleReaction={(emoji) => { void toggleReaction(item, emoji) }}
+              replyMessage={item.reply_to_id ? (messagesById.get(item.reply_to_id) ?? null) : null}
+              mediaClusterMessages={group}
+            />
+          )
+        }}
       />
 
       {threadNotice ? (
@@ -829,6 +1391,32 @@ export function MessageThread({
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {/* Context menu bottom sheet */}
+      <MessageContextSheet
+        message={contextMenuMessage}
+        isOwn={contextMenuMessage?.sender_id === currentUserId}
+        visible={contextMenuMessage !== null}
+        onDismiss={() => setContextMenuMessage(null)}
+        onReply={() => openReplyComposer(contextMenuMessage!)}
+        onEdit={() => openEditComposer(contextMenuMessage!)}
+        onUnsend={() => { void performUnsend(contextMenuMessage!) }}
+        reactions={contextMenuMessage ? (reactionsByMessageId.get(contextMenuMessage.id) ?? []) : []}
+        currentUserId={currentUserId}
+        reactionsAvailable={reactionsAvailable}
+        onToggleReaction={(emoji) => { if (contextMenuMessage) void toggleReaction(contextMenuMessage, emoji) }}
+      />
+
+      <MessageMediaPreviewModal
+        preview={mediaPreview}
+        onDismiss={() => setMediaPreview(null)}
+        onOpenItemActions={(item) => {
+          const message = item.contextId ? messagesById.get(item.contextId) : null
+          if (!message) return
+          setMediaPreview(null)
+          openContextMenu(message)
+        }}
+      />
 
       {/* Locked banner — shown when order is terminal */}
       {locked ? (
@@ -851,13 +1439,81 @@ export function MessageThread({
             </View>
           ) : null}
 
+          {/* Typing indicator */}
+          {counterpartyIsTyping ? (
+            <View style={styles.typingRow}>
+              <Text style={styles.typingText}>{otherName} is typing…</Text>
+            </View>
+          ) : null}
+
           {/* Recording indicator */}
           {isRecording && (
-            <View style={styles.recordingBar}>
-              <View style={styles.recordingDot} />
-              <Text style={styles.recordingText}>Recording… release to send</Text>
+            <View style={[styles.recordingBar, showCancelHint && styles.recordingBarCancel]}>
+              <View style={[styles.recordingDot, showCancelHint && styles.recordingDotCancel]} />
+              <Text style={[styles.recordingText, showCancelHint && styles.recordingTextCancel]}>
+                {showCancelHint ? 'Release to discard' : 'Recording — slide ← to cancel'}
+              </Text>
             </View>
           )}
+
+          {/* Reply preview bar */}
+          {replyingTo ? (
+            <View style={styles.replyBar}>
+              {replyingTo.type === 'PHOTO' ? (
+                <View style={styles.replyBarMedia}>
+                  {replyingToMediaIsVideo ? (
+                    <Feather name="play" size={18} color={Colors.textInverse} />
+                  ) : replyingToMediaUrl ? (
+                    <RemoteImage
+                      uri={replyingToMediaUrl}
+                      containerStyle={styles.replyBarMedia}
+                      style={styles.replyBarMediaImage}
+                      contentFit="cover"
+                      transition={80}
+                      surface="message_reply_target"
+                    />
+                  ) : (
+                    <ActivityIndicator size="small" color={Colors.midGrey} />
+                  )}
+                </View>
+              ) : null}
+              <View style={styles.replyBarContent}>
+                <Text style={styles.replyBarAuthor}>{replyingTo.sender_name}</Text>
+                <Text style={styles.replyBarBody} numberOfLines={1}>
+                  {replyingTo.is_deleted
+                    ? 'This message was unsent.'
+                    : replyingTo.type === 'PHOTO'
+                      ? 'Photo'
+                      : replyingTo.type === 'VOICE'
+                        ? 'Voice note'
+                        : decodeDisplayText(replyingTo.body ?? '')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setReplyingTo(null)}
+                style={styles.replyBarDismiss}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel reply"
+              >
+                <Feather name="x" size={18} color={Colors.midGrey} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Edit mode bar */}
+          {editingMessage ? (
+            <View style={styles.editBar}>
+              <Text style={styles.editBarLabel}>Editing message</Text>
+              <TouchableOpacity
+                onPress={() => { setEditingMessage(null); setText('') }}
+                style={styles.editBarDismiss}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel edit"
+              >
+                <Feather name="x" size={18} color={Colors.midGrey} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           {/* Input bar */}
           <View style={[styles.inputBar, { paddingBottom: composerBottomPadding }]}>
@@ -873,6 +1529,7 @@ export function MessageThread({
 
             <View style={styles.textInputWrap}>
               <TextInput
+                ref={composerInputRef}
                 style={styles.textInput}
                 placeholder="Message…"
                 placeholderTextColor={Colors.midGrey}
@@ -880,6 +1537,13 @@ export function MessageThread({
                 onChangeText={(v) => {
                   setText(v)
                   if (textError) validateText(v)
+                  if (channelRef.current) {
+                    void channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, isTyping: true } })
+                    if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current)
+                    typingDebounceRef.current = setTimeout(() => {
+                      void channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, isTyping: false } })
+                    }, 2000)
+                  }
                 }}
                 multiline
                 maxLength={2000}
@@ -896,7 +1560,7 @@ export function MessageThread({
                 <TouchableOpacity
                   style={styles.callBtn}
                   onPress={onPressCall}
-                  disabled={sending || callLoading}
+                  disabled={sending || callLoading || callBlocked}
                   accessibilityRole="button"
                   accessibilityLabel={callAccessibilityLabel}
                 >
@@ -917,15 +1581,13 @@ export function MessageThread({
                 >
                   {sending
                     ? <ActivityIndicator color={Colors.textInverse} size="small" />
-                    : <Text style={styles.sendBtnText}>→</Text>
+                    : <Feather name="arrow-up" size={18} color={Colors.textInverse} />
                   }
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity
+                <Animated.View
+                  {...micPanResponder.panHandlers}
                   style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
-                  onPressIn={startRecording}
-                  onPressOut={stopRecording}
-                  disabled={sending}
                   accessibilityRole="button"
                   accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
                 >
@@ -934,12 +1596,293 @@ export function MessageThread({
                     size={20}
                     color={isRecording ? Colors.textInverse : Colors.needleGreen}
                   />
-                </TouchableOpacity>
+                </Animated.View>
               )}
             </View>
           </View>
+
+          {callGateMessage ? (
+            <View style={styles.callGateCard}>
+              <Text style={styles.callGateText}>{callGateMessage}</Text>
+              {callGateActionLabel && onPressCallGateAction ? (
+                <TouchableOpacity
+                  style={styles.callGateAction}
+                  onPress={onPressCallGateAction}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.callGateActionText}>{callGateActionLabel}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
         </>
       )}
+    </View>
+  )
+}
+
+function formatLifecycleTime(value: string | null | undefined, timezone?: string | null) {
+  const date = parseDateValue(value)
+  if (!date) return 'Time not set'
+  try {
+    return date.toLocaleString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: timezone || undefined,
+    })
+  } catch {
+    return date.toLocaleString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  }
+}
+
+function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const lifecycle = getCallLifecycleState(event.scheduledStartAt, now)
+  if (lifecycle.status === 'unscheduled') return null
+
+  const reason = event.kind === 'consultation'
+    ? 'Consultation'
+    : callSchedulingReasonFor(event.reason).label
+  const isPaymentBlocked = event.paymentRequired === true && event.paymentPaid !== true
+  const isExpired =
+    event.status === 'EXPIRED' ||
+    event.status === 'DECLINED' ||
+    event.status === 'COMPLETED' ||
+    lifecycle.status === 'expired'
+  const scheduledLabel = formatLifecycleTime(event.scheduledStartAt ?? null, event.timezone)
+  const title = event.kind === 'consultation' ? 'Consultation call' : 'Ready-made coordination call'
+
+  return (
+    <View style={[styles.callLifecycleCard, isExpired && styles.callLifecycleCardExpired]}>
+      <View style={styles.callLifecycleHeader}>
+        <View style={styles.callLifecycleIcon}>
+          <Feather name="video" size={18} color={isExpired ? Colors.midGrey : Colors.needleGreen} />
+        </View>
+        <View style={styles.callLifecycleTitleWrap}>
+          <Text style={styles.callLifecycleEyebrow}>Order lifecycle event</Text>
+          <Text style={styles.callLifecycleTitle}>{title}</Text>
+          <Text style={styles.callLifecycleMeta}>{scheduledLabel}</Text>
+        </View>
+      </View>
+
+      <View style={styles.callLifecycleReasonRow}>
+        <Text style={styles.callLifecycleReasonLabel}>Reason</Text>
+        <Text style={styles.callLifecycleReasonValue}>{reason}</Text>
+      </View>
+
+      {isPaymentBlocked ? (
+        <View style={styles.callLifecyclePaymentBlock}>
+          <Text style={styles.callLifecyclePaymentText}>Consultation fee required before the room can open</Text>
+          {event.paymentActionLabel && event.onPressPayment ? (
+            <TouchableOpacity
+              style={styles.callLifecyclePaymentAction}
+              onPress={event.onPressPayment}
+              accessibilityRole="button"
+            >
+              <Text style={styles.callLifecyclePaymentActionText}>{event.paymentActionLabel}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : isExpired ? (
+        <View style={styles.callLifecycleExpiredBlock}>
+          <Text style={styles.callLifecycleExpiredText}>Call Missed / Window Expired</Text>
+          {event.onReschedule ? (
+            <TouchableOpacity
+              style={styles.callLifecycleTextAction}
+              onPress={event.onReschedule}
+              accessibilityRole="button"
+            >
+              <Text style={styles.callLifecycleTextActionLabel}>{event.rescheduleLabel ?? 'Reschedule'}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : lifecycle.status === 'active' ? (
+        <TouchableOpacity
+          style={styles.callLifecyclePrimaryAction}
+          onPress={event.onJoinVideo}
+          disabled={event.actionLoading || !event.onJoinVideo}
+          accessibilityRole="button"
+          accessibilityLabel="Join video call now"
+        >
+          {event.actionLoading ? (
+            <ActivityIndicator size="small" color={Colors.textInverse} />
+          ) : (
+            <Text style={styles.callLifecyclePrimaryActionText}>Join Video Call Now</Text>
+          )}
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.callLifecycleDisabledAction}>
+          <Text style={styles.callLifecycleDisabledActionText}>
+            {formatCallCountdown(lifecycle.msUntilOpen)}
+          </Text>
+        </View>
+      )}
+    </View>
+  )
+}
+
+function ClusterMediaTile({
+  message,
+  messages,
+  index,
+  mediaUrl,
+  onOpenContextMenu,
+  onOpenMedia,
+}: {
+  message: Message
+  messages: Message[]
+  index: number
+  mediaUrl: string | null
+  onOpenContextMenu: (message: Message) => void
+  onOpenMedia: (preview: MessageMediaPreview) => void
+}) {
+  const rawUri = message.photo_url ?? ''
+  const isVideo = isVideoMediaUrl(rawUri) || isVideoMediaUrl(mediaUrl)
+  const isOddLast = messages.length % 2 === 1 && index === messages.length - 1
+  const previewItems = messageMediaPreviewItems(messages, message.id, mediaUrl)
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={() => onOpenMedia({ items: previewItems, index })}
+      delayLongPress={280}
+      onLongPress={() => {
+        Vibration.vibrate(12)
+        onOpenContextMenu(message)
+      }}
+      accessibilityRole="imagebutton"
+      accessibilityLabel={`Open ${isVideo ? 'video' : 'photo'} ${index + 1} of ${messages.length}`}
+      accessibilityHint="Tap to view. Long press for actions on this media."
+      style={[styles.mediaMosaicTile, isOddLast && styles.mediaMosaicTileWide]}
+    >
+      {mediaUrl ? (
+        isVideo ? (
+          <PortfolioVideoPreview
+            uri={mediaUrl}
+            style={styles.mediaMosaicAsset}
+            contentFit="cover"
+            nativeControls={false}
+            autoplay={false}
+            isLooping={false}
+          />
+        ) : (
+          <RemoteImage
+            uri={mediaUrl}
+            containerStyle={styles.mediaMosaicAsset}
+            style={styles.mediaMosaicAsset}
+            contentFit="cover"
+            transition={120}
+            surface="message_photo_cluster"
+            fallback={<View style={[styles.mediaMosaicAsset, styles.photoFallback]} />}
+          />
+        )
+      ) : (
+        <View style={[styles.mediaMosaicAsset, styles.photoFallback]}>
+          <ActivityIndicator size="small" color={Colors.midGrey} />
+        </View>
+      )}
+      {isVideo ? (
+        <View style={styles.mediaMosaicVideoBadge}>
+          <Feather name="play" size={16} color={Colors.textInverse} />
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  )
+}
+
+function MediaMessageCluster({
+  messages,
+  isOwn,
+  avatarUrl,
+  onOpenContextMenu,
+  onOpenMedia,
+  replyMessage,
+}: {
+  messages: Message[]
+  isOwn: boolean
+  avatarUrl?: string | null
+  onOpenContextMenu: (message: Message) => void
+  onOpenMedia: (preview: MessageMediaPreview) => void
+  replyMessage: Message | null
+}) {
+  const mediaUrls = useMessageMediaUrls(messages)
+  const firstMessage = messages[0]
+  const lastMessage = messages[messages.length - 1]
+  if (!firstMessage || !lastMessage) return null
+
+  const time = (parseDateValue(lastMessage.created_at) ?? new Date()).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const receipt = lastMessage.read_at
+    ? { text: '✓✓', label: 'Read', style: styles.readReceiptRead }
+    : { text: '✓', label: 'Sent', style: styles.readReceiptDelivered }
+
+  return (
+    <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+      {!isOwn ? (
+        <AvatarImage
+          uri={avatarUrl}
+          initials={firstMessage.sender_name}
+          size={32}
+          style={styles.messageAvatar}
+          borderColor={Colors.white}
+          borderWidth={2}
+        />
+      ) : null}
+      <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, styles.bubbleMedia, styles.mediaMosaicBubble]}>
+        {!isOwn ? <Text style={styles.senderName}>{firstMessage.sender_name}</Text> : null}
+        {replyMessage ? (
+          <View style={[styles.replyQuote, isOwn && styles.replyQuoteOwn]}>
+            <Text style={[styles.replyQuoteAuthor, isOwn && styles.replyQuoteAuthorOwn]}>{replyMessage.sender_name}</Text>
+            <Text style={[styles.replyQuoteBody, isOwn && styles.replyQuoteBodyOwn]} numberOfLines={2}>
+              {replyMessage.is_deleted
+                ? 'This message was unsent.'
+                : replyMessage.type === 'PHOTO'
+                  ? 'Photo'
+                  : replyMessage.type === 'VOICE'
+                    ? 'Voice note'
+                    : decodeDisplayText(replyMessage.body ?? '')}
+            </Text>
+          </View>
+        ) : null}
+        <View style={styles.mediaMosaic}>
+          {messages.map((message, index) => (
+            <ClusterMediaTile
+              key={message.id}
+              message={message}
+              messages={messages}
+              index={index}
+              mediaUrl={mediaUrls.get(message.id) ?? null}
+              onOpenContextMenu={onOpenContextMenu}
+              onOpenMedia={onOpenMedia}
+            />
+          ))}
+        </View>
+        <View style={styles.bubbleMeta}>
+          <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
+          {isOwn ? (
+            <Text style={[styles.readReceipt, receipt.style]} accessibilityLabel={`Message batch ${receipt.label.toLowerCase()}`}>
+              {receipt.text} {receipt.label}
+            </Text>
+          ) : null}
+        </View>
+      </View>
     </View>
   )
 }
@@ -951,8 +1894,12 @@ function MessageBubble({
   reactions,
   currentUserId,
   reactionsAvailable,
-  onOpenReactions,
+  onOpenContextMenu,
+  onOpenMedia,
   onToggleReaction,
+  replyMessage,
+  clusterPosition = 'isolated',
+  mediaClusterMessages,
 }: {
   message: Message
   isOwn: boolean
@@ -960,13 +1907,39 @@ function MessageBubble({
   reactions: MessageReaction[]
   currentUserId: string
   reactionsAvailable: boolean
-  onOpenReactions: () => void
+  onOpenContextMenu: () => void
+  onOpenMedia: (preview: MessageMediaPreview) => void
   onToggleReaction: (emoji: string) => void
+  replyMessage: Message | null
+  clusterPosition?: ClusterPosition
+  mediaClusterMessages: Message[]
 }) {
   const [sound, setSound] = useState<Audio.Sound | null>(null)
   const [playing, setPlaying] = useState(false)
   const photoUrl = useMessageMediaUrl(message.photo_url)
   const voiceUrl = useMessageMediaUrl(message.voice_url)
+  const hasVideoAttachment = !!photoUrl && (isVideoMediaUrl(photoUrl) || isVideoMediaUrl(message.photo_url))
+  const isMediaMessage = message.type === 'PHOTO' && !!message.photo_url
+  const showAvatar = !isOwn && (!isMediaMessage || clusterPosition === 'isolated' || clusterPosition === 'end')
+  const showSenderName = !isOwn && (!isMediaMessage || clusterPosition === 'isolated' || clusterPosition === 'start')
+  const mediaPreviewItems = messageMediaPreviewItems(mediaClusterMessages, message.id, photoUrl)
+  const mediaPreviewIndex = Math.max(
+    0,
+    mediaClusterMessages.findIndex((clusterMessage) => clusterMessage.id === message.id),
+  )
+  const mediaClusterStyle = isMediaMessage
+    ? [
+        styles.bubbleMedia,
+        clusterPosition === 'start' && (isOwn ? styles.mediaClusterOwnStart : styles.mediaClusterOtherStart),
+        clusterPosition === 'middle' && (isOwn ? styles.mediaClusterOwnMiddle : styles.mediaClusterOtherMiddle),
+        clusterPosition === 'end' && (isOwn ? styles.mediaClusterOwnEnd : styles.mediaClusterOtherEnd),
+      ]
+    : null
+  const voiceDurationLabel = (() => {
+    if (message.type !== 'VOICE' || !message.body) return null
+    const n = parseInt(message.body, 10)
+    return Number.isFinite(n) && n > 0 ? formatVoiceDuration(n) : null
+  })()
 
   async function toggleVoice() {
     if (!voiceUrl) return
@@ -994,9 +1967,27 @@ function MessageBubble({
   }
 
   const time = (parseDateValue(message.created_at) ?? new Date()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+
+  if (message.is_deleted) {
+    return (
+      <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+        {!isOwn ? (
+          <AvatarImage uri={avatarUrl} initials={message.sender_name} size={32} style={styles.messageAvatar} borderColor={Colors.white} borderWidth={2} />
+        ) : null}
+        <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, styles.bubbleDeleted]}>
+          {!isOwn && <Text style={styles.senderName}>{message.sender_name}</Text>}
+          <Text style={[styles.bubbleDeletedText, isOwn && styles.bubbleDeletedTextOwn]}>This message was unsent.</Text>
+          <View style={styles.bubbleMeta}>
+            <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
+          </View>
+        </View>
+      </View>
+    )
+  }
+
   const receipt = message.read_at
     ? { text: '✓✓', label: 'Read', style: styles.readReceiptRead }
-    : { text: '✓✓', label: 'Delivered', style: styles.readReceiptDelivered }
+    : { text: '✓', label: 'Sent', style: styles.readReceiptDelivered }
   const bodyText = decodeDisplayText(message.body ?? '')
   const reactionCounts = MESSAGE_REACTION_OPTIONS.map((emoji) => {
     const matching = reactions.filter((reaction) => reaction.emoji === emoji)
@@ -1008,39 +1999,93 @@ function MessageBubble({
   }).filter(({ count }) => count > 0)
 
   return (
-    <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+    <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn, isMediaMessage && clusterPosition !== 'isolated' && styles.bubbleRowClustered]}>
       {!isOwn ? (
-        <AvatarImage
-          uri={avatarUrl}
-          initials={message.sender_name}
-          size={32}
-          style={styles.messageAvatar}
-          borderColor={Colors.white}
-          borderWidth={2}
-        />
+        showAvatar ? (
+          <AvatarImage
+            uri={avatarUrl}
+            initials={message.sender_name}
+            size={32}
+            style={styles.messageAvatar}
+            borderColor={Colors.white}
+            borderWidth={2}
+          />
+        ) : <View style={styles.messageAvatarSpacer} />
       ) : null}
       <TouchableOpacity
         activeOpacity={0.92}
-        onLongPress={reactionsAvailable ? onOpenReactions : undefined}
+        onLongPress={onOpenContextMenu}
         accessibilityRole="button"
-        accessibilityHint={reactionsAvailable ? 'Long press to react to this message' : undefined}
-        style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}
+        accessibilityHint="Long press for message options"
+        style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, mediaClusterStyle]}
       >
-        {!isOwn && <Text style={styles.senderName}>{message.sender_name}</Text>}
+        {showSenderName ? <Text style={styles.senderName}>{message.sender_name}</Text> : null}
+
+        {replyMessage ? (
+          <View style={[styles.replyQuote, isOwn && styles.replyQuoteOwn]}>
+            <Text style={[styles.replyQuoteAuthor, isOwn && styles.replyQuoteAuthorOwn]}>{replyMessage.sender_name}</Text>
+            <Text style={[styles.replyQuoteBody, isOwn && styles.replyQuoteBodyOwn]} numberOfLines={2}>
+              {replyMessage.is_deleted
+                ? 'This message was unsent.'
+                : replyMessage.type === 'PHOTO'
+                  ? 'Photo'
+                  : replyMessage.type === 'VOICE'
+                    ? 'Voice note'
+                    : decodeDisplayText(replyMessage.body ?? '')}
+            </Text>
+          </View>
+        ) : null}
 
         {message.type === 'TEXT' && (
           <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{bodyText}</Text>
         )}
 
         {message.type === 'PHOTO' && message.photo_url && (
-          <RemoteImage
-            uri={photoUrl}
-            style={styles.bubblePhoto}
-            contentFit="cover"
-            transition={120}
-            surface="message_photo"
-            fallback={<View style={[styles.bubblePhoto, styles.photoFallback]} />}
-          />
+          photoUrl && hasVideoAttachment ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => onOpenMedia({ items: mediaPreviewItems, index: mediaPreviewIndex })}
+              onLongPress={onOpenContextMenu}
+              accessibilityRole="imagebutton"
+              accessibilityLabel="Open video message"
+              style={styles.bubbleMediaWrap}
+            >
+              <PortfolioVideoPreview
+                uri={photoUrl}
+                style={styles.bubblePhoto}
+                contentFit="contain"
+                nativeControls={false}
+                autoplay={false}
+                isLooping={false}
+              />
+              <View style={styles.mediaOpenBadge}>
+                <Feather name="maximize-2" size={15} color={Colors.textInverse} />
+              </View>
+            </TouchableOpacity>
+          ) : photoUrl ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => onOpenMedia({ items: mediaPreviewItems, index: mediaPreviewIndex })}
+              onLongPress={onOpenContextMenu}
+              accessibilityRole="imagebutton"
+              accessibilityLabel="Open photo message"
+              style={styles.bubbleMediaWrap}
+            >
+              <RemoteImage
+                uri={photoUrl}
+                style={styles.bubblePhoto}
+                contentFit="cover"
+                transition={120}
+                surface="message_photo"
+                fallback={<View style={[styles.bubblePhoto, styles.photoFallback]} />}
+              />
+              <View style={styles.mediaOpenBadge}>
+                <Feather name="maximize-2" size={15} color={Colors.textInverse} />
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.bubblePhoto, styles.photoFallback]} />
+          )
         )}
 
         {message.type === 'VOICE' && (
@@ -1050,37 +2095,40 @@ function MessageBubble({
             accessibilityRole="button"
             accessibilityLabel={playing ? 'Pause voice note' : 'Play voice note'}
           >
-            <Text style={styles.voiceNoteIcon}>{playing ? '⏸' : '▶'}</Text>
+            <View style={[styles.voiceNoteIconWrap, isOwn && styles.voiceNoteIconWrapOwn]}>
+              <Feather name={playing ? 'pause' : 'play'} size={16} color={isOwn ? Colors.textInverse : Colors.needleGreen} />
+            </View>
             <View style={styles.voiceWave}>
               {[...Array(12)].map((_, i) => {
                 const seed = message.id.charCodeAt(i % message.id.length)
-                return <View key={i} style={[styles.voiceBar, { height: (seed % 12) + 4 }]} />
+                return <View key={i} style={[styles.voiceBar, isOwn && styles.voiceBarOwn, { height: (seed % 12) + 4 }]} />
               })}
             </View>
-            <Text style={styles.voiceNoteLabel}>Voice note</Text>
+            <Text style={[styles.voiceNoteLabel, isOwn && styles.voiceNoteLabelOwn]}>{voiceDurationLabel ?? 'Voice note'}</Text>
           </TouchableOpacity>
         )}
 
         <View style={styles.bubbleMeta}>
+          {message.edited_at ? (
+            <Text style={[styles.editedTag, isOwn && styles.editedTagOwn]}>(edited)</Text>
+          ) : null}
           <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
           {isOwn ? (
             <Text
               style={[styles.readReceipt, receipt.style]}
-              accessibilityLabel={`Message ${receipt.label.toLowerCase()}`}
+              accessibilityLabel={'Message ' + receipt.label.toLowerCase()}
             >
               {receipt.text} {receipt.label}
             </Text>
           ) : null}
-          {reactionsAvailable ? (
-            <TouchableOpacity
-              onPress={onOpenReactions}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="React to message"
-            >
-              <Feather name="smile" size={13} color={isOwn ? 'rgba(255,255,255,0.72)' : Colors.midGrey} />
-            </TouchableOpacity>
-          ) : null}
+          <TouchableOpacity
+            onPress={onOpenContextMenu}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Message options"
+          >
+            <Feather name="more-horizontal" size={13} color={isOwn ? 'rgba(255,255,255,0.72)' : Colors.midGrey} />
+          </TouchableOpacity>
         </View>
         {reactionCounts.length > 0 ? (
           <View style={[styles.reactionSummary, isOwn && styles.reactionSummaryOwn]}>
@@ -1090,7 +2138,7 @@ function MessageBubble({
                 style={[styles.reactionChip, selected && styles.reactionChipSelected, isOwn && styles.reactionChipOwn]}
                 onPress={() => onToggleReaction(emoji)}
                 accessibilityRole="button"
-                accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${emoji} reaction`}
+                accessibilityLabel={(selected ? 'Remove' : 'Add') + ' ' + emoji + ' reaction'}
               >
                 <Text style={[
                   styles.reactionChipText,
@@ -1108,15 +2156,274 @@ function MessageBubble({
   )
 }
 
+function MessageMediaPreviewModal({
+  preview,
+  onDismiss,
+  onOpenItemActions,
+}: {
+  preview: MessageMediaPreview | null
+  onDismiss: () => void
+  onOpenItemActions: (item: MediaLightboxItem, index: number) => void
+}) {
+  return (
+    <MediaLightboxModal
+      items={preview?.items ?? []}
+      activeIndex={preview?.index ?? null}
+      onDismiss={onDismiss}
+      onOpenItemActions={onOpenItemActions}
+    />
+  )
+}
+
+function MessageContextSheet({
+  message,
+  isOwn,
+  visible,
+  onDismiss,
+  onReply,
+  onEdit,
+  onUnsend,
+  reactions,
+  currentUserId,
+  reactionsAvailable,
+  onToggleReaction,
+}: {
+  message: Message | null
+  isOwn: boolean
+  visible: boolean
+  onDismiss: () => void
+  onReply: () => void
+  onEdit: () => void
+  onUnsend: () => void
+  reactions: MessageReaction[]
+  currentUserId: string
+  reactionsAvailable: boolean
+  onToggleReaction: (emoji: string) => void
+}) {
+  if (!message) return null
+  const canUnsend = isOwn && !message.is_deleted && isWithin15Minutes(message.created_at)
+  const canEdit = isOwn && !message.is_deleted && message.type === 'TEXT'
+  const canReply = !message.is_deleted
+  const canReact = reactionsAvailable && !message.is_deleted
+  const actionCount = Number(canReply) + Number(canEdit) + Number(canUnsend)
+  const actionSheetSnapPoint = actionCount <= 1 ? '34%' : '46%'
+  const previewLabel = message.is_deleted
+    ? 'This message was unsent.'
+    : message.type === 'PHOTO'
+      ? 'Media message'
+      : message.type === 'VOICE'
+        ? 'Voice note'
+        : decodeDisplayText(message.body ?? '')
+
+  return (
+    <BottomSheetScaffold
+      visible={visible}
+      title="Message actions"
+      subtitle={previewLabel}
+      onDismiss={onDismiss}
+      scrollable
+      snapPoints={[actionSheetSnapPoint]}
+      enableDynamicSizing={false}
+    >
+      {canReact ? (
+        <View style={styles.sheetReactionRow}>
+          {MESSAGE_REACTION_OPTIONS.map((emoji) => {
+            const selected = reactions.some((reaction) => reaction.user_id === currentUserId && reaction.emoji === emoji)
+            return (
+              <TouchableOpacity
+                key={emoji}
+                style={[styles.sheetEmojiBtn, selected && styles.sheetEmojiBtnSelected]}
+                onPress={() => { onToggleReaction(emoji); onDismiss() }}
+                accessibilityRole="button"
+                accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${emoji} reaction`}
+              >
+                <Text style={styles.sheetEmojiText}>{emoji}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      ) : null}
+
+      <View style={styles.sheetActionList}>
+        {canReply ? (
+          <TouchableOpacity style={styles.sheetActionRow} onPress={() => { onReply(); onDismiss() }} accessibilityRole="button">
+            <Text style={styles.sheetActionLabel}>Reply</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {canEdit ? (
+          <TouchableOpacity style={styles.sheetActionRow} onPress={() => { onEdit(); onDismiss() }} accessibilityRole="button">
+            <Text style={styles.sheetActionLabel}>Edit</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {canUnsend ? (
+          <TouchableOpacity style={styles.sheetActionRow} onPress={() => { onUnsend(); onDismiss() }} accessibilityRole="button">
+            <Text style={[styles.sheetActionLabel, styles.sheetActionLabelDestructive]}>Unsend</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </BottomSheetScaffold>
+  )
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
+  listHeaderStack: { gap: Spacing.sm },
 
   loadEarlierBtn: {
     alignSelf: 'center', paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
   },
   loadEarlierText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  callLifecycleCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  callLifecycleCardExpired: {
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+  },
+  callLifecycleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  callLifecycleIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  callLifecycleTitleWrap: { flex: 1, gap: 2 },
+  callLifecycleEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  callLifecycleTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  callLifecycleMeta: {
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    color: Colors.inkLight,
+  },
+  callLifecycleReasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: Spacing.sm,
+  },
+  callLifecycleReasonLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  callLifecycleReasonValue: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  callLifecyclePrimaryAction: {
+    minHeight: 46,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.lg,
+  },
+  callLifecyclePrimaryActionText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: Colors.textInverse,
+  },
+  callLifecycleDisabledAction: {
+    minHeight: 46,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.lg,
+  },
+  callLifecycleDisabledActionText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  callLifecyclePaymentBlock: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '24',
+    backgroundColor: Colors.kanteRustLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  callLifecyclePaymentText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    fontWeight: FontWeight.semibold,
+    color: Colors.kanteRust,
+  },
+  callLifecyclePaymentAction: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  callLifecyclePaymentActionText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.needleGreen,
+  },
+  callLifecycleExpiredBlock: {
+    borderRadius: Radius.md,
+    backgroundColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  callLifecycleExpiredText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+  },
+  callLifecycleTextAction: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  callLifecycleTextActionLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.needleGreen,
+  },
 
   empty: { paddingTop: 56, gap: Spacing.md, paddingHorizontal: Spacing.xl },
   emptyCard: {
@@ -1200,20 +2507,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.needleGreenLight, paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
   },
+  recordingBarCancel: { backgroundColor: Colors.kanteRustLight },
   recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.error },
+  recordingDotCancel: { backgroundColor: Colors.kanteRust },
   recordingText: { fontSize: FontSize.sm, color: Colors.needleGreen },
+  recordingTextCancel: { color: Colors.kanteRust },
 
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
   iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   textInputWrap: { flex: 1, gap: 3 },
   textInput: {
     backgroundColor: Colors.bone, borderRadius: Radius.xl,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
-    fontSize: FontSize.md, color: Colors.ink, maxHeight: 120,
+    paddingHorizontal: Spacing.md, paddingVertical: 7,
+    fontSize: FontSize.md, lineHeight: 20, color: Colors.ink, maxHeight: 108,
   },
   composerCounter: {
     alignSelf: 'flex-end',
@@ -1241,6 +2551,37 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.needleGreen + '24',
   },
+  callGateCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    marginTop: -Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '24',
+    backgroundColor: Colors.kanteRustLight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  callGateText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    color: Colors.kanteRust,
+    fontWeight: FontWeight.medium,
+  },
+  callGateAction: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  callGateActionText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
   voiceBtn: {
     width: 44,
     height: 44,
@@ -1253,26 +2594,121 @@ const styles = StyleSheet.create({
 
   bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: Spacing.xs },
   bubbleRowOwn: { justifyContent: 'flex-end' },
+  bubbleRowClustered: { marginTop: -Spacing.xs },
   messageAvatar: { marginBottom: 2 },
+  messageAvatarSpacer: { width: 32 },
   bubble: {
-    maxWidth: '78%', borderRadius: Radius.lg, padding: Spacing.md,
-    gap: Spacing.xs,
+    maxWidth: '76%',
+    minWidth: 92,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: 3,
+  },
+  bubbleMedia: {
+    padding: 6,
+    gap: 6,
+  },
+  mediaMosaicBubble: {
+    width: MESSAGE_MEDIA_TILE_SIZE + 12,
+  },
+  mediaMosaic: {
+    width: MESSAGE_MEDIA_TILE_SIZE,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: MESSAGE_MEDIA_MOSAIC_GAP,
+  },
+  mediaMosaicTile: {
+    position: 'relative',
+    width: MESSAGE_MEDIA_MOSAIC_TILE_SIZE,
+    height: MESSAGE_MEDIA_MOSAIC_TILE_SIZE,
+    borderRadius: Radius.sm,
+    overflow: 'hidden',
+    backgroundColor: Colors.boneDeep,
+  },
+  mediaMosaicTileWide: {
+    width: MESSAGE_MEDIA_TILE_SIZE,
+  },
+  mediaMosaicAsset: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaMosaicVideoBadge: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    width: 36,
+    height: 36,
+    marginLeft: -18,
+    marginTop: -18,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.56)',
   },
   bubbleOther: {
     backgroundColor: Colors.white, borderBottomLeftRadius: 4,
     ...Shadow.sm,
   },
   bubbleOwn: { backgroundColor: Colors.needleGreen, borderBottomRightRadius: 4 },
+  mediaClusterOtherStart: { borderBottomLeftRadius: 10, borderBottomRightRadius: Radius.md },
+  mediaClusterOtherMiddle: { borderTopLeftRadius: 10, borderBottomLeftRadius: 10, borderTopRightRadius: Radius.md, borderBottomRightRadius: Radius.md },
+  mediaClusterOtherEnd: { borderTopLeftRadius: 10, borderTopRightRadius: Radius.md },
+  mediaClusterOwnStart: { borderBottomRightRadius: 10, borderBottomLeftRadius: Radius.md },
+  mediaClusterOwnMiddle: { borderTopRightRadius: 10, borderBottomRightRadius: 10, borderTopLeftRadius: Radius.md, borderBottomLeftRadius: Radius.md },
+  mediaClusterOwnEnd: { borderTopRightRadius: 10, borderTopLeftRadius: Radius.md },
   senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: Fonts.display },
-  bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 22 },
+  bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 20 },
   bubbleTextOwn: { color: Colors.textInverse },
-  bubblePhoto: { width: 200, height: 200, borderRadius: Radius.md },
+  bubbleMediaWrap: {
+    position: 'relative',
+    width: MESSAGE_MEDIA_TILE_SIZE,
+    maxWidth: '100%',
+    alignSelf: 'flex-start',
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
+  bubblePhoto: { width: '100%', height: MESSAGE_MEDIA_TILE_SIZE, borderRadius: Radius.md, overflow: 'hidden' },
   photoFallback: { backgroundColor: Colors.boneDeep },
-  voiceNote: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: 2 },
-  voiceNoteIcon: { fontSize: 18 },
-  voiceWave: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 2 },
+  mediaOpenBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.46)',
+  },
+  voiceNote: {
+    minWidth: VOICE_NOTE_MIN_WIDTH,
+    maxWidth: VOICE_NOTE_MAX_WIDTH,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: 2,
+  },
+  voiceNoteIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  voiceNoteIconWrapOwn: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  voiceWave: { flex: 1, minHeight: 22, flexDirection: 'row', alignItems: 'center', gap: 2 },
   voiceBar: { width: 3, backgroundColor: Colors.needleGreen, borderRadius: 2 },
+  voiceBarOwn: { backgroundColor: 'rgba(255,255,255,0.84)' },
   voiceNoteLabel: { fontSize: FontSize.xs, color: Colors.inkLight },
+  voiceNoteLabelOwn: { color: 'rgba(255,255,255,0.84)' },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, justifyContent: 'flex-end' },
   bubbleTime: { fontSize: 10, color: Colors.midGrey },
   bubbleTimeOwn: { color: 'rgba(255,255,255,0.7)' },
@@ -1311,4 +2747,155 @@ const styles = StyleSheet.create({
   reactionChipTextSelected: {
     color: Colors.needleGreen,
   },
+
+  presenceBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.xs,
+    backgroundColor: Colors.bone,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  presenceDotOnline: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: Colors.needleGreen,
+  },
+  presenceTextOnline: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  presenceTextMuted: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+  },
+  typingRow: {
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.xs,
+    backgroundColor: Colors.white,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+  },
+  typingText: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontStyle: 'italic',
+  },
+
+  // Reply bar above composer
+  replyBar: {
+    minHeight: COMPOSER_CONTEXT_BAR_MIN_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.needleGreenLight,
+    borderTopWidth: 1,
+    borderTopColor: Colors.needleGreen + '24',
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  replyBarContent: { flex: 1, gap: 2 },
+  replyBarMedia: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.sm,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  replyBarMediaImage: { width: '100%', height: '100%' },
+  replyBarAuthor: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  replyBarBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 16 },
+  replyBarDismiss: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  replyBarDismissText: { fontSize: FontSize.sm, color: Colors.midGrey },
+
+  // Edit mode bar above composer
+  editBar: {
+    minHeight: COMPOSER_CONTEXT_BAR_MIN_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.bone,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  editBarLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  editBarDismiss: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  editBarDismissText: { fontSize: FontSize.sm, color: Colors.midGrey },
+
+  // Deleted bubble
+  bubbleDeleted: { opacity: 0.62 },
+  bubbleDeletedText: { fontSize: FontSize.sm, color: Colors.midGrey, fontStyle: 'italic', lineHeight: 20 },
+  bubbleDeletedTextOwn: { color: 'rgba(255,255,255,0.6)' },
+
+  // Edited tag in bubble meta
+  editedTag: { fontSize: 9, color: Colors.midGrey, fontStyle: 'italic' },
+  editedTagOwn: { color: 'rgba(255,255,255,0.52)' },
+
+  // Reply quote inside bubble
+  replyQuote: {
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.lightGrey,
+    paddingLeft: Spacing.sm,
+    marginBottom: Spacing.xs,
+    gap: 2,
+  },
+  replyQuoteOwn: { borderLeftColor: 'rgba(255,255,255,0.38)' },
+  replyQuoteAuthor: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  replyQuoteAuthorOwn: { color: 'rgba(255,255,255,0.8)' },
+  replyQuoteBody: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16 },
+  replyQuoteBodyOwn: { color: 'rgba(255,255,255,0.6)' },
+
+  // Context menu bottom sheet
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.44)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.lightGrey,
+    alignSelf: 'center',
+    marginBottom: Spacing.md,
+  },
+  sheetReactionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: Spacing.md,
+  },
+  sheetActionList: {
+    gap: Spacing.xs,
+    paddingBottom: Spacing.xs,
+  },
+  sheetEmojiBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  sheetEmojiBtnSelected: { backgroundColor: Colors.needleGreenLight },
+  sheetEmojiText: { fontSize: 22 },
+  sheetDivider: { height: 1, backgroundColor: Colors.lightGrey, marginVertical: Spacing.xs },
+  sheetActionRow: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.md },
+  sheetActionLabel: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
+  sheetActionLabelDestructive: { color: Colors.kanteRust },
+  sheetActionLabelMuted: { fontSize: FontSize.md, color: Colors.midGrey, fontWeight: FontWeight.medium },
 })

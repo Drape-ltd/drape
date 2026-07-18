@@ -62,7 +62,7 @@ export default function TailorsPage(): React.JSX.Element {
       <section className="py-8">
         <div className="grid gap-4 lg:grid-cols-3">
           {benefits.map(({ title, body }) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/84 p-6 shadow-sm">
+            <div key={title} className="rounded-[8px] border border-ink/6 bg-white/84 p-6 shadow-sm">
               <h3 className="text-xl text-ink">{title}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/66">{body}</p>
             </div>
@@ -80,7 +80,7 @@ export default function TailorsPage(): React.JSX.Element {
               Every step is tracked in the same order record that the customer can see, so there is nothing to explain after the fact.
             </p>
           </div>
-          <div className="overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+          <div className="overflow-hidden rounded-[8px] border border-ink/6 bg-white/84 shadow-sm">
             {journey.map(([title, body], i) => (
               <div key={title} className={`flex gap-4 px-5 py-5 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
                 <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/40">0{i + 1}</span>
@@ -96,7 +96,7 @@ export default function TailorsPage(): React.JSX.Element {
 
       {/* CTA */}
       <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
           <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Early access</p>

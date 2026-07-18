@@ -5,14 +5,15 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { supabase } from '@/lib/supabase'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { loadPayoutAccountStatus, type TailorPayoutStatus } from '@/lib/payout-setup'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
+import { appendToHistory } from '@/lib/navigation'
 import { getTimeOfDayGreeting } from '@/lib/time-of-day'
 import type { TailorStockAlert } from '@/lib/ready-made-stock'
 import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
@@ -43,6 +44,11 @@ type DashboardStats = {
   tier: string | null
   displayName: string
   availability: Availability
+  sellerType: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
+  supportsCustomOrders: boolean
+  supportsReadyMade: boolean
+  acceptsCustomOrdersNow: boolean
+  shopPaused: boolean
   currency: string
   isLive: boolean
   idVerificationStatus: string
@@ -148,7 +154,7 @@ export default function TailorDashboard() {
   function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc' | 'size_guide_scan'>) {
     router.push({
       pathname: DRAPE_VISION_ROUTE,
-      params: { mode, returnTo: '/(tailor)' },
+      params: { mode, returnTo: '/(tailor)', historyChain: appendToHistory(undefined, '/(tailor)') },
     } as never)
   }
 
@@ -156,7 +162,7 @@ export default function TailorDashboard() {
     setTimeOfDay(getTimeOfDayGreeting())
     void refetch()
     void loadPayoutSummary()
-  })
+  }, 0)
 
   async function onRefresh() {
     setRefreshing(true)
@@ -164,26 +170,29 @@ export default function TailorDashboard() {
     setRefreshing(false)
   }
 
-  async function setAvailability(value: Availability) {
-    if (!user?.id) return
+  async function updateOperationalStatus(next: { availability?: Availability; acceptsCustomOrdersNow?: boolean; shopPaused?: boolean }) {
+    if (!user?.id || !stats) return
     setAvailSaving(true)
-    const { error } = await supabase
-      .from('tailor_profiles')
-      .update({ availability: value })
-      .eq('user_id', user.id)
+    const { error } = await invokeFunction('tailor-profile-action', {
+      body: {
+        action: 'update-operational-status',
+        availability: next.availability,
+        acceptsCustomOrdersNow: next.acceptsCustomOrdersNow,
+        shopPaused: next.shopPaused,
+      },
+    })
     if (error) {
       Alert.alert(
-        'Error',
+        'Could not update status',
         isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. We could not update your availability yet. Retry when the signal improves.'
-          : 'Could not update your availability right now. Please try again in a moment.',
+          ? 'Connection looks weak. We could not update your order status yet. Retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not update your order status right now. Please try again in a moment.'),
       )
       setAvailSaving(false)
       return
     }
     await refetch()
     setAvailSaving(false)
-    setAvailModal(false)
   }
 
   const availColor = {
@@ -199,7 +208,14 @@ export default function TailorDashboard() {
     ? 'Customers can book and shop.'
     : stats?.availability === 'LIMITED'
       ? 'Visible with a slower-reply notice.'
-      : 'New bookings paused; active orders remain.'
+      : 'New custom bookings paused; active orders remain.'
+  const customOrderStatus = stats?.supportsCustomOrders
+    ? stats.acceptsCustomOrdersNow ? 'Custom open' : 'Custom paused'
+    : null
+  const shopOrderStatus = stats?.supportsReadyMade
+    ? stats.shopPaused ? 'Shop paused' : 'Shop open'
+    : null
+  const operationalStatusHint = [customOrderStatus, shopOrderStatus].filter(Boolean).join(' · ') || availabilityTileHint
   const pendingWorkCount = (stats?.pendingQuotes ?? 0) + (stats?.itemInquiries ?? 0)
   const payoutSnapshot = stats
     ? payoutSummary(stats, payoutStatus, payoutStatusLoading, payoutStatusError)
@@ -277,7 +293,7 @@ export default function TailorDashboard() {
       return
     }
     if (!readiness.payoutReady && readiness.identityVerified) {
-      router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)
+      router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)', historyChain: appendToHistory(undefined, '/(tailor)') } } as never)
       return
     }
     if (readiness.actionLabel === 'Review live profile') {
@@ -387,16 +403,16 @@ export default function TailorDashboard() {
               <TouchableOpacity style={styles.cockpitStatusTile} onPress={() => setAvailModal(true)}>
                 <View style={styles.cockpitTileHeader}>
                   <View style={[styles.availDot, { backgroundColor: availColor }]} />
-                  <Text style={styles.cockpitTileLabel}>Availability</Text>
+                  <Text style={styles.cockpitTileLabel}>Availability & orders</Text>
                 </View>
                 <Text style={styles.cockpitTileTitle}>{availabilityTitle}</Text>
-                <Text style={styles.cockpitTileHint} numberOfLines={2}>{availabilityTileHint}</Text>
+                <Text style={styles.cockpitTileHint} numberOfLines={2}>{operationalStatusHint}</Text>
               </TouchableOpacity>
 
               {payoutSnapshot ? (
                 <TouchableOpacity
                   style={styles.cockpitStatusTile}
-                  onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}
+                  onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)', historyChain: appendToHistory(undefined, '/(tailor)') } } as never)}
                 >
                   <View style={styles.cockpitTileHeader}>
                     <View style={[styles.payoutMiniBadge, payoutSnapshot.badgeStyle]}>
@@ -454,7 +470,11 @@ export default function TailorDashboard() {
                     style={styles.cockpitOrderRow}
                     onPress={() => router.push({
                       pathname: '/(tailor)/orders/[id]',
-                      params: { id: order.id, returnTo: '/(tailor)' },
+                      params: {
+                        id: order.id,
+                        returnTo: '/(tailor)',
+                        historyChain: appendToHistory(undefined, '/(tailor)'),
+                      },
                     })}
                   >
                     <View style={styles.cockpitOrderCopy}>
@@ -484,8 +504,8 @@ export default function TailorDashboard() {
               onStartShouldSetResponder={() => true}
             >
               <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>Your availability</Text>
-              <Text style={styles.modalSub}>This controls whether customers can book new orders with you.</Text>
+              <Text style={styles.modalTitle}>Availability & order status</Text>
+              <Text style={styles.modalSub}>Capacity, custom brief requests, and ready-made checkout are controlled separately.</Text>
               <ScrollView
                 style={styles.modalOptions}
                 contentContainerStyle={[
@@ -494,6 +514,7 @@ export default function TailorDashboard() {
                 ]}
                 showsVerticalScrollIndicator={false}
               >
+                <Text style={styles.modalSectionLabel}>Capacity</Text>
                 {AVAIL_OPTIONS.map((opt) => (
                   <TouchableOpacity
                     key={opt.value}
@@ -501,7 +522,7 @@ export default function TailorDashboard() {
                       styles.availOption,
                       stats?.availability === opt.value && styles.availOptionActive,
                     ]}
-                    onPress={() => !availSaving && setAvailability(opt.value)}
+                    onPress={() => !availSaving && updateOperationalStatus({ availability: opt.value })}
                     disabled={availSaving}
                   >
                     <View style={[styles.availOptionDot, { backgroundColor: opt.color }]} />
@@ -514,6 +535,66 @@ export default function TailorDashboard() {
                     )}
                   </TouchableOpacity>
                 ))}
+
+                {stats?.supportsCustomOrders ? (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Custom orders</Text>
+                    <TouchableOpacity
+                      style={[styles.availOption, stats.acceptsCustomOrdersNow && styles.availOptionActive]}
+                      onPress={() => !availSaving && updateOperationalStatus({ acceptsCustomOrdersNow: true })}
+                      disabled={availSaving}
+                    >
+                      <View style={[styles.availOptionDot, { backgroundColor: Colors.success }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.availOptionLabel}>Taking custom orders</Text>
+                        <Text style={styles.availOptionDesc}>Customers can send new custom briefs for quotes.</Text>
+                      </View>
+                      {stats.acceptsCustomOrdersNow ? <Text style={styles.availCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.availOption, !stats.acceptsCustomOrdersNow && styles.availOptionActive]}
+                      onPress={() => !availSaving && updateOperationalStatus({ acceptsCustomOrdersNow: false })}
+                      disabled={availSaving}
+                    >
+                      <View style={[styles.availOptionDot, { backgroundColor: Colors.warning }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.availOptionLabel}>Custom orders paused</Text>
+                        <Text style={styles.availOptionDesc}>Your profile stays visible, but new custom briefs are paused.</Text>
+                      </View>
+                      {!stats.acceptsCustomOrdersNow ? <Text style={styles.availCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+
+                {stats?.supportsReadyMade ? (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Ready-made shop</Text>
+                    <TouchableOpacity
+                      style={[styles.availOption, !stats.shopPaused && styles.availOptionActive]}
+                      onPress={() => !availSaving && updateOperationalStatus({ shopPaused: false })}
+                      disabled={availSaving}
+                    >
+                      <View style={[styles.availOptionDot, { backgroundColor: Colors.success }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.availOptionLabel}>Shop checkout open</Text>
+                        <Text style={styles.availOptionDesc}>Customers can buy live ready-made inventory when payout is ready.</Text>
+                      </View>
+                      {!stats.shopPaused ? <Text style={styles.availCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.availOption, stats.shopPaused && styles.availOptionActive]}
+                      onPress={() => !availSaving && updateOperationalStatus({ shopPaused: true })}
+                      disabled={availSaving}
+                    >
+                      <View style={[styles.availOptionDot, { backgroundColor: Colors.warning }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.availOptionLabel}>Shop checkout paused</Text>
+                        <Text style={styles.availOptionDesc}>Customers can browse your items, but checkout is paused.</Text>
+                      </View>
+                      {stats.shopPaused ? <Text style={styles.availCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                  </>
+                ) : null}
               </ScrollView>
             </View>
           </TouchableOpacity>
@@ -721,8 +802,6 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 440,
     alignSelf: 'center',
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   cockpitTop: {
@@ -1007,6 +1086,14 @@ const styles = StyleSheet.create({
   },
   modalTitle: { fontSize: 18, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: Fonts.display },
   modalSub: { fontSize: 13, color: Colors.inkLight, marginTop: -4, lineHeight: 18 },
+  modalSectionLabel: {
+    marginTop: Spacing.sm,
+    fontSize: 11,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreenDark,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
   availOption: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     minHeight: 44,

@@ -4,8 +4,7 @@
  * Help centre for customers — FAQ accordion, direct contact options,
  * and a link to the full website help centre.
  *
- * External links (Help Centre, WhatsApp) will resolve to drapeon.co pages
- * once the website is built.
+ * External links (Help Centre, WhatsApp) open the public Drapeon support paths.
  */
 
 import { useState } from 'react'
@@ -15,7 +14,7 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { DRAPE_CUSTOMER_GUIDE_TOPICS, DRAPE_HELP_FAQ } from '@drape/shared'
+import { CONTACTS, DRAPE_CUSTOMER_GUIDE_TOPICS, DRAPE_HELP_FAQ, buildWhatsAppSupportUrl } from '@drape/shared'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -159,15 +158,15 @@ export default function HelpScreen() {
             <ContactRow
               icon="mail"
               title="Email support"
-              sub="support@drapeon.co · we reply within 24h"
-              onPress={() => { void openExternal('mailto:support@drapeon.co?subject=Drapeon%20support%20request') }}
+              sub={`${CONTACTS.support} · we reply within 24h`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.support}?subject=Drapeon%20support%20request`) }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="message-circle"
               title="WhatsApp"
               sub="Chat with the team directly"
-              onPress={() => { void openExternal('https://wa.me/message/drapeon') }}
+              onPress={() => { void openExternal(buildWhatsAppSupportUrl('Hi Drapeon, I need customer support.')) }}
               last
             />
           </View>
@@ -218,12 +217,12 @@ export default function HelpScreen() {
 
 function alertOpenFailed(url: string) {
   if (url.startsWith('mailto:')) {
-    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drapeon support request". If this is about a live order, keep the order thread updated in Drapeon too.')
+    Alert.alert('Unable to open link', `Please email ${CONTACTS.support} directly with the subject "Drapeon support request". If this is about a live order, keep the order thread updated in Drapeon too.`)
     return
   }
 
   if (url.startsWith('https://wa.me/')) {
-    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drapeon support request". Keep the live order as the source of truth while you wait.')
+    Alert.alert('Unable to open link', `Please open WhatsApp and message Drapeon, or email ${CONTACTS.support} with the subject "Drapeon support request". Keep the live order as the source of truth while you wait.`)
     return
   }
 
@@ -232,7 +231,7 @@ function alertOpenFailed(url: string) {
     return
   }
 
-  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drapeon support request". If this is tied to a live order, keep the updates in Drapeon first.')
+  Alert.alert('Unable to open link', `Please try again in a moment or email ${CONTACTS.support} directly with the subject "Drapeon support request". If this is tied to a live order, keep the updates in Drapeon first.`)
 }
 
 // ─── FaqItem ─────────────────────────────────────────────────────────────────

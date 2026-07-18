@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import Link from 'next/link'
 import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
@@ -86,7 +86,7 @@ export default function AccountPage(): React.JSX.Element {
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {accessPaths.map((path) => (
-            <div key={path.eyebrow} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={path.eyebrow} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{path.eyebrow}</p>
               <h3 className="mt-4 text-2xl text-ink">{path.title}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{path.body}</p>
@@ -103,14 +103,14 @@ export default function AccountPage(): React.JSX.Element {
           description="Password reset, account deletion, privacy requests, and support have direct routes."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
-          <Link href="/account/recovery" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/recovery" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Password reset</p>
             <h3 className="mt-4 text-2xl text-ink">Open a reset link in the app.</h3>
             <p className="mt-3 text-sm leading-7 text-ink/68">
               Password recovery can start on web or in the app. Reset links return to the signed account flow so sensitive changes stay protected.
             </p>
           </Link>
-          <Link href="/account-deletion" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account-deletion" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Account deletion</p>
             <h3 className="mt-4 text-2xl text-ink">Request or confirm deletion.</h3>
             <p className="mt-3 text-sm leading-7 text-ink/68">
@@ -126,7 +126,17 @@ export default function AccountPage(): React.JSX.Element {
           title="Use the right inbox."
           description="If account access does not work, send the issue to the correct Drapeon team."
         />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+        <div className="mt-10 grid gap-5 lg:grid-cols-3 xl:grid-cols-4">
+          <a
+            href={buildWhatsAppSupportUrl('Hi Drapeon, I need account support.')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">WhatsApp support</p>
+            <h3 className="mt-4 break-words text-2xl text-ink">Message Drapeon</h3>
+            <p className="mt-3 text-sm leading-7 text-ink/68">Quick human routing for login, setup, or launch-test issues.</p>
+          </a>
           {[
             ['Customer support', CONTACTS.support, 'Help with orders, login, payments, delivery, reviews, and account access.'],
             ['Tailor support', CONTACTS.tailors, 'Help with setup, verification, shop, consultations, production, and payouts.'],
@@ -135,7 +145,7 @@ export default function AccountPage(): React.JSX.Element {
             <a
               key={String(email)}
               href={`mailto:${email}`}
-              className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+              className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
               <h3 className="mt-4 break-words text-2xl text-ink">{email}</h3>

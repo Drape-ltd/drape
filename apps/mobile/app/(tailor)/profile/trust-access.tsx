@@ -5,11 +5,11 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import { deriveTailorAccessGuidance } from '@/lib/tailor-access'
 import { payoutSetupCopy, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -53,6 +53,21 @@ export default function TailorTrustAccessScreen() {
       await Linking.openURL(url)
     } catch {
       Alert.alert('Unable to open link', `Please email ${email} directly from your mail app.`)
+    }
+  }
+
+  async function openWhatsAppSupport() {
+    const url = buildWhatsAppSupportUrl('Hi Drapeon, I need tailor support with my account access state.')
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert('Unable to open link', `Please message Drapeon in WhatsApp, or email ${CONTACTS.tailors} directly from your mail app.`)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Unable to open link', `Please message Drapeon in WhatsApp, or email ${CONTACTS.tailors} directly from your mail app.`)
     }
   }
 
@@ -189,7 +204,8 @@ export default function TailorTrustAccessScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
+        {/* ── Status + Reason ── */}
+        <View style={styles.statusCard}>
           <View style={[styles.badge, badgeStyle]}>
             <Text style={[styles.badgeText, badgeTextStyle]}>
               {guidance.state === 'CLEAR' ? 'Clear' : guidance.state === 'UNDER_REVIEW' ? 'In review' : 'Fix required'}
@@ -197,73 +213,77 @@ export default function TailorTrustAccessScreen() {
           </View>
           <Text style={styles.heroTitle}>{guidance.title}</Text>
           <Text style={styles.heroBody}>{guidance.body}</Text>
-        </View>
-
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionEyebrow}>Reason category</Text>
+          <View style={styles.cardDivider} />
+          <Text style={styles.sectionEyebrow}>Reason</Text>
           <Text style={styles.sectionTitle}>{guidance.reasonCategory}</Text>
           <Text style={styles.sectionBody}>{guidance.nextStep}</Text>
         </View>
 
-        {guidance.reasonCategory === 'Payout readiness' ? (
+        {/* ── Action card — hidden when clear ── */}
+        {guidance.state !== 'CLEAR' && (
           <View style={styles.infoCard}>
-            <Text style={styles.sectionEyebrow}>What to do next</Text>
-            <Text style={styles.sectionTitle}>{payoutNextStep.title}</Text>
-            <Text style={styles.sectionBody}>{payoutNextStep.body}</Text>
-            <Text style={styles.noteText}>
-              Submit the payout setup inside Drapeon so this blocker is durable and visible. Email is still there if the app path fails, but it should not be your first stop anymore.
-            </Text>
-            <TouchableOpacity
-              style={styles.reviewBtn}
-              onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/profile/trust-access' } } as never)}
-            >
-              <Text style={styles.reviewBtnText}>Start payout setup</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionEyebrow}>What is currently blocked</Text>
-          {guidance.blockedCapabilities.length > 0 ? (
-            <View style={styles.list}>
-              {guidance.blockedCapabilities.map((item) => (
-                <View key={item} style={styles.listRow}>
-                  <Feather name="slash" size={14} color={Colors.kanteRust} />
-                  <Text style={styles.listText}>{item}</Text>
+            {guidance.blockedCapabilities.length > 0 && (
+              <>
+                <Text style={styles.sectionEyebrow}>Blocked right now</Text>
+                <View style={styles.list}>
+                  {guidance.blockedCapabilities.map((item) => (
+                    <View key={item} style={styles.listRow}>
+                      <Feather name="slash" size={14} color={Colors.kanteRust} />
+                      <Text style={styles.listText}>{item}</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
+                <View style={styles.cardDivider} />
+              </>
+            )}
+            {guidance.reasonCategory === 'Payout readiness' && (
+              <>
+                <Text style={styles.sectionEyebrow}>Payout setup</Text>
+                <Text style={styles.sectionTitle}>{payoutNextStep.title}</Text>
+                <Text style={styles.sectionBody}>{payoutNextStep.body}</Text>
+                <Text style={styles.noteText}>
+                  Submit the payout setup inside Drapeon so this blocker is durable and visible. Email is still there if the app path fails, but it should not be your first stop anymore.
+                </Text>
+                <View style={styles.cardDivider} />
+              </>
+            )}
+            <Text style={styles.sectionEyebrow}>
+              {guidance.state === 'UNDER_REVIEW' ? 'While in review' : 'How to fix'}
+            </Text>
+            <Text style={styles.sectionBody}>
+              {guidance.state === 'UNDER_REVIEW'
+                ? 'This reads like a review state. The usual next move is to wait or add missing context, not to file a full appeal immediately.'
+                : 'This reads like a self-fixable hold first. Fix the requirement in-app when possible, then use support if the result still looks wrong.'}
+            </Text>
+            {guidance.appealCopy ? <Text style={styles.noteText}>{guidance.appealCopy}</Text> : null}
+            <View style={styles.actionBtns}>
+              {guidance.reasonCategory === 'Payout readiness' && (
+                <TouchableOpacity
+                  style={styles.reviewBtn}
+                  onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/profile/trust-access', historyChain: appendToHistory(undefined, '/(tailor)/profile/trust-access') } } as never)}
+                >
+                  <Text style={styles.reviewBtnText}>Start payout setup</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={guidance.reasonCategory === 'Payout readiness' ? styles.ghostBtn : styles.reviewBtn}
+                onPress={() => router.push('/(tailor)/profile/access-review' as never)}
+              >
+                <Text style={guidance.reasonCategory === 'Payout readiness' ? styles.ghostBtnText : styles.reviewBtnText}>
+                  Request human review
+                </Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <Text style={styles.sectionBody}>No standard seller capability is currently blocked by the signals Drapeon stores today.</Text>
-          )}
-        </View>
+          </View>
+        )}
 
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionEyebrow}>Fix, review, or appeal?</Text>
-          <Text style={styles.sectionBody}>
-            {guidance.state === 'UNDER_REVIEW'
-              ? 'This reads like a review state. The usual next move is to wait or add missing context, not to file a full appeal immediately.'
-              : guidance.state === 'FIX_REQUIRED'
-                ? 'This reads like a self-fixable hold first. Fix the requirement in-app when possible, then use support if the result still looks wrong.'
-                : 'No appeal is needed right now. Keep your profile, payout details, and order communication current.'}
-          </Text>
-          {guidance.appealCopy ? <Text style={styles.noteText}>{guidance.appealCopy}</Text> : null}
-          {guidance.state !== 'CLEAR' ? (
-            <TouchableOpacity
-              style={styles.reviewBtn}
-              onPress={() => router.push('/(tailor)/profile/access-review' as never)}
-            >
-              <Text style={styles.reviewBtnText}>Request human review</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
+        {/* ── Support ── */}
         <View style={styles.infoCard}>
           <Text style={styles.sectionEyebrow}>Need human help?</Text>
           <Text style={styles.sectionBody}>
             Use the inbox that matches the issue so trust, verification, and payout questions do not get lost in the wrong queue.
           </Text>
-          <View style={styles.contactList}>
+          <View style={styles.contactRows}>
             {guidance.supportEmail ? (
               <TouchableOpacity
                 style={styles.contactRow}
@@ -294,6 +314,19 @@ export default function TailorTrustAccessScreen() {
                 <Feather name="chevron-right" size={16} color={Colors.midGrey} />
               </TouchableOpacity>
             ) : null}
+            <TouchableOpacity
+              style={[styles.contactRow, styles.contactRowLast]}
+              onPress={() => { void openWhatsAppSupport() }}
+            >
+              <View style={styles.contactIcon}>
+                <Feather name="message-circle" size={16} color={Colors.needleGreen} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.contactTitle}>WhatsApp support</Text>
+                <Text style={styles.contactSub}>Message Drapeon directly</Text>
+              </View>
+              <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -314,12 +347,17 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md },
-  heroCard: {
+  statusCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,
     ...Shadow.sm,
+  },
+  cardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.lightGrey,
+    marginVertical: 4,
   },
   badge: {
     alignSelf: 'flex-start',
@@ -356,26 +394,51 @@ const styles = StyleSheet.create({
   listRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   listText: { flex: 1, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   noteText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  actionBtns: {
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
   reviewBtn: {
-    marginTop: Spacing.md,
     alignSelf: 'flex-start',
-    borderRadius: Radius.lg,
+    borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
     paddingHorizontal: Spacing.lg,
     paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   reviewBtnText: {
     color: Colors.textInverse,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
-  contactList: { gap: Spacing.sm, marginTop: Spacing.xs },
+  ghostBtn: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  ghostBtnText: {
+    color: Colors.ink,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+  },
+  contactRows: { marginTop: Spacing.xs },
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
+    minHeight: 52,
     paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
+  contactRowLast: { borderBottomWidth: 0 },
   contactIcon: {
     width: 34,
     height: 34,

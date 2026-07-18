@@ -20,10 +20,16 @@
     "./rate-limit": "./src/rate-limit.ts",
     "./preflight": "./src/preflight.ts",
     "./media-policy": "./src/media-policy.ts",
+    "./call-scheduling-policy": "./src/call-scheduling-policy.ts",
     "./exception-os": "./src/exception-os.ts",
     "./deadline-context": "./src/deadline-context.ts",
     "./display-text": "./src/display-text.ts",
-    "./measurement-profile": "./src/measurement-profile.ts"
+    "./measurement-profile": "./src/measurement-profile.ts",
+    "./onboarding-proof-item": "./src/onboarding-proof-item.ts",
+    "./ops-verification-evidence": "./src/ops-verification-evidence.ts",
+    "./custom-order-fabric": "./src/custom-order-fabric.ts",
+    "./order-brief-dossier": "./src/order-brief-dossier.ts",
+    "./message-thread-clusters": "./src/message-thread-clusters.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

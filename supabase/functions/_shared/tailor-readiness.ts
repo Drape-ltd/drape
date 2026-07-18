@@ -54,7 +54,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       canAcceptPaidOrders: false,
       canPublishPaidItems: false,
       code: 'PROFILE_INCOMPLETE',
-      message: 'Complete your seller profile before taking paid work live.',
+      message: 'Complete your tailor profile before taking paid work live.',
     }
   }
 

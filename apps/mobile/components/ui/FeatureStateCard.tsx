@@ -103,10 +103,10 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.display,
   },
   body: {
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     color: Colors.inkLight,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 20,
   },
   supportCard: {
     alignSelf: 'stretch',

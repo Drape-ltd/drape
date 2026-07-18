@@ -30,7 +30,7 @@ const CONSULTATION_DURATION_MS = 30 * 60 * 1000;
 const POST_SLOT_FOLLOW_UP_MS = 10 * 60 * 1000;
 const REQUEST_FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
 const REQUEST_EXPIRE_MS = 48 * 60 * 60 * 1000;
-const ORDER_CALL_JOIN_LATE_MS = 45 * 60 * 1000;
+const ORDER_CALL_JOIN_LATE_MS = 30 * 60 * 1000;
 const READY_MADE_CALL_STAGES = [
   "CONFIRMED",
   "DESIGNING",
@@ -45,6 +45,8 @@ const READY_MADE_CALL_STAGES = [
   "DELIVERED",
   "COLLECTED",
 ] as const;
+
+type ReminderKind = "30" | "5" | "now";
 
 type OrderRow = {
   id: string;
@@ -74,7 +76,7 @@ function shouldSkip(meta: ConsultationMeta | null, nowMs: number) {
   return false;
 }
 
-function dueReminder(meta: ConsultationMeta, nowMs: number): "30" | "5" | null {
+function dueReminder(meta: ConsultationMeta, nowMs: number): ReminderKind | null {
   const startsAt = new Date(meta.scheduledStartAt!).getTime();
   const msUntil = startsAt - nowMs;
 
@@ -84,6 +86,10 @@ function dueReminder(meta: ConsultationMeta, nowMs: number): "30" | "5" | null {
 
   if (!meta.reminder5SentAt && Math.abs(msUntil - FIVE_MIN_MS) <= WINDOW_MS) {
     return "5";
+  }
+
+  if (!meta.reminderStartSentAt && msUntil <= 0 && Math.abs(msUntil) <= WINDOW_MS) {
+    return "now";
   }
 
   return null;
@@ -101,7 +107,7 @@ function shouldSkipOrderCall(meta: OrderCallMeta | null, nowMs: number) {
   return false;
 }
 
-function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): "30" | "5" | null {
+function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): ReminderKind | null {
   const startsAt = new Date(meta.scheduledStartAt!).getTime();
   const msUntil = startsAt - nowMs;
 
@@ -113,36 +119,46 @@ function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): "30" | "5" | 
     return "5";
   }
 
+  if (!meta.reminderStartSentAt && msUntil <= 0 && Math.abs(msUntil) <= WINDOW_MS) {
+    return "now";
+  }
+
   return null;
 }
 
-function titleFor(kind: "30" | "5") {
+function titleFor(kind: ReminderKind) {
+  if (kind === "now") return "Consultation starting now";
   return kind === "30" ? "Consultation in 30 minutes" : "Consultation starts soon";
 }
 
-function bodyFor(kind: "30" | "5") {
+function bodyFor(kind: ReminderKind) {
+  if (kind === "now") return "Your Drape consultation is starting now. Tap to join.";
   return kind === "30"
     ? "Your Drape consultation is coming up. Open the order when you are ready."
     : "Your Drape consultation starts in 5 minutes. Open the order to join or start the call.";
 }
 
-function smsBodyFor(order: OrderRow, kind: "30" | "5") {
+function smsBodyFor(order: OrderRow, kind: ReminderKind) {
+  if (kind === "now") return `Drape: your consultation for order ${orderRef(order)} is starting now. Open Drape to join.`;
   return kind === "30"
     ? `Drape: your consultation for order ${orderRef(order)} starts in 30 minutes. Open Drape to prepare.`
     : `Drape: your consultation for order ${orderRef(order)} starts in 5 minutes. Open the order to join or start the call.`;
 }
 
-function orderCallTitleFor(kind: "30" | "5") {
+function orderCallTitleFor(kind: ReminderKind) {
+  if (kind === "now") return "Order call starting now";
   return kind === "30" ? "Order call in 30 minutes" : "Order call starts soon";
 }
 
-function orderCallBodyFor(kind: "30" | "5") {
+function orderCallBodyFor(kind: ReminderKind) {
+  if (kind === "now") return "Your ready-made order call is starting now. Tap to join.";
   return kind === "30"
     ? "Your ready-made order call is coming up. Open Messages when you are ready."
     : "Your ready-made order call starts in 5 minutes. Open Messages to join or start the call.";
 }
 
-function orderCallSmsBodyFor(order: OrderRow, kind: "30" | "5") {
+function orderCallSmsBodyFor(order: OrderRow, kind: ReminderKind) {
+  if (kind === "now") return `Drape: your ready-made order call for ${orderRef(order)} is starting now. Open Drape to join.`;
   return kind === "30"
     ? `Drape: your ready-made order call for ${orderRef(order)} starts in 30 minutes. Open Messages to prepare.`
     : `Drape: your ready-made order call for ${orderRef(order)} starts in 5 minutes. Open Messages to join or start the call.`;
@@ -178,13 +194,18 @@ function orderRef(order: OrderRow) {
 async function sendReminder(
   supabase: SupabaseClient,
   order: OrderRow,
-  kind: "30" | "5",
+  kind: ReminderKind,
 ) {
+  const urgent = kind === "now";
+  const data: Record<string, string> = urgent
+    ? { orderId: order.id, target: "call-join", callKind: "consultation", callType: "video" }
+    : { orderId: order.id };
   const payload = {
     title: titleFor(kind),
     body: bodyFor(kind),
     preferenceKey: "orderUpdates" as const,
-    data: { orderId: order.id },
+    data,
+    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "timeSensitive" as const } : {}),
   };
 
   const sends: Promise<unknown>[] = [];
@@ -234,13 +255,18 @@ async function sendReminder(
 async function sendOrderCallReminder(
   supabase: SupabaseClient,
   order: OrderRow,
-  kind: "30" | "5",
+  kind: ReminderKind,
 ) {
+  const urgent = kind === "now";
+  const data: Record<string, string> = urgent
+    ? { orderId: order.id, target: "call-join", callKind: "ready-made", callType: "video" }
+    : { orderId: order.id, target: "messages" };
   const payload = {
     title: orderCallTitleFor(kind),
     body: orderCallBodyFor(kind),
     preferenceKey: "messages" as const,
-    data: { orderId: order.id, target: "messages" },
+    data,
+    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "timeSensitive" as const } : {}),
   };
 
   const sends: Promise<unknown>[] = [];
@@ -699,8 +725,10 @@ Deno.serve(async (req) => {
 
     let sent30 = 0;
     let sent5 = 0;
+    let sentNow = 0;
     let orderCallSent30 = 0;
     let orderCallSent5 = 0;
+    let orderCallSentNow = 0;
     let followedUp = 0;
     let expired = 0;
     let skipped = 0;
@@ -739,6 +767,7 @@ Deno.serve(async (req) => {
         ...consultation!,
         reminder30SentAt: kind === "30" ? now.toISOString() : consultation!.reminder30SentAt ?? null,
         reminder5SentAt: kind === "5" ? now.toISOString() : consultation!.reminder5SentAt ?? null,
+        reminderStartSentAt: kind === "now" ? now.toISOString() : consultation!.reminderStartSentAt ?? null,
       };
 
       const { error: updateError } = await supabase
@@ -770,7 +799,8 @@ Deno.serve(async (req) => {
       });
 
       if (kind === "30") sent30 += 1;
-      else sent5 += 1;
+      else if (kind === "5") sent5 += 1;
+      else sentNow += 1;
     }
 
     for (const order of (readyMadeCallData ?? []) as OrderRow[]) {
@@ -806,6 +836,7 @@ Deno.serve(async (req) => {
         ...orderCall!,
         reminder30SentAt: kind === "30" ? now.toISOString() : orderCall!.reminder30SentAt ?? null,
         reminder5SentAt: kind === "5" ? now.toISOString() : orderCall!.reminder5SentAt ?? null,
+        reminderStartSentAt: kind === "now" ? now.toISOString() : orderCall!.reminderStartSentAt ?? null,
       };
 
       const { error: updateError } = await supabase
@@ -837,10 +868,11 @@ Deno.serve(async (req) => {
       });
 
       if (kind === "30") orderCallSent30 += 1;
-      else orderCallSent5 += 1;
+      else if (kind === "5") orderCallSent5 += 1;
+      else orderCallSentNow += 1;
     }
 
-    return new Response(JSON.stringify({ ok: true, sent30, sent5, orderCallSent30, orderCallSent5, followedUp, expired, skipped }), {
+    return new Response(JSON.stringify({ ok: true, sent30, sent5, sentNow, orderCallSent30, orderCallSent5, orderCallSentNow, followedUp, expired, skipped }), {
       status: 200,
       headers: { ...cors, "Content-Type": "application/json" },
     });

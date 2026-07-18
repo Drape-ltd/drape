@@ -8,11 +8,12 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, ActivityIndicator, Alert,
+  Switch, ActivityIndicator, Alert, Linking,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
+import * as Notifications from 'expo-notifications'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
@@ -72,6 +73,13 @@ export default function NotificationSettingsScreen() {
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<NotifPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
+  const [osGranted, setOsGranted] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    Notifications.getPermissionsAsync().then(({ status }) => {
+      setOsGranted(status === 'granted')
+    }).catch(() => setOsGranted(null))
+  }, [])
 
   useEffect(() => {
     const stored = user?.user_metadata?.notif_prefs
@@ -111,6 +119,18 @@ export default function NotificationSettingsScreen() {
         <Text style={styles.headerTitle}>Notification settings</Text>
         {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
+
+      {osGranted === false && (
+        <View style={styles.osDisabledBanner}>
+          <Feather name="bell-off" size={16} color={Colors.inkLight} />
+          <Text style={styles.osDisabledText}>
+            Push notifications are disabled in your device settings. Your preferences below are saved but won't trigger alerts until you re-enable them.
+          </Text>
+          <TouchableOpacity style={styles.osSettingsBtn} onPress={() => Linking.openSettings()}>
+            <Text style={styles.osSettingsBtnText}>Open settings</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
         <Text style={styles.intro}>
@@ -199,64 +219,24 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
 
   body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: 12,
-    gap: 6,
-    ...Shadow.sm,
+
+  osDisabledBanner: {
+    flexDirection: 'column', gap: Spacing.sm,
+    marginHorizontal: Spacing.lg, marginTop: Spacing.sm,
+    padding: Spacing.md,
+    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.lightGrey,
   },
-  heroBadge: {
+  osDisabledText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  osSettingsBtn: {
     alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.md, paddingVertical: 6,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
   },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
+  osSettingsBtnText: {
+    fontSize: FontSize.xs, fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 24,
-    fontFamily: Fonts.display,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.md,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 22,
-  },
-  guideCopy: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
   },
 
   intro: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
@@ -266,8 +246,6 @@ const styles = StyleSheet.create({
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
-  hint: { fontSize: 11, color: Colors.midGrey, lineHeight: 16, paddingHorizontal: 2 },
-
   prefRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
     padding: 10,

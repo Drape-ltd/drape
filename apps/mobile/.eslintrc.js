@@ -64,4 +64,26 @@ module.exports = {
     'prefer-const': 'warn',
     'react/react-in-jsx-scope': 'off',
   },
+  overrides: [
+    {
+      files: ['app/(customer)/**/*.{ts,tsx}', 'app/(tailor)/**/*.{ts,tsx}'],
+      rules: {
+        'no-restricted-syntax': [
+          'error',
+          {
+            selector: "CallExpression[callee.object.name='router'][callee.property.name='back']",
+            message: 'Do not use raw router navigation. Use resetTo(), goBackOrReturnTo(), or appendToHistory() from @drape/mobile/lib/navigation instead.',
+          },
+          {
+            selector: "CallExpression[callee.object.name='router'][callee.property.name='push'] > TemplateLiteral.arguments",
+            message: 'Do not use raw router navigation. Use resetTo(), goBackOrReturnTo(), or appendToHistory() from @drape/mobile/lib/navigation instead.',
+          },
+          {
+            selector: "CallExpression[callee.object.name='router'][callee.property.name='push'] > TSAsExpression.arguments > TemplateLiteral.expression",
+            message: 'Do not use raw router navigation. Use resetTo(), goBackOrReturnTo(), or appendToHistory() from @drape/mobile/lib/navigation instead.',
+          },
+        ],
+      },
+    },
+  ],
 }

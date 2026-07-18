@@ -419,6 +419,18 @@ async function fetchTailorProfile(supabase: SupabaseClient, tailorUserId: string
   return (data as TailorPayoutProfile | null) ?? null
 }
 
+async function hasPendingPayoutChangeRequest(supabase: SupabaseClient, tailorUserId: string | null | undefined) {
+  if (!tailorUserId) return false
+  const { count, error } = await supabase
+    .from('payout_change_requests')
+    .select('id', { count: 'exact', head: true })
+    .eq('tailor_user_id', tailorUserId)
+    .eq('status', 'PENDING')
+
+  if (error) throw error
+  return (count ?? 0) > 0
+}
+
 async function fetchSettledOrderPayment(supabase: SupabaseClient, orderId: string) {
   const { data, error } = await supabase
     .from('order_payments')
@@ -612,6 +624,7 @@ Deno.serve(async (req) => {
         const tailorProfile = order.tailor_id ? await fetchTailorProfile(supabase, order.tailor_id) : null
         const settledPayment = await fetchSettledOrderPayment(supabase, order.id)
         const openDispute = await hasOpenDispute(supabase, order.id)
+        const pendingPayoutChange = await hasPendingPayoutChangeRequest(supabase, order.tailor_id)
         const baseBlockedReason = earlyReleaseReason
         const settledPaymentRefunded = !!settledPayment && (
           settledPayment.status === 'PARTIAL_REFUND'
@@ -682,6 +695,15 @@ Deno.serve(async (req) => {
               paymentStatus: settledPayment?.status ?? null,
               refundedAmount: settledPayment?.refunded_amount ?? null,
             },
+          },
+          {
+            name: 'no_pending_payout_destination_change',
+            condition: !pendingPayoutChange,
+            errorCode: PAYOUT_BLOCKED_REASONS.PAYOUT_CHANGE_PENDING,
+            message: payoutPreflightMessage(PAYOUT_BLOCKED_REASONS.PAYOUT_CHANGE_PENDING),
+            field: 'payout_change_requests',
+            severity: 'BLOCKING',
+            actual: { tailor_user_id: order.tailor_id ?? null, pendingPayoutChange },
           },
           {
             name: 'payout_destination_not_on_hold',

@@ -28,6 +28,7 @@ const REVIEW_HOLD_RULES = [
 ] as const
 
 const ReviewTags = z.array(z.string().trim().min(1).max(40)).max(8)
+const ReviewMediaUrls = z.array(z.string().trim().min(1).max(1000)).max(6).default([])
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -37,6 +38,7 @@ const BodySchema = z.discriminatedUnion('action', [
     rating: z.number().int().min(1).max(5),
     body: z.string().trim().max(1000).optional(),
     tags: ReviewTags,
+    mediaUrls: ReviewMediaUrls.optional(),
   }),
   z.object({
     action: z.literal('upsert-customer-review'),
@@ -75,6 +77,67 @@ function reviewHoldReasons(text: string) {
   return REVIEW_HOLD_RULES
     .filter((rule) => rule.pattern.test(text))
     .map((rule) => rule.reason)
+}
+
+function encodeStoragePath(path: string) {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+}
+
+function reviewMediaObjectPath(value: string, supabaseUrl: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  let rawPath = trimmed
+  try {
+    const parsed = new URL(trimmed)
+    const expectedHost = new URL(supabaseUrl).host
+    if (parsed.host !== expectedHost) return null
+    const marker = '/storage/v1/object/public/review-media/'
+    if (!parsed.pathname.startsWith(marker)) return null
+    rawPath = parsed.pathname.slice(marker.length)
+  } catch {
+    rawPath = trimmed.replace(/^\/+/, '')
+    if (rawPath.startsWith('review-media/')) rawPath = rawPath.slice('review-media/'.length)
+  }
+
+  try {
+    return rawPath
+      .split('/')
+      .filter(Boolean)
+      .map((part) => decodeURIComponent(part))
+      .join('/')
+  } catch {
+    return null
+  }
+}
+
+function canonicalReviewMediaUrl(objectPath: string, supabaseUrl: string) {
+  return `${supabaseUrl.replace(/\/+$/u, '')}/storage/v1/object/public/review-media/${encodeStoragePath(objectPath)}`
+}
+
+function validateReviewMediaUrls(input: string[] | undefined, params: { orderId: string; customerId: string; supabaseUrl: string }) {
+  const urls = input ?? []
+  const next: string[] = []
+  for (const value of urls) {
+    const objectPath = reviewMediaObjectPath(value, params.supabaseUrl)
+    const parts = objectPath?.split('/').filter(Boolean) ?? []
+    if (
+      !objectPath ||
+      parts.length < 4 ||
+      parts[0] !== 'reviews' ||
+      parts[1] !== params.orderId ||
+      parts[2] !== params.customerId
+    ) {
+      return { ok: false as const, urls: [], error: 'Review media must be uploaded from this order before submitting.' }
+    }
+    const canonicalUrl = canonicalReviewMediaUrl(objectPath, params.supabaseUrl)
+    if (!next.includes(canonicalUrl)) next.push(canonicalUrl)
+  }
+  return { ok: true as const, urls: next }
 }
 
 Deno.serve(async (req) => {
@@ -226,6 +289,15 @@ Deno.serve(async (req) => {
         return preflightFailureResponse(reviewPreflight, cors, 409)
       }
 
+      const mediaValidation = validateReviewMediaUrls(body.mediaUrls, {
+        orderId: body.orderId,
+        customerId: caller.id,
+        supabaseUrl: getSupabaseUrl(),
+      })
+      if (!mediaValidation.ok) {
+        return jsonError(cors, 400, 'INVALID_REVIEW_MEDIA', mediaValidation.error)
+      }
+
       const holdReasons = [
         ...reviewHoldReasons(reviewBody),
         ...(dispute && ['OPEN', 'UNDER_REVIEW'].includes(dispute.status) ? ['OPEN_DISPUTE'] : []),
@@ -245,6 +317,7 @@ Deno.serve(async (req) => {
           rating: body.rating,
           body: reviewBody || null,
           tags: body.tags,
+          media_urls: mediaValidation.urls,
           published_at: publishedAt,
           flagged: publicationStatus === 'held',
         })
@@ -266,6 +339,7 @@ Deno.serve(async (req) => {
           payload: {
             rating: body.rating,
             reasons: holdReasons,
+            media_count: mediaValidation.urls.length,
           },
         })
 
@@ -287,6 +361,7 @@ Deno.serve(async (req) => {
             reasons: holdReasons,
             rating: body.rating,
             tag_count: body.tags.length,
+            media_count: mediaValidation.urls.length,
             publication_status: publicationStatus,
           },
         })
@@ -297,7 +372,7 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'CUSTOMER',
         order_id: body.orderId,
-        payload: { rating: body.rating, tag_count: body.tags.length, publication_status: publicationStatus },
+        payload: { rating: body.rating, tag_count: body.tags.length, media_count: mediaValidation.urls.length, publication_status: publicationStatus },
       })
 
       return jsonResponse({ ok: true, publicationStatus }, 200, cors)

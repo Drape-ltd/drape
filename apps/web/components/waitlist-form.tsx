@@ -68,7 +68,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): R
   }
 
   return (
-    <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)] backdrop-blur sm:p-7">
+    <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)] backdrop-blur sm:p-7">
       <div className="max-w-2xl">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{role === 'CUSTOMER' ? 'Customer queue' : 'Tailor queue'}</p>
         <h3 className="mt-3 text-3xl text-ink">{title}</h3>
@@ -87,7 +87,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): R
           }}
           autoComplete="name"
           className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
-          placeholder="John Doe"
+          placeholder="e.g. John Doe"
         />
         </label>
 
@@ -149,7 +149,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): R
           />
         </label>
 
-        <div className="rounded-[1.5rem] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
+        <div className="rounded-[8px] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <p className="text-sm leading-6 text-ink/60">
               Join now and we’ll keep you posted.
@@ -179,7 +179,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): R
       ) : null}
 
       {status === 'success' ? (
-        <div className="rounded-[1.5rem] border border-ink/6 bg-bone/80 p-5 lg:col-span-2">
+        <div className="rounded-[8px] border border-ink/6 bg-bone/80 p-5 lg:col-span-2">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">What happens next</p>
           <p className="mt-3 text-sm leading-7 text-ink/68">
             You’re in. We’ll reach out when this side opens.

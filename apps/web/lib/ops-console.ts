@@ -30,6 +30,8 @@ export type OpsActionKind =
   | 'bypass-review'
   | 'application-status'
   | 'verification-decision'
+  | 'profile-change-decision'
+  | 'payout-change-decision'
   | 'deletion-status'
   | 'review-visibility'
   | 'conversation-access'
@@ -289,6 +291,8 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'bypass-review',
     'application-status',
     'verification-decision',
+    'profile-change-decision',
+    'payout-change-decision',
     'deletion-status',
     'review-visibility',
     'conversation-access',
@@ -307,8 +311,8 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
   ],
   ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
   customer_success: ['dispute-status', 'dispute-resolution', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
-  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
-  finance: ['order-partial-refund', 'payout-release', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release'],
+  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'profile-change-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
+  finance: ['order-partial-refund', 'payout-release', 'payout-change-decision', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release'],
   engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve'],
 }
 

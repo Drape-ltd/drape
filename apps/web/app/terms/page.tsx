@@ -58,7 +58,7 @@ export default function TermsPage(): React.JSX.Element {
       }
     >
       <section className="py-8">
-        <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
             By using Drapeon, you agree to these Terms. If you use Drapeon on behalf of a business, tailor shop, studio, or organization, you confirm that you have authority to accept these Terms for that organization.
@@ -94,7 +94,7 @@ export default function TermsPage(): React.JSX.Element {
           title="Use Drapeon honestly and keep order decisions on record."
           description="Marketplace trust depends on accurate profiles, real portfolio media, reliable communication, and clear payment records."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
             {userRules.map((rule) => (
               <li key={rule} className="rounded-2xl bg-bone/70 px-4 py-3">{rule}</li>
@@ -114,7 +114,7 @@ export default function TermsPage(): React.JSX.Element {
             <MarketingCard key={item.title} title={item.title} body={item.body} />
           ))}
         </div>
-        <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+        <div className="mt-8 rounded-lg border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           Drapeon Vision and other fit tools are designed to improve measurement quality, but custom clothing still involves human judgment, fabric behavior, body changes, lighting, camera quality, and tailoring execution. Drapeon does not guarantee a perfect garment outcome.
         </div>
       </section>
@@ -137,7 +137,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
         <div className="mt-8 grid gap-4">
           {refundRules.map(([stage, outcome]) => (
-            <div key={stage} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={stage} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <h3 className="text-2xl text-ink">{stage}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{outcome}</p>
             </div>

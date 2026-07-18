@@ -39,7 +39,7 @@ export default function PressPage(): React.JSX.Element {
       </section>
 
       <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Media inquiries</p>
           <h2 className="mt-3 text-3xl text-white sm:text-4xl">We&apos;re happy to talk — reach the press inbox directly.</h2>
           <p className="mt-3 text-sm leading-7 text-white/62">

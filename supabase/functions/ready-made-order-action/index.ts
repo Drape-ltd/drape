@@ -250,7 +250,7 @@ Deno.serve(async (req) => {
         delivery_available,
         shipping_available,
         tailor_profile_id,
-        tailor_profiles!tailor_profile_id(id, user_id, is_live, availability, display_name, location, currency, payout_currency, payout_provider, payout_account_type, paystack_recipient_code, paystack_account_id, stripe_connect_account_id, stripe_account_id)
+        tailor_profiles!tailor_profile_id(id, user_id, is_live, availability, shop_paused, display_name, location, currency, payout_currency, payout_provider, payout_account_type, paystack_recipient_code, paystack_account_id, stripe_connect_account_id, stripe_account_id)
       `)
       .eq('id', body.sellerItemId)
       .maybeSingle()
@@ -309,13 +309,13 @@ Deno.serve(async (req) => {
         actual: { sellerLive: sellerProfile?.is_live ?? null },
       },
       {
-        name: 'seller_available',
-        condition: sellerProfile?.availability !== 'FULLY_BOOKED',
+        name: 'seller_shop_open',
+        condition: sellerProfile?.shop_paused !== true,
         errorCode: 'SELLER_UNAVAILABLE',
-        message: 'This seller is on a break and is not accepting new orders right now.',
-        field: 'availability',
+        message: 'This seller has paused ready-made checkout right now.',
+        field: 'shop_paused',
         severity: 'BLOCKING',
-        actual: { availability: sellerProfile?.availability ?? null },
+        actual: { shop_paused: sellerProfile?.shop_paused ?? null },
       },
     ])
 

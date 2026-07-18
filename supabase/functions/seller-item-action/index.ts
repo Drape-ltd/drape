@@ -8,6 +8,7 @@ import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import {
   deriveReadyMadeStockStatus,
+  resolveReadyMadeListingState,
   normalizeReadyMadeSizeInventory,
   sumReadyMadeSizeInventory,
   zeroReadyMadeSizeInventory,
@@ -16,6 +17,7 @@ import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'seller-item-action'
+const PROFILE_SELECT = 'id, supports_ready_made, profile_completed, id_verification_status, stripe_account_id, paystack_account_id, stripe_connect_account_id, paystack_recipient_code, payout_account_verified, payout_reverification_required, payout_account_type'
 const FIT_GUIDE_FIELDS = [
   'chest',
   'waist',
@@ -51,7 +53,7 @@ const CreateItemSchema = z.object({
   description: z.string().trim().max(600).optional().nullable(),
   sizes: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   sizeInventory: z.record(z.string(), z.number().int().min(0).max(5000)).default({}),
-  priceAmount: z.number().int().positive().max(100_000_00),
+  priceAmount: z.number().int().positive().max(100_000_00).nullable().optional(),
   currency: z.enum(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD']),
   photoUrls: z.array(z.string().url()).max(6).default([]),
   inventoryQuantity: z.number().int().min(0).max(5000).default(0),
@@ -60,6 +62,7 @@ const CreateItemSchema = z.object({
   shippingAvailable: z.boolean().default(false),
   sizeGuide: z.unknown().optional().nullable(),
   isLive: z.boolean().default(false),
+  onboarding: z.boolean().default(false),
 })
 
 const UpdateItemSchema = z.object({
@@ -70,7 +73,7 @@ const UpdateItemSchema = z.object({
   description: z.string().trim().max(600).optional().nullable(),
   sizes: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   sizeInventory: z.record(z.string(), z.number().int().min(0).max(5000)).default({}),
-  priceAmount: z.number().int().positive().max(100_000_00),
+  priceAmount: z.number().int().positive().max(100_000_00).nullable().optional(),
   currency: z.enum(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD']),
   photoUrls: z.array(z.string().url()).max(6).default([]),
   inventoryQuantity: z.number().int().min(0).max(5000).default(0),
@@ -79,6 +82,7 @@ const UpdateItemSchema = z.object({
   shippingAvailable: z.boolean().default(false),
   sizeGuide: z.unknown().optional().nullable(),
   isLive: z.boolean().default(false),
+  onboarding: z.boolean().default(false),
 })
 
 const UpdateItemStateSchema = z.object({
@@ -151,6 +155,19 @@ function liveListingPreflightIssues(input: {
 
 function existingStockStatusShouldStaySold(currentStockStatus: string | null | undefined, nextInventoryQuantity: number) {
   return currentStockStatus === 'SOLD_OUT' && nextInventoryQuantity <= 0
+}
+
+function hasPositivePriceAmount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+function onboardingProfileDisplayName(email?: string) {
+  const localPart = typeof email === 'string' ? email.split('@')[0] : ''
+  const emailName = localPart
+    .replace(/[^a-zA-Z\s'-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return emailName && emailName.length >= 2 ? emailName.slice(0, 80) : 'Setup in progress'
 }
 
 function nextItemInventory(input: {
@@ -294,19 +311,55 @@ Deno.serve(async (req) => {
 
     const body = parsed.data
 
-    const { data: profile, error: profileError } = await supabase
+    const isOnboardingItemCreate = body.action === 'create-item' && body.onboarding === true
+
+    const { data: profileRow, error: profileError } = await supabase
       .from('tailor_profiles')
-      .select('id, supports_ready_made, profile_completed, id_verification_status, stripe_account_id, paystack_account_id, stripe_connect_account_id, paystack_recipient_code, payout_account_verified, payout_reverification_required, payout_account_type')
+      .select(PROFILE_SELECT)
       .eq('user_id', caller.id)
       .maybeSingle()
 
     if (profileError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: profileError.message })
-      return jsonResponse({ error: 'We could not load your seller profile right now. Please try again.' }, 500, cors)
+      return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
+    }
+
+    let profile = profileRow
+
+    if (!profile?.id && isOnboardingItemCreate) {
+      const { data: createdProfile, error: createdProfileError } = await supabase
+        .from('tailor_profiles')
+        .upsert({
+          user_id: caller.id,
+          display_name: onboardingProfileDisplayName(caller.email),
+          location: 'Setup in progress',
+          currency: body.currency,
+          seller_type: 'TAILOR_SHOP',
+          supports_custom_orders: false,
+          supports_ready_made: true,
+          accepts_custom_orders_now: false,
+          shop_paused: true,
+          pickup_available: false,
+          delivery_available: false,
+          shipping_available: false,
+          delivery_fee: 0,
+          shipping_fee: 0,
+          is_live: false,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' })
+        .select(PROFILE_SELECT)
+        .single()
+
+      if (createdProfileError) {
+        log('error', FN, 'profile.bootstrap_failed', { actor_id: caller.id, error: createdProfileError.message })
+        return jsonResponse({ error: 'We could not prepare your setup profile right now. Please try again.' }, 500, cors)
+      }
+
+      profile = createdProfile
     }
 
     if (!profile?.id) {
-      return jsonResponse({ error: 'Complete your seller profile before adding shop items.' }, 404, cors)
+      return jsonResponse({ error: 'Complete your tailor profile before adding shop items.' }, 404, cors)
     }
 
     const { data: pickupDetails, error: pickupDetailsError } = await supabase
@@ -334,7 +387,23 @@ Deno.serve(async (req) => {
         sizeInventory: body.sizeInventory,
         fallbackInventoryQuantity: body.inventoryQuantity ?? 0,
       })
-      const nextIsLive = body.isLive ?? false
+      const requestedIsLive = body.isLive ?? false
+      const nextPriceAmount = body.priceAmount ?? null
+
+      if (body.onboarding !== true && !hasPositivePriceAmount(nextPriceAmount)) {
+        return jsonResponse({ error: 'Add a valid price before saving this item.' }, 400, cors)
+      }
+
+      const canPublishReadyMade = profile.supports_ready_made === true && readiness.canPublishPaidItems
+      const listingState = resolveReadyMadeListingState({
+        requestedIsLive,
+        canPublishReadyMade,
+        inventoryQuantity: nextInventoryQuantity,
+        onboarding: body.onboarding === true,
+      })
+      const nextIsLive = listingState.isLive
+      const baseStockStatus = listingState.stockStatus
+      const forcedOnboardingDraft = listingState.forcedDraft
 
       const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
         ['seller_item.title', 'title', body.title, "Contact details can't be included in item titles."],
@@ -357,7 +426,30 @@ Deno.serve(async (req) => {
         if (blocked) return blocked
       }
 
+      if (forcedOnboardingDraft) {
+        await audit(supabase, {
+          event: 'seller_item.live_request_forced_draft',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'info',
+          payload: {
+            function: FN,
+            action: body.action,
+            reason: body.onboarding === true
+              ? 'ONBOARDING_DRAFT'
+              : profile.supports_ready_made !== true
+                ? 'READY_MADE_NOT_ENABLED'
+                : readiness.code,
+            onboarding: body.onboarding === true,
+          },
+        })
+      }
+
       if (nextIsLive) {
+        if (!hasPositivePriceAmount(nextPriceAmount)) {
+          return jsonResponse({ error: 'Add a valid price before publishing this item live.' }, 400, cors)
+        }
+
         if (!(body.pickupAvailable || body.deliveryAvailable || body.shippingAvailable)) {
           return jsonResponse({ error: 'Choose at least one fulfillment option before publishing this item live.' }, 400, cors)
         }
@@ -378,7 +470,7 @@ Deno.serve(async (req) => {
       }
 
       if (nextIsLive && !profile.supports_ready_made) {
-        return jsonResponse({ error: 'Enable Shop now on your seller profile before publishing items.' }, 400, cors)
+        return jsonResponse({ error: 'Enable Shop now on your tailor profile before publishing items.' }, 400, cors)
       }
 
       if (nextIsLive && !readiness.canPublishPaidItems) {
@@ -414,12 +506,11 @@ Deno.serve(async (req) => {
         }
 
         const nextStockStatus =
-          !nextIsLive && existingStockStatusShouldStaySold(editableItem.stock_status, nextInventoryQuantity)
-            ? 'SOLD_OUT'
-            : deriveReadyMadeStockStatus({
-                isLive: nextIsLive,
-                inventoryQuantity: nextInventoryQuantity,
-              })
+          body.onboarding === true
+            ? baseStockStatus
+            : !nextIsLive && existingStockStatusShouldStaySold(editableItem.stock_status, nextInventoryQuantity)
+              ? 'SOLD_OUT'
+              : baseStockStatus
 
         const { error: updateError } = await supabase
           .from('seller_items')
@@ -428,7 +519,7 @@ Deno.serve(async (req) => {
             category: body.category?.trim() || null,
             description: normalizedDescription || null,
             sizes: nextSizes,
-            price_amount: body.priceAmount,
+            price_amount: nextPriceAmount,
             currency: body.currency,
             photo_urls: nextPhotoUrls,
             inventory_quantity: nextInventoryQuantity,
@@ -460,6 +551,9 @@ Deno.serve(async (req) => {
             inventory_quantity: nextInventoryQuantity,
             size_inventory: nextSizeInventory,
             stock_status: nextStockStatus,
+            requested_is_live: requestedIsLive,
+            forced_draft: forcedOnboardingDraft,
+            onboarding: body.onboarding === true,
           },
         })
 
@@ -473,13 +567,14 @@ Deno.serve(async (req) => {
           tailorProfileId: profile.id,
           relatedEntityType: 'seller_item',
           relatedEntityId: editableItem.id,
-          metadata: { action: body.action, isLive: nextIsLive },
+          metadata: { action: body.action, isLive: nextIsLive, requestedIsLive, forcedDraft: forcedOnboardingDraft, onboarding: body.onboarding === true },
         })
 
         return jsonResponse({
           ok: true,
           itemId: editableItem.id,
           isLive: nextIsLive,
+          forcedDraft: forcedOnboardingDraft,
           stockStatus: nextStockStatus,
           inventoryQuantity: nextInventoryQuantity,
           sizeInventory: nextSizeInventory,
@@ -494,7 +589,7 @@ Deno.serve(async (req) => {
           category: body.category?.trim() || null,
           description: normalizedDescription || null,
           sizes: nextSizes,
-          price_amount: body.priceAmount,
+          price_amount: nextPriceAmount,
           currency: body.currency,
           photo_urls: nextPhotoUrls,
           inventory_quantity: nextInventoryQuantity,
@@ -504,10 +599,7 @@ Deno.serve(async (req) => {
           delivery_available: body.deliveryAvailable,
           shipping_available: body.shippingAvailable,
           is_live: nextIsLive,
-          stock_status: deriveReadyMadeStockStatus({
-            isLive: nextIsLive,
-            inventoryQuantity: nextInventoryQuantity,
-          }),
+          stock_status: baseStockStatus,
         })
         .select('id')
         .single()
@@ -527,6 +619,10 @@ Deno.serve(async (req) => {
           is_live: nextIsLive,
           inventory_quantity: nextInventoryQuantity,
           size_inventory: nextSizeInventory,
+          stock_status: baseStockStatus,
+          requested_is_live: requestedIsLive,
+          forced_draft: forcedOnboardingDraft,
+          onboarding: body.onboarding === true,
         },
       })
 
@@ -540,17 +636,15 @@ Deno.serve(async (req) => {
         tailorProfileId: profile.id,
         relatedEntityType: 'seller_item',
         relatedEntityId: created.id,
-        metadata: { action: body.action, isLive: nextIsLive },
+        metadata: { action: body.action, isLive: nextIsLive, requestedIsLive, forcedDraft: forcedOnboardingDraft, onboarding: body.onboarding === true },
       })
 
       return jsonResponse({
         ok: true,
         itemId: created.id,
         isLive: nextIsLive,
-        stockStatus: deriveReadyMadeStockStatus({
-          isLive: nextIsLive,
-          inventoryQuantity: nextInventoryQuantity,
-        }),
+        forcedDraft: forcedOnboardingDraft,
+        stockStatus: baseStockStatus,
         inventoryQuantity: nextInventoryQuantity,
         sizeInventory: nextSizeInventory,
       }, 200, cors)
@@ -701,7 +795,7 @@ Deno.serve(async (req) => {
 
     if (body.action === 'publish-item' || body.action === 'relist-item') {
       if (!profile.supports_ready_made) {
-        return jsonResponse({ error: 'Enable Shop now on your seller profile before publishing items.' }, 400, cors)
+        return jsonResponse({ error: 'Enable Shop now on your tailor profile before publishing items.' }, 400, cors)
       }
       if (!readiness.canPublishPaidItems) {
         await audit(supabase, {

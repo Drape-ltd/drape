@@ -2,6 +2,7 @@ import { Tabs, useRouter, useSegments } from 'expo-router'
 import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors } from '@/constants/theme'
+import { resetTo } from '@/lib/navigation'
 import { useCustomerProfile } from '@/lib/customerProfile'
 import { useAuth } from '@/lib/auth'
 import { useUnreadMessageCount } from '@/lib/unread-messages'
@@ -80,7 +81,7 @@ export default function CustomerTabLayout() {
               testID="tab-home"
               accessibilityRole="button"
               accessibilityLabel="Explore tab"
-              onPress={() => router.navigate('/(customer)')}
+              onPress={() => resetTo(router, '/(customer)')}
             />
           ),
         }}
@@ -97,7 +98,7 @@ export default function CustomerTabLayout() {
               testID="tab-saved"
               accessibilityRole="button"
               accessibilityLabel="Wishlists tab"
-              onPress={() => router.navigate('/(customer)/saved')}
+              onPress={() => resetTo(router, '/(customer)/saved')}
             />
           ),
         }}
@@ -114,7 +115,7 @@ export default function CustomerTabLayout() {
               testID="tab-orders"
               accessibilityRole="button"
               accessibilityLabel="Orders tab"
-              onPress={() => router.navigate({ pathname: '/(customer)/orders', params: { tab: 'active' } })}
+              onPress={() => resetTo(router, { pathname: '/(customer)/orders', params: { tab: 'active' } })}
             />
           ),
         }}
@@ -133,7 +134,7 @@ export default function CustomerTabLayout() {
               testID="tab-messages"
               accessibilityRole="button"
               accessibilityLabel={unreadMessages > 0 ? `Messages tab, ${unreadMessages} unread` : 'Messages tab'}
-              onPress={() => router.navigate('/(customer)/messages')}
+              onPress={() => resetTo(router, '/(customer)/messages')}
             />
           ),
         }}
@@ -150,7 +151,7 @@ export default function CustomerTabLayout() {
               testID="tab-profile"
               accessibilityRole="button"
               accessibilityLabel="Profile tab"
-              onPress={() => router.navigate('/(customer)/profile')}
+              onPress={() => resetTo(router, '/(customer)/profile')}
             />
           ),
         }}

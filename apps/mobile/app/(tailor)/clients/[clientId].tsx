@@ -13,7 +13,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { AvatarImage } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
@@ -155,7 +155,11 @@ const MEAS_LABELS: Array<{ key: keyof Measurements; label: string }> = [
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ClientDetailScreen() {
-  const { clientId } = useLocalSearchParams<{ clientId: string }>()
+  const { clientId, historyChain, returnTo } = useLocalSearchParams<{
+    clientId: string
+    historyChain?: string
+    returnTo?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -489,7 +493,7 @@ export default function ClientDetailScreen() {
   )
 
   function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)/clients')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
   }
 
   return (
@@ -498,7 +502,7 @@ export default function ClientDetailScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
     >
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.content, { paddingBottom: Math.max(120, insets.bottom + 96) }]}
@@ -534,7 +538,15 @@ export default function ClientDetailScreen() {
               <View style={styles.identityActions}>
                 <TouchableOpacity
                   style={styles.messageBtn}
-                  onPress={() => router.navigate(`/(tailor)/messages/${orders[0].id}`)}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: '/(tailor)/messages/[orderId]',
+                      params: {
+                        orderId: orders[0].id,
+                        historyChain: appendToHistory(historyChain, `/(tailor)/clients/${clientId}`),
+                      },
+                    })
+                  }
                 >
                   <Text style={styles.messageBtnText}>Message</Text>
                 </TouchableOpacity>
@@ -543,7 +555,11 @@ export default function ClientDetailScreen() {
                     style={styles.secondaryActionBtn}
                     onPress={() => router.push({
                       pathname: '/(tailor)/clients/review/[orderId]',
-                      params: { orderId: latestReviewableOrder.id, returnTo: `/(tailor)/clients/${clientId}` },
+                      params: {
+                        orderId: latestReviewableOrder.id,
+                        returnTo: `/(tailor)/clients/${clientId}`,
+                        historyChain: appendToHistory(historyChain, `/(tailor)/clients/${clientId}`),
+                      },
                     })}
                   >
                     <Text style={styles.secondaryActionText}>Add review</Text>
@@ -586,7 +602,11 @@ export default function ClientDetailScreen() {
                 style={styles.emptyInfoCard}
                 onPress={() => latestReviewableOrder ? router.push({
                   pathname: '/(tailor)/clients/review/[orderId]',
-                  params: { orderId: latestReviewableOrder.id, returnTo: `/(tailor)/clients/${clientId}` },
+                  params: {
+                    orderId: latestReviewableOrder.id,
+                    returnTo: `/(tailor)/clients/${clientId}`,
+                    historyChain: appendToHistory(historyChain, `/(tailor)/clients/${clientId}`),
+                  },
                 }) : undefined}
                 disabled={!latestReviewableOrder}
                 activeOpacity={0.75}
@@ -649,7 +669,15 @@ export default function ClientDetailScreen() {
                   <View style={styles.emptyMeasureRow}>
                     <Text style={styles.emptyMeasureText}>No saved measurements yet.</Text>
                     <TouchableOpacity
-                      onPress={() => router.push(`/(tailor)/clients/diary/new`)}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(tailor)/clients/diary/[id]',
+                          params: {
+                            id: 'new',
+                            historyChain: appendToHistory(historyChain, `/(tailor)/clients/${clientId}`),
+                          },
+                        })
+                      }
                       accessibilityRole="button"
                       accessibilityLabel="Open client diary"
                     >
@@ -687,7 +715,7 @@ export default function ClientDetailScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Private fit notes</Text>
             <Text style={styles.sectionHint}>
-              Save fit preferences, alterations, and reminders only your studio can see.
+              Save alterations, garment context, and reminders only your studio can see.
             </Text>
 
             {contactWarning && (
@@ -747,7 +775,11 @@ export default function ClientDetailScreen() {
                     style={styles.orderRow}
                     onPress={() => router.push({
                       pathname: '/(tailor)/orders/[id]',
-                      params: { id: order.id, returnTo: `/(tailor)/clients/${clientId}` },
+                      params: {
+                        id: order.id,
+                        returnTo: `/(tailor)/clients/${clientId}`,
+                        historyChain: appendToHistory(historyChain, `/(tailor)/clients/${clientId}`),
+                      },
                     })}
                   >
                     <View style={{ flex: 1 }}>
@@ -828,12 +860,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, borderRadius: Radius.md,
     padding: 14, ...Shadow.sm,
   },
-  avatarLg: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: Colors.needleGreenLight,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  avatarLgText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   clientName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
   clientSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   identityActions: { gap: 8 },

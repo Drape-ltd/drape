@@ -26,11 +26,13 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { parseOrderSupportMeta, type OrderCallMeta, type OrderSupportMeta } from '@/lib/order-support'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 import { decodeDisplayText } from '@drape/shared/display-text'
+import { getCallLifecycleState } from '@drape/shared/call-scheduling-policy'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
@@ -61,12 +63,10 @@ function displayText(value: string | null | undefined, fallback = '') {
 function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
   if (!orderCall || orderCall.status !== 'SCHEDULED' || !orderCall.scheduledStartAt) return 'needs-schedule' as const
   if (orderCall.expiredAt) return 'expired' as const
-  const startsAt = new Date(orderCall.scheduledStartAt).getTime()
-  if (!Number.isFinite(startsAt)) return 'expired' as const
-  const now = Date.now()
-  if (now < startsAt - 10 * 60 * 1000) return 'too-early' as const
-  if (now > startsAt + 45 * 60 * 1000) return 'expired' as const
-  return 'join' as const
+  const lifecycle = getCallLifecycleState(orderCall.scheduledStartAt)
+  if (lifecycle.status === 'upcoming') return 'too-early' as const
+  if (lifecycle.status === 'active') return 'join' as const
+  return 'expired' as const
 }
 
 function formatOrderCallTime(value: string | null | undefined) {
@@ -101,10 +101,15 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 }
 
 export default function TailorMessagesScreen() {
-  const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
+  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
+    orderId: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const keyboard = useKeyboardState()
   const userId = user?.id
   const displayName = String(user?.user_metadata?.display_name ?? '').trim()
 
@@ -124,14 +129,31 @@ export default function TailorMessagesScreen() {
   const [startingCall, setStartingCall] = useState(false)
   const [reportingSafety, setReportingSafety] = useState(false)
   const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
+  const consultationMeta = orderInfo?.supportMeta.consultation ?? null
+  const consultationPaymentBlocked =
+    orderInfo?.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS' &&
+    !consultationMeta.paidAt
   const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(
     getEmptyConversationAccessState()
   )
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/orders')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/orders')
   }
+
+  const openConsultationOrderDetails = useCallback(() => {
+    router.push({
+      pathname: '/(tailor)/orders/[id]',
+      params: {
+        id: orderId,
+        returnTo: `/(tailor)/messages/${orderId}`,
+        historyChain: appendToHistory(historyChain, `/(tailor)/messages/${orderId}`),
+      },
+    })
+  }, [historyChain, orderId, router])
 
   const refreshConversationAccess = useCallback(async () => {
     if (!orderId) return
@@ -311,12 +333,12 @@ export default function TailorMessagesScreen() {
       const consultation = orderInfo?.stage === 'CONSULTATION'
       const room = consultation
         ? await createConsultationRoom(orderId, callType)
-        : await createOrderCallRoom(orderId, callType)
+        : await createOrderCallRoom(orderId, callType, 'tailor')
       if (!room?.url) {
         return
       }
       await fetchOrder()
-      await (consultation ? openConsultationCallUrl(room.url, 'tailor') : openDrapeCallUrl(room.url))
+      await (consultation ? openConsultationCallUrl(room.url, 'tailor') : openDrapeCallUrl(room.url, 'tailor'))
     } catch (error) {
       Alert.alert(
         'Call unavailable',
@@ -393,6 +415,17 @@ export default function TailorMessagesScreen() {
       showReadyMadeOrderCallOptions()
       return
     }
+    if (consultation && consultationPaymentBlocked) {
+      Alert.alert(
+        'Waiting on consultation fee',
+        'Consultation fee required before the room can open',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'View order', onPress: openConsultationOrderDetails },
+        ],
+      )
+      return
+    }
     Alert.alert(
       consultation ? 'Consultation call' : readyMade ? 'Order call' : 'Drapeon call',
       consultation
@@ -416,7 +449,7 @@ export default function TailorMessagesScreen() {
         },
       ]
     )
-  }, [orderInfo?.orderKind, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
+  }, [consultationPaymentBlocked, openConsultationOrderDetails, orderInfo?.orderKind, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
 
   const isConsultation = orderInfo?.stage === 'CONSULTATION'
   const callAvailable = isConsultation || isOrderCallStage(orderInfo?.stage)
@@ -499,11 +532,51 @@ export default function TailorMessagesScreen() {
     )
   }
 
+  const scheduledConsultation = orderInfo.stage === 'CONSULTATION' &&
+    consultationMeta?.status === 'SCHEDULED' &&
+    consultationMeta.scheduledStartAt
+  const scheduledOrderCall = orderInfo.orderKind === 'READY_MADE' &&
+    orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
+    orderInfo.supportMeta.orderCall.scheduledStartAt
+  const callLifecycleEvent = scheduledConsultation
+    ? {
+        kind: 'consultation' as const,
+        scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
+        timezone: consultationMeta?.timezone ?? null,
+        status: consultationMeta?.status ?? null,
+        paymentRequired: !!consultationMeta?.feeAmount && consultationMeta?.paymentTiming === 'BEFORE_CALL_STARTS',
+        paymentPaid: !!consultationMeta?.paidAt,
+        actionLoading: startingCall,
+        onJoinVideo: () => {
+          void startCall('video')
+        },
+        onReschedule: openConsultationOrderDetails,
+        rescheduleLabel: 'View order',
+        paymentActionLabel: 'View order',
+        onPressPayment: openConsultationOrderDetails,
+      }
+    : scheduledOrderCall
+      ? {
+          kind: 'ready-made' as const,
+          scheduledStartAt: orderInfo.supportMeta.orderCall?.scheduledStartAt,
+          timezone: orderInfo.supportMeta.orderCall?.timezone,
+          status: orderInfo.supportMeta.orderCall?.status,
+          reason: orderInfo.supportMeta.orderCall?.reason,
+          actionLoading: startingCall,
+          onJoinVideo: () => {
+            void startCall('video')
+          },
+          onReschedule: () => setShowOrderCallScheduler(true),
+          rescheduleLabel: 'Reschedule',
+        }
+      : null
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        enabled={Platform.OS === 'ios' || keyboard.visible}
       >
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack}>
@@ -528,7 +601,11 @@ export default function TailorMessagesScreen() {
             onPress={() =>
               router.push({
                 pathname: '/(tailor)/orders/[id]',
-                params: { id: orderId, returnTo: `/(tailor)/messages/${orderId}` },
+                params: {
+                  id: orderId,
+                  returnTo: `/(tailor)/messages/${orderId}`,
+                  historyChain: appendToHistory(historyChain, `/(tailor)/messages/${orderId}`),
+                },
               })
             }
           >
@@ -590,6 +667,11 @@ export default function TailorMessagesScreen() {
         callLoading={startingCall}
         onPressCall={showCallOptions}
         callAccessibilityLabel={isConsultation ? 'Open consultation call options' : 'Schedule or join order call'}
+        callBlocked={consultationPaymentBlocked}
+        callGateMessage={consultationPaymentBlocked && !callLifecycleEvent ? 'Consultation fee required before the room can open' : null}
+        callGateActionLabel={consultationPaymentBlocked ? 'View order' : null}
+        onPressCallGateAction={consultationPaymentBlocked ? openConsultationOrderDetails : undefined}
+        callLifecycleEvent={callLifecycleEvent}
         locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
         lockedMessage={
           conversationAccess.blocked

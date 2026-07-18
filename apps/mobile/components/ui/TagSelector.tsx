@@ -4,7 +4,7 @@
  * Handles both flat string[] and grouped TagGroup[] option sets.
  * Designed for large lists like specialties (~28 items) and languages (~36 items).
  */
-import React, { useState, useMemo } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
@@ -19,6 +19,8 @@ interface TagSelectorProps {
   maxSelectedMessage?: string
   /** Show a search/filter input at the top */
   searchable?: boolean
+  /** Hide the full list until the user types; show selected items as a removable inline list when idle */
+  searchOnly?: boolean
   label?: string
   required?: boolean
   hint?: string
@@ -28,6 +30,31 @@ function isGrouped(options: string[] | TagGroup[]): options is TagGroup[] {
   return options.length > 0 && typeof (options as TagGroup[])[0] === 'object'
 }
 
+function OptionRow({
+  item,
+  selected,
+  toggle,
+}: {
+  item: string
+  selected: boolean
+  toggle: (item: string) => void
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.optionRow}
+      onPress={() => toggle(item)}
+      activeOpacity={0.65}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+    >
+      <Text style={[styles.optionText, selected && styles.optionTextActive]}>{item}</Text>
+      <View style={[styles.optionCheck, selected && styles.optionCheckActive]}>
+        {selected ? <Feather name="check" size={14} color={Colors.textInverse} /> : null}
+      </View>
+    </TouchableOpacity>
+  )
+}
+
 export function TagSelector({
   options,
   selected,
@@ -35,6 +62,7 @@ export function TagSelector({
   maxSelected,
   maxSelectedMessage,
   searchable = false,
+  searchOnly = false,
   label,
   required,
   hint,
@@ -42,7 +70,7 @@ export function TagSelector({
   const [query, setQuery] = useState('')
   const [limitMessage, setLimitMessage] = useState('')
 
-  function toggle(item: string) {
+  const toggle = useCallback((item: string) => {
     if (!selected.includes(item) && maxSelected && selected.length >= maxSelected) {
       setLimitMessage(maxSelectedMessage ?? `Choose up to ${maxSelected}.`)
       return
@@ -53,7 +81,7 @@ export function TagSelector({
         ? selected.filter((s) => s !== item)
         : [...selected, item]
     )
-  }
+  }, [maxSelected, maxSelectedMessage, onChange, selected])
 
   const allItems = useMemo<string[]>(() => {
     if (isGrouped(options)) return options.flatMap((g) => g.items)
@@ -65,24 +93,6 @@ export function TagSelector({
     const q = query.toLowerCase()
     return allItems.filter((item) => item.toLowerCase().includes(q))
   }, [query, allItems])
-
-  function OptionRow({ item }: { item: string }) {
-    const active = selected.includes(item)
-    return (
-      <TouchableOpacity
-        style={styles.optionRow}
-        onPress={() => toggle(item)}
-        activeOpacity={0.65}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-      >
-        <Text style={[styles.optionText, active && styles.optionTextActive]}>{item}</Text>
-        <View style={[styles.optionCheck, active && styles.optionCheckActive]}>
-          {active ? <Feather name="check" size={14} color={Colors.textInverse} /> : null}
-        </View>
-      </TouchableOpacity>
-    )
-  }
 
   return (
     <View>
@@ -120,27 +130,69 @@ export function TagSelector({
         </View>
       )}
 
-      {/* Search results */}
-      {filteredItems ? (
-        <View style={styles.optionList}>
-          {filteredItems.length === 0
-            ? <Text style={styles.noResults}>No results for "{query}"</Text>
-            : filteredItems.map((item) => <OptionRow key={item} item={item} />)
-          }
+      {/* Selected items — shown in searchOnly mode when idle */}
+      {searchOnly && !query.trim() && selected.length > 0 && (
+        <View style={styles.selectedList}>
+          {selected.map((item, i) => (
+            <TouchableOpacity
+              key={item}
+              style={[styles.selectedRow, i === selected.length - 1 && styles.selectedRowLast]}
+              onPress={() => toggle(item)}
+              activeOpacity={0.65}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${item}`}
+            >
+              <Text style={styles.selectedRowText}>{item}</Text>
+              <Feather name="x" size={14} color={Colors.midGrey} />
+            </TouchableOpacity>
+          ))}
         </View>
-      ) : isGrouped(options) ? (
-        options.map((group) => (
-          <View key={group.label} style={styles.group}>
-            <Text style={styles.groupLabel}>{group.label}</Text>
-            <View style={styles.optionList}>
-              {group.items.map((item) => <OptionRow key={item} item={item} />)}
-            </View>
+      )}
+
+      {/* Full list — hidden in searchOnly mode until a query is typed */}
+      {(!searchOnly || !!query.trim()) && (
+        filteredItems ? (
+          <View style={styles.optionList}>
+            {filteredItems.length === 0
+              ? <Text style={styles.noResults}>No results for "{query}"</Text>
+              : filteredItems.map((item) => (
+                <OptionRow
+                  key={item}
+                  item={item}
+                  selected={selected.includes(item)}
+                  toggle={toggle}
+                />
+              ))
+            }
           </View>
-        ))
-      ) : (
-        <View style={styles.optionList}>
-          {(options as string[]).map((item) => <OptionRow key={item} item={item} />)}
-        </View>
+        ) : isGrouped(options) ? (
+          options.map((group) => (
+            <View key={group.label} style={styles.group}>
+              <Text style={styles.groupLabel}>{group.label}</Text>
+              <View style={styles.optionList}>
+                {group.items.map((item) => (
+                  <OptionRow
+                    key={item}
+                    item={item}
+                    selected={selected.includes(item)}
+                    toggle={toggle}
+                  />
+                ))}
+              </View>
+            </View>
+          ))
+        ) : (
+          <View style={styles.optionList}>
+            {(options as string[]).map((item) => (
+              <OptionRow
+                key={item}
+                item={item}
+                selected={selected.includes(item)}
+                toggle={toggle}
+              />
+            ))}
+          </View>
+        )
       )}
 
       {selected.length > 0 && (
@@ -198,6 +250,30 @@ const styles = StyleSheet.create({
   },
 
   group: { marginBottom: Spacing.lg },
+  selectedList: {
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    backgroundColor: Colors.white,
+    marginBottom: Spacing.xs,
+  },
+  selectedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    minHeight: 44,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+  },
+  selectedRowLast: { borderBottomWidth: 0 },
+  selectedRowText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
   groupLabel: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,

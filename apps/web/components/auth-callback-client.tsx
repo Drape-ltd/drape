@@ -178,7 +178,7 @@ export function AuthCallbackClient(): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)] px-5 py-8">
       <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-lg place-items-center">
-        <div className="w-full rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 text-center shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+        <div className="w-full rounded-[8px] border border-ink/8 bg-white/88 p-7 text-center shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon</p>
           <h1 className="mt-3 text-4xl text-ink">Opening your account</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">{message}</p>

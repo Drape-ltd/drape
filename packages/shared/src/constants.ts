@@ -25,6 +25,19 @@ export const CONTACTS = {
   ops: 'ops@drapeon.co',
 } as const
 
+export const WHATSAPP_SUPPORT = {
+  phoneDigits: '15128450347',
+  phoneE164: '+15128450347',
+  phoneDisplay: '(512) 845-0347',
+  url: 'https://wa.me/15128450347',
+} as const
+
+export function buildWhatsAppSupportUrl(message?: string): string {
+  const trimmed = message?.trim()
+  if (!trimmed) return WHATSAPP_SUPPORT.url
+  return `${WHATSAPP_SUPPORT.url}?text=${encodeURIComponent(trimmed)}`
+}
+
 // ─── Tier thresholds ─────────────────────────────────────────────────────────
 export const TIER_THRESHOLDS = {
   RISING: { minOrders: 10, minRating: 4.6 },

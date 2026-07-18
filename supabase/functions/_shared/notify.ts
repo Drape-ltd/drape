@@ -27,6 +27,9 @@ export interface PushPayload {
   body: string
   data?: Record<string, string>
   preferenceKey?: PushPreferenceKey
+  channelId?: string
+  sound?: string
+  interruptionLevel?: 'passive' | 'active' | 'timeSensitive' | 'critical'
 }
 
 export type PushPreferenceKey =
@@ -181,7 +184,9 @@ export async function sendPushToUser(
         title: notification.title,
         body: notification.body,
         data: notification.data ?? {},
-        sound: 'default',
+        sound: notification.sound ?? 'default',
+        channelId: notification.channelId,
+        interruptionLevel: notification.interruptionLevel,
         priority: 'high',
       }),
     })

@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { MaterialIcons } from '@expo/vector-icons'
 import { Colors } from '@/constants/theme'
+import { resetTo } from '@/lib/navigation'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { useAuth } from '@/lib/auth'
 import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
@@ -24,7 +25,7 @@ function useActiveOrderCount() {
 
   useRefreshOnFocus(() => {
     void refetch()
-  }, 15_000)
+  }, 0)
 
   return activeOrders.length
 }
@@ -95,7 +96,7 @@ export default function TailorTabLayout() {
               testID="tab-dashboard"
               accessibilityRole="button"
               accessibilityLabel="Dashboard tab"
-              onPress={() => router.navigate('/(tailor)')}
+              onPress={() => resetTo(router, '/(tailor)')}
             />
           ),
         }}
@@ -112,7 +113,7 @@ export default function TailorTabLayout() {
               testID="tab-clients"
               accessibilityRole="button"
               accessibilityLabel="Clients tab"
-              onPress={() => router.navigate('/(tailor)/clients')}
+              onPress={() => resetTo(router, '/(tailor)/clients')}
             />
           ),
         }}
@@ -131,7 +132,7 @@ export default function TailorTabLayout() {
               testID="tab-tailor-orders"
               accessibilityRole="button"
               accessibilityLabel={pendingCount > 0 ? `Orders tab, ${pendingCount} active` : 'Orders tab'}
-              onPress={() => router.navigate('/(tailor)/orders')}
+              onPress={() => resetTo(router, '/(tailor)/orders')}
             />
           ),
         }}
@@ -148,7 +149,7 @@ export default function TailorTabLayout() {
               testID="tab-shop"
               accessibilityRole="button"
               accessibilityLabel="Shop tab"
-              onPress={() => router.navigate('/(tailor)/shop')}
+              onPress={() => resetTo(router, '/(tailor)/shop')}
             />
           ),
         }}
@@ -165,7 +166,7 @@ export default function TailorTabLayout() {
               testID="tab-profile"
               accessibilityRole="button"
               accessibilityLabel="Profile tab"
-              onPress={() => router.navigate('/(tailor)/profile')}
+              onPress={() => resetTo(router, '/(tailor)/profile')}
             />
           ),
         }}

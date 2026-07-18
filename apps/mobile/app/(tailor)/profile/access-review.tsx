@@ -6,7 +6,7 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { useAuth } from '@/lib/auth'
 import { requestSellerAccessReview } from '@/lib/seller-access-review'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -168,6 +168,18 @@ export default function TailorAccessReviewScreen() {
           }}
         >
           <Text style={styles.secondaryBtnText}>Email support instead</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryBtn}
+          onPress={() => {
+            void openExternalUrl(
+              buildWhatsAppSupportUrl('Hi Drapeon, I need help with my tailor access review.'),
+              `Please message Drapeon in WhatsApp, or email ${CONTACTS.tailors} from your account email.`,
+            )
+          }}
+        >
+          <Text style={styles.secondaryBtnText}>Message WhatsApp support</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

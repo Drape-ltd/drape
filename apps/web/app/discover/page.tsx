@@ -71,13 +71,13 @@ export default function DiscoverPage(): React.JSX.Element {
             ['Save', 'Use wishlist to keep event ideas, preferred tailors, and pieces in one place.'],
             ['Start', 'Move into a custom brief or checkout with measurements, delivery expectations, and payment state attached.'],
           ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.35rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+            <div key={title} className="rounded-lg border border-ink/6 bg-white/82 p-5 shadow-sm">
               <div className="text-xl text-ink">{title}</div>
               <div className="mt-2 text-sm leading-7 text-ink/68">{body}</div>
             </div>
           ))}
         </div>
-        <div className="mt-10 rounded-[1.6rem] border border-ink/6 bg-ink p-6 text-white shadow-[0_22px_70px_rgba(22,28,24,0.12)]">
+        <div className="mt-10 rounded-[8px] border border-ink/6 bg-ink p-6 text-white shadow-[0_22px_70px_rgba(22,28,24,0.12)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/58">Access</p>
           <h3 className="mt-3 text-3xl text-white">Get early access while store access opens.</h3>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-white/70">

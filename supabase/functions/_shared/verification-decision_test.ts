@@ -1,4 +1,6 @@
 import {
+  INVALID_PROFILE_IMAGE_REJECTION_CODE,
+  PROFILE_IMAGE_REJECTION_REASON,
   performVerificationDecision,
   VERIFICATION_REJECTION_REASON_REQUIRED,
   type VerificationEmailMessage,
@@ -34,6 +36,7 @@ function createFakeSupabase(options?: {
     user_id: 'tailor-1',
     display_name: 'Amara Atelier',
     id_verification_status: options?.profileStatus ?? 'PENDING',
+    id_selfie_document_url: profileReady ? 'id-verification/tailor-1/selfie_123.jpg' : null,
     avatar_url: profileReady ? 'avatars/tailor-1/avatar.jpg' : null,
     specialty_tags: profileReady ? ['Agbada'] : [],
     portfolio_photo_urls: profileReady ? ['portfolio/tailor-1/look.jpg'] : [],
@@ -54,6 +57,10 @@ function createFakeSupabase(options?: {
     assigned_to: null,
     resolved_at: null,
   }
+  const portfolioItems = [
+    { image_url: 'portfolio/tailor-1/look-a.jpg' },
+    { image_url: 'portfolio/tailor-1/look-b.jpg' },
+  ]
 
   function builder(table: string) {
     const chain = {
@@ -75,7 +82,7 @@ function createFakeSupabase(options?: {
       },
       async maybeSingle() {
         if (table === 'tailor_profiles') return { data: profile, error: null }
-        if (table === 'users') return { data: user.email ? user : null, error: null }
+        if (table === 'users') return { data: user, error: null }
         if (table === 'ops_issues') return { data: issue, error: null }
         return { data: null, error: null }
       },
@@ -83,8 +90,9 @@ function createFakeSupabase(options?: {
         calls.push({ type: 'insert', table, payload })
         return { data: null, error: null }
       },
-      then(resolve: (value: { data: null; error: null }) => unknown, reject: (reason?: unknown) => unknown) {
-        return Promise.resolve({ data: null, error: null }).then(resolve, reject)
+      then(resolve: (value: { data: unknown; error: null }) => unknown, reject: (reason?: unknown) => unknown) {
+        const data = table === 'portfolio_items' ? portfolioItems : null
+        return Promise.resolve({ data, error: null }).then(resolve, reject)
       },
     }
     return chain
@@ -111,6 +119,7 @@ function createFakeSupabase(options?: {
 Deno.test('performVerificationDecision approves a pending tailor, resolves ops issue, audits, and sends email', async () => {
   const fake = createFakeSupabase()
   const messages: VerificationEmailMessage[] = []
+  const pushes: Array<{ userId: string; title: string; body: string }> = []
 
   const result = await performVerificationDecision(
     fake.client,
@@ -126,6 +135,10 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
       sendEmail: async (message) => {
         messages.push(message)
       },
+      sendPush: async (userId, message) => {
+        pushes.push({ userId, title: message.title, body: message.body })
+        return { status: 'SENT' }
+      },
       now: () => new Date('2026-05-01T12:00:00.000Z'),
     },
   )
@@ -136,7 +149,7 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
     {
       type: 'rpc',
       fn: 'ops_decide_verification',
-      args: { p_tailor_user_id: 'tailor-1', p_decision: 'APPROVE' },
+      args: { p_tailor_user_id: 'tailor-1', p_decision: 'APPROVE', p_reason: null },
     },
     'approval should call the canonical verification RPC',
   )
@@ -145,11 +158,64 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
     'approval should resolve the verification ops issue',
   )
   expect(
+    fake.calls.some((call) => (
+      call.type === 'update'
+      && call.table === 'tailor_profiles'
+      && JSON.stringify(call.payload?.portfolio_photo_urls) === JSON.stringify(['portfolio/tailor-1/look-a.jpg', 'portfolio/tailor-1/look-b.jpg'])
+    )),
+    'approval should resync public portfolio photo URLs from portfolio items',
+  )
+  expect(
     fake.calls.some((call) => call.type === 'insert' && call.table === 'audit_logs' && call.payload?.event === 'ops.verification_decision_logged'),
     'approval should write the audit trail',
   )
   expectEquals(messages.length, 1, 'approval should send one tailor email')
   expect(messages[0]!.subject.includes('verified'), 'approval email should confirm verification')
+  expectEquals(pushes.length, 1, 'approval should send one tailor push notification')
+  expectEquals(pushes[0]?.userId, 'tailor-1', 'approval push should target the tailor')
+  expect(pushes[0]!.title.includes('live'), 'approval push should tell the tailor they are live')
+})
+
+Deno.test('performVerificationDecision uses auth email fallback and records push status', async () => {
+  const fake = createFakeSupabase({ userEmail: null })
+  const messages: VerificationEmailMessage[] = []
+  const pushes: Array<{ userId: string; title: string; body: string }> = []
+
+  const result = await performVerificationDecision(
+    fake.client,
+    {
+      tailorUserId: 'tailor-1',
+      decision: 'APPROVE',
+      performedBy: 'trust@drapeon.co',
+      performedRole: 'TRUST',
+      source: 'ops_dashboard',
+    },
+    {
+      appUrl: 'https://drape.test',
+      lookupUserEmail: async (userId) => userId === 'tailor-1' ? 'auth-tailor@example.com' : null,
+      sendEmail: async (message) => {
+        messages.push(message)
+      },
+      sendPush: async (userId, message) => {
+        pushes.push({ userId, title: message.title, body: message.body })
+        return { status: 'SENT' }
+      },
+      now: () => new Date('2026-05-01T12:00:00.000Z'),
+    },
+  )
+
+  expect(result.ok, 'approval should succeed')
+  expectEquals(messages[0]?.to, 'auth-tailor@example.com', 'approval email should fall back to auth user email')
+  expectEquals(pushes.length, 1, 'approval should send push when email uses fallback')
+  expect(
+    fake.calls.some((call) => (
+      call.type === 'insert'
+      && call.table === 'audit_logs'
+      && call.payload?.event === 'ops.verification_decision_logged'
+      && (call.payload.payload as Record<string, unknown>)?.push_status === 'SENT'
+    )),
+    'audit log should include push status',
+  )
 })
 
 Deno.test('performVerificationDecision rejects with a reason, resolves ops issue, audits, and sends reason email', async () => {
@@ -182,7 +248,7 @@ Deno.test('performVerificationDecision rejects with a reason, resolves ops issue
     {
       type: 'rpc',
       fn: 'ops_decide_verification',
-      args: { p_tailor_user_id: 'tailor-1', p_decision: 'REJECT' },
+      args: { p_tailor_user_id: 'tailor-1', p_decision: 'REJECT', p_reason: reason },
     },
     'rejection should call the canonical verification RPC',
   )
@@ -192,6 +258,56 @@ Deno.test('performVerificationDecision rejects with a reason, resolves ops issue
   )
   expectEquals(messages.length, 1, 'rejection should send one tailor email')
   expect(messages[0]!.html.includes(reason), 'rejection email should include the ops reason')
+})
+
+Deno.test('performVerificationDecision stores structured invalid profile image rejection code with standard copy', async () => {
+  const fake = createFakeSupabase()
+  const messages: VerificationEmailMessage[] = []
+
+  const result = await performVerificationDecision(
+    fake.client,
+    {
+      tailorUserId: 'tailor-1',
+      decision: 'REJECT',
+      rejectionCode: INVALID_PROFILE_IMAGE_REJECTION_CODE,
+      performedBy: 'trust@drapeon.co',
+      performedRole: 'TRUST',
+      source: 'ops_dashboard',
+    },
+    {
+      appUrl: 'https://drape.test',
+      sendEmail: async (message) => {
+        messages.push(message)
+      },
+      now: () => new Date('2026-05-01T12:00:00.000Z'),
+    },
+  )
+
+  expect(result.ok, 'profile-image rejection should succeed with standard copy')
+  expectEquals(
+    fake.calls.find((call) => call.type === 'rpc'),
+    {
+      type: 'rpc',
+      fn: 'ops_decide_verification',
+      args: {
+        p_tailor_user_id: 'tailor-1',
+        p_decision: 'REJECT',
+        p_reason: PROFILE_IMAGE_REJECTION_REASON,
+        p_rejection_code: INVALID_PROFILE_IMAGE_REJECTION_CODE,
+      },
+    },
+    'profile-image rejection should call RPC with structured code',
+  )
+  expect(
+    fake.calls.some((call) =>
+      call.type === 'insert' &&
+      call.table === 'ops_audit_logs' &&
+      call.payload?.reason === PROFILE_IMAGE_REJECTION_REASON
+    ),
+    'profile-image rejection should write standard reason to issue audit history',
+  )
+  expectEquals(messages.length, 1, 'profile-image rejection should send one tailor email')
+  expect(messages[0]!.html.includes(PROFILE_IMAGE_REJECTION_REASON), 'email should include profile-image recovery copy')
 })
 
 Deno.test('performVerificationDecision refuses rejection without a reason before mutating anything', async () => {

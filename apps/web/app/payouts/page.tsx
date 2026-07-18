@@ -71,7 +71,7 @@ export default function PayoutsPage(): React.JSX.Element {
         />
         <div className="mt-10 grid gap-4">
           {payoutSteps.map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+            <div key={title} className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm">
               <h3 className="text-xl text-ink">{title}</h3>
               <p className="mt-2 text-sm leading-7 text-ink/68">{body}</p>
             </div>
@@ -85,7 +85,7 @@ export default function PayoutsPage(): React.JSX.Element {
           title="Use the payout inbox for money movement questions."
           description="This keeps payout-specific issues separate from general support and verification."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
             {payoutQuestions.map((item) => (
               <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">

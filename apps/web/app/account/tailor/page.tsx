@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import Link from 'next/link'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
@@ -43,13 +43,13 @@ export default function TailorAccountPage(): React.JSX.Element {
           title="Your craft, orders, clients, proof, and payout state live in one workspace."
           description="Use tailor access for incoming work, shop items, production proof, client context, earnings, payouts, and account readiness."
         />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+        <div className="mt-10 grid gap-5 lg:grid-cols-3 xl:grid-cols-4">
           {[
             ['Set up profile', 'Manage identity, specialties, portfolio, verification, availability, shop, and payout readiness.'],
             ['Work orders', 'Review briefs, send quotes, schedule consultations, request material advances, and update stages.'],
             ['Protect payout', 'Keep proof media, delivery context, disputes, refunds, and payout status clear before money moves.'],
           ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={title} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <h3 className="text-2xl text-ink">{title}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
             </div>
@@ -64,17 +64,26 @@ export default function TailorAccountPage(): React.JSX.Element {
           description="Tailor-side account issues should not get mixed into customer order support."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <Link href="/account/recovery" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/recovery" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Recovery</p>
             <h3 className="mt-4 text-2xl text-ink">Password and login help</h3>
           </Link>
-          <Link href="/account/payout" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/payout" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Payouts</p>
             <h3 className="mt-4 text-2xl text-ink">Payout readiness</h3>
           </Link>
-          <a href={`mailto:${CONTACTS.tailors}?subject=Tailor%20account%20help`} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <a href={`mailto:${CONTACTS.tailors}?subject=Tailor%20account%20help`} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>
             <h3 className="mt-4 break-words text-2xl text-ink">{CONTACTS.tailors}</h3>
+          </a>
+          <a
+            href={buildWhatsAppSupportUrl('Hi Drapeon, I need tailor account help.')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">WhatsApp</p>
+            <h3 className="mt-4 break-words text-2xl text-ink">Message Drapeon</h3>
           </a>
         </div>
       </section>

@@ -14,6 +14,7 @@ import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-r
 import { supabase } from '@/lib/supabase'
 import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
+import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
@@ -112,8 +113,7 @@ export default function TailorOrdersScreen() {
     void loadTailorProfile()
   }, [loadTailorProfile]))
 
-  // Refetch on focus, but keep a short freshness window so tab hops do not hammer Supabase.
-  useRefreshOnFocus(refetch, 30_000)
+  useRefreshOnFocus(refetch, 0)
 
   // Group: pending quotes first when on active tab; search on completed tab
   const sortedOrders = (() => {
@@ -151,7 +151,11 @@ export default function TailorOrdersScreen() {
 
     router.push({
       pathname: '/(tailor)/orders/[id]',
-      params: { id: item.id, returnTo: '/(tailor)/orders' },
+      params: {
+        id: item.id,
+        returnTo: '/(tailor)/orders',
+        historyChain: appendToHistory(undefined, '/(tailor)/orders'),
+      },
     })
   }
 
@@ -234,7 +238,7 @@ export default function TailorOrdersScreen() {
                 displayName={tailorProfile?.displayName ?? ''}
                 totalOrders={tailorProfile?.totalOrders ?? 0}
                 onSetupPress={() => router.navigate('/(tailor)/profile/setup')}
-                onPayoutPress={() => router.navigate({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/orders' } } as never)}
+                onPayoutPress={() => router.navigate({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/orders', historyChain: appendToHistory(undefined, '/(tailor)/orders') } } as never)}
                 onReviewProfilePress={() => router.navigate('/(tailor)/profile/edit')}
                 onCompletedPress={() => setTab('completed')}
               />
@@ -253,6 +257,7 @@ export default function TailorOrdersScreen() {
           renderItem={({ item }) => {
             const isPending = item.stage === 'PENDING_QUOTE'
             const isConsultation = item.stage === 'CONSULTATION'
+            const hint = orderHintForItem(item)
             return (
               <TouchableOpacity
                 style={[styles.card, isPending && styles.cardPending, isConsultation && styles.cardConsultation]}
@@ -262,7 +267,11 @@ export default function TailorOrdersScreen() {
                 accessibilityLabel={`Open order ${item.reference}`}
                 onPress={() => router.push({
                   pathname: '/(tailor)/orders/[id]',
-                  params: { id: item.id, returnTo: '/(tailor)/orders' },
+                  params: {
+                    id: item.id,
+                    returnTo: '/(tailor)/orders',
+                    historyChain: appendToHistory(undefined, '/(tailor)/orders'),
+                  },
                 })}
               >
                 <View style={styles.cardTop}>
@@ -289,9 +298,9 @@ export default function TailorOrdersScreen() {
                     </Text>
                   )}
                 </View>
-                {orderHintForItem(item) && (
+                {hint && (
                   <Text style={item.stage === 'IN_DISPUTE' ? styles.statusHintDispute : isPending ? styles.pendingCta : styles.statusHint}>
-                    {orderHintForItem(item)}
+                    {hint}
                   </Text>
                 )}
                 {isConsultation && (
@@ -431,27 +440,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: { paddingHorizontal: Spacing.lg, paddingTop: 8, paddingBottom: 6, gap: Spacing.xs },
   title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
-  guideCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: { padding: 2 },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,
@@ -473,8 +461,6 @@ const styles = StyleSheet.create({
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
   card: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,
@@ -532,7 +518,4 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
 
-  empty: { flex: 1, paddingTop: 80, alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.xl },
-  emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
-  emptySubtext: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
 })

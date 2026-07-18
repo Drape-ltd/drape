@@ -48,6 +48,7 @@ const manifest = {
   'group-member-action': ['user'],
   'handle-verification-decision': ['serviceRoleOrSignedLink'],
   'handoff-support-action': ['user'],
+  'identity-handoff-action': ['user'],
   'material-advance-action': ['mixedUserOrServiceRole'],
   'message-action': ['user'],
   'notify-ops-verification': ['user'],

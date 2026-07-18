@@ -31,7 +31,7 @@ const steps = [
 const privacy = [
   ['No video saved by default', 'Drapeon Vision is designed for measurement guidance only. Users review results before saving, and proof photos are only attached where the order flow requires evidence.'],
   ['Review before use', 'Measurements are never blindly applied. Users can retake a scan, edit manually, or switch to manual entry entirely.'],
-  ['Built for clothing fit', 'Drapeon Vision supports body measurements, fit preferences, and garment-specific measurement needs — not general biometric profiling.'],
+  ['Built for clothing fit', 'Drapeon Vision supports body measurements, optional fit notes, and garment-specific measurement needs — not general biometric profiling.'],
 ]
 
 export default function VisionPage(): React.JSX.Element {
@@ -62,7 +62,7 @@ export default function VisionPage(): React.JSX.Element {
       <section className="py-8">
         <div className="grid gap-4 lg:grid-cols-3">
           {steps.map(({ step, title, body }) => (
-            <div key={step} className="rounded-[1.5rem] border border-ink/6 bg-white/84 p-6 shadow-sm">
+            <div key={step} className="rounded-[8px] border border-ink/6 bg-white/84 p-6 shadow-sm">
               <span className="text-xs font-semibold tabular-nums text-needle/46">{step}</span>
               <h3 className="mt-2 text-xl text-ink">{title}</h3>
               <p className="mt-2 text-sm leading-6 text-ink/62">{body}</p>
@@ -84,7 +84,7 @@ export default function VisionPage(): React.JSX.Element {
               Read our privacy policy →
             </Link>
           </div>
-          <div className="overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+          <div className="overflow-hidden rounded-[8px] border border-ink/6 bg-white/84 shadow-sm">
             {privacy.map(([title, body], i) => (
               <div key={title} className={`px-5 py-5 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
                 <p className="font-semibold text-ink">{title}</p>
@@ -97,7 +97,7 @@ export default function VisionPage(): React.JSX.Element {
 
       {/* App CTA */}
       <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[1.6rem] border border-needle/14 bg-needle/6 p-8">
+        <div className="overflow-hidden rounded-[8px] border border-needle/14 bg-needle/6 p-8">
           <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Scan with the app</p>

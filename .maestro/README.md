@@ -66,6 +66,7 @@ maestro test --device <UDID> .maestro/flows/
 | `05-production-stages.yaml` | Tailor advances CONFIRMED → CUTTING → SEWING → FINISHING → SHIPPED |
 | `06-dispute-flow.yaml` | Customer opens dispute from SHIPPED order |
 | `07-sign-in-and-sign-out.yaml` | Session persistence after background, sign out |
+| `08-brief-fit-notes-return.yaml` | Customer opens fit notes from a brief and returns to the same measurements step |
 
 ## Notes
 

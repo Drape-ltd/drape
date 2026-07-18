@@ -1,6 +1,6 @@
 import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 export type ChoiceSheetOption = {
@@ -9,6 +9,7 @@ export type ChoiceSheetOption = {
   body?: string
   meta?: string
   icon?: keyof typeof Feather.glyphMap
+  materialIcon?: keyof typeof MaterialCommunityIcons.glyphMap
   disabled?: boolean
 }
 
@@ -96,13 +97,21 @@ export function ChoiceSheet({
                   accessibilityLabel={option.title}
                   accessibilityHint={option.body}
                 >
-                  {option.icon ? (
+                  {option.icon || option.materialIcon ? (
                     <View style={[styles.optionIcon, selected && styles.optionIconSelected]}>
-                      <Feather
-                        name={option.icon}
-                        size={18}
-                        color={selected ? Colors.needleGreen : Colors.inkLight}
-                      />
+                      {option.materialIcon ? (
+                        <MaterialCommunityIcons
+                          name={option.materialIcon}
+                          size={19}
+                          color={selected ? Colors.needleGreen : Colors.inkLight}
+                        />
+                      ) : option.icon ? (
+                        <Feather
+                          name={option.icon}
+                          size={18}
+                          color={selected ? Colors.needleGreen : Colors.inkLight}
+                        />
+                      ) : null}
                     </View>
                   ) : null}
                   <View style={styles.optionCopy}>
@@ -248,7 +257,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   doneButton: {
-    minHeight: 52,
+    minHeight: 56,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',

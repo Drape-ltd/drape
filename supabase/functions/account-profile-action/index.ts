@@ -8,19 +8,121 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { filterContactInfo, validateDisplayName } from '../../../packages/shared/src/contact-filter.ts'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '../../../packages/shared/src/phone.ts'
-import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
+import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { verifyReauthProof } from '../_shared/reauth-proof.ts'
 import { checkRateLimit, getClientIp, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
+import { getSmsProvider, hasSmsConfig, sendSmsDirect } from '../_shared/sms.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'account-profile-action'
+const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+
+type TailorAvatarReviewProfile = {
+  id?: string | null
+  display_name?: string | null
+  location?: string | null
+  specialty_tags?: string[] | null
+  avatar_url?: string | null
+  id_document_url?: string | null
+  id_selfie_document_url?: string | null
+  id_verification_status?: string | null
+  id_verification_metadata?: Record<string, unknown> | null
+  payout_account_verified?: boolean | null
+  payout_currency?: string | null
+}
+
+function readVerificationRejectionCode(metadata: Record<string, unknown> | null | undefined) {
+  if (!metadata || typeof metadata !== 'object') return null
+  const direct = metadata.rejection_code
+  if (typeof direct === 'string' && direct.trim().length > 0) return direct.trim().toUpperCase()
+  const nested = metadata.identity_verification
+  if (nested && typeof nested === 'object' && 'rejection_code' in nested) {
+    const nestedCode = (nested as Record<string, unknown>).rejection_code
+    if (typeof nestedCode === 'string' && nestedCode.trim().length > 0) return nestedCode.trim().toUpperCase()
+  }
+  return null
+}
+
+function hasLiveIdentitySelfie(profile: TailorAvatarReviewProfile) {
+  const path = typeof profile.id_selfie_document_url === 'string' && profile.id_selfie_document_url.trim().length > 0
+    ? profile.id_selfie_document_url.trim()
+    : typeof profile.id_document_url === 'string' && profile.id_document_url.trim().length > 0
+      ? profile.id_document_url.trim()
+      : ''
+  return path.includes('/selfie_') || path.includes('selfie_')
+}
+
+async function resubmitAvatarOnlyVerificationIfNeeded(
+  supabase: any,
+  callerId: string,
+  profile: TailorAvatarReviewProfile | null | undefined,
+  nextAvatarUrl: string,
+) {
+  if (!profile?.id) return false
+  const previousAvatarUrl = typeof profile.avatar_url === 'string' ? profile.avatar_url.trim() : ''
+  const avatarChanged = nextAvatarUrl.trim().length > 0 && nextAvatarUrl.trim() !== previousAvatarUrl
+  if (
+    profile.id_verification_status !== 'REJECTED' ||
+    readVerificationRejectionCode(profile.id_verification_metadata) !== INVALID_PROFILE_IMAGE_REJECTION_CODE ||
+    !avatarChanged ||
+    !hasLiveIdentitySelfie(profile)
+  ) {
+    return false
+  }
+
+  const now = new Date().toISOString()
+  const { error } = await supabase
+    .from('tailor_profiles')
+    .update({
+      id_verification_status: 'PENDING',
+      id_verification_submitted_at: now,
+      id_verification_rejection_reason: null,
+      id_verification_rejected_at: null,
+      id_verification_metadata: {},
+      updated_at: now,
+    })
+    .eq('user_id', callerId)
+
+  if (error) throw error
+
+  const payoutCurrency = normalizeAccountCurrency(profile.payout_currency)
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'TAILOR_VERIFICATION',
+    severity: 'HIGH',
+    source: FN,
+    actorId: callerId,
+    actorRole: 'TAILOR',
+    userId: callerId,
+    tailorProfileId: profile.id,
+    title: 'Tailor profile photo resubmitted',
+    description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. Existing live identity selfie is retained.`,
+    recommendedAction: 'Review the new public avatar against the retained live selfie ID evidence, then approve or reject with a structured reason.',
+    dedupeKey: `tailor-verification:${callerId}`,
+    metadata: {
+      display_name: profile.display_name ?? null,
+      location: profile.location ?? null,
+      specialty_tags: profile.specialty_tags ?? [],
+      id_document_url: profile.id_selfie_document_url ?? profile.id_document_url ?? null,
+      avatar_url: nextAvatarUrl,
+      rejection_code: INVALID_PROFILE_IMAGE_REJECTION_CODE,
+      payout_account_verified: profile.payout_account_verified ?? false,
+      payout_provider: payoutCurrency ? resolvePaymentProviderForCurrency(payoutCurrency) : null,
+      payout_currency: payoutCurrency ?? profile.payout_currency ?? null,
+    },
+  })
+
+  return true
+}
 const DUPLICATE_PHONE_MESSAGE = 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+const PHONE_OTP_TTL_MS = 10 * 60_000
+const PHONE_OTP_MAX_ATTEMPTS = 5
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -66,6 +168,19 @@ const BodySchema = z.discriminatedUnion('action', [
     displayName: z.string().trim().min(1).max(80),
     phone: z.string().trim().min(1).max(32),
     reauthProof: z.string().trim().min(20).optional(),
+  }),
+  z.object({
+    action: z.literal('check-phone-availability'),
+    phone: z.string().trim().min(1).max(32),
+  }),
+  z.object({
+    action: z.literal('send-phone-otp'),
+    phone: z.string().trim().min(1).max(32),
+  }),
+  z.object({
+    action: z.literal('verify-phone-otp'),
+    phone: z.string().trim().min(1).max(32),
+    code: z.string().trim().min(4).max(10),
   }),
   z.object({
     action: z.literal('update-avatar'),
@@ -119,6 +234,93 @@ function duplicatePhoneResponse(cors: HeadersInit) {
   }, 409, cors)
 }
 
+function getPhoneOtpMode() {
+  const mode = Deno.env.get('PHONE_OTP_MODE')?.trim().toLowerCase()
+  return mode === 'enforced' ? 'enforced' : 'bypass'
+}
+
+function isPhoneOtpEnforced() {
+  return getPhoneOtpMode() === 'enforced'
+}
+
+function buildOtpMessage(code: string) {
+  return `Your Drapeon verification code is ${code}. It expires in 10 minutes. Do not share this code.`
+}
+
+function generateOtpCode() {
+  const bytes = new Uint32Array(1)
+  crypto.getRandomValues(bytes)
+  return String(bytes[0] % 1_000_000).padStart(6, '0')
+}
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function getPhoneOtpSecret() {
+  return (
+    Deno.env.get('PHONE_OTP_SECRET') ??
+    Deno.env.get('AUTH_SMS_HOOK_SECRET') ??
+    Deno.env.get('SUPABASE_AUTH_HOOK_SECRET') ??
+    getServiceRoleKey()
+  ).trim()
+}
+
+async function hashPhoneOtp(input: { userId: string; phone: string; code: string }) {
+  return await sha256Hex(`${getPhoneOtpSecret()}:${input.userId}:${input.phone}:${input.code}`)
+}
+
+function timingSafeEqualHex(left: string, right: string) {
+  if (!left || !right) return false
+  const maxLength = Math.max(left.length, right.length)
+  let diff = left.length ^ right.length
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0)
+  }
+  return diff === 0
+}
+
+async function assertPhoneAvailable(
+  supabase: any,
+  phone: string,
+  actorId: string,
+) {
+  const { data: available, error } = await supabase.rpc('is_account_phone_available', {
+    p_raw_phone: phone,
+    p_actor_id: actorId,
+  })
+  if (!error) return { available: available === true, error: null }
+
+  log('warn', FN, 'phone_availability.rpc_failed_using_fallback', {
+    actor_id: actorId,
+    error: error.message,
+  })
+
+  const [userMatches, customerMatches] = await Promise.all([
+    supabase
+      .from('users')
+      .select('id')
+      .eq('phone', phone)
+      .neq('id', actorId)
+      .limit(1),
+    supabase
+      .from('customer_profiles')
+      .select('user_id')
+      .eq('phone', phone)
+      .neq('user_id', actorId)
+      .limit(1),
+  ])
+
+  const fallbackError = userMatches.error ?? customerMatches.error ?? null
+  if (fallbackError) return { available: false, error: fallbackError }
+
+  return {
+    available: (userMatches.data?.length ?? 0) === 0 && (customerMatches.data?.length ?? 0) === 0,
+    error: null,
+  }
+}
+
 function contactLeakMessage(field: string, value: string | string[] | null | undefined) {
   const entries = Array.isArray(value) ? value : [value]
   for (const entry of entries) {
@@ -154,14 +356,31 @@ Deno.serve(async (req) => {
     const body = parsed.data
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
+    const rateLimitMax =
+      body.action === 'check-phone-availability'
+        ? 45
+        : body.action === 'verify-phone-otp'
+          ? 15
+          : body.action === 'send-phone-otp'
+            ? 5
+            : body.action === 'update-avatar'
+              ? 20
+              : 5
     const allowed = await checkRateLimit(
       supabase,
       `${FN}:${body.action}:${caller.id}:${clientIp}`,
       3600,
-      body.action === 'update-avatar' ? 20 : 5,
+      rateLimitMax,
     )
     if (!allowed) {
-      const actorRole = body.action === 'bootstrap-web-onboarding' ? body.onboarding.role : body.role
+      const actorRole =
+        body.action === 'bootstrap-web-onboarding'
+          ? body.onboarding.role
+          : body.action === 'check-phone-availability' ||
+              body.action === 'send-phone-otp' ||
+              body.action === 'verify-phone-otp'
+            ? null
+            : body.role
       await audit(supabase, {
         event: 'rate_limit.exceeded',
         actor_id: caller.id,
@@ -343,6 +562,304 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, role: onboarding.role }, 200, cors)
     }
 
+    if (body.action === 'check-phone-availability') {
+      const normalizedPhone = normalizePhoneForStorage(body.phone)
+      const phoneIssue = validatePhoneForProfile(normalizedPhone)
+      if (phoneIssue) {
+        return jsonResponse({ error: phoneIssue, message: phoneIssue }, 400, cors)
+      }
+
+      const availability = await assertPhoneAvailable(supabase, normalizedPhone, caller.id)
+
+      if (availability.error) {
+        log('error', FN, 'phone_availability.lookup_failed', {
+          actor_id: caller.id,
+          error: availability.error.message,
+        })
+        return jsonResponse({
+          error: 'We could not check this phone number right now.',
+          message: 'We could not check this phone number right now.',
+        }, 500, cors)
+      }
+
+      if (!availability.available) {
+        return duplicatePhoneResponse(cors)
+      }
+
+      return jsonResponse({ ok: true, available: true }, 200, cors)
+    }
+
+    if (body.action === 'send-phone-otp') {
+      const normalizedPhone = normalizePhoneForStorage(body.phone)
+      const phoneIssue = validatePhoneForProfile(normalizedPhone)
+      if (phoneIssue) {
+        return jsonResponse({ error: phoneIssue, message: phoneIssue }, 400, cors)
+      }
+
+      const availability = await assertPhoneAvailable(supabase, normalizedPhone, caller.id)
+      if (availability.error) {
+        log('error', FN, 'phone_otp.availability_lookup_failed', {
+          actor_id: caller.id,
+          error: availability.error.message,
+        })
+        return jsonResponse({
+          error: 'We could not check this phone number right now.',
+          message: 'We could not check this phone number right now.',
+        }, 500, cors)
+      }
+
+      if (!availability.available) {
+        return duplicatePhoneResponse(cors)
+      }
+
+      const provider = getSmsProvider()
+      if (!isPhoneOtpEnforced()) {
+        await audit(supabase, {
+          event: 'account.phone_otp_bypassed',
+          actor_id: caller.id,
+          actor_role: null,
+          severity: 'info',
+          payload: {
+            function: FN,
+            mode: getPhoneOtpMode(),
+            provider,
+            masked_phone: maskPhone(normalizedPhone),
+          },
+        })
+        return jsonResponse({
+          ok: true,
+          verified: true,
+          bypassed: true,
+          message: 'Phone verification is bypassed for this environment.',
+        }, 200, cors)
+      }
+
+      if (!hasSmsConfig(provider)) {
+        log('error', FN, 'phone_otp.sms_not_configured', { provider })
+        return jsonResponse({
+          error: 'Phone verification is not available right now. Please try again later.',
+          message: 'Phone verification is not available right now. Please try again later.',
+        }, 503, cors)
+      }
+
+      const phoneRateLimitAllowed = await checkRateLimit(
+        supabase,
+        `${FN}:send-phone-otp:${normalizedPhone}:${clientIp}`,
+        3600,
+        5,
+      )
+      if (!phoneRateLimitAllowed) {
+        await audit(supabase, {
+          event: 'phone_otp.rate_limit_exceeded',
+          actor_id: caller.id,
+          actor_role: null,
+          severity: 'warn',
+          payload: { function: FN, masked_phone: maskPhone(normalizedPhone), ip: clientIp },
+        })
+        return rateLimitExceededResponse(cors)
+      }
+
+      const code = generateOtpCode()
+      const now = new Date().toISOString()
+      const expiresAt = new Date(Date.now() + PHONE_OTP_TTL_MS).toISOString()
+      const otpHash = await hashPhoneOtp({ userId: caller.id, phone: normalizedPhone, code })
+      const { error: verificationError } = await supabase
+        .from('account_phone_verifications')
+        .upsert(
+          {
+            user_id: caller.id,
+            phone: normalizedPhone,
+            otp_hash: otpHash,
+            attempts: 0,
+            expires_at: expiresAt,
+            verified_at: null,
+            consumed_at: null,
+            updated_at: now,
+          },
+          { onConflict: 'user_id,phone' },
+        )
+
+      if (verificationError) {
+        log('error', FN, 'phone_otp.record_upsert_failed', {
+          actor_id: caller.id,
+          error: verificationError.message,
+        })
+        return jsonResponse({
+          error: 'We could not start phone verification right now.',
+          message: 'We could not start phone verification right now.',
+        }, 500, cors)
+      }
+
+      try {
+        await sendSmsDirect(normalizedPhone, buildOtpMessage(code))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log('warn', FN, 'phone_otp.sms_send_failed', { actor_id: caller.id, provider, error: message })
+        return jsonResponse({
+          error: 'We could not send the verification code right now.',
+          message: 'We could not send the verification code right now.',
+        }, 502, cors)
+      }
+
+      await audit(supabase, {
+        event: 'account.phone_otp_sent',
+        actor_id: caller.id,
+        actor_role: null,
+        severity: 'info',
+        payload: { function: FN, provider, masked_phone: maskPhone(normalizedPhone), expires_at: expiresAt },
+      })
+
+      return jsonResponse({ ok: true, bypassed: false, expiresAt }, 200, cors)
+    }
+
+    if (body.action === 'verify-phone-otp') {
+      const normalizedPhone = normalizePhoneForStorage(body.phone)
+      const phoneIssue = validatePhoneForProfile(normalizedPhone)
+      if (phoneIssue) {
+        return jsonResponse({ error: phoneIssue, message: phoneIssue }, 400, cors)
+      }
+
+      const availability = await assertPhoneAvailable(supabase, normalizedPhone, caller.id)
+      if (availability.error) {
+        log('error', FN, 'phone_otp.verify_availability_lookup_failed', {
+          actor_id: caller.id,
+          error: availability.error.message,
+        })
+        return jsonResponse({
+          error: 'We could not check this phone number right now.',
+          message: 'We could not check this phone number right now.',
+        }, 500, cors)
+      }
+
+      if (!availability.available) {
+        return duplicatePhoneResponse(cors)
+      }
+
+      if (!isPhoneOtpEnforced()) {
+        return jsonResponse({
+          ok: true,
+          verified: true,
+          bypassed: true,
+          message: 'Phone verification is bypassed for this environment.',
+        }, 200, cors)
+      }
+
+      const code = body.code.replace(/\D/g, '')
+      if (code.length !== 6) {
+        return jsonResponse({
+          error: 'Enter the 6-digit verification code.',
+          message: 'Enter the 6-digit verification code.',
+        }, 400, cors)
+      }
+
+      const { data: verification, error: verificationLookupError } = await supabase
+        .from('account_phone_verifications')
+        .select('id, otp_hash, attempts, expires_at, verified_at, consumed_at')
+        .eq('user_id', caller.id)
+        .eq('phone', normalizedPhone)
+        .maybeSingle()
+
+      if (verificationLookupError) {
+        log('error', FN, 'phone_otp.lookup_failed', {
+          actor_id: caller.id,
+          error: verificationLookupError.message,
+        })
+        return jsonResponse({
+          error: 'We could not verify that code right now.',
+          message: 'We could not verify that code right now.',
+        }, 500, cors)
+      }
+
+      if (!verification) {
+        return jsonResponse({
+          error: 'Request a new verification code before continuing.',
+          message: 'Request a new verification code before continuing.',
+        }, 400, cors)
+      }
+
+      if (new Date(String(verification.expires_at)).getTime() <= Date.now()) {
+        return jsonResponse({
+          error: 'That code expired. Request a new one and try again.',
+          message: 'That code expired. Request a new one and try again.',
+        }, 400, cors)
+      }
+
+      const attempts = Number((verification as { attempts?: unknown }).attempts ?? 0)
+      if (attempts >= PHONE_OTP_MAX_ATTEMPTS) {
+        return jsonResponse({
+          error: 'Too many incorrect codes. Request a new verification code.',
+          message: 'Too many incorrect codes. Request a new verification code.',
+        }, 429, cors)
+      }
+
+      const expectedHash = String((verification as { otp_hash?: unknown }).otp_hash ?? '')
+      const submittedHash = await hashPhoneOtp({ userId: caller.id, phone: normalizedPhone, code })
+      if (!timingSafeEqualHex(expectedHash, submittedHash)) {
+        const nextAttempts = attempts + 1
+        await supabase
+          .from('account_phone_verifications')
+          .update({ attempts: nextAttempts, updated_at: new Date().toISOString() })
+          .eq('id', String((verification as { id?: unknown }).id ?? ''))
+        return jsonResponse({
+          error: nextAttempts >= PHONE_OTP_MAX_ATTEMPTS
+            ? 'Too many incorrect codes. Request a new verification code.'
+            : 'That code is not correct. Check the SMS and try again.',
+          message: nextAttempts >= PHONE_OTP_MAX_ATTEMPTS
+            ? 'Too many incorrect codes. Request a new verification code.'
+            : 'That code is not correct. Check the SMS and try again.',
+        }, nextAttempts >= PHONE_OTP_MAX_ATTEMPTS ? 429 : 400, cors)
+      }
+
+      const now = new Date().toISOString()
+      await supabase
+        .from('account_phone_verifications')
+        .update({ verified_at: now, consumed_at: now, updated_at: now })
+        .eq('id', String((verification as { id?: unknown }).id ?? ''))
+
+      const { data: authUserData } = await supabase.auth.admin.getUserById(caller.id)
+      const metadata = readAuthMetadata(authUserData?.user?.user_metadata)
+      await supabase.auth.admin.updateUserById(caller.id, {
+        user_metadata: {
+          ...metadata,
+          phone_verified_at: now,
+          verified_phone: normalizedPhone,
+        },
+      }).catch((error) => {
+        log('warn', FN, 'phone_otp.auth_metadata_update_failed', {
+          actor_id: caller.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+
+      await Promise.all([
+        supabase
+          .from('users')
+          .update({ phone_verified_at: now, updated_at: now })
+          .eq('id', caller.id)
+          .eq('phone', normalizedPhone),
+        supabase
+          .from('customer_profiles')
+          .update({ phone_verified_at: now, updated_at: now })
+          .eq('user_id', caller.id)
+          .eq('phone', normalizedPhone),
+      ]).catch((error) => {
+        log('warn', FN, 'phone_otp.profile_verified_at_update_failed', {
+          actor_id: caller.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+
+      await audit(supabase, {
+        event: 'account.phone_verified',
+        actor_id: caller.id,
+        actor_role: null,
+        severity: 'info',
+        payload: { function: FN, masked_phone: maskPhone(normalizedPhone) },
+      })
+
+      return jsonResponse({ ok: true, verified: true, bypassed: false, verifiedAt: now }, 200, cors)
+    }
+
     if (body.action === 'update-display-name' || body.action === 'update-currency') {
       const { data: userRow, error: userLookupError } = await supabase
         .from('users')
@@ -504,7 +1021,7 @@ Deno.serve(async (req) => {
       } else {
         const { data: tailorProfile, error: tailorLookupError } = await supabase
           .from('tailor_profiles')
-          .select('id')
+          .select('id, display_name, location, specialty_tags, avatar_url, id_document_url, id_selfie_document_url, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency')
           .eq('user_id', caller.id)
           .maybeSingle()
 
@@ -530,6 +1047,19 @@ Deno.serve(async (req) => {
           return jsonResponse({
             error: 'We could not update your profile photo right now.',
             message: 'We could not update your profile photo right now.',
+          }, 500, cors)
+        }
+
+        try {
+          await resubmitAvatarOnlyVerificationIfNeeded(supabase, caller.id, tailorProfile, body.avatarUrl)
+        } catch (resubmitError) {
+          log('error', FN, 'tailor_avatar.resubmit_failed', {
+            actor_id: caller.id,
+            error: resubmitError instanceof Error ? resubmitError.message : String(resubmitError),
+          })
+          return jsonResponse({
+            error: 'Profile photo saved, but we could not resubmit verification. Please try again.',
+            message: 'Profile photo saved, but we could not resubmit verification. Please try again.',
           }, 500, cors)
         }
       }

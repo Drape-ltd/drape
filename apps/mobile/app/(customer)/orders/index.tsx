@@ -7,6 +7,7 @@ import { Button, FeatureStateCard, StateCard } from '@/components/ui'
 import { customerOrderHint } from '@/lib/order-flow'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
+import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
@@ -95,8 +96,7 @@ export default function OrdersListScreen() {
         })
       : orders
 
-  // Refetch on focus, but keep a short freshness window so tab hops do not hammer Supabase.
-  useRefreshOnFocus(refetch, 30_000)
+  useRefreshOnFocus(refetch, 0)
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -166,77 +166,83 @@ export default function OrdersListScreen() {
               onViewCompleted={() => setTab('completed')}
             />
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              testID={`order-card-${item.stage}`}
-              activeOpacity={0.84}
-              accessibilityRole="button"
-              accessibilityLabel={`Open order ${item.reference}`}
-              onPress={() =>
-                router.push({
-                  pathname: '/(customer)/orders/[id]',
-                  params: { id: item.id, tab },
-                })
-              }
-            >
-              <View style={styles.cardTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.garment}>{item.garmentType}</Text>
-                  <Text style={styles.tailor}>{item.tailorName}</Text>
-                </View>
-                <View
-                  style={[
-                    styles.stagePill,
-                    { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' },
-                  ]}
-                >
-                  <Text
-                    style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}
+          renderItem={({ item }) => {
+            const showReviewNudge = ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(item.stage) && !item.hasReview
+            const hint = customerOrderHint(item.stage, item.orderKind)
+            return (
+              <TouchableOpacity
+                style={styles.card}
+                testID={`order-card-${item.stage}`}
+                activeOpacity={0.84}
+                accessibilityRole="button"
+                accessibilityLabel={`Open order ${item.reference}`}
+                onPress={() =>
+                  router.push({
+                    pathname: '/(customer)/orders/[id]',
+                    params: {
+                      id: item.id,
+                      tab,
+                      historyChain: appendToHistory(undefined, `/(customer)/orders?tab=${tab}`),
+                    },
+                  })
+                }
+              >
+                <View style={styles.cardTop}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.garment}>{item.garmentType}</Text>
+                    <Text style={styles.tailor}>{item.tailorName}</Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.stagePill,
+                      { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' },
+                    ]}
                   >
-                    {customerOrderStageLabel(item.stage, item.orderKind)}
-                  </Text>
+                    <Text
+                      style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}
+                    >
+                      {customerOrderStageLabel(item.stage, item.orderKind)}
+                    </Text>
+                  </View>
                 </View>
-              </View>
 
-              <View style={styles.cardMeta}>
-                <Text style={styles.ref}>#{item.reference}</Text>
-                {item.estimatedDate && (
-                  <Text style={styles.eta}>
-                    Est.{' '}
-                    {new Date(item.estimatedDate).toLocaleDateString('en-GB', {
-                      day: 'numeric',
-                      month: 'short',
-                    })}
-                  </Text>
-                )}
-                {item.quotedAmount && (
-                  <Text style={styles.amount}>
-                    {formatAmount(
-                      item.quotedAmount,
-                      item.quotedCurrency as CurrencyCode,
-                      item.quotedCurrency as CurrencyCode,
-                      STATIC_FALLBACK_RATES
-                    )}
-                  </Text>
-                )}
-              </View>
-              {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(item.stage) && !item.hasReview && (
-                <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>
-                    {item.stage === 'COMPLETE' ? '★  Leave a review' : '★  Finish and review'}
-                  </Text>
+                <View style={styles.cardMeta}>
+                  <Text style={styles.ref}>#{item.reference}</Text>
+                  {item.estimatedDate && (
+                    <Text style={styles.eta}>
+                      Est.{' '}
+                      {new Date(item.estimatedDate).toLocaleDateString('en-GB', {
+                        day: 'numeric',
+                        month: 'short',
+                      })}
+                    </Text>
+                  )}
+                  {item.quotedAmount && (
+                    <Text style={styles.amount}>
+                      {formatAmount(
+                        item.quotedAmount,
+                        item.quotedCurrency as CurrencyCode,
+                        item.quotedCurrency as CurrencyCode,
+                        STATIC_FALLBACK_RATES
+                      )}
+                    </Text>
+                  )}
                 </View>
-              )}
-              {customerOrderHint(item.stage, item.orderKind) && (
-                <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>
-                    {customerOrderHint(item.stage, item.orderKind)}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          )}
+                {showReviewNudge && (
+                  <View style={styles.reviewNudge}>
+                    <Text style={styles.reviewNudgeText}>
+                      {item.stage === 'COMPLETE' ? '★  Leave a review' : '★  Finish and review'}
+                    </Text>
+                  </View>
+                )}
+                {hint && !showReviewNudge && (
+                  <View style={styles.reviewNudge}>
+                    <Text style={styles.reviewNudgeText}>{hint}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )
+          }}
         />
       )}
     </SafeAreaView>
@@ -311,27 +317,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     fontFamily: Fonts.display,
   },
-  guideCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: { padding: 2 },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   tabs: {
     flexDirection: 'row',
     backgroundColor: Colors.boneDeep,
@@ -353,8 +338,6 @@ const styles = StyleSheet.create({
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
   card: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,

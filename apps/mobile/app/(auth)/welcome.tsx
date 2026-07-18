@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { View, Text, StyleSheet, Alert, Linking, ScrollView, TouchableOpacity, useColorScheme } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
+import { Feather } from '@expo/vector-icons'
 import { colors, darkColors } from '@drape/shared/design-system'
 import { Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
@@ -79,31 +79,28 @@ export default function WelcomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView
         bounces={false}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.brandBlock}>
-          <Text style={styles.wordmark}>Drapeon</Text>
-        </View>
+        {/* Wordmark — small anchor mark at top */}
+        <Text style={styles.wordmark}>Drapeon</Text>
 
+        {/* Hero — fills available vertical space */}
         <View style={styles.hero}>
-          <Text style={styles.tagline} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.86}>
+          <Text style={styles.tagline}>
             Your tailor.{'\n'}Anywhere in the world.
           </Text>
           <Text style={styles.sub}>
             Find a tailor, place your order, and watch it come to life. Every stitch tracked. Every payment protected.
           </Text>
-
-          <View style={styles.promiseRow}>
-            <PromiseItem icon="account" label="Find your tailor" styles={styles} palette={palette} />
-            <PromiseItem icon="tape-measure" label="Your measurements" styles={styles} palette={palette} />
-            <PromiseItem icon="shield-check" label="Protected payment" styles={styles} palette={palette} />
-          </View>
         </View>
 
+        <View style={styles.divider} />
+
+        {/* Actions */}
         <View style={styles.actions}>
           <RoleButton
             title="Continue as customer"
@@ -134,18 +131,14 @@ export default function WelcomeScreen() {
             By continuing you agree to our{' '}
             <Text
               style={styles.link}
-              onPress={() => {
-                void openLegal('https://drapeon.co/terms')
-              }}
+              onPress={() => { void openLegal('https://drapeon.co/terms') }}
             >
               Terms
             </Text>{' '}
             and{' '}
             <Text
               style={styles.link}
-              onPress={() => {
-                void openLegal('https://drapeon.co/privacy')
-              }}
+              onPress={() => { void openLegal('https://drapeon.co/privacy') }}
             >
               Privacy Policy
             </Text>
@@ -154,29 +147,6 @@ export default function WelcomeScreen() {
         </View>
       </ScrollView>
     </SafeAreaView>
-  )
-}
-
-function PromiseItem({
-  icon,
-  label,
-  styles,
-  palette,
-}: {
-  icon: keyof typeof MaterialCommunityIcons.glyphMap
-  label: string
-  styles: ReturnType<typeof makeStyles>
-  palette: WelcomePalette
-}) {
-  return (
-    <View style={styles.promiseItem}>
-      <View style={styles.promiseIcon}>
-        <MaterialCommunityIcons name={icon} size={18} color={palette.green} />
-      </View>
-      <Text style={styles.promiseLabel} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>
-        {label}
-      </Text>
-    </View>
   )
 }
 
@@ -203,9 +173,7 @@ function RoleButton({
       onPress={onPress}
       style={[styles.roleButton, primary ? styles.roleButtonPrimary : styles.roleButtonSecondary]}
     >
-      <View style={styles.roleCopy}>
-        <Text style={[styles.roleTitle, primary && styles.roleTitlePrimary]}>{title}</Text>
-      </View>
+      <Text style={[styles.roleTitle, primary && styles.roleTitlePrimary]}>{title}</Text>
       <Feather name="arrow-right" size={18} color={primary ? palette.inverse : palette.green} />
     </TouchableOpacity>
   )
@@ -213,139 +181,105 @@ function RoleButton({
 
 function makeStyles(palette: WelcomePalette) {
   return StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: palette.background,
-  },
-  content: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    gap: 28,
-    padding: Spacing.xl,
-    paddingBottom: Spacing.xxl,
-  },
-  brandBlock: {
-    paddingTop: 2,
-  },
-  wordmark: {
-    color: palette.green,
-    fontFamily: Fonts.display,
-    fontSize: 44,
-    fontWeight: FontWeight.bold,
-    letterSpacing: 0,
-    lineHeight: 50,
-  },
-  hero: {
-    gap: 16,
-  },
-  tagline: {
-    color: palette.ink,
-    fontFamily: Fonts.display,
-    fontSize: 42,
-    fontWeight: FontWeight.semibold,
-    letterSpacing: 0,
-    lineHeight: 48,
-  },
-  sub: {
-    color: palette.muted,
-    fontFamily: Fonts.body,
-    fontSize: 17,
-    lineHeight: 26,
-  },
-  promiseRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    marginTop: 8,
-  },
-  promiseItem: {
-    alignItems: 'center',
-    backgroundColor: palette.surface,
-    borderColor: palette.line,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    flex: 1,
-    gap: 7,
-    justifyContent: 'center',
-    minHeight: 88,
-    paddingHorizontal: 4,
-  },
-  promiseIcon: {
-    alignItems: 'center',
-    backgroundColor: palette.greenSoft,
-    borderRadius: Radius.full,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
-  promiseLabel: {
-    color: palette.ink,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: 12,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 15,
-    textAlign: 'center',
-    width: '100%',
-  },
-  actions: {
-    gap: Spacing.md,
-    paddingTop: 4,
-  },
-  roleButton: {
-    alignItems: 'center',
-    borderRadius: Radius.xl,
-    flexDirection: 'row',
-    gap: Spacing.md,
-    justifyContent: 'space-between',
-    minHeight: 62,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-  },
-  roleButtonPrimary: {
-    backgroundColor: palette.green,
-  },
-  roleButtonSecondary: {
-    backgroundColor: palette.secondaryButton,
-    borderColor: palette.line,
-    borderWidth: 1,
-  },
-  roleCopy: {
-    flex: 1,
-  },
-  roleTitle: {
-    color: palette.ink,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: 16,
-    fontWeight: FontWeight.semibold,
-  },
-  roleTitlePrimary: {
-    color: palette.inverse,
-  },
-  signInButton: {
-    alignItems: 'center',
-    backgroundColor: palette.surface,
-    borderColor: palette.line,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    justifyContent: 'center',
-    minHeight: 56,
-  },
-  signInLabel: {
-    color: palette.greenDark,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-  },
-  legal: {
-    color: palette.muted,
-    fontFamily: Fonts.body,
-    fontSize: FontSize.xs,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  link: {
-    color: palette.greenDark,
-    fontFamily: Fonts.bodyMedium,
-    fontWeight: FontWeight.medium,
-  },
-})
+    container: {
+      flex: 1,
+      backgroundColor: palette.background,
+    },
+    content: {
+      flexGrow: 1,
+      padding: Spacing.xl,
+      paddingBottom: Spacing.xxl,
+    },
+    wordmark: {
+      color: palette.green,
+      fontFamily: Fonts.display,
+      fontSize: 28,
+      fontWeight: FontWeight.semibold,
+      letterSpacing: 0,
+      lineHeight: 34,
+      paddingTop: Spacing.xs,
+    },
+    hero: {
+      flex: 1,
+      justifyContent: 'center',
+      gap: Spacing.lg,
+      paddingVertical: Spacing.xxl,
+    },
+    tagline: {
+      color: palette.ink,
+      fontFamily: Fonts.display,
+      fontSize: 44,
+      fontWeight: FontWeight.bold,
+      letterSpacing: -0.5,
+      lineHeight: 54,
+    },
+    sub: {
+      color: palette.muted,
+      fontFamily: Fonts.body,
+      fontSize: 16,
+      lineHeight: 25,
+      maxWidth: 320,
+    },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: palette.line,
+      marginBottom: Spacing.xl,
+    },
+    actions: {
+      gap: Spacing.md,
+    },
+    roleButton: {
+      alignItems: 'center',
+      borderRadius: Radius.xl,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      minHeight: 62,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+    },
+    roleButtonPrimary: {
+      backgroundColor: palette.green,
+    },
+    roleButtonSecondary: {
+      backgroundColor: palette.secondaryButton,
+      borderColor: palette.line,
+      borderWidth: 1,
+    },
+    roleTitle: {
+      color: palette.ink,
+      fontFamily: Fonts.bodySemiBold,
+      fontSize: FontSize.md,
+      fontWeight: FontWeight.semibold,
+    },
+    roleTitlePrimary: {
+      color: palette.inverse,
+    },
+    signInButton: {
+      alignItems: 'center',
+      backgroundColor: palette.surface,
+      borderColor: palette.line,
+      borderRadius: Radius.xl,
+      borderWidth: 1,
+      justifyContent: 'center',
+      minHeight: 56,
+    },
+    signInLabel: {
+      color: palette.greenDark,
+      fontFamily: Fonts.bodySemiBold,
+      fontSize: FontSize.md,
+      fontWeight: FontWeight.semibold,
+    },
+    legal: {
+      color: palette.muted,
+      fontFamily: Fonts.body,
+      fontSize: FontSize.xs,
+      lineHeight: 18,
+      textAlign: 'center',
+    },
+    link: {
+      color: palette.greenDark,
+      fontFamily: Fonts.bodyMedium,
+      fontWeight: FontWeight.medium,
+    },
+  })
 }

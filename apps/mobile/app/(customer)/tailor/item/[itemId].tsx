@@ -8,7 +8,7 @@ import { buildCustomerStockSignal, isReadyMadeBuyableForCustomer, quantityForSiz
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
-import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import {
   formatFitRange,
@@ -17,10 +17,11 @@ import {
   READY_MADE_FIT_FIELDS,
   recommendReadyMadeSize,
 } from '@/lib/ready-made-fit'
-import { Button, RemoteImage, SaveToWishlistSheet } from '@/components/ui'
+import { Button, PortfolioVideoPreview, RemoteImage, SaveToWishlistSheet } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { hapticLight } from '@/lib/haptics'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
+import { isVideoMediaUrl } from '@drape/shared/media-policy'
 
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
@@ -32,7 +33,11 @@ function createDraftSessionId() {
 }
 
 export default function SellerItemDetailScreen() {
-  const { itemId, returnTo } = useLocalSearchParams<{ itemId: string; returnTo?: string }>()
+  const { itemId, returnTo, historyChain } = useLocalSearchParams<{
+    itemId: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -84,15 +89,15 @@ export default function SellerItemDetailScreen() {
         stockStatus: item.stockStatus,
         inventoryQuantity: item.inventoryQuantity,
         isLive: item.sellerLive,
-      }) && item.sellerAvailability !== 'FULLY_BOOKED'
+      }) && !item.shopPaused
     : false
-  const sellerUnavailable = item ? item.sellerAvailability === 'FULLY_BOOKED' || !item.sellerLive : false
+  const sellerUnavailable = item ? item.shopPaused || !item.sellerLive : false
 
   function goBack() {
-    goBackOrReturnToIfNeeded(
+    goBackOrReturnTo(
       router,
       navigation,
-      returnTo,
+      pickSafeReturnTo(historyChain, returnTo),
       item?.tailorProfileId ? `/(customer)/tailor/${item.tailorProfileId}` : '/(customer)',
     )
   }
@@ -116,7 +121,11 @@ export default function SellerItemDetailScreen() {
 
       router.push({
         pathname: '/(customer)/messages/[orderId]',
-        params: { orderId: data.orderId, returnTo: `/(customer)/tailor/item/${item.id}` },
+        params: {
+          orderId: data.orderId,
+          returnTo: `/(customer)/tailor/item/${item.id}`,
+          historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
+        },
       })
     } catch (error) {
       Alert.alert(
@@ -189,7 +198,7 @@ export default function SellerItemDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack} style={styles.headerBackButton}>
@@ -221,7 +230,14 @@ export default function SellerItemDetailScreen() {
         ) : (
           <>
             <View style={styles.mediaCard}>
-              {item.photoUrls[imageIndex] ? (
+              {item.photoUrls[imageIndex] && isVideoMediaUrl(item.photoUrls[imageIndex]) ? (
+                <PortfolioVideoPreview
+                  uri={item.photoUrls[imageIndex]}
+                  style={styles.heroImage}
+                  contentFit="contain"
+                  nativeControls
+                />
+              ) : item.photoUrls[imageIndex] ? (
                 <RemoteImage
                   uri={item.photoUrls[imageIndex]}
                   bucket="seller-item-media"
@@ -248,19 +264,28 @@ export default function SellerItemDetailScreen() {
                       onPress={() => setImageIndex(index)}
                       style={[styles.thumbWrap, index === imageIndex && styles.thumbWrapActive]}
                     >
-                      <RemoteImage
-                        uri={url}
-                        bucket="seller-item-media"
-                        style={styles.thumb}
-                        contentFit="contain"
-                        transition={120}
-                        surface="customer_ready_made_detail_thumb"
-                        fallback={(
-                          <View style={[styles.thumb, styles.placeholder]}>
-                            <Feather name="shopping-bag" size={16} color={Colors.midGrey} />
+                      {isVideoMediaUrl(url) ? (
+                        <View style={styles.videoThumbWrap}>
+                          <PortfolioVideoPreview uri={url} style={styles.thumb} contentFit="contain" autoplay={index === imageIndex} />
+                          <View style={styles.videoThumbBadge}>
+                            <Feather name="play" size={11} color={Colors.textInverse} />
                           </View>
-                        )}
-                      />
+                        </View>
+                      ) : (
+                        <RemoteImage
+                          uri={url}
+                          bucket="seller-item-media"
+                          style={styles.thumb}
+                          contentFit="contain"
+                          transition={120}
+                          surface="customer_ready_made_detail_thumb"
+                          fallback={(
+                            <View style={[styles.thumb, styles.placeholder]}>
+                              <Feather name="shopping-bag" size={16} color={Colors.midGrey} />
+                            </View>
+                          )}
+                        />
+                      )}
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -285,6 +310,13 @@ export default function SellerItemDetailScreen() {
                   <Feather name="pause-circle" size={16} color={Colors.error} />
                   <Text style={styles.unavailableNoticeText}>
                     {item.sellerName} is not accepting new orders right now. Save this item and check back later.
+                  </Text>
+                </View>
+              ) : !canBuy && item.sizes.length > 0 && inStockSizes.length === 0 ? (
+                <View style={styles.unavailableNotice}>
+                  <Feather name="x-circle" size={16} color={Colors.error} />
+                  <Text style={styles.unavailableNoticeText}>
+                    All sizes are currently sold out. Save this item to be notified when stock returns.
                   </Text>
                 </View>
               ) : null}
@@ -324,7 +356,15 @@ export default function SellerItemDetailScreen() {
                   <Button
                     label="Add measurements"
                     variant="secondary"
-                    onPress={() => router.push('/(customer)/profile/measurements')}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/(customer)/profile/measurements',
+                        params: {
+                          returnTo: `/(customer)/tailor/item/${item.id}`,
+                          historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
+                        },
+                      })
+                    }
                   />
                 </View>
               ) : null}
@@ -434,6 +474,7 @@ export default function SellerItemDetailScreen() {
                 params: {
                   itemId: item.id,
                   returnTo: `/(customer)/tailor/item/${item.id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
                 },
               })}
             />
@@ -448,6 +489,7 @@ export default function SellerItemDetailScreen() {
               params: {
                 tailorId: item.tailorProfileId,
                 returnTo: `/(customer)/tailor/${item.tailorProfileId}`,
+                historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
                 draftSession: createDraftSessionId(),
                 freshStart: '1',
               },
@@ -580,6 +622,18 @@ const styles = StyleSheet.create({
   thumbWrap: { width: 60, height: 60, borderRadius: Radius.sm, overflow: 'hidden', borderWidth: 1.5, borderColor: 'transparent' },
   thumbWrapActive: { borderColor: PRIMARY_GREEN },
   thumb: { width: '100%', height: '100%', backgroundColor: Colors.boneDeep },
+  videoThumbWrap: { width: '100%', height: '100%', position: 'relative' },
+  videoThumbBadge: {
+    position: 'absolute',
+    left: 5,
+    bottom: 5,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(17,17,17,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   sellerName: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   title: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: Fonts.display },
@@ -660,9 +714,6 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 12, color: Colors.inkLight, fontWeight: FontWeight.medium },
   chipTextMuted: { color: MUTED_GREY },
   description: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
-  bestUseEyebrow: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  bestUseText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   policyWrap: { gap: 8 },
   policyRow: { gap: 4 },
   policyTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },

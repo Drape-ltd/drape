@@ -164,6 +164,41 @@ describe('deriveTailorSetupProgress', () => {
     expect(progress.fieldErrors.priceRange).toBe('Set a valid USD price range up to 100,000.')
   })
 
+  it('requires tailor shops to show both portfolio work and a ready-made item', () => {
+    const missingReadyMade = deriveTailorSetupProgress({
+      ...COMPLETE_SETUP,
+      sellerType: 'TAILOR_SHOP',
+      portfolioItemCount: 1,
+      readyMadeItemCount: 0,
+    })
+
+    expect(missingReadyMade.firstIncompleteStep).toBe(2)
+    expect(missingReadyMade.fieldErrors.portfolio).toBe(
+      TAILOR_SETUP_VALIDATION.HYBRID_PROOF_REQUIRED_MESSAGE,
+    )
+
+    const missingPortfolio = deriveTailorSetupProgress({
+      ...COMPLETE_SETUP,
+      sellerType: 'TAILOR_SHOP',
+      portfolioItemCount: 0,
+      readyMadeItemCount: 1,
+    })
+
+    expect(missingPortfolio.firstIncompleteStep).toBe(2)
+    expect(missingPortfolio.fieldErrors.portfolio).toBe(
+      TAILOR_SETUP_VALIDATION.HYBRID_PROOF_REQUIRED_MESSAGE,
+    )
+
+    const completeHybrid = deriveTailorSetupProgress({
+      ...COMPLETE_SETUP,
+      sellerType: 'TAILOR_SHOP',
+      portfolioItemCount: 1,
+      readyMadeItemCount: 1,
+    })
+
+    expect(completeHybrid.fieldErrors.portfolio).toBeUndefined()
+  })
+
   it('resumes at portfolio when the minimum work samples are missing', () => {
     const progress = deriveTailorSetupProgress({
       ...COMPLETE_SETUP,

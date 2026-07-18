@@ -4,7 +4,8 @@
  * in the user's profile row. Also handles foreground notification display.
  */
 import { useEffect, useRef } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as Notifications from 'expo-notifications'
 import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
@@ -30,11 +31,15 @@ const ALLOWED_SCREENS = new Set([
   '/(tailor)/profile/notifications',
 ])
 
+const CALL_NOTIFICATION_CHANNEL_ID = 'calls'
+const CALL_START_NOTIFICATION_KEY_PREFIX = 'drapeon:call-start-notification'
+
 const EXPO_PROJECT_ID =
   process.env.EXPO_PUBLIC_PROJECT_ID?.trim()
   || '4729d6f8-273a-43a9-abdf-6e4ca31ce83d'
 
 type NotificationSubscription = ReturnType<typeof Notifications.addNotificationReceivedListener>
+const pushRegistrationByUser = new Map<string, Promise<void>>()
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' &&
@@ -49,6 +54,19 @@ function resolveNotificationPath(
   const target = typeof data.target === 'string' ? data.target : null
   const screen = typeof data.screen === 'string' ? data.screen : null
   const orderId = isUuid(data.orderId) ? data.orderId : null
+  const rawCallKind = typeof data.callKind === 'string' ? data.callKind : null
+  const rawCallType = typeof data.callType === 'string' ? data.callType : null
+  const callKind = rawCallKind === 'consultation' || rawCallKind === 'ready-made' ? rawCallKind : null
+  const callType = rawCallType === 'audio' ? 'audio' : 'video'
+
+  if (orderId && target === 'call-join') {
+    const params = new URLSearchParams({
+      orderId,
+      callKind: callKind ?? 'ready-made',
+      callType,
+    })
+    return `/call-join?${params.toString()}`
+  }
 
   if (orderId && target === 'messages') {
     return `${base}/messages/${orderId}`
@@ -79,7 +97,16 @@ export function usePushNotifications(userId: string | null) {
   useEffect(() => {
     if (!userId) return
 
-    void registerAndStore(userId)
+    const syncRegistration = () => {
+      void syncPushRegistration(userId)
+    }
+
+    syncRegistration()
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') syncRegistration()
+    })
+
+    return () => appStateSubscription.remove()
   }, [userId])
 
   useEffect(() => {
@@ -121,6 +148,17 @@ export function usePushNotifications(userId: string | null) {
   }, [userId, role, router])
 }
 
+export function syncPushRegistration(userId: string) {
+  const activeRegistration = pushRegistrationByUser.get(userId)
+  if (activeRegistration) return activeRegistration
+
+  const registration = registerAndStore(userId).finally(() => {
+    pushRegistrationByUser.delete(userId)
+  })
+  pushRegistrationByUser.set(userId, registration)
+  return registration
+}
+
 async function registerAndStore(userId: string) {
   try {
     Sentry.addBreadcrumb({
@@ -130,10 +168,10 @@ async function registerAndStore(userId: string) {
       data: { platform: Platform.OS, projectIdConfigured: !!process.env.EXPO_PUBLIC_PROJECT_ID?.trim() },
     })
 
-    const { status: existing } = await Notifications.getPermissionsAsync()
-    let finalStatus = existing
+    const existingPermission = await Notifications.getPermissionsAsync()
+    let finalStatus = existingPermission.status
 
-    if (existing !== 'granted') {
+    if (finalStatus !== 'granted' && existingPermission.canAskAgain) {
       const { status } = await Notifications.requestPermissionsAsync()
       finalStatus = status
     }
@@ -153,6 +191,13 @@ async function registerAndStore(userId: string) {
         name: 'Drapeon',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
+      })
+      await Notifications.setNotificationChannelAsync(CALL_NOTIFICATION_CHANNEL_ID, {
+        name: 'Drapeon calls',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 450, 160, 450, 160, 450],
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
       })
     }
 
@@ -195,7 +240,53 @@ async function registerAndStore(userId: string) {
  */
 export async function sendLocalNotification(title: string, body: string, data?: Record<string, string>) {
   await Notifications.scheduleNotificationAsync({
-    content: { title, body, data: data ?? {} },
+    content: { title, body, data: data ?? {}, sound: 'default' },
     trigger: null, // fire immediately
   })
+}
+
+export async function scheduleCallStartLocalNotification({
+  orderId,
+  callKind,
+  scheduledStartAt,
+  counterpartName,
+}: {
+  orderId: string
+  callKind: 'consultation' | 'ready-made'
+  scheduledStartAt: Date | string
+  counterpartName?: string | null
+}) {
+  const date = scheduledStartAt instanceof Date ? scheduledStartAt : new Date(scheduledStartAt)
+  const storageKey = `${CALL_START_NOTIFICATION_KEY_PREFIX}:${callKind}:${orderId}`
+  const previousNotificationId = await AsyncStorage.getItem(storageKey).catch(() => null)
+  if (previousNotificationId) {
+    await Notifications.cancelScheduledNotificationAsync(previousNotificationId).catch(() => {})
+    await AsyncStorage.removeItem(storageKey).catch(() => {})
+  }
+
+  if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) return null
+
+  const notificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: callKind === 'consultation' ? 'Consultation starting now' : 'Order call starting now',
+      body: counterpartName?.trim()
+        ? `Your call with ${counterpartName.trim()} is starting now. Tap to join.`
+        : 'Your Drapeon call is starting now. Tap to join.',
+      data: {
+        orderId,
+        target: 'call-join',
+        callKind,
+        callType: 'video',
+      },
+      sound: 'default',
+      interruptionLevel: 'timeSensitive',
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date,
+      channelId: CALL_NOTIFICATION_CHANNEL_ID,
+    },
+  })
+  await AsyncStorage.setItem(storageKey, notificationId).catch(() => {})
+  return notificationId
 }

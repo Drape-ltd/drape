@@ -7,6 +7,7 @@ import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { createPaystackTransferRecipient, fallbackPaystackBanks, listPaystackBanks, resolvePaystackAccountNumber } from '../_shared/paystack.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { createStripeAccountLink, createStripeConnectAccount, retrieveStripeConnectAccount } from '../_shared/stripe.ts'
+import { isApprovedTailorProfile, stagePayoutChangeRequest } from '../_shared/verification-review.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
 import {
@@ -103,6 +104,12 @@ type TailorProfileRow = {
   payout_account_last_changed_at?: string | null
   payout_account_change_locked_until?: string | null
   payout_destination_hold_until?: string | null
+}
+
+type PayoutChangeRequestRow = {
+  id: string
+  requested_destination?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -251,6 +258,68 @@ function hasVerifiedPayoutDestination(profile: TailorProfileRow) {
   return profile.payout_account_verified === true
     && profile.payout_reverification_required !== true
     && currentPayoutDestinationKey(profile) !== null
+}
+
+function currentDestinationPayload(profile: TailorProfileRow) {
+  return {
+    payout_currency: profile.payout_currency ?? null,
+    payout_provider: profile.payout_provider ?? null,
+    payout_account_type: profile.payout_account_type ?? null,
+    payout_account_verified: profile.payout_account_verified ?? false,
+    payout_reverification_required: profile.payout_reverification_required ?? null,
+    payout_bank_name: profile.payout_bank_name ?? null,
+    payout_bank_code: profile.payout_bank_code ?? null,
+    payout_account_name: profile.payout_account_name ?? null,
+    payout_account_masked: profile.payout_account_masked ?? null,
+    payout_country_code: profile.payout_country_code ?? null,
+    paystack_recipient_code: profile.paystack_recipient_code ?? null,
+    paystack_account_id: profile.paystack_account_id ?? null,
+    stripe_connect_account_id: profile.stripe_connect_account_id ?? null,
+    stripe_account_id: profile.stripe_account_id ?? null,
+    manual_bank_entry: profile.manual_bank_entry ?? false,
+    manual_bank_name: profile.manual_bank_name ?? null,
+    manual_bank_country_code: profile.manual_bank_country_code ?? null,
+    manual_bank_country_name: profile.manual_bank_country_name ?? null,
+    manual_bank_swift_bic: profile.manual_bank_swift_bic ?? null,
+    manual_bank_account_name: profile.manual_bank_account_name ?? null,
+    manual_bank_verification_status: profile.manual_bank_verification_status ?? null,
+  }
+}
+
+async function createPayoutChangeReviewIssue(
+  supabase: any,
+  input: {
+    callerId: string
+    profile: TailorProfileRow
+    requestId: string | null
+    provider: 'PAYSTACK' | 'STRIPE'
+    payoutCurrency: string
+    title: string
+    description: string
+    metadata?: Record<string, unknown>
+  },
+) {
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'PAYOUT_BLOCKED',
+    severity: 'HIGH',
+    source: FN,
+    actorId: input.callerId,
+    actorRole: 'TAILOR',
+    userId: input.callerId,
+    tailorProfileId: input.profile.id,
+    relatedEntityType: 'payout_change_request',
+    relatedEntityId: input.requestId,
+    provider: input.provider,
+    title: input.title,
+    description: input.description,
+    recommendedAction: 'Compare the current payout destination against the requested destination, confirm account holder risk, then approve or reject the staged change.',
+    dedupeKey: `payout-change:${input.profile.id}`,
+    metadata: {
+      request_id: input.requestId,
+      payout_currency: input.payoutCurrency,
+      ...(input.metadata ?? {}),
+    },
+  })
 }
 
 function payoutChangeGuardResponse(profile: TailorProfileRow, nextDestinationKey: string, nowIso: string, headers: HeadersInit) {
@@ -543,6 +612,55 @@ Deno.serve(async (req) => {
       const guardResponse = payoutChangeGuardResponse(profile, nextDestinationKey, now, cors)
       if (guardResponse) return guardResponse
 
+      const paystackDestination = {
+        payout_currency: body.payoutCurrency,
+        payout_provider: 'PAYSTACK',
+        payout_account_type: 'PAYSTACK',
+        payout_account_verified: true,
+        payout_reverification_required: false,
+        payout_bank_name: payoutBankName,
+        payout_bank_code: payoutBankCode,
+        payout_account_name: resolved.account_name,
+        payout_account_masked: payoutAccountMasked,
+        payout_country_code: payoutCountryCode,
+        paystack_recipient_code: recipient.recipient_code,
+        paystack_account_id: recipient.recipient_code,
+        stripe_connect_account_id: null,
+        stripe_account_id: null,
+        ...manualBankResetPatch(),
+      }
+
+      if (isApprovedTailorProfile(profile)) {
+        const request = await stagePayoutChangeRequest(supabase, {
+          tailorUserId: caller.id,
+          tailorProfileId: profile.id,
+          currentDestination: currentDestinationPayload(profile),
+          requestedDestination: paystackDestination,
+          metadata: { action: body.action, provider: 'PAYSTACK', next_destination_key: nextDestinationKey },
+        })
+
+        await createPayoutChangeReviewIssue(supabase, {
+          callerId: caller.id,
+          profile,
+          requestId: request?.id ?? null,
+          provider: 'PAYSTACK',
+          payoutCurrency: body.payoutCurrency,
+          title: 'Payout destination change needs review',
+          description: `${profile.display_name ?? 'A tailor'} verified a new Paystack payout destination after approval. Existing payout details stay live until ops approves the change.`,
+          metadata: { bank_name: payoutBankName, account_name: resolved.account_name, account_masked: payoutAccountMasked },
+        })
+
+        await audit(supabase, {
+          event: 'seller.payout_change_requested',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'warn',
+          payload: { function: FN, provider: 'PAYSTACK', request_id: request?.id ?? null, payout_currency: body.payoutCurrency },
+        })
+
+        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
+      }
+
       const { error: currencyUpdateError } = await supabase
         .from('tailor_profiles')
         .update({
@@ -663,6 +781,62 @@ Deno.serve(async (req) => {
       ].join(':')
       const guardResponse = payoutChangeGuardResponse(profile, nextDestinationKey, now, cors)
       if (guardResponse) return guardResponse
+
+      const manualDestination = {
+        payout_currency: manual.payoutCurrency,
+        payout_provider: provider,
+        payout_account_type: null,
+        payout_account_verified: false,
+        payout_reverification_required: true,
+        payout_bank_name: manual.bankName,
+        payout_bank_code: null,
+        payout_account_name: manual.accountName,
+        payout_account_masked: maskedAccountNumber,
+        payout_country_code: manual.bankCountryCode,
+        paystack_recipient_code: null,
+        paystack_account_id: null,
+        stripe_connect_account_id: null,
+        stripe_account_id: null,
+        manual_bank_entry: true,
+        manual_bank_name: manual.bankName,
+        manual_bank_country_code: manual.bankCountryCode,
+        manual_bank_country_name: manual.bankCountryName,
+        manual_bank_swift_bic: manual.swiftBic,
+        manual_bank_account_number: manual.accountNumber,
+        manual_bank_account_name: manual.accountName,
+        manual_bank_verification_status: 'PENDING',
+      }
+
+      if (isApprovedTailorProfile(profile)) {
+        const request = await stagePayoutChangeRequest(supabase, {
+          tailorUserId: caller.id,
+          tailorProfileId: profile.id,
+          currentDestination: currentDestinationPayload(profile),
+          requestedDestination: manualDestination,
+          metadata: { action: body.action, provider, next_destination_key: nextDestinationKey },
+        })
+
+        await createPayoutChangeReviewIssue(supabase, {
+          callerId: caller.id,
+          profile,
+          requestId: request?.id ?? null,
+          provider,
+          payoutCurrency: manual.payoutCurrency,
+          title: 'Manual payout destination change needs review',
+          description: `${profile.display_name ?? 'A tailor'} submitted manual payout details after approval. Existing payout details stay live until ops approves the change.`,
+          metadata: { bank_name: manual.bankName, bank_country_code: manual.bankCountryCode, account_name: manual.accountName, account_masked: maskedAccountNumber },
+        })
+
+        await audit(supabase, {
+          event: 'seller.payout_change_requested',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'warn',
+          payload: { function: FN, provider, request_id: request?.id ?? null, payout_currency: manual.payoutCurrency, manual_bank_entry: true },
+        })
+
+        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
+      }
 
       const { error: updateError } = await supabase
         .from('tailor_profiles')
@@ -812,6 +986,67 @@ Deno.serve(async (req) => {
         refreshUrl: body.refreshUrl,
       })
 
+      const stripeDestination = {
+        payout_currency: body.payoutCurrency,
+        payout_provider: 'STRIPE',
+        payout_account_type: 'STRIPE_CONNECT',
+        payout_account_verified: false,
+        payout_reverification_required: true,
+        payout_country_code: countryCode,
+        stripe_connect_account_id: accountId,
+        stripe_account_id: accountId,
+        paystack_recipient_code: null,
+        paystack_account_id: null,
+        payout_bank_name: null,
+        payout_bank_code: null,
+        payout_account_name: null,
+        payout_account_masked: null,
+        ...manualBankResetPatch(),
+      }
+
+      if (isApprovedTailorProfile(profile)) {
+        const request = await stagePayoutChangeRequest(supabase, {
+          tailorUserId: caller.id,
+          tailorProfileId: profile.id,
+          currentDestination: currentDestinationPayload(profile),
+          requestedDestination: stripeDestination,
+          metadata: { action: body.action, provider: 'STRIPE', next_destination_key: nextDestinationKey },
+        })
+
+        await createPayoutChangeReviewIssue(supabase, {
+          callerId: caller.id,
+          profile,
+          requestId: request?.id ?? null,
+          provider: 'STRIPE',
+          payoutCurrency: body.payoutCurrency,
+          title: 'Stripe payout destination change needs review',
+          description: `${profile.display_name ?? 'A tailor'} started a new Stripe payout destination after approval. Existing payout details stay live until ops approves the change.`,
+          metadata: { stripe_connect_account_id: accountId, country_code: countryCode },
+        })
+
+        await audit(supabase, {
+          event: 'seller.payout_change_requested',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'warn',
+          payload: { function: FN, provider: 'STRIPE', request_id: request?.id ?? null, payout_currency: body.payoutCurrency, stripe_connect_account_id: accountId },
+        })
+
+        return jsonResponse({
+          ok: true,
+          pendingReview: true,
+          requestId: request?.id ?? null,
+          onboarding: {
+            provider: 'STRIPE',
+            payoutCurrency: body.payoutCurrency,
+            countryCode,
+            stripeConnectAccountId: accountId,
+            url: accountLink.url,
+            expiresAt: accountLink.expires_at,
+          },
+        }, 200, cors)
+      }
+
       const { error: updateError } = await supabase
         .from('tailor_profiles')
         .update({
@@ -852,7 +1087,25 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === 'refresh-stripe-connect-status') {
-      const accountId = profile.stripe_connect_account_id?.trim()
+      let accountId = profile.stripe_connect_account_id?.trim() || null
+      let pendingPayoutRequest: PayoutChangeRequestRow | null = null
+      if (!accountId) {
+        const { data: pending, error: pendingError } = await supabase
+          .from('payout_change_requests')
+          .select('id, requested_destination, metadata')
+          .eq('tailor_user_id', caller.id)
+          .eq('status', 'PENDING')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (pendingError) throw pendingError
+        pendingPayoutRequest = (pending as PayoutChangeRequestRow | null) ?? null
+        const pendingStripeId = typeof pendingPayoutRequest?.requested_destination?.stripe_connect_account_id === 'string'
+          ? pendingPayoutRequest.requested_destination.stripe_connect_account_id.trim()
+          : ''
+        accountId = pendingStripeId || null
+      }
+
       if (!accountId) {
         return jsonResponse({ error: 'Stripe Connect is not started for this tailor yet.' }, 409, cors)
       }
@@ -860,6 +1113,76 @@ Deno.serve(async (req) => {
       const account = await retrieveStripeConnectAccount(accountId)
       const verified = account.charges_enabled === true && account.payouts_enabled === true
       const now = new Date().toISOString()
+
+      if (isApprovedTailorProfile(profile)) {
+        const requestedDestination = {
+          ...(pendingPayoutRequest?.requested_destination ?? {}),
+          payout_provider: 'STRIPE',
+          payout_account_type: 'STRIPE_CONNECT',
+          payout_account_verified: verified,
+          payout_reverification_required: verified ? false : true,
+          stripe_connect_account_id: account.id,
+          stripe_account_id: account.id,
+          payout_country_code: normalizeCountryCode(account.country ?? profile.payout_country_code ?? null),
+        }
+
+        let requestId = pendingPayoutRequest?.id ?? null
+        if (requestId) {
+          const { error: pendingUpdateError } = await supabase
+            .from('payout_change_requests')
+            .update({
+              current_destination: currentDestinationPayload(profile),
+              requested_destination: requestedDestination,
+              metadata: { ...(pendingPayoutRequest?.metadata ?? {}), action: body.action, provider: 'STRIPE', stripe_status_refreshed_at: now },
+              submitted_at: now,
+              updated_at: now,
+            })
+            .eq('id', requestId)
+          if (pendingUpdateError) throw pendingUpdateError
+        } else {
+          const staged = await stagePayoutChangeRequest(supabase, {
+            tailorUserId: caller.id,
+            tailorProfileId: profile.id,
+            currentDestination: currentDestinationPayload(profile),
+            requestedDestination,
+            metadata: { action: body.action, provider: 'STRIPE', stripe_status_refreshed_at: now },
+          })
+          requestId = staged?.id ?? null
+        }
+
+        if (verified) {
+          await audit(supabase, {
+            event: 'seller.payout_change_ready_for_review',
+            actor_id: caller.id,
+            actor_role: 'TAILOR',
+            severity: 'warn',
+            payload: {
+              function: FN,
+              provider: 'STRIPE',
+              request_id: requestId,
+              payout_currency: normalizeAccountCurrency(profile.payout_currency) ?? 'USD',
+              stripe_connect_account_id: account.id,
+            },
+          })
+        }
+
+        return jsonResponse({
+          ok: true,
+          pendingReview: true,
+          requestId,
+          account: {
+            provider: 'STRIPE',
+            stripeConnectAccountId: account.id,
+            chargesEnabled: account.charges_enabled === true,
+            payoutsEnabled: account.payouts_enabled === true,
+            detailsSubmitted: account.details_submitted === true,
+            payoutAccountVerified: verified,
+            payoutReverificationRequired: verified ? false : true,
+            payoutAccountVerifiedAt: verified ? now : null,
+            payoutCountryCode: normalizeCountryCode(account.country ?? profile.payout_country_code ?? null),
+          },
+        }, 200, cors)
+      }
 
       const { error: updateError } = await supabase
         .from('tailor_profiles')

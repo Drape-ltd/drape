@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnToIfNeeded, pickSafeReturnTo } from '@/lib/navigation'
 import {
   BODY_PROFILE_FLAG_LABELS,
   buildMeasurementConfidenceByField,
@@ -128,13 +128,14 @@ function isMeasurementScansUnavailable(
 export default function GuidedFitScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
+  const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const { user } = useAuth()
+  const pickedReturnTo = pickSafeReturnTo(historyChain, returnTo)
   const safeReturnTo =
-    typeof returnTo === 'string' &&
-    returnTo.length > 0 &&
-    returnTo !== '/(customer)/profile/guided-fit'
-      ? returnTo
+    typeof pickedReturnTo === 'string' &&
+    pickedReturnTo.length > 0 &&
+    pickedReturnTo !== '/(customer)/profile/guided-fit'
+      ? pickedReturnTo
       : null
 
   const [loading, setLoading] = useState(true)
@@ -365,7 +366,7 @@ export default function GuidedFitScreen() {
     const noteFields = [styleEaseNotes, postureNote, asymmetryNote]
     const blocked = noteFields.some((value) => filterContactInfo(value).blocked)
     if (blocked) {
-      setNoteError("Contact details can't be included in guided fit notes.")
+      setNoteError("Contact details can't be included in fit notes.")
       return false
     }
     setNoteError('')
@@ -413,7 +414,7 @@ export default function GuidedFitScreen() {
     if (!hasCompleteMeasurementProfile(measurements)) {
       Alert.alert(
         'Complete measurements first',
-        'Finish your manual measurement profile first so guided fit intake has a trustworthy baseline.'
+        'Finish your measurement profile first so fit notes have a trustworthy baseline.'
       )
       return
     }
@@ -486,11 +487,11 @@ export default function GuidedFitScreen() {
     if (scanError || !inserted?.id) {
       setSaving(false)
       Alert.alert(
-        'Could not save guided fit intake',
+        'Could not save fit notes',
         isLikelyConnectivityIssue(scanError)
           ? 'Connection looks weak. Retry when the signal improves.'
           : isMeasurementScansUnavailable(scanError)
-            ? 'Guided fit is not ready in this build yet. Your measurements are still safe; use manual measurements for now.'
+            ? 'Fit notes are not ready in this build yet. Your measurements are still safe.'
             : 'Please try again in a moment.'
       )
       return
@@ -528,7 +529,7 @@ export default function GuidedFitScreen() {
 
     if (updateError) {
       Alert.alert(
-        'Could not finish guided fit intake',
+        'Could not finish fit notes',
         isLikelyConnectivityIssue(updateError)
           ? 'Connection looks weak. The session saved, but your fit profile summary did not finish updating yet.'
           : 'The session saved, but the profile summary did not finish updating. Please try again.'
@@ -543,10 +544,10 @@ export default function GuidedFitScreen() {
     })
 
     Alert.alert(
-      requiresTailorReview ? 'Saved with tailor review' : 'Guided fit saved',
+      requiresTailorReview ? 'Saved with tailor review' : 'Fit notes saved',
       requiresTailorReview
-        ? 'Your guided fit intake is saved. A tailor review will still be expected before cutting starts.'
-        : 'Your guided fit intake is saved and will carry into your next order.',
+        ? 'Your fit notes are saved. A tailor review will still be expected before cutting starts.'
+        : 'Your fit notes are saved and can carry into your next order.',
       [{ text: 'Continue', onPress: finishAfterSave }]
     )
   }
@@ -556,10 +557,10 @@ export default function GuidedFitScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.centerState}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Guided fit intake</Text>
-            <Text style={styles.stateTitle}>Loading your fit baseline…</Text>
+            <Text style={styles.stateEyebrow}>Fit notes</Text>
+            <Text style={styles.stateTitle}>Loading your measurements…</Text>
             <Text style={styles.stateHint}>
-              We’re pulling your saved measurements so this fit intake stays grounded in the same
+              We’re pulling your saved measurements so these notes stay grounded in the same
               profile your tailor will see.
             </Text>
           </View>
@@ -573,7 +574,7 @@ export default function GuidedFitScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.centerState}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Guided fit intake</Text>
+            <Text style={styles.stateEyebrow}>Fit notes</Text>
             <Text style={styles.stateTitle}>Couldn't load your fit baseline.</Text>
             <Text style={styles.stateHint}>
               Please try again in a moment, or update your measurements first if this keeps
@@ -595,19 +596,22 @@ export default function GuidedFitScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.centerState}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Guided fit intake</Text>
+            <Text style={styles.stateEyebrow}>Fit notes</Text>
             <Text style={styles.stateTitle}>Complete measurements first.</Text>
             <Text style={styles.stateHint}>
-              Guided fit intake works best after your core measurements, garment context, and
-              body-shape notes are already saved.
+              Fit notes are optional. Add them after your core measurements are saved, or when an
+              order needs extra garment context.
             </Text>
             <Button
               label="Open measurements"
               onPress={() =>
-                router.push({
-                  pathname: '/(customer)/profile/measurements',
-                  params: { returnTo: '/(customer)/profile/guided-fit' },
-                })
+	                router.replace({
+	                  pathname: '/(customer)/profile/measurements',
+	                  params: {
+	                    returnTo: '/(customer)/profile/guided-fit',
+	                    historyChain: appendToHistory(historyChain ?? safeReturnTo ?? undefined, '/(customer)/profile/guided-fit'),
+	                  },
+	                })
               }
             />
             <Button label="Back" variant="secondary" onPress={goBack} />
@@ -627,7 +631,7 @@ export default function GuidedFitScreen() {
           <TouchableOpacity onPress={goBack}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Guided fit intake</Text>
+          <Text style={styles.headerTitle}>Fit notes</Text>
           <View style={{ width: 60 }} />
         </View>
 
@@ -637,11 +641,11 @@ export default function GuidedFitScreen() {
           contentContainerStyle={styles.content}
         >
           <View style={styles.heroCard}>
-            <Text style={styles.heroEyebrow}>Measurement moat</Text>
-            <Text style={styles.heroTitle}>Capture the fit details a tape measure misses.</Text>
+            <Text style={styles.heroEyebrow}>Optional context</Text>
+            <Text style={styles.heroTitle}>Add fit notes when the garment needs it.</Text>
             <Text style={styles.heroText}>
-              This does not replace your tailor. It gives them the fit intent, stretch context,
-              posture notes, and symmetry cues that usually get lost between quote and cutting.
+              Measurements stay first. These notes give your tailor fit direction, stretch context,
+              posture notes, and symmetry cues when an order needs more than numbers.
             </Text>
           </View>
 
@@ -780,14 +784,14 @@ export default function GuidedFitScreen() {
               </View>
               <Text style={styles.summaryHint}>
                 {fitPreview.requiresTailorReview
-                  ? 'This intake will carry a tailor-review checkpoint before cutting starts.'
-                  : 'This intake will attach to your next order as guided fit context.'}
+                  ? 'These notes will carry a tailor-review checkpoint before cutting starts.'
+                  : 'These notes can attach to your next order as fit context.'}
               </Text>
             </View>
           ) : null}
 
           <Button
-            label="Save guided fit intake"
+            label="Save fit notes"
             onPress={save}
             loading={saving}
             disabled={saving}

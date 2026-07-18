@@ -1,7 +1,8 @@
 import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet, Alert, Text, ScrollView, useColorScheme } from 'react-native'
-import { Stack, useRouter, useSegments } from 'expo-router'
+import { Stack, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { Audio } from 'expo-av'
 import * as SplashScreen from 'expo-splash-screen'
 import { useFonts } from 'expo-font'
 import {
@@ -28,16 +29,43 @@ import { getStripePublishableKey } from '@/lib/payments'
 import { OptionalStripeProvider } from '@/lib/stripe-runtime'
 import { supabase } from '@/lib/supabase'
 import { initSentry, Sentry } from '@/lib/sentry'
-import { identify, setAnalyticsConsent } from '@/lib/analytics'
+import { capture, identify, setAnalyticsConsent } from '@/lib/analytics'
 import { isBiometricEnabled, authenticate } from '@/lib/biometric'
 import { queryClient } from '@/lib/queryClient'
 import { hydratePersistedQueryCache, installQueryCachePersistence } from '@/lib/queryPersistence'
+import {
+  BottomSheetModalProviderRuntime,
+  GestureHandlerRootViewRuntime,
+} from '@/lib/native-sheet-runtime'
 import { Colors, FontSize, FontWeight, Fonts, Spacing } from '@/constants/theme'
 import { validatePhoneForProfile } from '@drape/shared/phone'
 
 const LOCK_AFTER_MS = 5 * 60 * 1000 // lock after 5 minutes in background
 const SPLASH_FAILSAFE_MS = __DEV__ ? 2500 : 8000
 const ROUTE_GUARD_QUERY_TIMEOUT_MS = 5_000
+const nativeInteractionStyles = StyleSheet.create({ root: { flex: 1 } })
+
+function NativeInteractionProviders({ children }: { children: ReactNode }) {
+  const GestureHandlerRootView = GestureHandlerRootViewRuntime
+  const BottomSheetModalProvider = BottomSheetModalProviderRuntime
+
+  if (!GestureHandlerRootView || !BottomSheetModalProvider) return children
+
+  return (
+    <GestureHandlerRootView style={nativeInteractionStyles.root}>
+      <BottomSheetModalProvider>{children}</BottomSheetModalProvider>
+    </GestureHandlerRootView>
+  )
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function historyChainDepth(historyChain: string | undefined) {
+  if (!historyChain) return 0
+  return historyChain.split(',').map((segment) => segment.trim()).filter(Boolean).length
+}
 
 function hideNativeSplash(reason: string) {
   if (__DEV__) console.log(`Hiding Drapeon splash: ${reason}`)
@@ -284,6 +312,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   const rootSegment = segments[0] as string | undefined
   const secondSegment = segments[1] as string | undefined
   const thirdSegment = segments[2] as string | undefined
+  const pathname = usePathname()
   const router = useRouter()
   const splashHidden = useRef(false)
   const authRecoveryInFlight = useRef(false)
@@ -496,14 +525,21 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const inCustomer = rootSegment === '(customer)'
     const inTailor = rootSegment === '(tailor)'
     const inVision = rootSegment === 'vision'
+    const inCallJoin = rootSegment === 'call-join'
+    const inVerifyHandoff = rootSegment === 'verify-handoff'
     const inPaymentReturn = rootSegment === 'paystack-redirect' || rootSegment === 'stripe-redirect'
     const onResetPassword = inAuth && secondSegment === 'reset-password'
+    const onTailorSetup = inTailor && secondSegment === 'profile' && thirdSegment === 'setup'
+    const onTailorOnboardingItemCreation =
+      (inTailor && secondSegment === 'shop' && thirdSegment === 'new') ||
+      pathname === '/(tailor)/shop/new' ||
+      pathname === '/shop/new'
     // Passport claim links are public deep links — allow unauthenticated access
     // so customers who aren't signed in can still see the preview before logging in.
     const inPassport = rootSegment === 'passport'
 
     if (!session) {
-      if (!inAuth && !inPassport) router.replace('/(auth)/welcome')
+      if (!inAuth && !inPassport && !inVerifyHandoff) router.replace('/(auth)/welcome')
       return
     }
 
@@ -522,7 +558,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
       if (!customerProfileChecked || customerProfileChecking) return
       if (customerProfileCheckFailed) {
         // A transient network failure should not send an existing customer into setup.
-        if (!inCustomer && !inVision && !inPaymentReturn) router.replace('/(customer)')
+        if (!inCustomer && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
         return
       }
       if (!customerProfileComplete) {
@@ -531,23 +567,22 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
         if (!onSetup) router.replace('/(auth)/customer-setup')
         return
       }
-      if (!inCustomer && !inVision && !inPaymentReturn) router.replace('/(customer)')
+      if (!inCustomer && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
     } else if (role === 'TAILOR') {
       if (!tailorProfileChecked || tailorProfileChecking) return
       if (tailorProfileCheckFailed) {
         // Do not shove a signed-in tailor into setup because a transient profile
         // lookup failed. Individual screens can show their own retry states.
-        if (!inTailor && !inVision && !inPaymentReturn) router.replace('/(tailor)')
+        if (!inTailor && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
         return
       }
       if (!tailorHasProfile || !tailorProfileCompleted) {
         // No profile row yet, or profile submitted but not yet completed — send to setup
-        const onSetup = inTailor && secondSegment === 'profile' && thirdSegment === 'setup'
-        if (!onSetup) router.replace('/(tailor)/profile/setup')
+        if (!onTailorSetup && !onTailorOnboardingItemCreation) router.replace('/(tailor)/profile/setup')
         return
       }
       // Profile is complete — never redirect to setup again
-      if (!inTailor && !inVision && !inPaymentReturn) router.replace('/(tailor)')
+      if (!inTailor && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
     }
   }, [
     customerProfileChecked,
@@ -557,6 +592,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     loading,
     role,
     rootSegment,
+    pathname,
     router,
     secondSegment,
     session,
@@ -600,6 +636,31 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   return null
 }
 
+function ScreenAnalytics() {
+  const pathname = usePathname()
+  const segments = useSegments()
+  const params = useGlobalSearchParams<{ historyChain?: string | string[] }>()
+  const historyChain = firstParam(params.historyChain)
+  const lastTrackedKey = useRef('')
+  const routeSegments = segments.join('/')
+
+  useEffect(() => {
+    const screenPath = pathname || `/${routeSegments}`
+    const trackKey = `${screenPath}|${historyChain ?? ''}`
+    if (trackKey === lastTrackedKey.current) return
+    lastTrackedKey.current = trackKey
+
+    capture('screen_view', {
+      screen_path: screenPath,
+      route_segments: routeSegments,
+      historyChain: historyChain ?? null,
+      historyChainDepth: historyChainDepth(historyChain),
+    })
+  }, [historyChain, pathname, routeSegments])
+
+  return null
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme()
   const statusBarStyle = colorScheme === 'dark' ? 'light' : 'dark'
@@ -612,6 +673,18 @@ export default function RootLayout() {
     DrapeTextBold: Inter_700Bold,
   })
   const appReady = fontsLoaded || !!fontError
+
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      allowsRecordingIOS: false,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    }).catch((error) => {
+      Sentry.captureException(error, { tags: { area: 'audio_mode' } })
+    })
+  }, [])
 
   useEffect(() => {
     if (fontError) {
@@ -638,44 +711,49 @@ export default function RootLayout() {
 
   return (
     <StartupErrorBoundary>
-      <OptionalStripeProvider
-        publishableKey={getStripePublishableKey()}
-        urlScheme="drape"
-        setReturnUrlSchemeOnAndroid
-      >
-        <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <CustomerProfileProvider>
-          <TailorProfileProvider>
-          <RouteGuard appReady={appReady} />
-          <BiometricGate />
-          <StatusBar style={statusBarStyle} />
-          <Stack
-            key={colorScheme ?? 'light'}
-            screenOptions={{
-              headerStyle: { backgroundColor: Colors.bone },
-              headerTintColor: Colors.ink,
-              headerTitleStyle: { fontFamily: Fonts.bodySemiBold, fontWeight: '600', color: Colors.ink },
-              headerShadowVisible: false,
-              contentStyle: { backgroundColor: Colors.bone },
-              animation: 'slide_from_right',
-            }}
-          >
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(customer)" options={{ headerShown: false }} />
-            <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
-            <Stack.Screen name="passport" options={{ headerShown: false }} />
-            <Stack.Screen name="group-invite/[code]" options={{ headerShown: false }} />
-            <Stack.Screen name="referral/[code]" options={{ headerShown: false }} />
-            <Stack.Screen name="vision" options={{ headerShown: false }} />
-            <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
-          </Stack>
-          </TailorProfileProvider>
-          </CustomerProfileProvider>
-        </AuthProvider>
-        </QueryClientProvider>
-      </OptionalStripeProvider>
+      <NativeInteractionProviders>
+        <OptionalStripeProvider
+          publishableKey={getStripePublishableKey()}
+          urlScheme="drape"
+          setReturnUrlSchemeOnAndroid
+        >
+          <QueryClientProvider client={queryClient}>
+            <AuthProvider>
+              <CustomerProfileProvider>
+                <TailorProfileProvider>
+                  <RouteGuard appReady={appReady} />
+                  <ScreenAnalytics />
+                  <BiometricGate />
+                  <StatusBar style={statusBarStyle} />
+                  <Stack
+                    key={colorScheme ?? 'light'}
+                    screenOptions={{
+                      headerStyle: { backgroundColor: Colors.bone },
+                      headerTintColor: Colors.ink,
+                      headerTitleStyle: { fontFamily: Fonts.bodySemiBold, fontWeight: '600', color: Colors.ink },
+                      headerShadowVisible: false,
+                      contentStyle: { backgroundColor: Colors.bone },
+                      animation: 'slide_from_right',
+                    }}
+                  >
+                    <Stack.Screen name="index" options={{ headerShown: false }} />
+                    <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                    <Stack.Screen name="(customer)" options={{ headerShown: false }} />
+                    <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
+                    <Stack.Screen name="passport" options={{ headerShown: false }} />
+                    <Stack.Screen name="group-invite/[code]" options={{ headerShown: false }} />
+                    <Stack.Screen name="referral/[code]" options={{ headerShown: false }} />
+                    <Stack.Screen name="vision" options={{ headerShown: false }} />
+                    <Stack.Screen name="call-join" options={{ headerShown: false }} />
+                    <Stack.Screen name="verify-handoff/[token]" options={{ headerShown: false }} />
+                    <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
+                  </Stack>
+                </TailorProfileProvider>
+              </CustomerProfileProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        </OptionalStripeProvider>
+      </NativeInteractionProviders>
     </StartupErrorBoundary>
   )
 }

@@ -22,19 +22,19 @@ import {
   useLocalSearchParams,
   useRouter,
   useNavigation,
-  type Href,
 } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
-import { ResizeMode, Video } from 'expo-av'
 import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { Sentry } from '@/lib/sentry'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
 import { openTrackingPage } from '@/lib/shipping'
 import { shareGroupOrderInvite } from '@/lib/invite'
 import {
@@ -100,9 +100,11 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui'
+import { Button, HandoffSupportModal, Input, MediaLightboxModal, PortfolioVideoPreview, RemoteImage, type MediaLightboxItem } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { buildBriefDossier } from '@drape/shared'
 import { type OrderStage } from '@drape/shared/order-machine'
+import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-brief-dossier'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import {
@@ -112,6 +114,13 @@ import {
 import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
+import {
+  ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
+} from '@drape/shared/media-policy'
 
 type StageUpdate = {
   id: string
@@ -130,11 +139,21 @@ type OrderStageUpdateRow = {
 }
 
 type CustomOrderDetailRow = {
+  garment_type_other: string | null
+  gender_presentation: string | null
+  social_reference_links: unknown
+  style_notes: string | null
+  body_note: string | null
   fabric_approval_required: boolean | null
   fabric_approval_status: string | null
   fabric_description: string | null
+  fabric_budget_amount: number | null
+  fabric_budget_currency: string | null
   fabric_sourcing_deadline_days: number | null
   fabric_sourcing_deadline_at: string | null
+  shipping_preference: string | null
+  delivery_instructions: string | null
+  target_delivery_date: string | null
 }
 
 type TailorProfileJoinRow = {
@@ -150,6 +169,8 @@ type OrderQueryRow = {
   fulfillment_option: string | null
   garment_type: string | null
   garment_description: string | null
+  occasion: string | null
+  deadline: string | null
   item_title: string | null
   item_size: string | null
   item_quantity: number | null
@@ -190,6 +211,7 @@ type OrderQueryRow = {
   fulfillment_reference: string | null
   fulfillment_contact_name: string | null
   fulfillment_contact_phone: string | null
+  reference_photos: unknown
   collection_code: string | null
   video_call_url: string | null
   handoff_completed_at: string | null
@@ -228,6 +250,70 @@ function isVideoUri(uri: string | null | undefined) {
   return typeof uri === 'string' && /\.(mp4|mov|m4v|webm)(?:[?#].*)?$/iu.test(uri)
 }
 
+function normalizeExternalHref(value: string) {
+  return /^https?:\/\//iu.test(value) ? value : `https://${value}`
+}
+
+function dossierMediaItems(label: string, mediaUrls: string[]): MediaLightboxItem[] {
+  return mediaUrls.slice(0, 6).map((uri, index) => ({
+    uri,
+    label: `${label} ${index + 1}`,
+    kind: isVideoUri(uri) ? 'video' : 'photo',
+    bucket: isVideoUri(uri) ? undefined : 'order-photos',
+  }))
+}
+
+const ORDER_EVIDENCE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.orderUpdateVideo
+const ORDER_EVIDENCE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.orderUpdateVideo
+
+function orderEvidenceContentType(asset: ImagePicker.ImagePickerAsset) {
+  const normalizedMimeType = asset.mimeType?.split(';')[0]?.trim().toLowerCase()
+  if (normalizedMimeType && (ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES as readonly string[]).includes(normalizedMimeType)) {
+    return normalizedMimeType
+  }
+
+  const extension = (asset.fileName ?? asset.uri).match(/\.([a-z0-9]+)(?:[?#].*)?$/iu)?.[1]?.toLowerCase()
+  if (extension === 'png') return 'image/png'
+  if (extension === 'webp') return 'image/webp'
+  if (extension === 'mov') return 'video/quicktime'
+  if (extension === 'mp4' || extension === 'm4v') return 'video/mp4'
+  return asset.type === 'video' ? 'video/mp4' : 'image/jpeg'
+}
+
+function orderEvidenceExtension(contentType: string) {
+  if (contentType === 'image/png') return 'png'
+  if (contentType === 'image/webp') return 'webp'
+  if (contentType === 'video/quicktime') return 'mov'
+  if (contentType === 'video/mp4') return 'mp4'
+  return 'jpg'
+}
+
+function orderEvidenceDurationSeconds(asset: ImagePicker.ImagePickerAsset) {
+  if (typeof asset.duration !== 'number' || !Number.isFinite(asset.duration) || asset.duration <= 0) return null
+  return asset.duration > 1000 ? asset.duration / 1000 : asset.duration
+}
+
+function validateOrderEvidenceAsset(asset: ImagePicker.ImagePickerAsset) {
+  const contentType = orderEvidenceContentType(asset)
+  const isVideo = asset.type === 'video' || (ALLOWED_VIDEO_CONTENT_TYPES as readonly string[]).includes(contentType)
+  if (!isVideo) return null
+
+  if (!(ALLOWED_VIDEO_CONTENT_TYPES as readonly string[]).includes(contentType)) {
+    return 'That video type is not supported here. Please choose an MP4 or MOV video.'
+  }
+
+  if (typeof asset.fileSize === 'number' && asset.fileSize > ORDER_EVIDENCE_VIDEO_MAX_BYTES) {
+    return `Choose videos under ${Math.round(ORDER_EVIDENCE_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`
+  }
+
+  const durationSeconds = orderEvidenceDurationSeconds(asset)
+  if (durationSeconds && durationSeconds > ORDER_EVIDENCE_VIDEO_MAX_SECONDS) {
+    return OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE
+  }
+
+  return null
+}
+
 function StageMediaPreview({
   uri,
   style,
@@ -241,13 +327,13 @@ function StageMediaPreview({
 }) {
   if (isVideoUri(uri)) {
     return (
-      <Video
-        source={{ uri }}
+      <PortfolioVideoPreview
+        uri={uri}
         style={style as StyleProp<ViewStyle>}
-        useNativeControls
-        resizeMode={ResizeMode.CONTAIN}
+        contentFit="contain"
+        nativeControls
+        autoplay={false}
         isLooping={false}
-        accessibilityLabel={accessibilityLabel}
       />
     )
   }
@@ -275,6 +361,8 @@ type OrderDetail = {
   fulfillmentOption: string | null
   garmentType: string
   garmentDescription: string | null
+  occasion: string | null
+  deadline: string | null
   itemTitle: string | null
   itemSize: string | null
   itemQuantity: number
@@ -318,6 +406,7 @@ type OrderDetail = {
   fulfillmentReference: string | null
   fulfillmentContactName: string | null
   fulfillmentContactPhone: string | null
+  referencePhotos: string[]
   collectionCode: string | null
   videoCallUrl: string | null
   handoffCompletedAt: string | null
@@ -325,11 +414,21 @@ type OrderDetail = {
   measurementSnapshot: MeasurementSnapshot | null
   supportMeta: OrderSupportMeta
   customDetail: {
+    garmentTypeOther: string | null
+    genderPresentation: string | null
+    socialReferenceLinks: string[]
+    styleNotes: string | null
+    bodyNote: string | null
     fabricApprovalRequired: boolean
     fabricApprovalStatus: string | null
     fabricDescription: string | null
+    fabricBudgetAmount: number | null
+    fabricBudgetCurrency: string | null
     fabricSourcingDeadlineDays: number | null
     fabricSourcingDeadlineAt: string | null
+    shippingPreference: string | null
+    deliveryInstructions: string | null
+    targetDeliveryDate: string | null
   } | null
   stageUpdates: StageUpdate[]
   createdAt: string
@@ -411,6 +510,12 @@ const AFTERCARE_SUPPORT_LABELS: Record<AftercareSupportType, string> = {
   DAMAGE_OR_DEFECT: 'Damage or defect',
   ALTERATION_FOLLOW_UP: 'Alteration follow-up',
   OTHER: 'Other aftercare issue',
+}
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
 }
 
 function formatReadableDate(value: string | Date) {
@@ -828,12 +933,13 @@ function formatConsultationStart(value: string | Date | null | undefined) {
 }
 
 export default function OrderTrackingScreen() {
-  const { id, sent, placed, tab, returnTo } = useLocalSearchParams<{
+  const { id, sent, placed, tab, returnTo, historyChain } = useLocalSearchParams<{
     id: string
     sent?: string
     placed?: string
     tab?: string
     returnTo?: string
+    historyChain?: string
   }>()
   const router = useRouter()
   const navigation = useNavigation()
@@ -848,6 +954,7 @@ export default function OrderTrackingScreen() {
     }
     return 'active'
   }
+  const explicitReturnPath = pickSafeReturnTo(historyChain, returnTo)
 
   function goBack() {
     if (sent === '1') {
@@ -858,17 +965,12 @@ export default function OrderTrackingScreen() {
       router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })
       return
     }
-    if (returnTo === 'customer-notifications') {
-      router.push('/(customer)/profile/notifications')
-      return
-    }
-    if (returnTo) {
-      router.replace(returnTo as Href)
-      return
-    }
-    if (navigation.canGoBack()) router.back()
-    else
-      router.replace({ pathname: '/(customer)/orders', params: { tab: fallbackTab(order?.stage) } })
+    goBackOrReturnTo(
+      router,
+      navigation,
+      explicitReturnPath,
+      { pathname: '/(customer)/orders', params: { tab: fallbackTab(order?.stage) } },
+    )
   }
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -899,11 +1001,24 @@ export default function OrderTrackingScreen() {
   const [payingAdvanceId, setPayingAdvanceId] = useState<string | null>(null)
   const [startingHandoffCall, setStartingHandoffCall] = useState<'audio' | 'video' | null>(null)
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([])
+  const [mediaPreview, setMediaPreview] = useState<{ items: MediaLightboxItem[]; index: number } | null>(null)
   const [startingConsultationCall, setStartingConsultationCall] = useState<
     'audio' | 'video' | null
   >(null)
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const { startOrderPayment, startMaterialAdvancePayment } = useOrderPaymentFlow()
+
+  const openDossierLink = useCallback(async (href: string) => {
+    try {
+      await Linking.openURL(normalizeExternalHref(href))
+    } catch {
+      Alert.alert('Could not open link', 'Please try again in a moment.')
+    }
+  }, [])
+
+  const openMediaPreview = useCallback((items: MediaLightboxItem[], index: number) => {
+    setMediaPreview({ items, index })
+  }, [])
   const purgedTerminalOrderRef = useRef<string | null>(null)
 
   async function openCallUrl(url: string) {
@@ -914,7 +1029,11 @@ export default function OrderTrackingScreen() {
     if (!order) return
     router.navigate({
       pathname: '/(customer)/messages/[orderId]',
-      params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+      params: {
+        orderId: order.id,
+        returnTo: `/(customer)/orders/${order.id}`,
+        historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+      },
     })
   }
 
@@ -982,15 +1101,15 @@ export default function OrderTrackingScreen() {
             .from('orders')
             .select(
               `
-            id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
+            id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, occasion, deadline, item_title, item_size, item_quantity, item_subtotal, stage,
             tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, consultation_fee, fulfillment_fee, quoted_completion_date,
             source_currency, source_amount, subtotal_amount, platform_fee_amount, tax_amount, tax_rate_bps, tax_region, tax_fallback, tax_fallback_reason, shipping_amount, total_amount,
             fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
             fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
-            fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone,
+            fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos,
             collection_code, video_call_url, handoff_completed_at, customer_handoff_confirmed_at, special_note, customer_measurements_snapshot, created_at,
             tailor_profiles!tailor_profile_id(display_name, location),
-            custom_order_details(fabric_approval_required, fabric_approval_status, fabric_description, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at),
+            custom_order_details(garment_type_other, gender_presentation, social_reference_links, style_notes, body_note, fabric_approval_required, fabric_approval_status, fabric_description, fabric_budget_amount, fabric_budget_currency, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at, shipping_preference, delivery_instructions, target_delivery_date),
             order_stage_updates(id, stage, note, photo_url, created_at)
           `
             )
@@ -1089,6 +1208,8 @@ export default function OrderTrackingScreen() {
             fulfillmentOption: d.fulfillment_option ?? null,
             garmentType: displayText(d.garment_type, 'Order'),
             garmentDescription: displayNullableText(d.garment_description),
+            occasion: displayNullableText(d.occasion),
+            deadline: d.deadline ?? null,
             itemTitle: displayNullableText(d.item_title),
             itemSize: d.item_size ?? null,
             itemQuantity: d.item_quantity ?? 1,
@@ -1132,6 +1253,7 @@ export default function OrderTrackingScreen() {
             fulfillmentReference: displayNullableText(d.fulfillment_reference),
             fulfillmentContactName: displayNullableText(d.fulfillment_contact_name),
             fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
+            referencePhotos: asStringList(d.reference_photos),
             collectionCode: d.collection_code,
             videoCallUrl: d.video_call_url ?? null,
             handoffCompletedAt: d.handoff_completed_at ?? null,
@@ -1142,11 +1264,21 @@ export default function OrderTrackingScreen() {
             supportMeta,
             customDetail: customDetail
               ? {
+                  garmentTypeOther: displayNullableText(customDetail.garment_type_other),
+                  genderPresentation: displayNullableText(customDetail.gender_presentation),
+                  socialReferenceLinks: asStringList(customDetail.social_reference_links),
+                  styleNotes: displayNullableText(customDetail.style_notes),
+                  bodyNote: displayNullableText(customDetail.body_note),
                   fabricApprovalRequired: customDetail.fabric_approval_required === true,
                   fabricApprovalStatus: customDetail.fabric_approval_status ?? null,
                   fabricDescription: displayNullableText(customDetail.fabric_description),
+                  fabricBudgetAmount: customDetail.fabric_budget_amount ?? null,
+                  fabricBudgetCurrency: customDetail.fabric_budget_currency ?? null,
                   fabricSourcingDeadlineDays: customDetail.fabric_sourcing_deadline_days ?? null,
                   fabricSourcingDeadlineAt: customDetail.fabric_sourcing_deadline_at ?? null,
+                  shippingPreference: displayNullableText(customDetail.shipping_preference),
+                  deliveryInstructions: displayNullableText(customDetail.delivery_instructions),
+                  targetDeliveryDate: customDetail.target_delivery_date ?? null,
                 }
               : null,
             stageUpdates: (d.order_stage_updates ?? []).map((u) => ({
@@ -1302,7 +1434,7 @@ export default function OrderTrackingScreen() {
     if (!order || startingHandoffCall) return
     setStartingHandoffCall(callType)
     try {
-      const room = await createOrderCallRoom(order.id, callType)
+      const room = await createOrderCallRoom(order.id, callType, 'customer')
       if (room?.fallback === 'MESSAGES') {
         await fetchOrder()
         openOrderMessages()
@@ -1310,7 +1442,7 @@ export default function OrderTrackingScreen() {
       }
       if (!room?.url) return
       await fetchOrder()
-      await openDrapeCallUrl(room.url)
+      await openDrapeCallUrl(room.url, 'customer')
     } catch (error) {
       Sentry.captureException(error, {
         extra: { context: 'customer_start_handoff_call', orderId: order.id, callType },
@@ -1391,37 +1523,58 @@ export default function OrderTrackingScreen() {
     if (source === 'camera') {
       const permission = await ImagePicker.requestCameraPermissionsAsync()
       if (!permission.granted) {
-        Alert.alert('Camera access needed', 'Take a quick delivery proof photo before confirming receipt.')
+        Alert.alert('Camera access needed', 'Take quick delivery proof before confirming receipt.')
         return null
       }
     } else {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
       if (!permission.granted) {
-        Alert.alert('Photo access needed', 'Choose a delivery proof photo before confirming receipt.')
+        Alert.alert('Media access needed', 'Choose delivery proof before confirming receipt.')
         return null
       }
     }
 
-    const result = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.85,
-        })
-      : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.85,
-        })
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera'
+          ? ImagePicker.launchCameraAsync({
+              mediaTypes: ['images', 'videos'],
+              quality: 0.85,
+              videoMaxDuration: ORDER_EVIDENCE_VIDEO_MAX_SECONDS,
+            })
+          : ImagePicker.launchImageLibraryAsync(
+              preferCompatibleVideoRepresentation({
+                mediaTypes: ['images', 'videos'],
+                quality: 0.85,
+                videoMaxDuration: ORDER_EVIDENCE_VIDEO_MAX_SECONDS,
+              })
+            ),
+      {
+        context: 'customer_order_receipt_proof_picker',
+        mediaLabel: 'delivery proof media file',
+        extra: { source, orderId: order?.id, userId: user?.id },
+      }
+    )
+    if (!result) return null
 
     if (result.canceled || !result.assets?.[0]) return null
     const asset = result.assets[0]
-    const contentType = asset.mimeType ?? 'image/jpeg'
-    const extension = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'
+    const validationError = validateOrderEvidenceAsset(asset)
+    if (validationError) {
+      Alert.alert('Video not added', validationError)
+      return null
+    }
+    const contentType = orderEvidenceContentType(asset)
+    const extension = orderEvidenceExtension(contentType)
     return uploadPublicStorageImage({
       bucket: 'order-photos',
       path: `receipts/${id}/${Date.now()}_${Math.random().toString(36).slice(2)}.${extension}`,
       uri: asset.uri,
       contentType,
-      maxBytes: 10 * 1024 * 1024,
+      maxBytes: (ALLOWED_VIDEO_CONTENT_TYPES as readonly string[]).includes(contentType)
+        ? ORDER_EVIDENCE_VIDEO_MAX_BYTES
+        : MEDIA_LIMITS_BYTES.image,
+      allowedContentTypes: ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
       purpose: 'ORDER_REFERENCE',
     })
   }
@@ -1449,16 +1602,24 @@ export default function OrderTrackingScreen() {
             )
         Alert.alert('Could not confirm receipt', message)
       } else {
-        router.replace(`/(customer)/review/${id}`)
+        const reviewReturnTarget = `/(customer)/orders/${id}`
+        router.replace({
+          pathname: '/(customer)/review/[orderId]',
+          params: {
+            orderId: id,
+            returnTo: reviewReturnTarget,
+            historyChain: appendToHistory(historyChain, reviewReturnTarget),
+          },
+        })
       }
     } catch (error) {
       setConfirming(false)
       Sentry.captureException(error, { extra: { context: 'confirm_receipt_upload', orderId: id } })
       Alert.alert(
-        'Proof photo not saved',
+        'Proof media not saved',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. Your receipt was not confirmed yet.'
-          : 'We could not upload the delivery proof photo. Please try again.',
+          : 'We could not upload the delivery proof. Please try again.',
       )
     }
   }
@@ -1939,6 +2100,48 @@ export default function OrderTrackingScreen() {
   const fabricHandoffLabel =
     order.supportMeta.fabricHandoffLabel ??
     (fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null)
+  const briefDossier = buildBriefDossier(
+    {
+      orderKind: order.orderKind,
+      garmentType: order.garmentType,
+      garmentDescription: order.garmentDescription,
+      itemTitle: order.itemTitle,
+      itemSize: order.itemSize,
+      itemQuantity: order.itemQuantity,
+      occasion: order.occasion,
+      stage: order.stage,
+      quotedAmount: baseAmount(order),
+      quotedCurrency: order.quotedCurrency,
+      quotedCompletionDate: order.quotedCompletionDate,
+      deadline: order.deadline,
+      fabricSource: order.fabricSource,
+      deliveryMethod: order.deliveryMethod,
+      deliveryAddress: order.deliveryAddress,
+      recipientName: order.recipientName,
+      recipientPhone: order.recipientPhone,
+      fabricTracking: order.fabricTracking,
+      trackingNumber: order.trackingNumber,
+      carrier: order.carrier,
+      fulfillmentProvider: order.fulfillmentProvider,
+      fulfillmentReference: order.fulfillmentReference,
+      fulfillmentContactName: order.fulfillmentContactName,
+      fulfillmentContactPhone: order.fulfillmentContactPhone,
+      collectionCode: order.collectionCode,
+      referencePhotos: order.referencePhotos,
+      proofMediaUrls: order.stageUpdates.map((update) => update.photoUrl).filter((url): url is string => !!url),
+      supportMeta: order.supportMeta as unknown as Record<string, unknown>,
+      customDetail: order.customDetail,
+      measurementSnapshot: order.measurementSnapshot as Record<string, unknown> | null,
+      measurementSourceLabel: measurementSource ? MEASUREMENT_SOURCE_LABELS[measurementSource] ?? String(measurementSource) : null,
+      fitConfidenceLabel: fitConfidence ? FIT_CONFIDENCE_LABELS[fitConfidence] ?? String(fitConfidence) : null,
+      measurementAgeLabel: measurementAgeText,
+      wearerLabel,
+      bulkMemberCount: groupMembers.length,
+    },
+    {
+      money: (amount, currency) => amount == null ? 'Quote pending' : formatAmount(amount, (currency ?? order.quotedCurrency) as CurrencyCode, (currency ?? order.quotedCurrency) as CurrencyCode, STATIC_FALLBACK_RATES),
+    },
+  )
   const showFabricTrackingSection =
     order.fabricSource === 'CUSTOMER_SUPPLIES' &&
     (fabricHandoffMode == null || isShippingFabricHandoff(fabricHandoffMode))
@@ -2181,6 +2384,8 @@ export default function OrderTrackingScreen() {
         router={router}
         customerEmail={user?.email ?? ''}
         preferredTab={tab}
+        returnTarget={explicitReturnPath}
+        historyChain={historyChain}
       />
     )
   }
@@ -2261,7 +2466,11 @@ export default function OrderTrackingScreen() {
             onPress={() =>
               router.navigate({
                 pathname: '/(customer)/messages/[orderId]',
-                params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+                params: {
+                  orderId: order.id,
+                  returnTo: `/(customer)/orders/${order.id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                },
               })
             }
           />
@@ -2283,7 +2492,14 @@ export default function OrderTrackingScreen() {
             <Button
               label="Continue to checkout"
               onPress={() =>
-                router.navigate(`/(customer)/tailor/item/checkout/${order.sellerItemId}`)
+                router.navigate({
+                  pathname: '/(customer)/tailor/item/checkout/[itemId]',
+                  params: {
+                    itemId: order.sellerItemId as string,
+                    returnTo: `/(customer)/orders/${order.id}`,
+                    historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                  },
+                })
               }
             />
           ) : null}
@@ -2905,7 +3121,11 @@ export default function OrderTrackingScreen() {
                   onPress={() =>
                     router.navigate({
                       pathname: '/(customer)/messages/[orderId]',
-                      params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+                      params: {
+                        orderId: order.id,
+                        returnTo: `/(customer)/orders/${order.id}`,
+                        historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                      },
                     })
                   }
                 />
@@ -3382,7 +3602,7 @@ export default function OrderTrackingScreen() {
 
           {fitProfile ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Guided fit intake</Text>
+              <Text style={styles.sectionTitle}>Fit notes</Text>
               <View style={styles.supportCard}>
                 <View style={styles.supportMetaList}>
                   {fitProfile.status ? (
@@ -3432,7 +3652,7 @@ export default function OrderTrackingScreen() {
                   <>
                     <View style={[styles.supportStatusBadge, styles.supportStatusSuccess]}>
                       <Text style={[styles.supportStatusText, styles.supportStatusTextSuccess]}>
-                        Tailor reviewed this fit intake
+                        Tailor reviewed these fit notes
                       </Text>
                     </View>
                     <Text style={styles.supportHint}>
@@ -3452,7 +3672,7 @@ export default function OrderTrackingScreen() {
                   </>
                 ) : (
                   <Text style={styles.supportHint}>
-                    This guided fit intake was attached to help your tailor quote and cut with more
+                    These fit notes were attached to help your tailor quote and cut with more
                     context.
                   </Text>
                 )}
@@ -4016,7 +4236,15 @@ export default function OrderTrackingScreen() {
           {['COMPLETE', 'DELIVERED', 'COLLECTED'].includes(order.stage) && !hasReview && (
             <TouchableOpacity
               style={styles.reviewCta}
-              onPress={() => router.push(`/(customer)/review/${order.id}`)}
+              onPress={() =>
+                router.push({
+                  pathname: '/(customer)/review/[orderId]',
+                  params: {
+                    orderId: order.id,
+                    historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                  },
+                })
+              }
               activeOpacity={0.85}
             >
               <View style={styles.reviewCtaInner}>
@@ -4034,6 +4262,25 @@ export default function OrderTrackingScreen() {
               </Text>
             </TouchableOpacity>
           )}
+
+          <View style={styles.section}>
+            <SupportDisclosure
+              title={briefDossier.title}
+              summary="Summary, style refs, fabric plan, measurements, fulfillment, bulk details, and proof."
+              defaultExpanded={order.orderKind === 'CUSTOM'}
+            >
+              <View style={styles.dossierList}>
+                {briefDossier.sections.map((section) => (
+                  <BriefDossierCard
+                    key={section.id}
+                    section={section}
+                    onOpenLink={openDossierLink}
+                    onOpenMedia={openMediaPreview}
+                  />
+                ))}
+              </View>
+            </SupportDisclosure>
+          </View>
 
           {order.orderKind === 'READY_MADE' && (
             <View style={styles.section}>
@@ -4236,7 +4483,11 @@ export default function OrderTrackingScreen() {
           onPress={() =>
             router.navigate({
               pathname: '/(customer)/messages/[orderId]',
-              params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+              params: {
+                orderId: order.id,
+                returnTo: `/(customer)/orders/${order.id}`,
+                historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+              },
             })
           }
           testID="message-tailor-btn"
@@ -4360,6 +4611,12 @@ export default function OrderTrackingScreen() {
         />
       ) : null}
 
+      <MediaLightboxModal
+        items={mediaPreview?.items ?? []}
+        activeIndex={mediaPreview?.index ?? null}
+        onDismiss={() => setMediaPreview(null)}
+      />
+
       <HandoffSupportModal
         visible={showHandoffSupport}
         orderId={order.id}
@@ -4380,6 +4637,112 @@ function SummaryLine({ label, value }: { label: string; value: string }) {
     <View style={styles.summaryLine}>
       <Text style={styles.summaryLineLabel}>{label}</Text>
       <Text style={styles.summaryLineValue}>{decodeDisplayText(value)}</Text>
+    </View>
+  )
+}
+
+function BriefDossierRowView({
+  row,
+  onOpenLink,
+  onOpenMedia,
+}: {
+  row: BriefDossierRow
+  onOpenLink: (href: string) => void
+  onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+}) {
+  if (row.presentation === 'chips' && row.values?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.summaryLineLabel}>{row.label}</Text>
+        <View style={styles.styleChipRow}>
+          {row.values.map((value) => (
+            <View key={value} style={styles.styleChip}>
+              <Text style={styles.styleChipText}>{decodeDisplayText(value)}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
+  if (row.presentation === 'links' && row.hrefs?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.summaryLineLabel}>{row.label}</Text>
+        {row.hrefs.map((href) => (
+          <TouchableOpacity
+            key={href}
+            onPress={() => void onOpenLink(href)}
+            accessibilityRole="link"
+            accessibilityLabel={`Open ${decodeDisplayText(href)}`}
+          >
+            <Text style={styles.dossierLinkText}>{decodeDisplayText(href)}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    )
+  }
+
+  if (row.presentation === 'media' && row.mediaUrls?.length) {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <View style={styles.dossierRowHeader}>
+          <Text style={styles.summaryLineLabel}>{row.label}</Text>
+          {row.value ? <Text style={styles.helperText}>{row.value}</Text> : null}
+        </View>
+        <View style={styles.dossierMediaGrid}>
+          {dossierMediaItems(row.label, row.mediaUrls).map((item, index, items) => (
+            <TouchableOpacity
+              key={item.uri + '-' + index}
+              style={styles.dossierMediaTile}
+              onPress={() => onOpenMedia(items, index)}
+              activeOpacity={0.9}
+              accessibilityRole="imagebutton"
+              accessibilityLabel={`Open ${item.label}`}
+            >
+              <StageMediaPreview uri={item.uri} style={styles.dossierMediaImage} surface="customer_order_dossier_media" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
+  if (row.presentation === 'stacked') {
+    return (
+      <View style={styles.dossierRowStacked}>
+        <Text style={styles.summaryLineLabel}>{row.label}</Text>
+        <Text style={styles.dossierStackedText}>{decodeDisplayText(row.value ?? '')}</Text>
+      </View>
+    )
+  }
+
+  return <SummaryLine label={row.label} value={row.value ?? 'Not set'} />
+}
+
+function BriefDossierCard({
+  section,
+  onOpenLink,
+  onOpenMedia,
+}: {
+  section: BriefDossierSection
+  onOpenLink: (href: string) => void
+  onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+}) {
+  return (
+    <View style={styles.supportCard}>
+      <Text style={styles.supportCardTitle}>{section.title}</Text>
+      {section.summary ? <Text style={styles.helperText}>{section.summary}</Text> : null}
+      <View style={styles.supportMetaList}>
+        {section.rows.map((row) => (
+          <BriefDossierRowView
+            key={row.id}
+            row={row}
+            onOpenLink={onOpenLink}
+            onOpenMedia={onOpenMedia}
+          />
+        ))}
+      </View>
     </View>
   )
 }
@@ -5896,12 +6259,16 @@ function QuoteReviewScreen({
   router,
   customerEmail,
   preferredTab,
+  returnTarget,
+  historyChain,
 }: {
   order: OrderDetail
   onAction: () => Promise<void>
   router: ReturnType<typeof useRouter>
   customerEmail?: string
   preferredTab?: string
+  returnTarget?: string
+  historyChain?: string
 }) {
   const [accepting, setAccepting] = useState(false)
   const [declining, setDeclining] = useState(false)
@@ -5910,6 +6277,21 @@ function QuoteReviewScreen({
   const navigation = useNavigation()
   const { startOrderPayment } = useOrderPaymentFlow()
   const orderCurrency = order.quotedCurrency
+  const orderReturnTab = preferredTab === 'completed' ? 'completed' : 'active'
+  const currentOrderReturnTarget = `/(customer)/orders/${order.id}`
+  const currentOrderHistoryChain = appendToHistory(historyChain, currentOrderReturnTarget)
+
+  function replaceCurrentOrder() {
+    router.replace({
+      pathname: '/(customer)/orders/[id]',
+      params: {
+        id: order.id,
+        tab: orderReturnTab,
+        returnTo: returnTarget ?? currentOrderReturnTarget,
+        historyChain: currentOrderHistoryChain,
+      },
+    })
+  }
   const payNowLabel =
     baseAmount(order) != null
       ? formatAmount(baseAmount(order) ?? 0, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)
@@ -5929,12 +6311,15 @@ function QuoteReviewScreen({
   const consultationMeta = order.supportMeta.consultation ?? null
   const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else
-      router.replace({
+    goBackOrReturnTo(
+      router,
+      navigation,
+      returnTarget,
+      {
         pathname: '/(customer)/orders',
         params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
-      })
+      },
+    )
   }
 
   // Find the quote from stage updates or a separate quote field
@@ -5968,13 +6353,7 @@ function QuoteReviewScreen({
                     'Payment not finished',
                     'Your quote is still saved. Finish payment from the order screen any time.'
                   )
-                  router.replace({
-                    pathname: '/(customer)/orders/[id]',
-                    params: {
-                      id: order.id,
-                      tab: preferredTab === 'completed' ? 'completed' : 'active',
-                    },
-                  })
+                  replaceCurrentOrder()
                   return
                 }
 
@@ -5983,13 +6362,7 @@ function QuoteReviewScreen({
                     'Payment failed',
                     `${result.message}\n\nRetry from the order screen within 2 hours to keep this quote alive.`
                   )
-                  router.replace({
-                    pathname: '/(customer)/orders/[id]',
-                    params: {
-                      id: order.id,
-                      tab: preferredTab === 'completed' ? 'completed' : 'active',
-                    },
-                  })
+                  replaceCurrentOrder()
                   return
                 }
 
@@ -6004,13 +6377,7 @@ function QuoteReviewScreen({
                 return
               }
 
-              router.replace({
-                pathname: '/(customer)/orders/[id]',
-                params: {
-                  id: order.id,
-                  tab: preferredTab === 'completed' ? 'completed' : 'active',
-                },
-              })
+              replaceCurrentOrder()
             } catch (error) {
               Sentry.captureException(error, {
                 extra: { context: 'accept_quote_payment_unhandled', orderId: order.id },
@@ -6307,7 +6674,11 @@ function QuoteReviewScreen({
           onPress={() =>
             router.navigate({
               pathname: '/(customer)/messages/[orderId]',
-              params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+              params: {
+                orderId: order.id,
+                returnTo: `/(customer)/orders/${order.id}`,
+                historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+              },
             })
           }
         />
@@ -6356,23 +6727,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.display,
   },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    fontFamily: Fonts.display,
-  },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-
   // Progress bar
   progressBar: { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
   progressStep: { flex: 1, alignItems: 'center', gap: 4, position: 'relative' },
@@ -6616,6 +6970,22 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     fontWeight: FontWeight.medium,
   },
+  dossierList: { gap: Spacing.sm },
+  dossierRowStacked: { gap: 6 },
+  dossierRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.sm },
+  dossierStackedText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
+  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreen, lineHeight: 20 },
+  dossierMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  dossierMediaTile: { width: '31%', aspectRatio: 1, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
+  dossierMediaImage: { width: '100%', height: '100%' },
+  styleChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  styleChip: {
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+  },
+  styleChipText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   helperText: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
   quoteFootnote,
   supportCard: {
@@ -6891,27 +7261,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.display,
   },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   retryBtn: {
     backgroundColor: Colors.needleGreen,
@@ -6965,5 +7314,4 @@ const styles = StyleSheet.create({
     borderColor: Colors.needleGreen + '35',
   },
   escrowNoteText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  expiryNote: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' as const },
 })

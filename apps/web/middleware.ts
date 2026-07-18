@@ -89,6 +89,9 @@ function contentSecurityPolicy(nonce: string) {
   const imgSrc = ["'self'", 'data:', 'blob:', getSupabaseStorageOrigin(), 'https://*.supabase.co', 'https://images.unsplash.com', 'https://*.stripe.com']
     .filter(Boolean)
     .join(' ')
+  const mediaSrc = ["'self'", 'blob:', getSupabaseStorageOrigin(), 'https://*.supabase.co']
+    .filter(Boolean)
+    .join(' ')
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? ''
   const shouldUpgradeInsecureRequests = siteUrl.startsWith('https://') && !siteUrl.includes('localhost')
   const connectSrc = [
@@ -121,6 +124,7 @@ function contentSecurityPolicy(nonce: string) {
     "frame-ancestors 'none'",
     "object-src 'none'",
     `img-src ${imgSrc}`,
+    `media-src ${mediaSrc}`,
     `script-src ${scriptSrc}`,
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",

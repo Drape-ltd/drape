@@ -59,10 +59,10 @@ function AvatarImageComponent({
       {hasRemoteImage ? (
         <ExpoImage
           source={{ uri: resolvedUri }}
-	          style={StyleSheet.absoluteFillObject}
-	          contentFit="cover"
-	          contentPosition="top center"
-	          cachePolicy="memory-disk"
+          style={StyleSheet.absoluteFillObject}
+          contentFit="cover"
+          contentPosition="center"
+          cachePolicy="memory-disk"
           transition={120}
           placeholder={PROFILE_IMAGE_PLACEHOLDER}
           onLoad={() => setLoadedUri(resolvedUri)}

@@ -41,6 +41,9 @@ Thumbs.db
 !.vscode/settings.json
 .idea
 
+# Local Codex skills
+.codex/skills/
+
 # Prisma
 packages/db/generated
 
@@ -79,6 +82,7 @@ packages/drape-vision/android/build/
 coverage
 .maestro/screenshots
 qa-artifacts/
+competition-screens/
 
 # Certificates & keys
 *.pem

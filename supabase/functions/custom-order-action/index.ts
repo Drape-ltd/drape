@@ -30,6 +30,7 @@ import {
 import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/checkout-policy.ts'
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 import { resolveDeadlineContextWarning } from '../../../packages/shared/src/deadline-context.ts'
+import { getCustomOrderFabricIssues } from '../../../packages/shared/src/custom-order-fabric.ts'
 
 const FN = 'custom-order-action'
 const STALE_MEASUREMENT_MONTHS = 6
@@ -60,6 +61,8 @@ const IN_PROGRESS_ORDER_STAGES = [
   'IN_DISPUTE',
 ] as const
 
+const MAX_FABRIC_REFERENCE_MEDIA = 4
+
 const BodySchema = z.object({
   action: z.enum(['create-order', 'preflight-create-order']),
   tailorProfileId: z.string().trim().uuid(),
@@ -81,6 +84,15 @@ const BodySchema = z.object({
   fabricBudgetAmount: z.number().int().nonnegative().optional().nullable(),
   fabricBudgetCurrency: z.string().trim().max(3).optional().nullable(),
   fabricSourcingDeadlineDays: z.number().int().optional().nullable(),
+  fabricReferenceMedia: z.array(z.string().url()).max(MAX_FABRIC_REFERENCE_MEDIA).default([]),
+  fabricReferenceMediaCount: z.number().int().min(0).max(MAX_FABRIC_REFERENCE_MEDIA).optional().default(0),
+  fabricReferenceLinks: z.array(z.string().trim().url()).max(CUSTOM_ORDER_MAX_STYLE_LINKS).default([]),
+  fabricSubstitutionPreference: z.enum(['ASK_BEFORE_SUBSTITUTING', 'SIMILAR_OK', 'EXACT_MATCH_ONLY']).optional().nullable(),
+  bulkFabricMode: z.enum(['SAME_FABRIC', 'COORDINATED_VARIATIONS', 'DIFFERENT_FABRIC_PER_PERSON']).optional().nullable(),
+  fabricVendorName: z.string().trim().max(120).optional().nullable(),
+  fabricVendorLocation: z.string().trim().max(180).optional().nullable(),
+  fabricVendorLink: z.string().trim().url().optional().nullable(),
+  fabricVendorNotes: z.string().trim().max(400).optional().nullable(),
   supportMeta: z.unknown().optional().nullable(),
   deliveryMethod: z.enum(['SHIPPING', 'LOCAL_DELIVERY', 'LOCAL_COLLECTION']),
   shippingPreference: z.enum(['STANDARD', 'EXPRESS']).optional().nullable(),
@@ -258,11 +270,19 @@ Deno.serve(async (req) => {
     }
 
     const body = parsed.data
+    const supportMeta = body.supportMeta && typeof body.supportMeta === 'object' && !Array.isArray(body.supportMeta)
+      ? body.supportMeta as Record<string, unknown>
+      : null
     const normalizedGarmentTypeOther = normalizeText(body.garmentTypeOther)
     const normalizedBodyNote = normalizeText(body.bodyNote) ?? normalizeText(body.fitNote)
     const referencePhotos = body.referencePhotos ?? []
     const preflightReferencePhotoCount = body.action === 'preflight-create-order' ? body.referencePhotoCount ?? 0 : 0
     const styleReferenceLinks = [...new Set((body.styleReferenceLinks ?? []).map((link) => link.trim()))]
+    const fabricReferenceMedia = body.fabricReferenceMedia ?? []
+    const preflightFabricReferenceMediaCount = body.action === 'preflight-create-order'
+      ? body.fabricReferenceMediaCount ?? 0
+      : fabricReferenceMedia.length
+    const fabricReferenceLinks = [...new Set((body.fabricReferenceLinks ?? []).map((link) => link.trim()))]
     const hasStyleReference = referencePhotos.length + preflightReferencePhotoCount > 0 || styleReferenceLinks.length > 0
 
     if (!isKnownCustomGarmentType(body.garmentType)) {
@@ -294,26 +314,45 @@ Deno.serve(async (req) => {
       return jsonError(cors, 400, 'STYLE_LINK_UNSUPPORTED', 'Style links must be from Instagram, Pinterest, or TikTok.')
     }
 
+    const unsupportedFabricLink = fabricReferenceLinks.find((link) => !isAllowedCustomStyleReference(link))
+    if (unsupportedFabricLink) {
+      return jsonError(cors, 400, 'FABRIC_LINK_UNSUPPORTED', 'Fabric links must be from Instagram, Pinterest, or TikTok.')
+    }
+
     const fabricSourcingDeadlineDays =
       body.fabricSource === 'TAILOR_SOURCES'
         ? body.fabricSourcingDeadlineDays ?? CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS
         : null
 
-    if (body.fabricSource === 'TAILOR_SOURCES') {
-      if (!normalizeText(body.fabricDescription)) {
-        return jsonError(cors, 400, 'FABRIC_DESCRIPTION_REQUIRED', 'Describe the fabric the tailor should source before submitting.')
-      }
-
-      if (!isCustomFabricSourcingDeadline(fabricSourcingDeadlineDays)) {
-        return jsonError(cors, 400, 'FABRIC_SOURCING_DEADLINE_INVALID', 'Choose a supported fabric sourcing deadline.')
-      }
+    if (body.fabricSource === 'TAILOR_SOURCES' && !isCustomFabricSourcingDeadline(fabricSourcingDeadlineDays)) {
+      return jsonError(cors, 400, 'FABRIC_SOURCING_DEADLINE_INVALID', 'Choose a supported fabric sourcing deadline.')
     }
 
     const normalizedFabricBudgetCurrency = body.fabricBudgetCurrency
       ? normalizeAccountCurrency(body.fabricBudgetCurrency)
       : null
-    if (body.fabricBudgetAmount && !normalizedFabricBudgetCurrency) {
-      return jsonError(cors, 400, 'FABRIC_BUDGET_CURRENCY_INVALID', 'Choose a supported currency for the fabric budget.')
+    const bulkMeta = objectRecord(supportMeta?.bulkOrder)
+    const bulkRecipientCount = typeof bulkMeta?.recipientCount === 'number' ? bulkMeta.recipientCount : null
+    const fabricIssues = getCustomOrderFabricIssues({
+      fabricSource: body.fabricSource,
+      fabricDescription: body.fabricDescription,
+      fabricBudgetAmount: body.fabricBudgetAmount ?? null,
+      fabricBudgetCurrency: normalizedFabricBudgetCurrency,
+      fabricReferenceMediaCount: preflightFabricReferenceMediaCount,
+      fabricReferenceLinkCount: fabricReferenceLinks.length,
+      fabricSubstitutionPreference: body.fabricSubstitutionPreference ?? null,
+      fabricHandoffMode: typeof supportMeta?.fabricHandoffMode === 'string' ? supportMeta.fabricHandoffMode : null,
+      isBulkOrder: Boolean(bulkMeta?.enabled),
+      bulkRecipientCount,
+      bulkFabricMode: body.bulkFabricMode ?? (typeof bulkMeta?.fabricMode === 'string' ? bulkMeta.fabricMode : null),
+      suggestedVendorName: body.fabricVendorName,
+      suggestedVendorLocation: body.fabricVendorLocation,
+      suggestedVendorLink: body.fabricVendorLink,
+      suggestedVendorNotes: body.fabricVendorNotes,
+    })
+    if (fabricIssues.length > 0) {
+      const issue = fabricIssues[0]
+      return jsonError(cors, 400, issue.code, issue.message)
     }
 
     const needsRecipientDeliveryDetails = body.deliveryMethod !== 'LOCAL_COLLECTION'
@@ -358,9 +397,6 @@ Deno.serve(async (req) => {
       )
     }
 
-    const supportMeta = body.supportMeta && typeof body.supportMeta === 'object' && !Array.isArray(body.supportMeta)
-      ? body.supportMeta as Record<string, unknown>
-      : null
     const wearerContext = normalizeWearerContext(supportMeta, body.customerMeasurementsSnapshot)
     const measurementAge = normalizeMeasurementAge(supportMeta, body.customerMeasurementsSnapshot)
     const measurementSnapshot = objectRecord(body.customerMeasurementsSnapshot)
@@ -475,6 +511,9 @@ Deno.serve(async (req) => {
       ['custom_order.style_notes', 'style_notes', body.styleNotes, "Contact details can't be included in style notes."],
       ['custom_order.body_note', 'body_note', normalizedBodyNote, "Contact details can't be included in body notes."],
       ['custom_order.fabric_description', 'fabric_description', body.fabricDescription, "Contact details can't be included in fabric notes."],
+      ['custom_order.fabric_vendor_name', 'fabric_vendor_name', body.fabricVendorName, "Contact details can't be included in vendor notes."],
+      ['custom_order.fabric_vendor_location', 'fabric_vendor_location', body.fabricVendorLocation, "Contact details can't be included in vendor notes."],
+      ['custom_order.fabric_vendor_notes', 'fabric_vendor_notes', body.fabricVendorNotes, "Contact details can't be included in vendor notes."],
       ['custom_order.delivery_instructions', 'delivery_instructions', body.deliveryInstructions, "Contact details can't be included in delivery instructions."],
     ]
 
@@ -493,7 +532,6 @@ Deno.serve(async (req) => {
       if (blocked) return blocked
     }
 
-    const bulkMeta = objectRecord(supportMeta?.bulkOrder)
     const blockedStructuredContext = await rejectIfBlockedContact({
       supabase,
       fn: FN,
@@ -529,7 +567,7 @@ Deno.serve(async (req) => {
 
     const { data: tailorProfile, error: tailorError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, is_live, supports_custom_orders, availability, location, currency, payout_currency, payout_provider, payout_account_type, paystack_recipient_code, paystack_account_id, stripe_connect_account_id, stripe_account_id')
+      .select('id, user_id, is_live, supports_custom_orders, accepts_custom_orders_now, availability, location, currency, payout_currency, payout_provider, payout_account_type, paystack_recipient_code, paystack_account_id, stripe_connect_account_id, stripe_account_id')
       .eq('id', body.tailorProfileId)
       .maybeSingle()
 
@@ -580,13 +618,13 @@ Deno.serve(async (req) => {
         },
       },
       {
-        name: 'tailor_accepting_orders',
-        condition: tailorProfile?.availability !== 'FULLY_BOOKED',
+        name: 'tailor_accepting_custom_orders_now',
+        condition: (tailorProfile as any)?.accepts_custom_orders_now !== false,
         errorCode: 'SELLER_ON_BREAK',
-        message: 'This tailor is not currently accepting orders. Check back later or browse other tailors.',
-        field: 'availability',
+        message: 'This tailor is not currently accepting custom orders. Check back later or browse other tailors.',
+        field: 'accepts_custom_orders_now',
         severity: 'BLOCKING',
-        actual: { availability: tailorProfile?.availability ?? null },
+        actual: { accepts_custom_orders_now: (tailorProfile as any)?.accepts_custom_orders_now ?? null },
       },
       {
         name: 'seller_order_currency_resolved',
@@ -625,8 +663,8 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'SELLER_UNAVAILABLE', 'This seller is not accepting custom orders right now.')
     }
 
-    if (tailorProfile.availability === 'FULLY_BOOKED') {
-      return jsonError(cors, 409, 'SELLER_ON_BREAK', 'This seller is on a break and is not accepting new orders right now.')
+    if ((tailorProfile as any).accepts_custom_orders_now === false) {
+      return jsonError(cors, 409, 'SELLER_ON_BREAK', 'This seller is not accepting custom orders right now.')
     }
 
     if (body.deliveryMethod === 'LOCAL_COLLECTION') {
@@ -766,6 +804,8 @@ Deno.serve(async (req) => {
         targetDeliveryDate: body.deadline,
         referencePhotoCount: referencePhotos.length,
         styleReferenceLinkCount: styleReferenceLinks.length,
+        fabricReferenceMediaCount: fabricReferenceMedia.length,
+        fabricReferenceLinkCount: fabricReferenceLinks.length,
         shippingPreference: normalizedShippingPreference,
       },
       styleReferenceLinks,
@@ -790,12 +830,39 @@ Deno.serve(async (req) => {
           note: normalizedBodyNote,
         }
         : null,
+      fabricReference: {
+        sourceMode: body.fabricSource,
+        mediaCount: fabricReferenceMedia.length,
+        mediaUrls: fabricReferenceMedia,
+        linkCount: fabricReferenceLinks.length,
+        links: fabricReferenceLinks,
+      },
+      customerFabricProof: body.fabricSource === 'CUSTOMER_SUPPLIES'
+        ? {
+          requiredBeforeQuote: true,
+          mediaCount: fabricReferenceMedia.length,
+          mediaUrls: fabricReferenceMedia,
+          referenceLinks: fabricReferenceLinks,
+        }
+        : null,
       fabricSourcing: body.fabricSource === 'TAILOR_SOURCES'
         ? {
           description: normalizeText(body.fabricDescription),
           budgetAmount: body.fabricBudgetAmount ?? null,
           budgetCurrency: normalizedFabricBudgetCurrency,
           deadlineBusinessDays: fabricSourcingDeadlineDays,
+          referenceMediaUrls: fabricReferenceMedia,
+          referenceLinks: fabricReferenceLinks,
+          substitutionPreference: body.fabricSubstitutionPreference ?? null,
+          suggestedVendor: body.fabricVendorName || body.fabricVendorLocation || body.fabricVendorLink || body.fabricVendorNotes
+            ? {
+              name: normalizeText(body.fabricVendorName),
+              location: normalizeText(body.fabricVendorLocation),
+              link: normalizeText(body.fabricVendorLink),
+              notes: normalizeText(body.fabricVendorNotes),
+            }
+            : null,
+          bulkFabricMode: body.bulkFabricMode ?? (typeof bulkMeta?.fabricMode === 'string' ? bulkMeta.fabricMode : null),
         }
         : null,
       deliveryInstructions: normalizeText(body.deliveryInstructions),
@@ -962,6 +1029,24 @@ Deno.serve(async (req) => {
       metadata: { referencePhotoCount: referencePhotos.length },
     })
 
+    if (fabricReferenceMedia.length > 0) {
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'CUSTOMER',
+        surface: 'custom_order.fabric_reference',
+        publicUrls: fabricReferenceMedia,
+        purpose: 'ORDER_REFERENCE',
+        orderId: created.id,
+        relatedEntityType: 'order',
+        relatedEntityId: created.id,
+        metadata: {
+          fabricReferenceMediaCount: fabricReferenceMedia.length,
+          fabricSource: body.fabricSource,
+        },
+      })
+    }
+
     await audit(supabase, {
       event: 'custom_order.created',
       actor_id: caller.id,
@@ -1006,6 +1091,28 @@ Deno.serve(async (req) => {
         headline: 'A customer sent you a new custom brief',
         body: notificationBody,
         ctaLabel: 'Review order',
+      }),
+    )
+    const customerConfirmationTitle = 'Custom brief submitted'
+    const customerConfirmationBody = "Your " + body.garmentType + " brief was sent. We will notify you when the tailor replies or sends a quote."
+
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, caller.id, {
+        title: customerConfirmationTitle,
+        body: customerConfirmationBody,
+        preferenceKey: 'orderUpdates',
+        data: { orderId: created.id, type: 'custom_order_submitted' },
+      }),
+    )
+    EdgeRuntime.waitUntil(
+      sendOrderEventEmail(supabase, {
+        order: orderNotificationContext,
+        recipientUserId: caller.id,
+        audience: 'CUSTOMER',
+        subject: customerConfirmationTitle,
+        headline: 'Your custom brief was sent',
+        body: customerConfirmationBody,
+        ctaLabel: 'View order',
       }),
     )
 

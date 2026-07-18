@@ -32,10 +32,12 @@ declare const EdgeRuntime: {
 const BodySchema = z.object({
   orderId:  uuid,
   callType: z.enum(['video', 'audio']).default('video'),
+  notifyCounterpart: z.boolean().default(true),
 })
 
 // Room expires 48h after creation — covers consultation window with buffer
 const ROOM_TTL_SECONDS = 48 * 60 * 60
+const CONSULTATION_JOIN_EARLY_MS = 5 * 60 * 1000
 
 function jsonResponse(body: Record<string, unknown>, status: number, corsHeaders: HeadersInit) {
   return new Response(JSON.stringify(body), {
@@ -75,9 +77,9 @@ function consultationStartGate(scheduledStartAt: string | null | undefined) {
   if (!scheduledStartAt) return null
   const starts = new Date(scheduledStartAt).getTime()
   if (!Number.isFinite(starts)) return null
-  const opensAt = starts - 15 * 60 * 1000
+  const opensAt = starts - CONSULTATION_JOIN_EARLY_MS
   if (Date.now() < opensAt) {
-    return 'This consultation opens 15 minutes before the scheduled time.'
+    return 'This consultation opens 5 minutes before the scheduled time.'
   }
   return null
 }
@@ -116,7 +118,8 @@ Deno.serve(async (req) => {
     const parsed = parseBody(BodySchema, await req.json())
     if (!parsed.ok) return jsonError(corsHeaders, 400, 'VALIDATION_FAILED', parsed.error)
 
-    const { orderId, callType } = parsed.data
+    const { orderId, notifyCounterpart } = parsed.data
+    const callType = parsed.data.callType ?? 'video'
     const audioOnly = callType === 'audio'
 
     const supabase = createClient(
@@ -133,7 +136,7 @@ Deno.serve(async (req) => {
     // Check for existing room URL — also fetch tailor ownership fields
     const { data: order } = await supabase
       .from('orders')
-      .select('id, reference, stage, video_call_url, tailor_id, customer_id, consultation_fee, special_note, tailor_profiles!tailor_profile_id(user_id)')
+      .select('id, reference, stage, video_call_url, tailor_id, tailor_profile_id, customer_id, consultation_fee, special_note, tailor_profiles!tailor_profile_id(user_id)')
       .eq('id', orderId)
       .single()
 
@@ -141,6 +144,10 @@ Deno.serve(async (req) => {
 
     // Verify the caller is one of the two people on this order
     const tailorUserId = order.tailor_id ?? (order.tailor_profiles as any)?.user_id
+    const tailorProfileId =
+      typeof (order as { tailor_profile_id?: string | null }).tailor_profile_id === 'string'
+        ? (order as { tailor_profile_id?: string | null }).tailor_profile_id
+        : null
     const customerUserId = (order as { customer_id?: string | null }).customer_id ?? null
     const callerRole = tailorUserId === caller.id ? 'TAILOR' : customerUserId === caller.id ? 'CUSTOMER' : null
     if (!callerRole) {
@@ -304,6 +311,16 @@ Deno.serve(async (req) => {
       .eq('id', orderId)
       .eq('stage', 'CONSULTATION')
 
+    if (callerRole === 'CUSTOMER') {
+      updateQuery = updateQuery.eq('customer_id', caller.id)
+    } else if (order.tailor_id) {
+      updateQuery = updateQuery.eq('tailor_id', caller.id)
+    } else if (tailorProfileId) {
+      updateQuery = updateQuery.eq('tailor_profile_id', tailorProfileId)
+    } else {
+      return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only the customer or tailor on this order can start the consultation room.')
+    }
+
     updateQuery = order.video_call_url
       ? updateQuery.eq('video_call_url', order.video_call_url)
       : updateQuery.is('video_call_url', null)
@@ -312,8 +329,21 @@ Deno.serve(async (req) => {
 
     if (!persistedRows || persistedRows.length === 0) {
       // Race: another request beat us — return the URL it set
-      const { data: fresh } = await supabase
-        .from('orders').select('video_call_url').eq('id', orderId).single()
+      let freshQuery = supabase
+        .from('orders')
+        .select('video_call_url')
+        .eq('id', orderId)
+        .eq('stage', 'CONSULTATION')
+
+      if (callerRole === 'CUSTOMER') {
+        freshQuery = freshQuery.eq('customer_id', caller.id)
+      } else if (order.tailor_id) {
+        freshQuery = freshQuery.eq('tailor_id', caller.id)
+      } else if (tailorProfileId) {
+        freshQuery = freshQuery.eq('tailor_profile_id', tailorProfileId)
+      }
+
+      const { data: fresh } = await freshQuery.maybeSingle()
       const existingUrl = (fresh as any)?.video_call_url
       if (existingUrl) {
         return jsonResponse({ url: existingUrl, existing: true }, 200, corsHeaders)
@@ -329,7 +359,7 @@ Deno.serve(async (req) => {
     await audit(supabase, {
       event: 'consultation.room_created',
       actor_id: caller.id,
-      actor_role: 'TAILOR',
+      actor_role: callerRole,
       order_id: orderId,
       payload: {
         function: 'create-consultation-room',
@@ -353,20 +383,30 @@ Deno.serve(async (req) => {
               }),
             })
             .eq('id', orderId)
+            .eq('stage', 'CONSULTATION')
+            .eq('video_call_url', roomUrl)
         })(),
       )
     }
 
-    if (recipientId) {
+    if (recipientId && notifyCounterpart) {
       EdgeRuntime.waitUntil(
         Promise.allSettled([
           sendPushToUser(supabase, recipientId.toString(), {
             title: audioOnly ? 'Consultation audio ready' : 'Consultation call ready',
             body: audioOnly
-              ? 'Your consultation audio room is ready. Join from your order or messages.'
-              : 'Your consultation call is ready. Join from your order or messages.',
-            preferenceKey: 'orderUpdates',
-            data: { orderId },
+              ? 'Your consultation audio room is ready. Tap to join now.'
+              : 'Your consultation call is ready. Tap to join now.',
+            preferenceKey: 'messages',
+            channelId: 'calls',
+            sound: 'default',
+            interruptionLevel: 'timeSensitive',
+            data: {
+              orderId,
+              target: 'call-join',
+              callKind: 'consultation',
+              callType,
+            },
           }),
           enqueueSmsJob(supabase, {
             userId: recipientId.toString(),

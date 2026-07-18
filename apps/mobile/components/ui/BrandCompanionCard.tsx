@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { Colors, Fonts, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 type BrandCompanionCardProps = {
   title?: string
@@ -8,21 +8,21 @@ type BrandCompanionCardProps = {
 }
 
 export function BrandCompanionCard({
-  title = 'Mascot direction',
-  body = 'Launch with a subtle stitch companion, not a loud character. Drapeon handles money and measurements, so trust leads and charm supports.',
-  label = 'Thread mark',
+  title = 'Drapeon',
+  body = '',
+  label = '',
 }: BrandCompanionCardProps) {
   return (
     <View style={styles.card}>
       <Text style={styles.title}>{title}</Text>
-      <Text style={styles.body}>{body}</Text>
+      {body ? <Text style={styles.body}>{body}</Text> : null}
       <View style={styles.threadRow}>
         <View style={styles.threadLine} />
         <View style={styles.threadMark}>
           <Text style={styles.threadInitial}>D</Text>
         </View>
       </View>
-      <Text style={styles.label}>{label}</Text>
+      {label ? <Text style={styles.label}>{label}</Text> : null}
     </View>
   )
 }
@@ -33,8 +33,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    borderRadius: 18,
-    padding: 33,
+    borderRadius: Radius.xl,
+    padding: Spacing.xxxl,
     gap: Spacing.md,
   },
   title: {

@@ -130,7 +130,7 @@ export function RecoveryBridge(): any {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)] px-5 py-8">
       <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-md place-items-center">
-        <div className="w-full rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+        <div className="w-full rounded-[8px] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon</p>
 
           {done ? (
@@ -179,12 +179,12 @@ export function RecoveryBridge(): any {
                       placeholder="8+ characters"
                       autoComplete="new-password"
                       maxLength={MAX_PASSWORD_LENGTH}
-                      className="min-h-12 w-full rounded-[1rem] border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                      className="min-h-12 w-full rounded-lg border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((v) => !v)}
-                      className="absolute inset-y-1.5 right-1.5 rounded-[0.8rem] px-3 text-xs font-semibold text-needle transition hover:bg-bone"
+                      className="absolute inset-y-1.5 right-1.5 rounded-lg px-3 text-xs font-semibold text-needle transition hover:bg-bone"
                     >
                       {showPassword ? 'Hide' : 'Show'}
                     </button>
@@ -204,7 +204,7 @@ export function RecoveryBridge(): any {
                   </span>
                 </div>
                 {error ? (
-                  <p role="alert" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
+                  <p role="alert" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
                     {error}
                   </p>
                 ) : null}

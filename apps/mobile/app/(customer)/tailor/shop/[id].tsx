@@ -6,16 +6,21 @@ import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
 import { Button, RemoteImage } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
-import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
+import { isVideoMediaUrl } from '@drape/shared/media-policy'
 
 function createDraftSessionId() {
   return `${new Date().getTime().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 export default function TailorShopScreen() {
-  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
+  const { id, returnTo, historyChain } = useLocalSearchParams<{
+    id: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { data, isLoading, refetch } = useTailorShop(id)
@@ -23,8 +28,8 @@ export default function TailorShopScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const tailorName = data?.tailorName ?? 'This seller'
   const items = useMemo(() => data?.items ?? [], [data?.items])
-  const sellerUnavailable = data ? data.sellerAvailability === 'FULLY_BOOKED' || !data.sellerLive : false
-  const customOrdersAvailable = data ? data.supportsCustomOrders && !sellerUnavailable : false
+  const sellerUnavailable = data ? data.shopPaused || !data.sellerLive : false
+  const customOrdersAvailable = data ? data.supportsCustomOrders && data.acceptsCustomOrdersNow && data.sellerLive : false
 
   useRefreshOnFocus(() => { void refetch() }, 0)
 
@@ -35,7 +40,12 @@ export default function TailorShopScreen() {
   }
 
   function goBack() {
-    goBackOrReturnToIfNeeded(router, navigation, returnTo, `/(customer)/tailor/${id}`)
+    goBackOrReturnTo(
+      router,
+      navigation,
+      pickSafeReturnTo(historyChain, returnTo),
+      `/(customer)/tailor/${id}`,
+    )
   }
 
   return (
@@ -65,7 +75,7 @@ export default function TailorShopScreen() {
           <View style={styles.unavailableCard}>
             <Feather name="pause-circle" size={18} color={Colors.error} />
             <Text style={styles.unavailableText}>
-              {tailorName} is not accepting new orders right now. You can still browse, but checkout and custom requests stay locked until they are available again.
+              {tailorName} has paused ready-made checkout right now. You can still browse and save pieces until checkout reopens.
             </Text>
           </View>
         ) : null}
@@ -90,6 +100,7 @@ export default function TailorShopScreen() {
                 params: {
                   tailorId: id,
                   returnTo: `/(customer)/tailor/shop/${id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/tailor/shop/${id}`),
                   draftSession: createDraftSessionId(),
                   freshStart: '1',
                 },
@@ -104,6 +115,7 @@ export default function TailorShopScreen() {
                 inventoryQuantity: item.inventoryQuantity,
                 showAvailableCount: true,
               })
+              const coverImageUrl = item.photoUrls.find((url) => !isVideoMediaUrl(url)) ?? null
 
               return (
                 <TouchableOpacity
@@ -113,14 +125,18 @@ export default function TailorShopScreen() {
                   onPress={() =>
                     router.push({
                       pathname: '/(customer)/tailor/item/[itemId]',
-                      params: { itemId: item.id, returnTo: `/(customer)/tailor/shop/${id}` },
+                      params: {
+                        itemId: item.id,
+                        returnTo: `/(customer)/tailor/shop/${id}`,
+                        historyChain: appendToHistory(historyChain, `/(customer)/tailor/shop/${id}`),
+                      },
                     })
                   }
                 >
                   <View style={styles.itemImageWrap}>
-                    {item.photoUrls[0] ? (
+                    {coverImageUrl ? (
                       <RemoteImage
-                        uri={item.photoUrls[0]}
+                        uri={coverImageUrl}
                         bucket="seller-item-media"
                         style={styles.itemImage}
                         contentFit="contain"
@@ -140,7 +156,7 @@ export default function TailorShopScreen() {
                     {stockSignal.tone !== 'available' ? <StockPill signal={stockSignal} floating /> : null}
                   </View>
                   <View style={styles.itemBody}>
-                    <Text style={styles.itemTitle}>{item.title}</Text>
+                    <Text style={styles.itemTitle} numberOfLines={2}>{item.title}</Text>
                     {item.category ? <Text style={styles.itemCategory}>{item.category}</Text> : null}
                     <View style={styles.priceRow}>
                       <Text style={styles.itemPrice}>

@@ -1,17 +1,22 @@
 import 'server-only'
 
 import {
+  buildOpsVerificationEvidenceSummary,
   formatOpsIssueNumber,
   normalizeAccountCurrency,
   payoutBlockReasonMessage,
   payoutWindowClosesAt,
   resolvePaymentProviderForCurrency,
+  type OpsVerificationEvidenceSummary,
+  type OpsVerificationProofItemEvidence,
   type PayoutBlockedReason,
 } from '@drape/shared'
 
 import { createServiceRoleClient } from './server-supabase'
 
 const OPS_DASHBOARD_CACHE_TTL_MS = 15_000
+const ID_DOCUMENT_BUCKET = 'id-documents'
+const ID_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60
 
 let opsDashboardDataCache: {
   data: OpsDashboardData
@@ -70,7 +75,12 @@ type TailorVerificationRow = {
   location: string
   specialty_tags: string[] | null
   id_document_url: string | null
+  id_selfie_document_url: string | null
+  avatar_url: string | null
+  portfolio_photo_urls: string[] | null
+  portfolio_video_urls: string[] | null
   id_verification_status: string
+  id_verification_submitted_at?: string | null
   payout_account_verified?: boolean | null
   payout_provider?: string | null
   payout_currency?: string | null
@@ -146,7 +156,7 @@ type SellerItemRow = {
   description: string | null
   category: string | null
   sizes: string[] | null
-  price_amount: number
+  price_amount: number | null
   currency: string
   photo_urls: string[] | null
   is_live: boolean
@@ -371,7 +381,13 @@ export type OpsVerification = {
   location: string
   specialtyTags: string[]
   idDocumentUrl: string | null
+  avatarUrl: string | null
+  portfolioPhotoUrls: string[]
+  portfolioVideoUrls: string[]
+  proofItems: OpsVerificationProofItemEvidence[]
+  evidenceSummary: OpsVerificationEvidenceSummary
   status: string
+  idVerificationSubmittedAt: string | null
   payoutAccountVerified: boolean
   payoutProvider: string | null
   payoutCurrency: string | null
@@ -444,7 +460,7 @@ export type OpsShopItem = {
   tailorProfileId: string
   tailorDisplayName: string
   tailorEmail: string | null
-  priceAmount: number
+  priceAmount: number | null
   currency: string
   photoUrls: string[]
   isLive: boolean
@@ -692,6 +708,53 @@ function stringPayloadValue(payload: Record<string, unknown>, key: string) {
 function metadataStringValue(metadata: Record<string, unknown> | null, key: string) {
   const value = metadata?.[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function idDocumentStoragePath(value: string | null | undefined): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed) return null
+
+  let path = trimmed
+  if (/^https?:\/\//iu.test(trimmed)) {
+    try {
+      const url = new URL(trimmed)
+      const decodedPath = decodeURIComponent(url.pathname)
+      const match = decodedPath.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?id-documents\/(.+)$/u)
+      if (!match?.[1]) return null
+      path = match[1]
+    } catch {
+      return null
+    }
+  }
+
+  path = path.replace(/^\/+/u, '').replace(/^id-documents\//u, '')
+  if (!path.startsWith('id-verification/')) return null
+  return path
+}
+
+async function createIdDocumentSignedUrl(
+  client: {
+    storage: {
+      from: (bucket: string) => {
+        createSignedUrl: (
+          path: string,
+          expiresIn: number,
+        ) => Promise<{ data: { signedUrl: string } | null; error: { message: string } | null }>
+      }
+    }
+  },
+  value: string | null | undefined,
+) {
+  const path = idDocumentStoragePath(value)
+  if (!path) return null
+
+  const { data, error } = await client
+    .storage
+    .from(ID_DOCUMENT_BUCKET)
+    .createSignedUrl(path, ID_DOCUMENT_SIGNED_URL_TTL_SECONDS)
+
+  if (error) return null
+  return data?.signedUrl ?? null
 }
 
 const LEGACY_WORKFLOW_ISSUE_EVENTS = [
@@ -1105,6 +1168,33 @@ function sellerItemRiskLabels(item: SellerItemRow) {
   return labels
 }
 
+function cleanMediaUrls(value: string[] | null | undefined) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((url) => (typeof url === 'string' ? url.trim() : ''))
+    .filter((url) => url.length > 0)
+}
+
+function isVerificationProofItem(item: SellerItemRow) {
+  return item.is_live === false || item.stock_status === 'HIDDEN'
+}
+
+function mapVerificationProofItem(item: SellerItemRow): OpsVerificationProofItemEvidence {
+  return {
+    id: item.id,
+    title: item.title,
+    category: item.category,
+    description: item.description,
+    mediaUrls: cleanMediaUrls(item.photo_urls),
+    isLive: item.is_live,
+    stockStatus: item.stock_status,
+    inventoryQuantity: typeof item.inventory_quantity === 'number' ? item.inventory_quantity : 0,
+    sizes: item.sizes ?? [],
+    createdAt: item.created_at,
+    updatedAt: item.updated_at,
+  }
+}
+
 function orderPaymentRefundedAmount(payment: OrderPaymentContextRow) {
   if (payment.status === 'REFUNDED') return Math.max(payment.amount, 0)
   if (typeof payment.refunded_amount === 'number') return Math.max(Math.min(payment.refunded_amount, payment.amount), 0)
@@ -1217,7 +1307,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .limit(24),
     client
       .from('tailor_profiles')
-      .select('id, user_id, display_name, location, specialty_tags, id_document_url, id_verification_status, payout_account_verified, payout_provider, payout_currency, created_at, updated_at')
+      .select('id, user_id, display_name, location, specialty_tags, id_document_url, id_selfie_document_url, avatar_url, portfolio_photo_urls, portfolio_video_urls, id_verification_status, id_verification_submitted_at, payout_account_verified, payout_provider, payout_currency, created_at, updated_at')
       .eq('id_verification_status', 'PENDING')
       .order('updated_at', { ascending: false })
       .limit(24),
@@ -1453,6 +1543,22 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   if (sellerItemsResult.status === 'fulfilled' && sellerItemsResult.value.error) {
     issues.push(formatIssue('Shop inventory', sellerItemsResult.value.error))
   }
+  let verificationProofItems: SellerItemRow[] = []
+  if (pendingVerifications.length > 0) {
+    const { data, error } = await client
+      .from('seller_items')
+      .select('id, tailor_profile_id, title, description, category, sizes, price_amount, currency, photo_urls, is_live, stock_status, inventory_quantity, size_inventory, pickup_available, delivery_available, shipping_available, created_at, updated_at')
+      .in('tailor_profile_id', pendingVerifications.map((profile) => profile.id))
+      .order('updated_at', { ascending: false })
+      .limit(Math.max(24, pendingVerifications.length * 4))
+
+    if (error) {
+      issues.push(formatIssue('Verification proof items', error))
+    } else {
+      verificationProofItems = ((data ?? []) as SellerItemRow[]).filter(isVerificationProofItem)
+    }
+  }
+
   if (payoutsResult.status === 'rejected') issues.push(formatIssue('Payouts', payoutsResult.reason))
   if (payoutsResult.status === 'fulfilled' && payoutsResult.value.error) {
     issues.push(formatIssue('Payouts', payoutsResult.value.error))
@@ -1806,6 +1912,24 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     })
   }
 
+  const idDocumentUrlsByProfileId = new Map<string, string | null>()
+  await Promise.all(
+    pendingVerifications.map(async (profile) => {
+      const verificationDocumentPath = profile.id_selfie_document_url ?? profile.id_document_url
+      idDocumentUrlsByProfileId.set(
+        profile.id,
+        await createIdDocumentSignedUrl(client, verificationDocumentPath),
+      )
+    }),
+  )
+
+  const verificationProofItemsByProfileId = new Map<string, OpsVerificationProofItemEvidence[]>()
+  for (const item of verificationProofItems) {
+    const current = verificationProofItemsByProfileId.get(item.tailor_profile_id) ?? []
+    current.push(mapVerificationProofItem(item))
+    verificationProofItemsByProfileId.set(item.tailor_profile_id, current)
+  }
+
   return {
     summary,
     systemHealth,
@@ -1882,6 +2006,17 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     pendingVerifications: pendingVerifications.map((profile) => {
       const user = usersById.get(profile.user_id)
       const verificationIssue = verificationIssuesByUserId.get(profile.user_id)
+      const idDocumentUrl = idDocumentUrlsByProfileId.get(profile.id) ?? null
+      const portfolioPhotoUrls = cleanMediaUrls(profile.portfolio_photo_urls)
+      const portfolioVideoUrls = cleanMediaUrls(profile.portfolio_video_urls)
+      const proofItems = verificationProofItemsByProfileId.get(profile.id) ?? []
+      const evidenceSummary = buildOpsVerificationEvidenceSummary({
+        avatarUrl: profile.avatar_url,
+        idDocumentUrl,
+        portfolioPhotoUrls,
+        portfolioVideoUrls,
+        proofItems,
+      })
 
       return {
         displayId: verificationIssue?.issue_number ? formatOpsIssueNumber(verificationIssue.issue_number) : issueDisplayId('TAI', profile.id),
@@ -1892,8 +2027,14 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         email: user?.email ?? null,
         location: profile.location,
         specialtyTags: profile.specialty_tags ?? [],
-        idDocumentUrl: profile.id_document_url,
+        idDocumentUrl,
+        avatarUrl: profile.avatar_url ?? null,
+        portfolioPhotoUrls,
+        portfolioVideoUrls,
+        proofItems,
+        evidenceSummary,
         status: profile.id_verification_status,
+        idVerificationSubmittedAt: profile.id_verification_submitted_at ?? null,
         payoutAccountVerified: profile.payout_account_verified === true,
         payoutProvider: derivePayoutProvider(profile.payout_currency),
         payoutCurrency: profile.payout_currency ?? null,

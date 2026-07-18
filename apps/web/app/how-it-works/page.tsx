@@ -54,7 +54,7 @@ export default function HowItWorksPage(): React.JSX.Element {
       <section className="py-8">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {phases.map(({ label, body }, i) => (
-            <div key={label} className="rounded-[1.5rem] border border-ink/6 bg-white/84 p-5 shadow-sm">
+            <div key={label} className="rounded-[8px] border border-ink/6 bg-white/84 p-5 shadow-sm">
               <span className="text-xs font-semibold tabular-nums text-needle/46">0{i + 1}</span>
               <h3 className="mt-2 text-xl text-ink">{label}</h3>
               <p className="mt-2 text-sm leading-6 text-ink/62">{body}</p>
@@ -74,7 +74,7 @@ export default function HowItWorksPage(): React.JSX.Element {
             <p className="mt-3 text-sm leading-7 text-ink/62">
               A clearer route than scattered messages, informal payments, and no visibility on production.
             </p>
-            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+            <div className="mt-6 overflow-hidden rounded-[8px] border border-ink/6 bg-white/84 shadow-sm">
               {customerSteps.map(([title, body], i) => (
                 <div key={title} className={`flex gap-4 px-5 py-4 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
                   <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/40">0{i + 1}</span>
@@ -94,7 +94,7 @@ export default function HowItWorksPage(): React.JSX.Element {
             <p className="mt-3 text-sm leading-7 text-ink/62">
               Better intake, clearer production context, and a visible path to payout — without the WhatsApp chaos.
             </p>
-            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+            <div className="mt-6 overflow-hidden rounded-[8px] border border-ink/6 bg-white/84 shadow-sm">
               {tailorSteps.map(([title, body], i) => (
                 <div key={title} className={`flex gap-4 px-5 py-4 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
                   <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/40">0{i + 1}</span>
@@ -111,7 +111,7 @@ export default function HowItWorksPage(): React.JSX.Element {
 
       {/* CTA */}
       <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Ready?</p>
           <h2 className="mt-3 text-3xl text-white sm:text-4xl">Join the waitlist or apply as a tailor.</h2>
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">

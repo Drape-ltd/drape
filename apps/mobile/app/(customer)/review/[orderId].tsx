@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Image as RNImage,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import * as ImagePicker from 'expo-image-picker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -12,8 +13,23 @@ import { promptProductFeedback } from '@/lib/productFeedback'
 import { Sentry } from '@/lib/sentry'
 import { referToTailor } from '@/lib/invite'
 import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, PortfolioVideoPreview } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { stripExif } from '@/lib/stripExif'
+import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
+import {
+  isVideoPickerAsset,
+  pickerVideoContentType,
+  pickerVideoExtension,
+  validateVideoPickerAsset,
+} from '@/lib/video-asset'
+import {
+  ALLOWED_REVIEW_MEDIA_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  VIDEO_DURATION_LIMIT_MESSAGE,
+} from '@drape/shared/media-policy'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const REVIEW_TAGS = [
@@ -24,9 +40,19 @@ const REVIEW_TAGS = [
   'Quality craftsmanship',
 ]
 const REVIEW_WINDOW_DAYS = 14
+const MAX_REVIEW_MEDIA = 6
+const REVIEW_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.reviewVideo
+const REVIEW_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.reviewVideo
 
 type TailorProfileJoinRow = {
   display_name: string | null
+}
+
+type ReviewMediaDraft = {
+  id: string
+  uri: string
+  type: 'image' | 'video'
+  asset: ImagePicker.ImagePickerAsset
 }
 
 type ReviewOrderSummaryRow = {
@@ -50,8 +76,28 @@ function reviewWindowClosed(stageUpdatedAt: string | null) {
   return Date.now() - reviewClock > REVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000
 }
 
+
+function validateReviewMediaAsset(asset: ImagePicker.ImagePickerAsset) {
+  if (isVideoPickerAsset(asset)) {
+    return validateVideoPickerAsset(asset, {
+      maxBytes: REVIEW_VIDEO_MAX_BYTES,
+      maxSeconds: REVIEW_VIDEO_MAX_SECONDS,
+      maxBytesMessage: `Choose review videos under ${Math.round(REVIEW_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`,
+      durationMessage: VIDEO_DURATION_LIMIT_MESSAGE,
+    })
+  }
+
+  if (typeof asset.fileSize === 'number' && asset.fileSize > MEDIA_LIMITS_BYTES.image) {
+    return 'Choose photos under 10 MB.'
+  }
+  return null
+}
+
 export default function ReviewScreen() {
-  const { orderId } = useLocalSearchParams<{ orderId: string }>()
+  const { orderId, historyChain } = useLocalSearchParams<{
+    orderId: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
@@ -75,7 +121,13 @@ export default function ReviewScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [skipping, setSkipping] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [reviewMedia, setReviewMedia] = useState<ReviewMediaDraft[]>([])
   const feedbackPromptedRef = useRef(false)
+  const historyReturnTarget = historyChain
+    ?.split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .at(-1)
 
   function promptOrderCompletionFeedbackOnce(reason: 'review_submitted' | 'review_skipped') {
     if (userId && !feedbackPromptedRef.current) {
@@ -202,7 +254,7 @@ export default function ReviewScreen() {
         setOrderSummary(null)
         setLoadingOrder(false)
         Alert.alert('Review unavailable', 'This order is not ready for review yet.')
-        router.replace(`/(customer)/orders/${orderId}`)
+        router.replace((historyReturnTarget ?? `/(customer)/orders/${orderId}`) as never)
         return
       }
       if (reviewWindowClosed(order.stage_updated_at ?? null)) {
@@ -259,6 +311,88 @@ export default function ReviewScreen() {
     setTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
   }
 
+  async function pickReviewMedia() {
+    if (reviewMedia.length >= MAX_REVIEW_MEDIA) {
+      Alert.alert('Media limit reached', `You can add up to ${MAX_REVIEW_MEDIA} photos or videos to a review.`)
+      return
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('Media access needed', 'Allow photo access to add review photos or videos.')
+      return
+    }
+
+    const remainingSlots = MAX_REVIEW_MEDIA - reviewMedia.length
+    const result = await launchImagePickerSafely(
+      () => ImagePicker.launchImageLibraryAsync(
+        preferCompatibleVideoRepresentation({
+          mediaTypes: ['images', 'videos'],
+          allowsMultipleSelection: true,
+          selectionLimit: remainingSlots,
+          quality: 0.9,
+          videoMaxDuration: REVIEW_VIDEO_MAX_SECONDS,
+        })
+      ),
+      {
+        context: 'customer_review_media_picker',
+        mediaLabel: 'review media file',
+        extra: { orderId, userId },
+      }
+    )
+    if (!result || result.canceled) return
+
+    const accepted: ReviewMediaDraft[] = []
+    const rejected: string[] = []
+    for (const asset of result.assets.slice(0, remainingSlots)) {
+      const error = validateReviewMediaAsset(asset)
+      if (error) {
+        rejected.push(error)
+        continue
+      }
+      const type = isVideoPickerAsset(asset) ? 'video' : 'image'
+      accepted.push({
+        id: `${asset.assetId ?? asset.uri}:${Date.now()}:${accepted.length}`,
+        uri: asset.uri,
+        type,
+        asset,
+      })
+    }
+
+    if (accepted.length > 0) {
+      setReviewMedia((current) => [...current, ...accepted].slice(0, MAX_REVIEW_MEDIA))
+    }
+    if (rejected.length > 0) {
+      Alert.alert('Some media was skipped', Array.from(new Set(rejected)).join('\n'))
+    }
+  }
+
+  function removeReviewMedia(id: string) {
+    setReviewMedia((current) => current.filter((item) => item.id !== id))
+  }
+
+  async function uploadReviewMediaDrafts() {
+    if (!userId || reviewMedia.length === 0) return []
+
+    const uploadedUrls: string[] = []
+    for (const [index, item] of reviewMedia.entries()) {
+      const isVideo = item.type === 'video'
+      const contentType = isVideo ? pickerVideoContentType(item.asset) : 'image/jpeg'
+      const extension = isVideo ? pickerVideoExtension(item.asset) : 'jpg'
+      const uri = isVideo ? item.uri : await stripExif(item.uri, { maxWidth: 1800, compress: 0.88 })
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'review-media',
+        path: `reviews/${orderId}/${userId}/${Date.now()}-${index}.${extension}`,
+        uri,
+        contentType,
+        maxBytes: isVideo ? REVIEW_VIDEO_MAX_BYTES : MEDIA_LIMITS_BYTES.image,
+        allowedContentTypes: ALLOWED_REVIEW_MEDIA_CONTENT_TYPES,
+        purpose: 'REVIEW_MEDIA',
+      })
+      uploadedUrls.push(publicUrl)
+    }
+    return uploadedUrls
+  }
   async function submit() {
     if (submitting || skipping) return
     if (!orderSummary) return
@@ -275,6 +409,20 @@ export default function ReviewScreen() {
       ? `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
       : parts[0] || 'Customer'
 
+    let mediaUrls: string[] = []
+    try {
+      mediaUrls = await uploadReviewMediaDrafts()
+    } catch (uploadError) {
+      Sentry.captureException(uploadError, { extra: { context: 'review_media_upload', orderId, mediaCount: reviewMedia.length } })
+      setSubmitting(false)
+      const message = isLikelyConnectivityIssue(uploadError)
+        ? 'Connection looks weak. Review media did not upload yet.'
+        : 'We could not upload that review media. Try removing it or choosing a smaller file.'
+      setSubmitError(message)
+      Alert.alert('Media not uploaded', message)
+      return
+    }
+
     const { data, error } = await invokeFunction<{ ok?: boolean; publicationStatus?: 'published' | 'held' }>('review-action', {
       body: {
         action: 'submit-tailor-review',
@@ -283,6 +431,7 @@ export default function ReviewScreen() {
         rating,
         body: body.trim() || undefined,
         tags,
+        mediaUrls,
       },
     })
 
@@ -321,7 +470,7 @@ export default function ReviewScreen() {
           : 'Your review was saved, but we could not finalize the order yet. Please reopen the order and try again.'
         setSubmitError(completeMessage)
         Alert.alert('Review saved', completeMessage)
-        router.replace(`/(customer)/orders/${orderId}`)
+        router.replace((historyReturnTarget ?? `/(customer)/orders/${orderId}`) as never)
         return
       }
     }
@@ -329,6 +478,7 @@ export default function ReviewScreen() {
     capture('review_submitted', {
       rating,
       tag_count: tags.length,
+      media_count: mediaUrls.length,
       has_body: !!body.trim(),
       tags,
     })
@@ -442,7 +592,7 @@ export default function ReviewScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
@@ -520,6 +670,38 @@ export default function ReviewScreen() {
               hint={`${body.length}/300 · Stars and tags are enough. Add a note only if you want.`}
             />
 
+
+            <View style={styles.section}>
+              <View style={styles.mediaHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sectionLabel}>Photos or video</Text>
+                  <Text style={styles.mediaHint}>Optional. Add up to {MAX_REVIEW_MEDIA}; videos must be {REVIEW_VIDEO_MAX_SECONDS} seconds or less.</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.mediaAddBtn, reviewMedia.length >= MAX_REVIEW_MEDIA && styles.mediaAddBtnDisabled]}
+                  onPress={pickReviewMedia}
+                  disabled={reviewMedia.length >= MAX_REVIEW_MEDIA || submitting || skipping}
+                >
+                  <Text style={styles.mediaAddText}>{reviewMedia.length > 0 ? 'Add more' : 'Add media'}</Text>
+                </TouchableOpacity>
+              </View>
+              {reviewMedia.length > 0 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mediaStrip}>
+                  {reviewMedia.map((item) => (
+                    <View key={item.id} style={styles.mediaThumbWrap}>
+                      {item.type === 'video' ? (
+                        <PortfolioVideoPreview uri={item.uri} style={styles.mediaThumb} autoplay={false} />
+                      ) : (
+                        <RNImage source={{ uri: item.uri }} style={styles.mediaThumb} resizeMode="cover" />
+                      )}
+                      <TouchableOpacity style={styles.mediaRemoveBtn} onPress={() => removeReviewMedia(item.id)}>
+                        <Text style={styles.mediaRemoveText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : null}
+            </View>
             {/* Reviewer note */}
             <View style={styles.noteCard}>
               <Text style={styles.noteText}>
@@ -588,6 +770,34 @@ const styles = StyleSheet.create({
   tagText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
   tagTextActive: { color: Colors.needleGreen },
 
+
+  mediaHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  mediaHint: { marginTop: 4, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  mediaAddBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.white,
+  },
+  mediaAddBtnDisabled: { opacity: 0.45 },
+  mediaAddText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  mediaStrip: { gap: Spacing.sm, paddingRight: Spacing.lg },
+  mediaThumbWrap: { position: 'relative' },
+  mediaThumb: { width: 92, height: 92, borderRadius: Radius.md, backgroundColor: Colors.boneDeep, overflow: 'hidden' },
+  mediaRemoveBtn: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.ink,
+  },
+  mediaRemoveText: { color: Colors.textInverse, fontSize: 18, lineHeight: 20, fontWeight: FontWeight.bold },
   noteCard: {
     backgroundColor: Colors.boneDeep, borderRadius: Radius.md, padding: Spacing.md,
     borderWidth: 1, borderColor: Colors.needleGreen + '35',

@@ -129,7 +129,7 @@ export function LocationAutocomplete({
         {canSearch && open && suggestions.length > 0 ? (
           <div
             id={listId}
-            className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-[1.25rem] border border-ink/6 bg-white shadow-[0_22px_50px_rgba(22,28,24,0.12)]"
+            className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-[8px] border border-ink/6 bg-white shadow-[0_22px_50px_rgba(22,28,24,0.12)]"
           >
             {suggestions.map((suggestion) => (
               <button

@@ -1,11 +1,11 @@
 import type { Metadata } from 'next'
+import { WHATSAPP_SUPPORT } from '@drape/shared'
 
 export const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
 export const defaultTitle = 'Drapeon | Custom fashion orders, fit, and trusted tailors'
 export const defaultDescription =
   'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.'
-export const publicPhoneE164 = '+15128450347'
-export const publicPhoneDisplay = '(512) 845-0347'
+export const publicPhoneE164 = WHATSAPP_SUPPORT.phoneE164
 export const socialLinks = [
   { label: 'Instagram', url: 'https://www.instagram.com/drapeonn/' },
   { label: 'X', url: 'https://x.com/Drapeonn' },

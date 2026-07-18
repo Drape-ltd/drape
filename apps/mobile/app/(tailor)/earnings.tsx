@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import {
   buildTailorTransactionsCsv,
@@ -296,7 +296,7 @@ export default function TailorEarningsScreen() {
             <Text style={styles.stateHint}>
               Set up a payout account before you take paid work so Drapeon can release earnings safely.
             </Text>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings', historyChain: appendToHistory(undefined, '/(tailor)/earnings') } } as never)}>
               <Text style={styles.primaryBtnText}>Open payout setup</Text>
             </TouchableOpacity>
           </View>
@@ -334,7 +334,7 @@ export default function TailorEarningsScreen() {
             <Text style={styles.warningBody}>
               Drapeon will not release earnings until your payout account is verified. Orders can still settle into a protected balance, but withdrawals stay blocked until setup is complete.
             </Text>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings', historyChain: appendToHistory(undefined, '/(tailor)/earnings') } } as never)}>
               <Text style={styles.primaryBtnText}>{data.payoutReverificationRequired ? 'Reconnect payout account' : 'Finish payout setup'}</Text>
             </TouchableOpacity>
           </View>
@@ -491,7 +491,15 @@ export default function TailorEarningsScreen() {
                 <TouchableOpacity
                   key={row.orderId}
                   style={styles.transactionCard}
-                  onPress={() => router.navigate(`/(tailor)/orders/${row.orderId}`)}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: '/(tailor)/orders/[id]',
+                      params: {
+                        id: row.orderId,
+                        historyChain: appendToHistory(undefined, '/(tailor)/earnings'),
+                      },
+                    })
+                  }
                   activeOpacity={0.78}
                 >
                   <View style={styles.rowTop}>

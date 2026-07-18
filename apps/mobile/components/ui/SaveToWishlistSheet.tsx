@@ -38,6 +38,7 @@ export function SaveToWishlistSheet({
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.overlay}
+        accessibilityViewIsModal
       >
         <TouchableOpacity style={styles.scrim} activeOpacity={1} onPress={onClose} />
         <View style={styles.sheet}>
@@ -119,13 +120,13 @@ export function SaveToWishlistSheet({
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'flex-end' },
-  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.36)' },
   sheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 33,
-    paddingTop: 17,
+    paddingHorizontal: Spacing.xxxl,
+    paddingTop: Spacing.lg,
     paddingBottom: Spacing.xl,
     gap: Spacing.xl,
   },

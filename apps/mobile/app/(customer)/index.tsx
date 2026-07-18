@@ -27,6 +27,7 @@ import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
 import { fetchReadGateway } from '@/lib/read-gateway'
+import { appendToHistory } from '@/lib/navigation'
 import {
   loadRecentlyViewedTailors,
   saveRecentlyViewedTailor,
@@ -45,7 +46,7 @@ const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
 const VISION_FAB_POSITION_KEY = 'drape_customer_vision_fab_position'
 const MAX_RECENT_SEARCHES = 5
 const PAGE_SIZE = 20
-const EXPLORE_FOCUS_REFRESH_MS = 60_000
+const EXPLORE_FOCUS_REFRESH_MS = 0
 const EXPLORE_CARD_IMAGE_RATIO = 1.04
 const VISION_FAB_SIZE = 56
 const VISION_FAB_MARGIN = Spacing.md
@@ -658,6 +659,7 @@ export default function CustomerHomeScreen() {
       const now = Date.now()
       const shouldRefresh =
         lastBrowseFetchAtRef.current === 0 ||
+        EXPLORE_FOCUS_REFRESH_MS === 0 ||
         now - lastBrowseFetchAtRef.current > EXPLORE_FOCUS_REFRESH_MS
       if (shouldRefresh) {
         lastBrowseFetchAtRef.current = now
@@ -814,7 +816,10 @@ export default function CustomerHomeScreen() {
 
   function navigateToTailor(tailor: TailorCard) {
     saveRecentlyViewedTailor(user?.id, tailor)
-    router.navigate(`/(customer)/tailor/${tailor.id}`)
+    router.navigate({
+      pathname: '/(customer)/tailor/[id]',
+      params: { id: tailor.id, historyChain: appendToHistory(undefined, '/(customer)') },
+    })
   }
 
   function applyQuery(q: string) {
@@ -856,6 +861,7 @@ export default function CustomerHomeScreen() {
       params: {
         mode: 'customer_scan',
         returnTo: '/(customer)',
+        historyChain: appendToHistory(undefined, '/(customer)'),
       },
     } as never)
   }, [router])
@@ -1024,7 +1030,7 @@ export default function CustomerHomeScreen() {
           {recentSearches.length > 0 && (
             <View style={styles.suggestSection}>
               <View style={styles.suggestHeader}>
-                <Text style={styles.suggestTitle}>Recent searches</Text>
+                <Text style={styles.suggestGroupLabel}>Recent searches</Text>
                 <TouchableOpacity
                   onPress={() => {
                     clearRecentSearches(user?.id)
@@ -1034,45 +1040,42 @@ export default function CustomerHomeScreen() {
                   <Text style={styles.suggestClear}>Clear</Text>
                 </TouchableOpacity>
               </View>
-              {recentSearches.map((s, i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={styles.recentSearchRow}
-                  onPress={() => applyQuery(s)}
-                >
-                  <Feather name="clock" size={16} color={Colors.midGrey} />
-                  <Text style={styles.recentSearchText}>{s}</Text>
+              <View style={styles.suggestCard}>
+                {recentSearches.map((s, i) => (
                   <TouchableOpacity
-                    onPress={() => {
-                      const updated = recentSearches.filter((_, j) => j !== i)
-                      setRecentSearches(updated)
-                      AsyncStorage.setItem(
-                        storageKey(RECENT_SEARCHES_KEY, user?.id),
-                        JSON.stringify(updated)
-                      )
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Remove ${s} from recent searches`}
+                    key={i}
+                    style={[styles.recentSearchRow, i === recentSearches.length - 1 && styles.recentSearchRowLast]}
+                    onPress={() => applyQuery(s)}
                   >
-                    <Feather name="x" size={14} color={Colors.midGrey} />
+                    <Feather name="clock" size={16} color={Colors.midGrey} />
+                    <Text style={styles.recentSearchText}>{s}</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        const updated = recentSearches.filter((_, j) => j !== i)
+                        setRecentSearches(updated)
+                        AsyncStorage.setItem(
+                          storageKey(RECENT_SEARCHES_KEY, user?.id),
+                          JSON.stringify(updated)
+                        )
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${s} from recent searches`}
+                    >
+                      <Feather name="x" size={14} color={Colors.midGrey} />
+                    </TouchableOpacity>
                   </TouchableOpacity>
-                </TouchableOpacity>
-              ))}
+                ))}
+              </View>
             </View>
           )}
           <View style={styles.suggestSection}>
-            <Text style={styles.suggestTitle}>Try searching</Text>
-            <View style={styles.suggestRows}>
-              {[
-                'Suits in Lagos',
-                'Tailors in London',
-                'Bridal',
-                'Casual wear',
-                'Traditional',
-                'Bespoke suits',
-              ].map((s) => (
-                <TouchableOpacity key={s} style={styles.suggestRow} onPress={() => applyQuery(s)} activeOpacity={0.76}>
+            <Text style={styles.suggestGroupLabel}>Try searching</Text>
+            <View style={styles.suggestCard}>
+              {(
+                ['Suits in Lagos', 'Tailors in London', 'Bridal', 'Casual wear', 'Traditional', 'Bespoke suits']
+              ).map((s, i, arr) => (
+                <TouchableOpacity key={s} style={[styles.suggestRow, i === arr.length - 1 && styles.suggestRowLast]} onPress={() => applyQuery(s)} activeOpacity={0.76}>
                   <Feather name="search" size={15} color={Colors.midGrey} />
                   <Text style={styles.suggestRowText}>{s}</Text>
                   <Feather name="chevron-right" size={17} color={Colors.midGrey} />
@@ -1119,9 +1122,6 @@ export default function CustomerHomeScreen() {
           ListEmptyComponent={
             !(searching || searchPending) ? (
               <View style={styles.emptyState}>
-                <View style={styles.emptyStateBadge}>
-                  <Text style={styles.emptyStateBadgeText}>Search</Text>
-                </View>
                 <View
                   style={[styles.emptyStateIcon, searchFetchError && styles.emptyStateIconError]}
                 >
@@ -1244,7 +1244,11 @@ export default function CustomerHomeScreen() {
                       onPress={() =>
                         router.push({
                           pathname: '/(customer)/orders/[id]',
-                          params: { id: order.id, returnTo: '/(customer)' },
+                          params: {
+                            id: order.id,
+                            returnTo: '/(customer)',
+                            historyChain: appendToHistory(undefined, '/(customer)'),
+                          },
                         })
                       }
                     >
@@ -1312,9 +1316,6 @@ export default function CustomerHomeScreen() {
               </View>
             ) : (
               <View style={styles.emptyBrowseCard}>
-                <View style={styles.emptyBrowseBadge}>
-                  <Text style={styles.emptyBrowseBadgeText}>Discovery</Text>
-                </View>
                 <Text style={styles.emptyBrowseTitle}>Verified tailors are being refreshed</Text>
                 <Text style={styles.emptyBrowseHint}>
                   Pull down to refresh, search by specialty, or check back shortly as vetted
@@ -1427,6 +1428,8 @@ function GridCard({
 // ─── Search result card ───────────────────────────────────────────────────────
 
 function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
+  const svcLabel = serviceLabel(tailor)
+  const availHint = availabilityHint(tailor)
   return (
     <TouchableOpacity style={styles.resultCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.resultThumb}>
@@ -1470,15 +1473,11 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
-        {serviceLabel(tailor) ? (
-          <Text style={styles.resultServiceText} numberOfLines={1}>
-            {serviceLabel(tailor)}
-          </Text>
+        {svcLabel ? (
+          <Text style={styles.resultServiceText} numberOfLines={1}>{svcLabel}</Text>
         ) : null}
-        {availabilityHint(tailor) && (
-          <Text style={styles.resultHint} numberOfLines={1}>
-            {availabilityHint(tailor)}
-          </Text>
+        {availHint && (
+          <Text style={styles.resultHint} numberOfLines={1}>{availHint}</Text>
         )}
         {tailor.availability === 'LIMITED' && (
           <View style={styles.limitedBadge}>
@@ -1756,48 +1755,62 @@ function CustomerOnboardingModal({
   const isLast = step === CUSTOMER_ONBOARDING_SLIDES.length - 1
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDone}>
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onDone}>
       <View style={styles.onboardingOverlay}>
         <View style={styles.onboardingCard}>
+          {/* Top bar: back + dots + skip */}
+          <View style={styles.onboardingTopBar}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Previous slide"
+              onPress={() => onStepChange(step - 1)}
+              style={[styles.onboardingNavBtn, step === 0 && styles.onboardingNavBtnHidden]}
+              disabled={step === 0}
+            >
+              <Feather name="arrow-left" size={18} color={Colors.inkLight} />
+            </TouchableOpacity>
+
+            <View style={styles.onboardingDots}>
+              {CUSTOMER_ONBOARDING_SLIDES.map((_, index) => (
+                <View
+                  key={index}
+                  style={[styles.onboardingDot, index === step && styles.onboardingDotActive]}
+                />
+              ))}
+            </View>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Skip customer walkthrough"
+              onPress={onDone}
+              style={styles.onboardingSkip}
+            >
+              <Text style={styles.onboardingSkipText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Slide content */}
+          <View style={styles.onboardingContent}>
+            <View style={styles.onboardingIcon}>
+              <Feather name={slide.icon} size={34} color={PRIMARY_GREEN} />
+            </View>
+            <Text style={styles.onboardingTitle}>{slide.title}</Text>
+            <Text style={styles.onboardingBody}>{slide.body}</Text>
+          </View>
+
+          {/* CTA */}
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel="Skip customer walkthrough"
-            onPress={onDone}
-            style={styles.onboardingSkip}
-          >
-            <Text style={styles.onboardingSkipText}>Skip</Text>
-          </TouchableOpacity>
-
-          <View style={styles.onboardingIcon}>
-            <Feather name={slide.icon} size={30} color={PRIMARY_GREEN} />
-          </View>
-          <Text style={styles.onboardingTitle}>{slide.title}</Text>
-          <Text style={styles.onboardingBody}>{slide.body}</Text>
-
-          <View style={styles.onboardingDots}>
-            {CUSTOMER_ONBOARDING_SLIDES.map((_, index) => (
-              <View
-                key={index}
-                style={[styles.onboardingDot, index === step && styles.onboardingDotActive]}
-              />
-            ))}
-          </View>
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={
-              isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'
-            }
+            accessibilityLabel={isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'}
             onPress={() => {
-              if (isLast) {
-                onDone()
-                return
-              }
+              if (isLast) { onDone(); return }
               onStepChange(step + 1)
             }}
             style={styles.onboardingButton}
+            activeOpacity={0.82}
           >
-            <Text style={styles.onboardingButtonText}>{isLast ? 'Get Started' : 'Continue'}</Text>
+            <Text style={styles.onboardingButtonText}>{isLast ? "Let's go" : 'Next'}</Text>
+            {!isLast && <Feather name="arrow-right" size={17} color={Colors.textInverse} />}
           </TouchableOpacity>
         </View>
       </View>
@@ -1898,20 +1911,6 @@ const styles = StyleSheet.create({
   // Scroll areas
   scroll: { flex: 1 },
   content: { paddingBottom: 24 },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: 11,
-    fontWeight: FontWeight.semibold,
-    color: PRIMARY_GREEN,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   errorBanner: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.md,
@@ -1927,30 +1926,43 @@ const styles = StyleSheet.create({
   suggestionsContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 28 },
   suggestSection: { gap: Spacing.sm },
   suggestHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  suggestTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
-  suggestClear: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
+  suggestGroupLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: MUTED_GREY,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  suggestClear: { fontSize: FontSize.xs, color: MUTED_GREY, fontWeight: FontWeight.medium },
+  suggestCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
   recentSearchRow: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
     paddingVertical: 10,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
   },
+  recentSearchRowLast: { borderBottomWidth: 0 },
   recentSearchText: { flex: 1, fontSize: 14, color: CHARCOAL },
-  suggestRows: { gap: Spacing.sm },
   suggestRow: {
     minHeight: 50,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
+  suggestRowLast: { borderBottomWidth: 0 },
   suggestRowText: { flex: 1, fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.medium },
 
   // Search results (FlatList)
@@ -1963,20 +1975,6 @@ const styles = StyleSheet.create({
     color: PRIMARY_GREEN,
     fontWeight: FontWeight.semibold,
   },
-  availRow: { flexDirection: 'row', gap: Spacing.sm },
-  availChip: {
-    minHeight: 44,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    justifyContent: 'center',
-  },
-  availChipActive: { backgroundColor: CHARCOAL, borderColor: CHARCOAL },
-  availLabel: { fontSize: 12, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  availLabelActive: { color: Colors.textInverse },
   loadMoreSpinner: { marginVertical: Spacing.lg },
 
   // Result card
@@ -1990,11 +1988,6 @@ const styles = StyleSheet.create({
   },
   resultThumb: { width: 76, height: 86, borderRadius: Radius.md, overflow: 'hidden' },
   resultThumbImg: { width: '100%', height: '100%' },
-  resultThumbPlaceholder: {
-    backgroundColor: Colors.boneDeep,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   exploreMediaPlaceholder: {
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
@@ -2036,16 +2029,6 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   resultHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
-  capabilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: 2 },
-  capabilityChip: {
-    backgroundColor: HOME_BG,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 4,
-    minHeight: 24,
-    justifyContent: 'center',
-  },
-  capabilityText: { fontSize: 11, color: Colors.inkLight, fontWeight: FontWeight.medium },
   limitedBadge: {
     backgroundColor: Colors.statusPendingBg,
     paddingHorizontal: Spacing.sm,
@@ -2210,36 +2193,55 @@ const styles = StyleSheet.create({
   },
   onboardingOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(26,26,24,0.52)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: Spacing.xl,
+    backgroundColor: 'rgba(26,26,24,0.48)',
+    justifyContent: 'flex-end',
   },
   onboardingCard: {
-    width: '100%',
-    maxWidth: 420,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    alignItems: 'center',
-    gap: Spacing.md,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    paddingBottom: Spacing.xxxl,
+    gap: Spacing.xl,
     ...Shadow.lg,
   },
+  onboardingTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  onboardingNavBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingNavBtnHidden: { opacity: 0 },
   onboardingSkip: {
-    alignSelf: 'flex-end',
-    minHeight: 44,
+    minHeight: 40,
     paddingHorizontal: Spacing.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   onboardingSkipText: {
+    fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
     color: Colors.midGrey,
-    fontWeight: FontWeight.medium,
+  },
+  onboardingContent: {
+    alignItems: 'center',
+    gap: Spacing.lg,
+    paddingVertical: Spacing.md,
   },
   onboardingIcon: {
-    width: 72,
-    height: 72,
+    width: 80,
+    height: 80,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
@@ -2247,18 +2249,21 @@ const styles = StyleSheet.create({
   },
   onboardingTitle: {
     fontFamily: Fonts.display,
-    fontSize: FontSize.xl,
+    fontSize: 26,
+    lineHeight: 32,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
   },
   onboardingBody: {
+    fontFamily: Fonts.body,
     fontSize: FontSize.md,
     color: Colors.inkLight,
-    lineHeight: 23,
+    lineHeight: 24,
     textAlign: 'center',
+    maxWidth: 300,
   },
-  onboardingDots: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.xs },
+  onboardingDots: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
   onboardingDot: {
     width: 8,
     height: 8,
@@ -2267,17 +2272,19 @@ const styles = StyleSheet.create({
   },
   onboardingDotActive: { width: 24, backgroundColor: Colors.needleGreen },
   onboardingButton: {
-    width: '100%',
-    minHeight: 52,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreen,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.sm,
+    minHeight: 56,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.needleGreen,
   },
   onboardingButtonText: {
+    fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.md,
-    color: Colors.textInverse,
     fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
   },
 
   // Section
@@ -2324,27 +2331,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
 
-  // Continue searching card
-  continueCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    ...Shadow.sm,
-  },
-  continueLabel: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  continueQuery: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: 15,
-    fontWeight: FontWeight.semibold,
-    color: CHARCOAL,
-  },
-  continueMeta: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
-  continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
-
   // Orders
   continueSection: {
     paddingTop: Spacing.md,
@@ -2363,8 +2349,6 @@ const styles = StyleSheet.create({
     width: 154,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     padding: 10,
     gap: 4,
     ...Shadow.sm,
@@ -2403,11 +2387,6 @@ const styles = StyleSheet.create({
   },
   gridImageWrap: { width: '100%', position: 'relative', padding: 10 },
   gridImage: { width: '100%', height: '100%' },
-  gridImagePlaceholder: {
-    backgroundColor: Colors.boneDeep,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   recentBadge: {
     position: 'absolute',
     top: 8,
@@ -2421,11 +2400,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.24)',
   },
-  recentBadgeText: {
-    fontSize: 10,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textInverse,
-  },
   gridInfo: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 14, gap: 4 },
   gridName: {
     fontFamily: Fonts.bodySemiBold,
@@ -2434,14 +2408,6 @@ const styles = StyleSheet.create({
     color: CHARCOAL,
   },
   gridLocation: { fontSize: 12, lineHeight: 17, color: MUTED_GREY },
-  gridTags: { fontSize: 12, color: Colors.inkLight, marginTop: 2 },
-  gridServiceText: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: Colors.inkLight,
-    marginTop: 1,
-  },
-  gridHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
   gridUnavailableText: {
     fontSize: 11,
     lineHeight: 16,
@@ -2455,19 +2421,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     paddingVertical: 48,
     paddingHorizontal: Spacing.lg,
-  },
-  emptyStateBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  emptyStateBadgeText: {
-    fontSize: 11,
-    fontWeight: FontWeight.semibold,
-    color: PRIMARY_GREEN,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
   },
   emptyStateIcon: {
     width: 58,
@@ -2519,20 +2472,6 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     gap: Spacing.sm,
     ...Shadow.sm,
-  },
-  emptyBrowseBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  emptyBrowseBadgeText: {
-    fontSize: 11,
-    fontWeight: FontWeight.semibold,
-    color: PRIMARY_GREEN,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
   },
   emptyBrowseTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
   emptyBrowseHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18 },

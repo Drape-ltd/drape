@@ -5,7 +5,7 @@ const URL_OR_WEB_PATTERN =
   /(https?:\/\/|www\.|\b\w+\.(com|co|io|ng|co\.uk|net|org|info|biz|app|dev|me)\b)/i
 const PLATFORM_PATTERN =
   /\b(instagram|whatsapp|facebook|messenger|telegram|signal|viber|line|kik|tiktok|snapchat)\b/i
-const SOCIAL_HANDLE_PATTERN = /(^|[\s(])@[a-zA-Z0-9_.]{2,}\b/
+const SOCIAL_HANDLE_PATTERN = /@[a-zA-Z0-9_.]{2,}\b/
 const REDIRECT_PATTERN =
   /\b(find me on|dm me|message me on|reach me at|same handle|my @ is|look me up|hit me up on|slide into|call me|text me|email me|send me your number|drop me your number)\b/i
 const EMAIL_PATTERN = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i

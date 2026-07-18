@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Modal, Platform,
+  TouchableOpacity, ActivityIndicator, Alert, Modal, Platform, KeyboardAvoidingView,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -17,7 +17,7 @@ import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import { AddressAutocompleteInput, TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
@@ -59,6 +59,8 @@ type TailorEditProfileRow = {
   seller_type: SellerType | null
   supports_custom_orders: boolean | null
   supports_ready_made: boolean | null
+  accepts_custom_orders_now: boolean | null
+  shop_paused: boolean | null
   pickup_available: boolean | null
   delivery_available: boolean | null
   shipping_available: boolean | null
@@ -102,16 +104,16 @@ const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
 ]
 
 const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
-  { value: 'OPEN',         label: 'Open',         hint: 'Accepting new order requests' },
-  { value: 'LIMITED',      label: 'Limited',       hint: 'Accepting orders; response time may be longer' },
-  { value: 'FULLY_BOOKED', label: 'Fully booked',  hint: '"Notify me" shown instead of booking button' },
+  { value: 'OPEN',         label: 'Open',         hint: 'Taking new orders' },
+  { value: 'LIMITED',      label: 'Limited',       hint: 'Taking orders, but may respond slower' },
+  { value: 'FULLY_BOOKED', label: 'Fully booked',  hint: 'Profile visible, orders closed' },
 ]
 
 const VERIFY_LABEL: Record<VerificationStatus, string> = {
-  NOT_SUBMITTED: 'Setup still needed',
+  NOT_SUBMITTED: 'Not started',
   PENDING:       'Review in progress',
   VERIFIED:      'Identity confirmed',
-  REJECTED:      'Needs attention',
+  REJECTED:      'Action needed',
 }
 const VERIFY_COLOR: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: Colors.midGrey,
@@ -142,6 +144,8 @@ export default function EditProfileScreen() {
   const [sellerType, setSellerType]       = useState<SellerType>('TAILOR')
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
   const [supportsReadyMade, setSupportsReadyMade] = useState(false)
+  const [acceptsCustomOrdersNow, setAcceptsCustomOrdersNow] = useState(true)
+  const [shopPaused, setShopPaused] = useState(false)
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
   const [pickupInstructions, setPickupInstructions] = useState('')
@@ -157,6 +161,8 @@ export default function EditProfileScreen() {
     sellerType: SellerType
     supportsCustomOrders: boolean
     supportsReadyMade: boolean
+    acceptsCustomOrdersNow: boolean
+    shopPaused: boolean
     pickupAvailable: boolean
     pickupAddress: string
     pickupInstructions: string
@@ -194,6 +200,8 @@ export default function EditProfileScreen() {
     sellerType     !== base.sellerType ||
     supportsCustomOrders !== base.supportsCustomOrders ||
     supportsReadyMade !== base.supportsReadyMade ||
+    acceptsCustomOrdersNow !== base.acceptsCustomOrdersNow ||
+    shopPaused !== base.shopPaused ||
     pickupAvailable !== base.pickupAvailable ||
     pickupAddress !== base.pickupAddress ||
     pickupInstructions !== base.pickupInstructions ||
@@ -206,6 +214,44 @@ export default function EditProfileScreen() {
       ? specialties.slice(0, 4).join(' · ') + (specialties.length > 4 ? ` +${specialties.length - 4} more` : '')
       : 'Choose the styles customers can book you for.'
   const currencyLabel = CURRENCY_OPTIONS.find((option) => option.value === currency)?.label ?? currency
+
+  function applySellerType(nextType: SellerType) {
+    setSellerType(nextType)
+    if (nextType === 'BOUTIQUE') {
+      setSupportsCustomOrders(false)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(false)
+      setShopPaused(false)
+    } else if (nextType === 'TAILOR_SHOP') {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(false)
+    } else {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(false)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(true)
+    }
+  }
+
+  function toggleSupportsCustomOrders() {
+    setSupportsCustomOrders((value) => {
+      const next = !value
+      if (!next) setAcceptsCustomOrdersNow(false)
+      if (next) setAcceptsCustomOrdersNow(true)
+      return next
+    })
+  }
+
+  function toggleSupportsReadyMade() {
+    setSupportsReadyMade((value) => {
+      const next = !value
+      if (!next) setShopPaused(true)
+      if (next) setShopPaused(false)
+      return next
+    })
+  }
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
@@ -220,7 +266,7 @@ export default function EditProfileScreen() {
       const [{ data, error }, { data: pickupData }] = await Promise.all([
         supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
+          .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, accepts_custom_orders_now, shop_paused, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
           .eq('user_id', userId)
           .maybeSingle(),
         supabase
@@ -245,6 +291,8 @@ export default function EditProfileScreen() {
           sellerType:   (d.seller_type ?? 'TAILOR') as SellerType,
           supportsCustomOrders: d.supports_custom_orders ?? true,
           supportsReadyMade: d.supports_ready_made ?? false,
+          acceptsCustomOrdersNow: d.accepts_custom_orders_now ?? true,
+          shopPaused: d.shop_paused ?? false,
           pickupAvailable: d.pickup_available ?? true,
           pickupAddress: pickup?.pickup_address ?? '',
           pickupInstructions: pickup?.pickup_instructions ?? '',
@@ -261,6 +309,8 @@ export default function EditProfileScreen() {
         setSellerType(snap.sellerType)
         setSupportsCustomOrders(snap.supportsCustomOrders)
         setSupportsReadyMade(snap.supportsReadyMade)
+        setAcceptsCustomOrdersNow(snap.acceptsCustomOrdersNow)
+        setShopPaused(snap.shopPaused)
         setPickupAvailable(snap.pickupAvailable)
         setPickupAddress(snap.pickupAddress)
         setPickupInstructions(snap.pickupInstructions)
@@ -288,6 +338,8 @@ export default function EditProfileScreen() {
           sellerType: 'TAILOR' as SellerType,
           supportsCustomOrders: true,
           supportsReadyMade: false,
+          acceptsCustomOrdersNow: true,
+          shopPaused: false,
           pickupAvailable: true,
           pickupAddress: '',
           pickupInstructions: '',
@@ -304,6 +356,8 @@ export default function EditProfileScreen() {
         setSellerType(snap.sellerType)
         setSupportsCustomOrders(snap.supportsCustomOrders)
         setSupportsReadyMade(snap.supportsReadyMade)
+        setAcceptsCustomOrdersNow(snap.acceptsCustomOrdersNow)
+        setShopPaused(snap.shopPaused)
         setPickupAvailable(snap.pickupAvailable)
         setPickupAddress(snap.pickupAddress)
         setPickupInstructions(snap.pickupInstructions)
@@ -358,11 +412,14 @@ export default function EditProfileScreen() {
         upsert: true,
       })
       const bustUrl = `${publicUrl}?t=${new Date().getTime()}`
-      const { error: profileError } = await invokeFunction('tailor-profile-action', {
+      const { data, error: profileError } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
         body: { action: 'update-avatar', avatarUrl: bustUrl },
       })
       if (profileError) throw profileError
       setAvatarUrl(bustUrl)
+      if (data?.pendingReview) {
+        Alert.alert('Submitted for review', 'Your new profile photo is saved as a pending draft. Customers keep seeing the approved photo until ops clears it.')
+      }
     } catch (error) {
       Alert.alert(
         'Upload failed',
@@ -432,7 +489,7 @@ export default function EditProfileScreen() {
     }
 
     setSaving(true)
-    const { error } = await invokeFunction('tailor-profile-action', {
+    const { data, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
       body: {
         action: 'update-profile',
         profile: {
@@ -446,6 +503,8 @@ export default function EditProfileScreen() {
           sellerType,
           supportsCustomOrders,
           supportsReadyMade,
+          acceptsCustomOrdersNow,
+          shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
           pickupInstructions: pickupInstructions.trim() || null,
@@ -466,6 +525,9 @@ export default function EditProfileScreen() {
       Alert.alert('Save failed', message)
       return
     }
+    if (data?.pendingReview) {
+      Alert.alert('Submitted for review', 'Trust-sensitive profile changes are saved as a pending draft. Your approved public profile stays live while ops reviews them.')
+    }
     setBase({
       displayName: displayName.trim(),
       location: location.trim(),
@@ -476,6 +538,8 @@ export default function EditProfileScreen() {
       sellerType,
       supportsCustomOrders,
       supportsReadyMade,
+      acceptsCustomOrdersNow,
+      shopPaused,
       pickupAvailable,
       pickupAddress: pickupAddress.trim(),
       pickupInstructions: pickupInstructions.trim(),
@@ -492,12 +556,8 @@ export default function EditProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Storefront</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your storefront…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling in your public profile details so you can update how customers discover and trust your work.
-            </Text>
+            <Text style={styles.stateTitle}>Loading your profile…</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -509,10 +569,9 @@ export default function EditProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Storefront</Text>
             <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
             <Text style={styles.stateHint}>
-              This screen should help you refine the storefront customers see before they decide to trust you with an order.
+              This is where you manage how customers find and book you.
             </Text>
             <TouchableOpacity
               style={styles.errorRetry}
@@ -536,7 +595,7 @@ export default function EditProfileScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack} hitSlop={8}>
@@ -555,329 +614,364 @@ export default function EditProfileScreen() {
         </TouchableOpacity>
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.heroCard}>
-          <View style={styles.heroIcon}>
-            <Feather name="edit-3" size={17} color={Colors.needleGreen} />
-          </View>
-          <View style={styles.heroCopy}>
-            <Text style={styles.heroTitle}>Storefront details</Text>
-            <Text style={styles.heroSub}>Keep your profile clear, current, and easy to book.</Text>
-          </View>
-        </View>
 
-        {/* ── Avatar ───────────────────────────────────────────────────── */}
-        <View style={styles.avatarSection}>
-          <TouchableOpacity
-            style={styles.avatarWrap}
-            onPress={handleAvatarPress}
-            disabled={uploadingAvatar}
-            activeOpacity={0.8}
-          >
-            {uploadingAvatar ? (
-              <View style={[styles.avatar, styles.avatarLoading]}>
-                <ActivityIndicator color={Colors.textInverse} />
-              </View>
-            ) : (
-              <AvatarImage
-                uri={avatarUrl}
-                initials={initials}
-                size={88}
-                style={styles.avatarImage}
-                shadow
-              />
-            )}
-            <View style={styles.cameraBadge}>
-              <Feather name="camera" size={12} color={Colors.textInverse} />
-            </View>
-          </TouchableOpacity>
-          <Text style={styles.avatarHint}>Tap to change photo</Text>
-        </View>
-
-        {/* ── Identity ─────────────────────────────────────────────────── */}
-        <Section title="Identity">
-          <Field label="Display name" required error={errors.name}>
-            <TextInput
-              style={[styles.input, errors.name && styles.inputError]}
-              value={displayName}
-              onChangeText={(v) => { setDisplayName(v); setErrors((e) => ({ ...e, name: undefined })) }}
-              placeholder="e.g. John Doe"
-              placeholderTextColor={Colors.midGrey}
-              autoCapitalize="words"
-            />
-          </Field>
-
-          <Field label="Location" required error={errors.location}>
-            <View>
-              <TextInput
-                style={[styles.input, errors.location && styles.inputError]}
-                value={location}
-                onChangeText={onLocationChange}
-                onBlur={() => setShowSuggestions(false)}
-                placeholder="e.g. Lagos, Nigeria"
-                placeholderTextColor={Colors.midGrey}
-                autoCorrect={false}
-                autoComplete="off"
-              />
-              {showSuggestions && locationSuggestions.length > 0 && (
-                <View style={styles.suggestBox}>
-                  {locationSuggestions.map((s, i) => (
-                    <TouchableOpacity
-                      key={i}
-                      style={[styles.suggestRow, i === locationSuggestions.length - 1 && styles.suggestRowLast]}
-                      onPress={() => { setLocation(s); setLocationSuggestions([]); setShowSuggestions(false) }}
-                    >
-                      <Text style={styles.suggestText}>{s}</Text>
-                    </TouchableOpacity>
-                  ))}
+        {/* ── Identity card: avatar + name + location ─────────────────── */}
+        <View style={styles.identityCard}>
+          <View style={styles.avatarSection}>
+            <TouchableOpacity
+              style={styles.avatarWrap}
+              onPress={handleAvatarPress}
+              disabled={uploadingAvatar}
+              activeOpacity={0.8}
+            >
+              {uploadingAvatar ? (
+                <View style={[styles.avatar, styles.avatarLoading]}>
+                  <ActivityIndicator color={Colors.textInverse} />
                 </View>
+              ) : (
+                <AvatarImage
+                  uri={avatarUrl}
+                  initials={initials}
+                  size={88}
+                  style={styles.avatarImage}
+                  shadow
+                />
               )}
-            </View>
-          </Field>
-        </Section>
-
-        {/* ── Professional details ──────────────────────────────────────── */}
-        <Section title="Professional details">
-          <Field label="About you" error={bioError}>
-            <TextInput
-              style={[styles.input, styles.multiline, bioError ? styles.inputError : undefined]}
-              value={bio}
-              onChangeText={(v) => { setBio(v); if (bioError) validateBio(v) }}
-              onBlur={() => validateBio(bio)}
-              placeholder="Tell customers who you are, what you specialise in, and your experience…"
-              placeholderTextColor={Colors.midGrey}
-              multiline
-              numberOfLines={5}
-              maxLength={500}
-            />
-            <Text style={styles.charCount}>{bio.trim().length}/500</Text>
-            <Text style={styles.fieldHint}>What customers look for</Text>
-            <View style={styles.helperPromptList}>
-              {BIO_PROMPTS.map((prompt) => (
-                <View key={prompt} style={styles.helperPromptRow}>
-                  <View style={styles.helperPromptDot} />
-                  <Text style={styles.helperPromptText}>{prompt}</Text>
-                </View>
-              ))}
-            </View>
-          </Field>
-
-          <Field label="Specialties" required error={errors.specialties}>
-            <TouchableOpacity
-              style={[styles.selectorSummary, errors.specialties && styles.selectorSummaryError]}
-              activeOpacity={0.75}
-              onPress={() => setShowSpecialtySheet(true)}
-            >
-              <View style={styles.selectorSummaryText}>
-                <Text style={styles.selectorSummaryTitle}>
-                  {specialties.length > 0 ? `${specialties.length} selected` : 'Choose specialties'}
-                </Text>
-                <Text style={styles.selectorSummaryBody}>{specialtySummary}</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-            </TouchableOpacity>
-            {specialties.length > 0 ? (
-              <Text style={styles.selectedPreviewSummary} numberOfLines={2}>
-                {specialties.slice(0, 5).join(' · ')}
-                {specialties.length > 5 ? ` · +${specialties.length - 5} more` : ''}
-              </Text>
-            ) : null}
-          </Field>
-
-          <Field label="Pricing currency">
-            <TouchableOpacity
-              style={styles.selectorSummary}
-              activeOpacity={0.75}
-              onPress={() => setShowCurrencySheet(true)}
-            >
-              <View style={styles.selectorSummaryText}>
-                <Text style={styles.selectorSummaryTitle}>{currencyLabel}</Text>
-                <Text style={styles.selectorSummaryBody}>
-                  Used for your profile, quotes, and ready-made listings.
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-            </TouchableOpacity>
-          </Field>
-        </Section>
-
-        {/* ── Availability ──────────────────────────────────────────────── */}
-        <Section title="Availability">
-          {AVAIL_OPTIONS.map((opt) => (
-            <TouchableOpacity
-              key={opt.value}
-              style={[styles.availCard, availability === opt.value && styles.availCardActive]}
-              onPress={() => setAvailability(opt.value)}
-              activeOpacity={0.75}
-            >
-              <View style={[styles.availRadio, availability === opt.value && styles.availRadioActive]} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.availLabel, availability === opt.value && styles.availLabelActive]}>
-                  {opt.label}
-                </Text>
-                <Text style={styles.availHint}>{opt.hint}</Text>
+              <View style={styles.cameraBadge}>
+                <Feather name="camera" size={12} color={Colors.textInverse} />
               </View>
             </TouchableOpacity>
-          ))}
-        </Section>
+            <Text style={styles.avatarHint}>Tap to change photo</Text>
+          </View>
 
-        <Section title="Selling setup">
-          <Field label="Seller type">
-            <View style={styles.choiceGroup}>
-              {([
-                { value: 'TAILOR', label: 'Tailor', hint: 'Custom work first' },
-                { value: 'BOUTIQUE', label: 'Boutique', hint: 'Shop with tailors behind it' },
-                { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'Custom and ready-made together' },
-              ] as const).map((opt) => (
+          <View style={styles.identityDivider} />
+
+          <TextInput
+            style={[styles.identityInput, errors.name && styles.identityInputError]}
+            value={displayName}
+            onChangeText={(v) => { setDisplayName(v); setErrors((e) => ({ ...e, name: undefined })) }}
+            placeholder="Your name"
+            placeholderTextColor={Colors.midGrey}
+            autoCapitalize="words"
+          />
+          {errors.name ? <Text style={styles.inlineError}>{errors.name}</Text> : null}
+
+          <View style={styles.identityDivider} />
+
+          <TextInput
+            style={[styles.identityInput, styles.identityInputSub, errors.location && styles.identityInputError]}
+            value={location}
+            onChangeText={onLocationChange}
+            onBlur={() => setShowSuggestions(false)}
+            placeholder="City, country"
+            placeholderTextColor={Colors.midGrey}
+            autoCorrect={false}
+            autoComplete="off"
+          />
+          {errors.location ? <Text style={styles.inlineError}>{errors.location}</Text> : null}
+          {showSuggestions && locationSuggestions.length > 0 && (
+            <View style={styles.suggestBox}>
+              {locationSuggestions.map((s, i) => (
                 <TouchableOpacity
-                  key={opt.value}
-                  style={[styles.choiceCard, sellerType === opt.value && styles.choiceCardActive]}
-                  onPress={() => setSellerType(opt.value)}
+                  key={i}
+                  style={[styles.suggestRow, i === locationSuggestions.length - 1 && styles.suggestRowLast]}
+                  onPress={() => { setLocation(s); setLocationSuggestions([]); setShowSuggestions(false) }}
                 >
-                  <Text style={[styles.choiceTitle, sellerType === opt.value && styles.choiceTitleActive]}>{opt.label}</Text>
-                  <Text style={styles.choiceHint}>{opt.hint}</Text>
+                  <Text style={styles.suggestText}>{s}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-          </Field>
+          )}
+        </View>
 
-          <Field label="What customers can do">
-            <View style={styles.choiceGroup}>
-              <TouchableOpacity
-                style={[styles.choiceCard, supportsCustomOrders && styles.choiceCardActive]}
-                onPress={() => setSupportsCustomOrders((value) => !value)}
-              >
-                <Text style={[styles.choiceTitle, supportsCustomOrders && styles.choiceTitleActive]}>Custom order</Text>
-                <Text style={styles.choiceHint}>Customers send details and you quote the work.</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.choiceCard, supportsReadyMade && styles.choiceCardActive]}
-                onPress={() => setSupportsReadyMade((value) => !value)}
-              >
-                <Text style={[styles.choiceTitle, supportsReadyMade && styles.choiceTitleActive]}>Shop now</Text>
-                <Text style={styles.choiceHint}>Customers buy ready-made pieces you already have.</Text>
-              </TouchableOpacity>
+        {/* ── Bio card ─────────────────────────────────────────────────── */}
+        <View style={styles.bioCard}>
+          <Text style={styles.cardMicro}>About your work</Text>
+          <TextInput
+            style={[styles.bioInput, bioError ? styles.bioInputError : undefined]}
+            value={bio}
+            onChangeText={(v) => { setBio(v); if (bioError) validateBio(v) }}
+            onBlur={() => validateBio(bio)}
+            placeholder={'e.g. Lagos-based tailor specialising in Agbada and bespoke suits. 10+ years of experience…'}
+            placeholderTextColor={Colors.midGrey}
+            multiline
+            numberOfLines={5}
+            maxLength={500}
+          />
+          {bioError ? <Text style={styles.inlineError}>{bioError}</Text> : null}
+          <View style={styles.bioFooter}>
+            <View style={styles.bioPrompts}>
+              {BIO_PROMPTS.map((p) => (
+                <Text key={p} style={styles.bioPromptItem}>{'·'} {p}</Text>
+              ))}
             </View>
-          </Field>
+            <Text style={styles.charCount}>{bio.trim().length}/500</Text>
+          </View>
+        </View>
 
-          <Field label="Fulfillment">
-            <View style={styles.choiceGroup}>
-              <TouchableOpacity
-                style={[styles.choiceCard, pickupAvailable && styles.choiceCardActive]}
-                onPress={() => setPickupAvailable((value) => !value)}
-              >
-                <Text style={[styles.choiceTitle, pickupAvailable && styles.choiceTitleActive]}>Pickup</Text>
-                <Text style={styles.choiceHint}>Customer collects from you or your shop.</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.choiceCard, deliveryAvailable && styles.choiceCardActive]}
-                onPress={() => setDeliveryAvailable((value) => !value)}
-              >
-                <Text style={[styles.choiceTitle, deliveryAvailable && styles.choiceTitleActive]}>Delivery</Text>
-                <Text style={styles.choiceHint}>You or your team deliver nearby orders.</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.choiceCard, shippingAvailable && styles.choiceCardActive]}
-                onPress={() => setShippingAvailable((value) => !value)}
-              >
-                <Text style={[styles.choiceTitle, shippingAvailable && styles.choiceTitleActive]}>Shipping</Text>
-                <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
-              </TouchableOpacity>
-            </View>
-            {pickupAvailable ? (
-              <View style={styles.fulfillmentFeeBlock}>
-                <Text style={styles.fieldHint}>
-                  Double-check this exact address before you save. Customers only see it after an order is marked ready for collection.
-                </Text>
-                <AddressAutocompleteInput
-                  label="Pickup address"
-                  value={pickupAddress}
-                  onChangeText={setPickupAddress}
-                  placeholder="e.g. 12 Marina Road, Victoria Island"
-                  hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
-                  multiline
-                />
-                <Field label="Pickup instructions (optional)">
-                  <TextInput
-                    style={styles.input}
-                    value={pickupInstructions}
-                    onChangeText={setPickupInstructions}
-                    placeholder="e.g. Ask for the front desk and bring your collection code."
-                    placeholderTextColor={Colors.midGrey}
-                  />
-                </Field>
-                {pickupAddress.trim().length === 0 ? (
-                  <Text style={styles.helperError}>Add your exact pickup address to keep pickup turned on.</Text>
-                ) : pickupAddress.trim().length < 8 ? (
-                  <Text style={styles.helperError}>Add a fuller pickup address before offering pickup.</Text>
-                ) : null}
-              </View>
-            ) : null}
-            {deliveryAvailable || shippingAvailable ? (
-              <View style={styles.fulfillmentFeeBlock}>
-                <Text style={styles.fieldLabel}>Standard Drapeon dispatch fees</Text>
-                <Text style={styles.fieldHint}>
-                  Drapeon now collects the standard delivery or shipping fee at checkout based on the buyer address and your location. You only need to keep your location and fulfillment options accurate here.
-                </Text>
-              </View>
-            ) : null}
-          </Field>
-        </Section>
-
-        {/* ── Portfolio ────────────────────────────────────────────────── */}
-        <Section title="Portfolio">
+        {/* ── Specialties + Currency list card ─────────────────────────── */}
+        <View style={styles.listCard}>
           <TouchableOpacity
-            style={styles.portfolioLink}
-            onPress={() => router.push({
-              pathname: '/(tailor)/profile/portfolio',
-              params: { returnTo: '/(tailor)/profile/edit' },
-            })}
+            style={[styles.listRow, errors.specialties ? styles.listRowError : undefined]}
             activeOpacity={0.75}
+            onPress={() => setShowSpecialtySheet(true)}
           >
-            <View style={styles.portfolioLinkLeft}>
-              <Feather name="image" size={18} color={Colors.needleGreen} />
-              <View>
-                <Text style={styles.portfolioLinkTitle}>Manage portfolio</Text>
-                <Text style={styles.portfolioLinkSub}>
-                  {portfolioCount > 0 ? `${portfolioCount} item${portfolioCount !== 1 ? 's' : ''}` : 'No items yet. Add your work'}
+            <View style={styles.listRowBody}>
+              <Text style={styles.listRowLabel}>Specialties</Text>
+              {specialties.length > 0 ? (
+                <Text style={styles.listRowValue} numberOfLines={1}>
+                  {specialties.slice(0, 3).join(' · ')}{specialties.length > 3 ? ` +${specialties.length - 3}` : ''}
                 </Text>
-              </View>
+              ) : (
+                <Text style={styles.listRowPlaceholder}>What do you make?</Text>
+              )}
             </View>
             <Feather name="chevron-right" size={18} color={Colors.midGrey} />
           </TouchableOpacity>
-        </Section>
+          {errors.specialties ? (
+            <Text style={[styles.inlineError, { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xs }]}>
+              {errors.specialties}
+            </Text>
+          ) : null}
 
-        {/* ── Trust status (read-only) ──────────────────────────────────── */}
-        <Section title="Trust status">
+          <View style={styles.listDivider} />
+
+          <TouchableOpacity style={styles.listRow} activeOpacity={0.75} onPress={() => setShowCurrencySheet(true)}>
+            <View style={styles.listRowBody}>
+              <Text style={styles.listRowLabel}>Prices shown in</Text>
+              <Text style={styles.listRowValue}>{currencyLabel}</Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── How you sell ─────────────────────────────────────────────── */}
+        <Text style={styles.sectionMicro}>How you sell</Text>
+
+        <View style={styles.sellerTypeRow}>
+          {([
+            { value: 'TAILOR',      label: 'Tailor',   icon: 'scissors'     as const, sub: 'Custom orders' },
+            { value: 'BOUTIQUE',    label: 'Boutique',  icon: 'shopping-bag' as const, sub: 'Ready-made' },
+            { value: 'TAILOR_SHOP', label: 'Shop',      icon: 'briefcase'    as const, sub: 'Both' },
+          ] as const).map((opt) => {
+            const active = sellerType === opt.value
+            return (
+              <TouchableOpacity
+                key={opt.value}
+                style={[styles.sellerCard, active && styles.sellerCardActive]}
+                onPress={() => applySellerType(opt.value)}
+                activeOpacity={0.75}
+              >
+                <Feather name={opt.icon} size={20} color={active ? Colors.needleGreen : Colors.midGrey} />
+                <Text style={[styles.sellerLabel, active && styles.sellerLabelActive]}>{opt.label}</Text>
+                <Text style={styles.sellerSub}>{opt.sub}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+
+        <View style={styles.listCard}>
+          {sellerType !== 'BOUTIQUE' ? (
+            <>
+              <TouchableOpacity style={styles.serviceRow} onPress={toggleSupportsCustomOrders} activeOpacity={0.75}>
+                <View style={[styles.serviceIconWrap, supportsCustomOrders && styles.serviceIconWrapActive]}>
+                  <Feather name="edit-2" size={15} color={supportsCustomOrders ? Colors.needleGreen : Colors.midGrey} />
+                </View>
+                <View style={styles.serviceBody}>
+                  <Text style={[styles.serviceTitle, supportsCustomOrders && styles.serviceTitleActive]}>Custom orders</Text>
+                  <Text style={styles.serviceHint}>
+                    {supportsCustomOrders && acceptsCustomOrdersNow ? 'Accepting new briefs'
+                      : supportsCustomOrders ? 'On — currently paused' : 'Off'}
+                  </Text>
+                </View>
+                <View style={[styles.serviceCheck, supportsCustomOrders && styles.serviceCheckActive]}>
+                  {supportsCustomOrders && <Feather name="check" size={12} color={Colors.needleGreen} />}
+                </View>
+              </TouchableOpacity>
+              {supportsCustomOrders ? (
+                <View style={styles.statusChipRow}>
+                  <TouchableOpacity
+                    style={[styles.statusChip, acceptsCustomOrdersNow && styles.statusChipActive]}
+                    onPress={() => setAcceptsCustomOrdersNow(true)}
+                  >
+                    <Text style={[styles.statusChipText, acceptsCustomOrdersNow && styles.statusChipTextActive]}>Open</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.statusChip, !acceptsCustomOrdersNow && styles.statusChipActive]}
+                    onPress={() => setAcceptsCustomOrdersNow(false)}
+                  >
+                    <Text style={[styles.statusChipText, !acceptsCustomOrdersNow && styles.statusChipTextActive]}>Paused</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {sellerType === 'TAILOR_SHOP' && <View style={styles.listDivider} />}
+            </>
+          ) : null}
+
+          {sellerType !== 'TAILOR' ? (
+            <>
+              <TouchableOpacity style={styles.serviceRow} onPress={toggleSupportsReadyMade} activeOpacity={0.75}>
+                <View style={[styles.serviceIconWrap, supportsReadyMade && styles.serviceIconWrapActive]}>
+                  <Feather name="shopping-bag" size={15} color={supportsReadyMade ? Colors.needleGreen : Colors.midGrey} />
+                </View>
+                <View style={styles.serviceBody}>
+                  <Text style={[styles.serviceTitle, supportsReadyMade && styles.serviceTitleActive]}>Shop</Text>
+                  <Text style={styles.serviceHint}>
+                    {supportsReadyMade && !shopPaused ? 'Checkout open'
+                      : supportsReadyMade ? 'On — checkout paused' : 'Off'}
+                  </Text>
+                </View>
+                <View style={[styles.serviceCheck, supportsReadyMade && styles.serviceCheckActive]}>
+                  {supportsReadyMade && <Feather name="check" size={12} color={Colors.needleGreen} />}
+                </View>
+              </TouchableOpacity>
+              {supportsReadyMade ? (
+                <View style={styles.statusChipRow}>
+                  <TouchableOpacity
+                    style={[styles.statusChip, !shopPaused && styles.statusChipActive]}
+                    onPress={() => setShopPaused(false)}
+                  >
+                    <Text style={[styles.statusChipText, !shopPaused && styles.statusChipTextActive]}>Open</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.statusChip, shopPaused && styles.statusChipActive]}
+                    onPress={() => setShopPaused(true)}
+                  >
+                    <Text style={[styles.statusChipText, shopPaused && styles.statusChipTextActive]}>Paused</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+
+        {/* ── Availability ─────────────────────────────────────────────── */}
+        <Text style={styles.sectionMicro}>Availability</Text>
+        <View style={styles.listCard}>
+          {AVAIL_OPTIONS.map((opt, i) => (
+            <View key={opt.value}>
+              <TouchableOpacity style={styles.availRow} onPress={() => setAvailability(opt.value)} activeOpacity={0.75}>
+                <View style={[styles.availDot, {
+                  backgroundColor: i === 0 ? Colors.success : i === 1 ? Colors.warning : Colors.error,
+                }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.availLabel, availability === opt.value && styles.availLabelActive]}>{opt.label}</Text>
+                  <Text style={styles.availHint}>{opt.hint}</Text>
+                </View>
+                {availability === opt.value
+                  ? <Feather name="check" size={16} color={Colors.needleGreen} />
+                  : null}
+              </TouchableOpacity>
+              {i < AVAIL_OPTIONS.length - 1 && <View style={styles.listDivider} />}
+            </View>
+          ))}
+        </View>
+
+        {/* ── Delivery options ─────────────────────────────────────────── */}
+        <Text style={styles.sectionMicro}>Delivery options</Text>
+        <View style={styles.deliveryRow}>
+          {([
+            { key: 'pickup',   label: 'Pickup',  icon: 'map-pin'    as const, active: pickupAvailable,   toggle: () => setPickupAvailable((v) => !v) },
+            { key: 'delivery', label: 'Deliver', icon: 'navigation' as const, active: deliveryAvailable, toggle: () => setDeliveryAvailable((v) => !v) },
+            { key: 'shipping', label: 'Ship',    icon: 'package'    as const, active: shippingAvailable, toggle: () => setShippingAvailable((v) => !v) },
+          ]).map((opt) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.deliveryChip, opt.active && styles.deliveryChipActive]}
+              onPress={opt.toggle}
+              activeOpacity={0.75}
+            >
+              <Feather name={opt.icon} size={16} color={opt.active ? Colors.needleGreen : Colors.midGrey} />
+              <Text style={[styles.deliveryChipLabel, opt.active && styles.deliveryChipLabelActive]}>{opt.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {pickupAvailable ? (
+          <View style={styles.pickupBlock}>
+            <Text style={styles.pickupNote}>Customers only see this after an order is marked ready for collection.</Text>
+            <AddressAutocompleteInput
+              label="Pickup address"
+              value={pickupAddress}
+              onChangeText={setPickupAddress}
+              placeholder="e.g. 12 Marina Road, Victoria Island"
+              hint="Search or type your full pickup address. Include street, city, and country."
+              multiline
+            />
+            <TextInput
+              style={styles.input}
+              value={pickupInstructions}
+              onChangeText={setPickupInstructions}
+              placeholder="Pickup instructions (optional)"
+              placeholderTextColor={Colors.midGrey}
+            />
+            {pickupAddress.trim().length === 0 ? (
+              <Text style={styles.helperError}>Enter your pickup address to keep this on.</Text>
+            ) : pickupAddress.trim().length < 8 ? (
+              <Text style={styles.helperError}>Add a more complete address before enabling pickup.</Text>
+            ) : null}
+          </View>
+        ) : null}
+        {(deliveryAvailable || shippingAvailable) ? (
+          <Text style={styles.deliveryFeeNote}>
+            Drapeon calculates and collects the delivery fee at checkout. Keep your location accurate and you're set.
+          </Text>
+        ) : null}
+
+        {/* ── Portfolio + Verification nav card ────────────────────────── */}
+        <View style={[styles.listCard, { marginTop: Spacing.xs }]}>
           <TouchableOpacity
-            style={styles.trustRow}
+            style={styles.listRow}
+            onPress={() => router.push({
+              pathname: '/(tailor)/profile/portfolio',
+              params: {
+                returnTo: '/(tailor)/profile/edit',
+                historyChain: appendToHistory(undefined, '/(tailor)/profile/edit'),
+              },
+            })}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.navIcon, { backgroundColor: Colors.needleGreenLight }]}>
+              <Feather name="image" size={16} color={Colors.needleGreen} />
+            </View>
+            <View style={styles.listRowBody}>
+              <Text style={styles.listRowLabel}>Portfolio</Text>
+              <Text style={styles.listRowValue}>
+                {portfolioCount > 0 ? `${portfolioCount} item${portfolioCount !== 1 ? 's' : ''}` : 'Add your work'}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+          </TouchableOpacity>
+
+          <View style={styles.listDivider} />
+
+          <TouchableOpacity
+            style={styles.listRow}
             onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
             activeOpacity={0.75}
           >
-            <View style={styles.trustIcon}>
+            <View style={[styles.navIcon, { backgroundColor: VERIFY_COLOR[verifyStatus] + '1a' }]}>
               <View style={[styles.verifyDot, { backgroundColor: VERIFY_COLOR[verifyStatus] }]} />
             </View>
-            <View style={styles.trustCopy}>
-              <Text style={styles.trustTitle}>{VERIFY_LABEL[verifyStatus]}</Text>
-              <Text style={styles.trustSub}>
-                {verifyStatus === 'VERIFIED'
-                  ? 'You can manage profile and payout access from one place.'
-                  : verifyStatus === 'PENDING'
-                    ? 'We will keep this page updated as review moves.'
-                    : 'Open trust & access for the exact next step.'}
-              </Text>
+            <View style={styles.listRowBody}>
+              <Text style={styles.listRowLabel}>Verification</Text>
+              <Text style={styles.listRowValue}>{VERIFY_LABEL[verifyStatus]}</Text>
             </View>
             <Text style={styles.trustAction}>
-              {verifyStatus === 'NOT_SUBMITTED' || verifyStatus === 'REJECTED' ? 'Fix' : 'View'}
+              {verifyStatus === 'NOT_SUBMITTED' ? 'Start' : verifyStatus === 'REJECTED' ? 'Retry' : 'View'}
             </Text>
-            <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+            <Feather name="chevron-right" size={18} color={Colors.midGrey} />
           </TouchableOpacity>
-        </Section>
+        </View>
+
       </ScrollView>
+      </KeyboardAvoidingView>
       <SpecialtyPickerSheet
         visible={showSpecialtySheet}
         selected={specialties}
@@ -898,31 +992,6 @@ export default function EditProfileScreen() {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={sectionStyles.wrap}>
-      <Text style={sectionStyles.title}>{title}</Text>
-      <View style={sectionStyles.body}>{children}</View>
-    </View>
-  )
-}
-
-function Field({
-  label, required, error, children,
-}: {
-  label: string; required?: boolean; error?: string; children: React.ReactNode
-}) {
-  return (
-    <View style={fieldStyles.wrap}>
-      <Text style={fieldStyles.label}>
-        {label}{required && <Text style={fieldStyles.required}> *</Text>}
-      </Text>
-      {children}
-      {error ? <Text style={fieldStyles.error}>{error}</Text> : null}
-    </View>
-  )
-}
 
 function SpecialtyPickerSheet({
   visible,
@@ -1044,41 +1113,10 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.boneDeep,
     backgroundColor: Colors.bone,
   },
   headerTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  heroIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroCopy: { flex: 1, gap: 2 },
-  heroTitle: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    fontFamily: Fonts.display,
-  },
-  heroSub: {
-    fontSize: FontSize.xs,
-    color: Colors.inkLight,
-    lineHeight: 18,
-  },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
@@ -1086,30 +1124,35 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: { opacity: 0.35 },
   saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
-    gap: Spacing.md,
-    alignItems: 'center',
-    ...Shadow.lg,
-  },
-  stateEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    letterSpacing: 0,
+    width: '100%', maxWidth: 440, backgroundColor: Colors.white,
+    borderRadius: Radius.xl, padding: Spacing.lg, gap: Spacing.md,
+    alignItems: 'center', ...Shadow.lg,
   },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: Fonts.display },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  errorRetry: {
+    backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl,
+  },
+  errorRetryText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorSecondary: {
+    backgroundColor: Colors.white, borderColor: Colors.lightGrey,
+    borderRadius: Radius.full, borderWidth: 1,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl,
+  },
+  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 
-  scroll: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 48 },
+  scroll: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 56 },
 
-  // Avatar
-  avatarSection: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
+  // ── Identity card ──────────────────────────────────────────────────────────
+  identityCard: {
+    backgroundColor: Colors.white, borderRadius: Radius.xl,
+    overflow: 'hidden', ...Shadow.md,
+  },
+  avatarSection: { alignItems: 'center', gap: Spacing.xs, paddingTop: Spacing.xl, paddingBottom: Spacing.md },
   avatarWrap: { position: 'relative' },
   avatar: {
     width: 88, height: 88, borderRadius: 44,
@@ -1119,75 +1162,151 @@ const styles = StyleSheet.create({
   },
   avatarLoading: { opacity: 0.6 },
   avatarImage: { width: 88, height: 88, borderRadius: 44, borderWidth: 2, borderColor: Colors.needleGreen + '40' },
-  avatarInitials: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   cameraBadge: {
     position: 'absolute', bottom: 0, right: 0,
     width: 26, height: 26, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: Colors.bone,
+    borderWidth: 2, borderColor: Colors.white,
   },
   avatarHint: { fontSize: FontSize.xs, color: Colors.midGrey },
+  identityDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.boneDeep },
+  identityInput: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.semibold,
+    color: Colors.ink, fontFamily: Fonts.display,
+    paddingHorizontal: Spacing.lg, paddingVertical: 14,
+  },
+  identityInputSub: {
+    fontSize: FontSize.md, fontWeight: FontWeight.regular,
+    color: Colors.inkLight, fontFamily: Fonts.body,
+  },
+  identityInputError: { color: Colors.error },
+  inlineError: { fontSize: FontSize.xs, color: Colors.error, paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xs },
 
-  // Inputs
+  // ── Bio card ───────────────────────────────────────────────────────────────
+  bioCard: {
+    backgroundColor: Colors.white, borderRadius: Radius.xl,
+    padding: Spacing.lg, gap: Spacing.md, ...Shadow.md,
+  },
+  cardMicro: {
+    fontSize: FontSize.xs, fontWeight: FontWeight.semibold,
+    color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  bioInput: {
+    fontSize: FontSize.md, color: Colors.ink,
+    minHeight: 96, textAlignVertical: 'top', lineHeight: 22,
+    borderWidth: 1, borderColor: Colors.boneDeep,
+    borderRadius: Radius.md, padding: Spacing.md,
+  },
+  bioInputError: { borderColor: Colors.error },
+  bioFooter: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
+  bioPrompts: { flex: 1, gap: 3 },
+  bioPromptItem: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right' },
+
+  // ── Generic list card ──────────────────────────────────────────────────────
+  listCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, overflow: 'hidden', ...Shadow.md },
+  listRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    minHeight: 64, gap: Spacing.md,
+  },
+  listRowError: { backgroundColor: Colors.error + '06' },
+  listRowBody: { flex: 1, gap: 2 },
+  listRowLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  listRowValue: { fontSize: FontSize.sm, color: Colors.midGrey },
+  listRowPlaceholder: { fontSize: FontSize.sm, color: Colors.lightGrey },
+  listDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.boneDeep, marginHorizontal: Spacing.lg },
+
+  // ── Section micro-label (above card groups) ────────────────────────────────
+  sectionMicro: {
+    fontSize: FontSize.xs, fontWeight: FontWeight.semibold,
+    color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.8,
+    paddingHorizontal: Spacing.xs, paddingTop: Spacing.xs,
+  },
+
+  // ── Seller type cards ──────────────────────────────────────────────────────
+  sellerTypeRow: { flexDirection: 'row', gap: Spacing.sm },
+  sellerCard: {
+    flex: 1, backgroundColor: Colors.white, borderRadius: Radius.xl,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm,
+    alignItems: 'center', gap: 4,
+    borderWidth: 1.5, borderColor: 'transparent', ...Shadow.sm,
+  },
+  sellerCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  sellerLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight, textAlign: 'center' },
+  sellerLabelActive: { color: Colors.needleGreen },
+  sellerSub: { fontSize: 10, color: Colors.midGrey, textAlign: 'center' },
+
+  // ── Service toggle rows ────────────────────────────────────────────────────
+  serviceRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: Spacing.md,
+  },
+  serviceIconWrap: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: Colors.bone, alignItems: 'center', justifyContent: 'center',
+  },
+  serviceIconWrapActive: { backgroundColor: Colors.needleGreenLight },
+  serviceBody: { flex: 1, gap: 2 },
+  serviceTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  serviceTitleActive: { color: Colors.ink },
+  serviceHint: { fontSize: FontSize.xs, color: Colors.midGrey },
+  serviceCheck: {
+    width: 24, height: 24, borderRadius: 12,
+    borderWidth: 1.5, borderColor: Colors.lightGrey,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  serviceCheckActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  statusChipRow: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingBottom: Spacing.md },
+  statusChip: {
+    paddingHorizontal: Spacing.md, paddingVertical: 6,
+    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+  },
+  statusChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  statusChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium, color: Colors.midGrey },
+  statusChipTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+
+  // ── Availability rows ──────────────────────────────────────────────────────
+  availRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: Spacing.md,
+  },
+  availDot: { width: 8, height: 8, borderRadius: 4 },
+  availLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  availLabelActive: { color: Colors.ink },
+  availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 1, lineHeight: 18 },
+
+  // ── Delivery chips ─────────────────────────────────────────────────────────
+  deliveryRow: { flexDirection: 'row', gap: Spacing.sm },
+  deliveryChip: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: Spacing.md, borderRadius: Radius.xl,
+    borderWidth: 1.5, borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white, ...Shadow.sm,
+  },
+  deliveryChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  deliveryChipLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.midGrey },
+  deliveryChipLabelActive: { color: Colors.needleGreen },
+
+  // ── Pickup block ───────────────────────────────────────────────────────────
+  pickupBlock: { gap: Spacing.sm },
+  pickupNote: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  deliveryFeeNote: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, paddingHorizontal: Spacing.xs },
   input: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg, paddingVertical: 10,
     fontSize: FontSize.md, color: Colors.ink, ...Shadow.sm,
-    borderWidth: 1, borderColor: 'transparent',
+    borderWidth: 1, borderColor: Colors.boneDeep,
   },
-  inputError: { borderColor: Colors.error },
-  multiline: { minHeight: 100, textAlignVertical: 'top' },
-  charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right', marginTop: 4 },
-  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
-  fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   helperError: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
-  helperPromptList: { gap: 6, marginTop: Spacing.sm },
-  helperPromptRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  helperPromptDot: {
-    width: 5,
-    height: 5,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreen,
-  },
-  helperPromptText: { flex: 1, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
-  selectorSummary: {
-    minHeight: 68,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  selectorSummaryError: {
-    borderColor: Colors.error,
-    backgroundColor: Colors.error + '08',
-  },
-  selectorSummaryText: { flex: 1, gap: 3 },
-  selectorSummaryTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  selectorSummaryBody: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    lineHeight: 18,
-  },
-  selectedPreviewSummary: {
-    marginTop: Spacing.xs,
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.medium,
-    lineHeight: 18,
-  },
+  // ── Nav rows (portfolio + verification) ────────────────────────────────────
+  navIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  verifyDot: { width: 8, height: 8, borderRadius: 4 },
+  trustAction: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
 
-  // Location suggestions
+  // ── Location suggestions ───────────────────────────────────────────────────
   suggestBox: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.lightGrey,
@@ -1200,198 +1319,41 @@ const styles = StyleSheet.create({
   suggestRowLast: { borderBottomWidth: 0 },
   suggestText: { fontSize: FontSize.sm, color: Colors.ink },
 
-  // Availability
-  availCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
-    borderWidth: 1, borderColor: Colors.lightGrey,
-  },
-  availCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  availRadio: {
-    width: 18, height: 18, borderRadius: 9,
-    borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
-  },
-  availRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
-  availLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  availLabelActive: { color: Colors.needleGreen },
-  availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 1, lineHeight: 18 },
-  choiceGroup: { gap: Spacing.sm },
-  choiceCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    gap: 2,
-  },
-  choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  choiceTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  choiceTitleActive: { color: Colors.needleGreen },
-  choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
-
-  // Portfolio link
-  portfolioLink: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, ...Shadow.sm,
-  },
-  portfolioLinkLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
-  portfolioLinkSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-
-  // Trust status
-  trustRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  trustIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: Colors.bone,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  trustCopy: { flex: 1, gap: 2 },
-  trustTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
-  trustSub: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  trustAction: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  verifyDot: { width: 8, height: 8, borderRadius: 4 },
-  errorRetry: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xxxl,
-  },
-  errorRetryText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  errorSecondary: {
-    backgroundColor: Colors.white,
-    borderColor: Colors.lightGrey,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xxxl,
-  },
-  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-
-  sheetOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  sheetScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.34)',
-  },
+  // ── Bottom sheets ──────────────────────────────────────────────────────────
+  sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  sheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.34)' },
   specialtySheet: {
-    maxHeight: '86%',
-    backgroundColor: Colors.bone,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    paddingTop: Spacing.sm,
-    paddingHorizontal: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.lg,
+    maxHeight: '86%', backgroundColor: Colors.bone,
+    borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    paddingTop: Spacing.sm, paddingHorizontal: Spacing.xl, gap: Spacing.md, ...Shadow.lg,
   },
   sheetHandle: {
-    width: 42,
-    height: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.lightGrey,
-    alignSelf: 'center',
+    width: 42, height: 4, borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey, alignSelf: 'center',
   },
-  specialtySheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.md,
-  },
-  specialtySheetTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    fontFamily: Fonts.display,
-  },
-  specialtySheetSubtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.midGrey,
-    lineHeight: 20,
-  },
+  specialtySheetHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
+  specialtySheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  specialtySheetSubtitle: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
   sheetClose: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 36, height: 36, borderRadius: Radius.full,
+    backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.lightGrey,
+    alignItems: 'center', justifyContent: 'center',
   },
-  specialtySheetScroll: {
-    marginHorizontal: -Spacing.xs,
-  },
-  specialtySheetContent: {
-    paddingHorizontal: Spacing.xs,
-    paddingBottom: Spacing.md,
-  },
+  specialtySheetScroll: { marginHorizontal: -Spacing.xs },
+  specialtySheetContent: { paddingHorizontal: Spacing.xs, paddingBottom: Spacing.md },
+  selectorSummaryText: { flex: 1, gap: 3 },
   currencySheet: {
-    backgroundColor: Colors.bone,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    paddingTop: Spacing.sm,
-    paddingHorizontal: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.lg,
+    backgroundColor: Colors.bone, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    paddingTop: Spacing.sm, paddingHorizontal: Spacing.xl, gap: Spacing.md, ...Shadow.lg,
   },
-  currencyOptionList: {
-    gap: Spacing.sm,
-  },
+  currencyOptionList: { gap: Spacing.sm },
   currencyOptionRow: {
-    minHeight: 58,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    paddingHorizontal: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    minHeight: 58, borderRadius: Radius.lg, borderWidth: 1,
+    borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'space-between',
   },
-  currencyOptionRowActive: {
-    borderColor: Colors.needleGreen,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  currencyOptionText: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  currencyOptionTextActive: {
-    color: Colors.needleGreen,
-  },
-})
-
-const sectionStyles = StyleSheet.create({
-  wrap: { gap: Spacing.md },
-  title: {
-    fontSize: FontSize.sm, fontWeight: FontWeight.semibold,
-    color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.8,
-  },
-  body: { gap: Spacing.md },
-})
-
-const fieldStyles = StyleSheet.create({
-  wrap: { gap: 6 },
-  label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
-  required: { color: Colors.error },
-  error: { fontSize: FontSize.xs, color: Colors.error, marginTop: 4 },
+  currencyOptionRowActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  currencyOptionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  currencyOptionTextActive: { color: Colors.needleGreen },
 })

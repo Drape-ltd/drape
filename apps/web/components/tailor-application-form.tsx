@@ -124,7 +124,7 @@ export function TailorApplicationForm(): React.JSX.Element {
 
   return (
     <form className="mt-10 grid gap-4 lg:grid-cols-2" onSubmit={onSubmit}>
-      <div className="grid gap-3 rounded-[1.5rem] border border-ink/6 bg-bone/72 p-5 lg:col-span-2 sm:grid-cols-3">
+      <div className="grid gap-3 rounded-[8px] border border-ink/6 bg-bone/72 p-5 lg:col-span-2 sm:grid-cols-3">
         {[
           'Show your strongest specialty clearly.',
           'Share one or two links that represent your work well.',
@@ -137,7 +137,7 @@ export function TailorApplicationForm(): React.JSX.Element {
       </div>
 
       {source === 'SIGNED_IN_ACCOUNT' ? (
-        <div className="rounded-[1rem] border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle lg:col-span-2">
+        <div className="rounded-lg border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle lg:col-span-2">
           This application is tied to your signed-in Drapeon account. Ops will review it before tailor workspace setup opens.
         </div>
       ) : null}
@@ -168,7 +168,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           }}
           autoComplete="name"
           className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
-          placeholder="John Doe"
+          placeholder="e.g. John Doe"
         />
       </label>
 
@@ -273,7 +273,7 @@ export function TailorApplicationForm(): React.JSX.Element {
         />
       </label>
 
-      <div className="rounded-[1.5rem] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
+      <div className="rounded-[8px] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <p className="text-sm leading-6 text-ink/60">
             We’ll review it and reach out if there’s a fit.
@@ -303,7 +303,7 @@ export function TailorApplicationForm(): React.JSX.Element {
       ) : null}
 
       {status === 'success' ? (
-        <div className="rounded-[1.5rem] border border-ink/6 bg-bone/80 p-5 lg:col-span-2">
+        <div className="rounded-[8px] border border-ink/6 bg-bone/80 p-5 lg:col-span-2">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">What happens next</p>
           <p className="mt-3 text-sm leading-7 text-ink/68">
             We have your application. We’ll review it and get back to you.

@@ -9,6 +9,7 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme
 import { confirmOrderPayment } from '@/lib/payments'
 import { qk } from '@/lib/queries'
 import { queryClient } from '@/lib/queryClient'
+import { resetTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
 
 type ConfirmState = 'checking' | 'confirmed' | 'pending' | 'failed' | 'invalid'
@@ -73,7 +74,7 @@ export default function PaystackRedirectScreen() {
         setState('confirmed')
         setMessage('Payment confirmed. Opening your order now.')
         setTimeout(() => {
-          router.replace({
+          resetTo(router, {
             pathname: '/(customer)/orders/[id]',
             params: { id: result.orderId, paymentReturn: '1' },
           } as never)
@@ -105,12 +106,12 @@ export default function PaystackRedirectScreen() {
 
   function openOrder() {
     if (orderId) {
-      router.replace({
+      resetTo(router, {
         pathname: '/(customer)/orders/[id]',
         params: { id: orderId, paymentReturn: '1' },
       } as never)
     } else {
-      router.replace('/(customer)/orders')
+      resetTo(router, '/(customer)/orders')
     }
   }
 

@@ -34,7 +34,7 @@ export default function ApplyPage(): React.JSX.Element {
       </section>
 
       <section className="pb-12">
-        <div className="rounded-[1.75rem] border border-ink/6 bg-white/88 p-6 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/88 p-6 shadow-sm">
         <TailorApplicationForm />
         </div>
       </section>

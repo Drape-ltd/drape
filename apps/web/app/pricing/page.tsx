@@ -78,7 +78,7 @@ export default function PricingPage(): React.JSX.Element {
           title="These are the pieces that must be explicit."
           description="Pricing is not only a percentage. It includes payment timing, payouts, refunds, delivery costs, and support obligations."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
             {openItems.map((item) => (
               <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">

@@ -107,6 +107,9 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         body: requireString(notification, 'body'),
         data: stringRecord(notification.data),
         preferenceKey: asString(notification.preferenceKey) as never,
+        channelId: asString(notification.channelId) ?? undefined,
+        sound: asString(notification.sound) ?? undefined,
+        interruptionLevel: asString(notification.interruptionLevel) as never,
       })
       if (result.status === 'ERROR') {
         throw new Error(`Push delivery failed: ${result.reason}`)

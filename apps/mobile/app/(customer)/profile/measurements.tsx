@@ -11,13 +11,13 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnToIfNeeded, pickSafeReturnTo, sanitizeReturnTo } from '@/lib/navigation'
 import {
   isMeasurementSource,
   isMeasurementMetadataKey,
@@ -28,7 +28,13 @@ import {
 import { Button, ChoiceSheet, DisclosureSection, Input, type ChoiceSheetOption } from '@/components/ui'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { filterContactInfo } from '@drape/shared/contact-filter'
-import { buildMeasurementProfileStoragePayload } from '@drape/shared/measurement-profile'
+import {
+  buildMeasurementProfileStoragePayload,
+  isMeasurementFieldKey,
+  promoteSpecialistMeasurementsToProfileValues,
+  specialistMeasurementProfileValueKeys,
+  stripDrapeVisionFit360DraftFields,
+} from '@drape/shared/measurement-profile'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const HOME_BG = Colors.bone
@@ -78,6 +84,14 @@ interface CustomMeasurement {
   value: string
 }
 
+type SpecialistMeasurementSection = {
+  id: string
+  title: string
+  subtitle: string
+  icon: keyof typeof MaterialCommunityIcons.glyphMap
+  values: Array<{ key: string; label: string; value: string }>
+}
+
 type MeasurementProfileRow = {
   id: string
   label: string
@@ -90,7 +104,71 @@ type MeasurementProfileRow = {
   updated_at: string | null
 }
 
-type MeasurementModuleKey = 'lengths' | 'upper' | 'lower' | 'headwear' | 'custom'
+type MeasurementModuleKey = 'lengths' | 'upper' | 'hand_wrist' | 'lower' | 'headwear' | 'custom'
+
+const DRAPE_VISION_FIT_360_CAPTURE_METHOD = 'DRAPE_VISION_ROTATION'
+const SPECIALIST_MEASUREMENT_META_KEYS = new Set([
+  'unit',
+  'cm',
+  'title',
+  'measurementScanId',
+  'captureMethod',
+  'captureMethodLabel',
+  'captureVersion',
+  'visionPipelineVersion',
+  'outputKind',
+  'scanFlow',
+  'scanFlowLabel',
+  'capturedAt',
+  'confidenceOverall',
+  'confidenceByField',
+  'requiresTailorReview',
+  'tapeInputsIn',
+  'tapeSummary',
+])
+const SPECIALIST_SECTION_META: Record<string, { title: string; subtitle: string; icon: keyof typeof MaterialCommunityIcons.glyphMap }> = {
+  hand_wrist: {
+    title: 'Hand & wrist scan',
+    subtitle: 'Palm, cuff, bangle, and wrist values saved from Vision.',
+    icon: 'hand-front-right-outline',
+  },
+  headwear: {
+    title: 'Headwear scan',
+    subtitle: 'Head, crown, fila, and hat-band values saved from Vision.',
+    icon: 'hat-fedora',
+  },
+  bodice_corset: {
+    title: 'Bodice & corset scan',
+    subtitle: 'Bodice, under-bust, torso, and ribcage values saved from Vision.',
+    icon: 'tshirt-crew-outline',
+  },
+  lower_body_detail: {
+    title: 'Hem & ankle openings',
+    subtitle: 'Extra hem/opening values saved from the lower-body scan.',
+    icon: 'human-male-height-variant',
+  },
+  fit_360: {
+    title: 'Fit 360 scan',
+    subtitle: 'Core body measurements saved from Vision.',
+    icon: 'rotate-360',
+  },
+}
+const SPECIALIST_PROFILE_FIELD_ALIASES: Record<string, string> = {
+  'Palm width': 'palmWidth',
+  'Palm length': 'palmLength',
+  'Sleeve opening': 'sleeveOpening',
+  'Bangle pass-over': 'banglePassOver',
+  'Bangle pass over': 'banglePassOver',
+  ankleHem: 'ankleHemOpening',
+  'Ankle / hem opening': 'ankleHemOpening',
+}
+const SPECIALIST_SECTION_MODULE: Partial<Record<string, Exclude<MeasurementModuleKey, 'custom'>>> = {
+  fit_360: 'lengths',
+  bodice_corset: 'upper',
+  hand_wrist: 'hand_wrist',
+  lower_body_detail: 'lower',
+  headwear: 'headwear',
+}
 
 function isEditableCustomMeasurementEntry(key: string, value: unknown) {
   if (isMeasurementMetadataKey(key)) return false
@@ -98,6 +176,83 @@ function isEditableCustomMeasurementEntry(key: string, value: unknown) {
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'string') return value.trim().length > 0
   return false
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isFit360VisionProfile(measurements: Record<string, unknown>) {
+  const latestFitProfile = isRecord(measurements.latestFitProfile) ? measurements.latestFitProfile : null
+  return measurements.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    latestFitProfile?.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    measurements.scanFlow === 'FIT_TURN_360_V1' ||
+    latestFitProfile?.scanFlow === 'FIT_TURN_360_V1'
+}
+
+function normalizeLoadedMeasurementProfile(measurements: Record<string, unknown> | null) {
+  if (!measurements) return measurements
+  const promoted = promoteSpecialistMeasurementsToProfileValues(measurements).measurements
+  if (!isFit360VisionProfile(promoted)) return promoted
+  return stripDrapeVisionFit360DraftFields(promoted)
+}
+
+function titleizeMeasurementKey(key: string) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function formatMeasurementValue(value: unknown, unit: Unit) {
+  const numericValue = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : null
+  if (numericValue == null || !Number.isFinite(numericValue)) return null
+  const rounded = numericValue.toFixed(2).replace(/\.?0+$/, '')
+  return `${rounded} ${unit}`
+}
+
+function readSpecialistMeasurementSections(measurements: Record<string, unknown> | null): SpecialistMeasurementSection[] {
+  if (!measurements || !isRecord(measurements.specialistMeasurements)) return []
+
+  return Object.entries(measurements.specialistMeasurements)
+    .map(([mode, rawValue]) => {
+      if (!isRecord(rawValue)) return null
+      const unit: Unit = rawValue.unit === 'cm' ? 'cm' : 'in'
+      const meta = SPECIALIST_SECTION_META[mode] ?? {
+        title: typeof rawValue.title === 'string' && rawValue.title.trim()
+          ? rawValue.title.trim()
+          : titleizeMeasurementKey(mode),
+        subtitle: 'Saved scan values for this profile.',
+        icon: 'ruler-square',
+      }
+      const values = Object.entries(rawValue)
+        .filter(([key]) => {
+          if (SPECIALIST_MEASUREMENT_META_KEYS.has(key)) return false
+          return !isMeasurementFieldKey(SPECIALIST_PROFILE_FIELD_ALIASES[key] ?? key)
+        })
+        .map(([key, value]) => {
+          const formattedValue = formatMeasurementValue(value, unit)
+          if (!formattedValue) return null
+          return { key, label: titleizeMeasurementKey(key), value: formattedValue }
+        })
+        .filter((value): value is { key: string; label: string; value: string } => !!value)
+
+      if (!values.length) return null
+      return {
+        id: mode,
+        title: meta.title,
+        subtitle: meta.subtitle,
+        icon: meta.icon,
+        values,
+      }
+    })
+    .filter((section): section is SpecialistMeasurementSection => !!section)
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -230,7 +385,7 @@ const FIT_FLAG_OPTIONS: Array<{ value: FitFlag; label: string; hint: string }> =
 const STEP_TITLES = ['Body measurements', 'Garment cuts', 'Body shape', 'Fit challenges & context']
 
 const STEP_SUBTITLES = [
-  'Add as many measurements as you can. The more detail you share, the better your tailor can quote and cut.',
+  'Start with core values. Add extra areas only when a garment or tailor needs them.',
   'This helps your tailor understand which cuts and shapes to use. This is a fit question, not a personal one.',
   'Pick all that apply. This helps your tailor visualise how a garment will fall before they start cutting.',
   'Where do clothes usually fit badly, and what context should your tailor know before cutting?',
@@ -330,44 +485,51 @@ const MEASUREMENT_MODULE_OPTIONS: Array<{
   value: MeasurementModuleKey
   title: string
   body: string
-  icon: keyof typeof Feather.glyphMap
+  materialIcon: keyof typeof MaterialCommunityIcons.glyphMap
 }> = [
   {
     value: 'lengths',
     title: 'Lengths',
     body: 'Height, sleeve, inseam, outseam, torso, and back length.',
-    icon: 'maximize-2',
+    materialIcon: 'tape-measure',
   },
   {
     value: 'upper',
     title: 'Upper body detail',
-    body: 'Neck, under bust, bicep, and wrist for shirts, cuffs, bodice, and corset work.',
-    icon: 'watch',
+    body: 'Neck, under bust, and bicep for shirts, bodice, and corset work.',
+    materialIcon: 'tshirt-crew-outline',
+  },
+  {
+    value: 'hand_wrist',
+    title: 'Hand & wrist',
+    body: 'Wrist, palm, sleeve opening, and bangle pass-over.',
+    materialIcon: 'hand-front-right-outline',
   },
   {
     value: 'lower',
     title: 'Lower body detail',
     body: 'Thigh and knee for trousers, fitted skirts, and narrow hems.',
-    icon: 'align-justify',
+    materialIcon: 'human-male-height-variant',
   },
   {
     value: 'headwear',
     title: 'Headwear',
     body: 'Head, hat band, crown, and fila details for caps, gele, and formal headwear.',
-    icon: 'circle',
+    materialIcon: 'hat-fedora',
   },
   {
     value: 'custom',
     title: 'Custom tape points',
     body: 'Add garment-specific points your tailor asked for.',
-    icon: 'plus-circle',
+    materialIcon: 'plus-circle-outline',
   },
 ]
 
 const MODULE_FIELD_KEYS: Record<Exclude<MeasurementModuleKey, 'custom'>, string[]> = {
   lengths: ['height', 'inseam', 'sleeveLength', 'backLength', 'outseam', 'torsoLength'],
-  upper: ['neckCircumference', 'underBust', 'bicepCircumference', 'wristCircumference'],
-  lower: ['thighCircumference', 'kneeCircumference'],
+  upper: ['neckCircumference', 'underBust', 'bicepCircumference'],
+  hand_wrist: ['wristCircumference', 'palmWidth', 'palmLength', 'sleeveOpening', 'banglePassOver'],
+  lower: ['thighCircumference', 'kneeCircumference', 'ankleHemOpening'],
   headwear: [
     'headCircumference',
     'hatBandLine',
@@ -414,12 +576,13 @@ export default function MeasurementsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
-  const sanitizedReturnTo = sanitizeReturnTo(returnTo)
+  const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
+  const sanitizedReturnTo = sanitizeReturnTo(pickSafeReturnTo(historyChain, returnTo))
   const safeReturnTo = sanitizedReturnTo && sanitizedReturnTo !== '/(customer)/profile/measurements'
     ? sanitizedReturnTo
     : undefined
   const { user } = useAuth()
+  const userId = user?.id
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [fetchError, setFetchError] = useState(false)
@@ -430,6 +593,8 @@ export default function MeasurementsScreen() {
   const [customMeasurementSheetOpen, setCustomMeasurementSheetOpen] = useState(false)
   const [measurementProfiles, setMeasurementProfiles] = useState<MeasurementProfileRow[]>([])
   const [visibleMeasurementModules, setVisibleMeasurementModules] = useState<MeasurementModuleKey[]>([])
+  const [specialistMeasurementSections, setSpecialistMeasurementSections] = useState<SpecialistMeasurementSection[]>([])
+  const [editingMeasurements, setEditingMeasurements] = useState(false)
 
   // Layer 1
   const [measurementProfileLabel, setMeasurementProfileLabel] = useState('Me')
@@ -449,6 +614,11 @@ export default function MeasurementsScreen() {
   const [kneeCircumference, setKneeCircumference] = useState('')
   const [bicepCircumference, setBicepCircumference] = useState('')
   const [wristCircumference, setWristCircumference] = useState('')
+  const [palmWidth, setPalmWidth] = useState('')
+  const [palmLength, setPalmLength] = useState('')
+  const [sleeveOpening, setSleeveOpening] = useState('')
+  const [banglePassOver, setBanglePassOver] = useState('')
+  const [ankleHemOpening, setAnkleHemOpening] = useState('')
   const [headCircumference, setHeadCircumference] = useState('')
   const [hatBandLine, setHatBandLine] = useState('')
   const [headLength, setHeadLength] = useState('')
@@ -491,6 +661,11 @@ export default function MeasurementsScreen() {
     setKneeCircumference('')
     setBicepCircumference('')
     setWristCircumference('')
+    setPalmWidth('')
+    setPalmLength('')
+    setSleeveOpening('')
+    setBanglePassOver('')
+    setAnkleHemOpening('')
     setHeadCircumference('')
     setHatBandLine('')
     setHeadLength('')
@@ -509,6 +684,7 @@ export default function MeasurementsScreen() {
     setCustomMeasurements([])
     setFitCaptureMeta({})
     setVisibleMeasurementModules([])
+    setSpecialistMeasurementSections([])
     if (!m) return
     if (typeof m.measurementProfileLabel === 'string' && m.measurementProfileLabel.trim()) {
       setMeasurementProfileLabel(m.measurementProfileLabel.trim())
@@ -532,6 +708,11 @@ export default function MeasurementsScreen() {
       setBicepCircumference(String(m.bicepCircumference))
     if (typeof m.wristCircumference === 'number')
       setWristCircumference(String(m.wristCircumference))
+    if (typeof m.palmWidth === 'number') setPalmWidth(String(m.palmWidth))
+    if (typeof m.palmLength === 'number') setPalmLength(String(m.palmLength))
+    if (typeof m.sleeveOpening === 'number') setSleeveOpening(String(m.sleeveOpening))
+    if (typeof m.banglePassOver === 'number') setBanglePassOver(String(m.banglePassOver))
+    if (typeof m.ankleHemOpening === 'number') setAnkleHemOpening(String(m.ankleHemOpening))
     if (typeof m.headCircumference === 'number') setHeadCircumference(String(m.headCircumference))
     if (typeof m.hatBandLine === 'number') setHatBandLine(String(m.hatBandLine))
     if (typeof m.headLength === 'number') setHeadLength(String(m.headLength))
@@ -574,6 +755,11 @@ export default function MeasurementsScreen() {
       'kneeCircumference',
       'bicepCircumference',
       'wristCircumference',
+      'palmWidth',
+      'palmLength',
+      'sleeveOpening',
+      'banglePassOver',
+      'ankleHemOpening',
       'headCircumference',
       'hatBandLine',
       'headLength',
@@ -601,6 +787,7 @@ export default function MeasurementsScreen() {
       'fitFlags',
       'bodyNote',
       'captureMethod',
+      'captureMethodLabel',
       'captureVersion',
       'capturedAt',
       'confidenceOverall',
@@ -633,12 +820,30 @@ export default function MeasurementsScreen() {
             tailorMeasurementOverrideAt: null,
           }
         : null
-    setFitCaptureMeta({
+    const nextFitCaptureMeta: Record<string, unknown> = {
       bodyFlags: Array.isArray(m.bodyFlags) ? m.bodyFlags : [],
       symmetryFlags: Array.isArray(m.symmetryFlags) ? m.symmetryFlags : [],
-      latestFitProfile: preservedLatestFitProfile,
-    })
-    const extras = Object.entries(m).filter(([k, value]) => !standardKeys.has(k) && isEditableCustomMeasurementEntry(k, value))
+    }
+    if (preservedLatestFitProfile) nextFitCaptureMeta.latestFitProfile = preservedLatestFitProfile
+    if (isRecord(m.specialistMeasurements)) nextFitCaptureMeta.specialistMeasurements = m.specialistMeasurements
+    if (isRecord(m.visionSpecialistProfile)) nextFitCaptureMeta.visionSpecialistProfile = m.visionSpecialistProfile
+    for (const key of [
+      'latestSpecialistMeasurementScanId',
+      'latestSpecialistScanMode',
+      'latestSpecialistScanFlow',
+      'latestSpecialistScanStatus',
+      'latestSpecialistScanAt',
+    ]) {
+      if (typeof m[key] === 'string' && m[key].trim()) nextFitCaptureMeta[key] = m[key]
+    }
+    setFitCaptureMeta(nextFitCaptureMeta)
+    setSpecialistMeasurementSections(readSpecialistMeasurementSections(m))
+    const specialistBackedKeys = specialistMeasurementProfileValueKeys(m)
+    const extras = Object.entries(m).filter(([k, value]) => (
+      !standardKeys.has(k) &&
+      !specialistBackedKeys.has(k) &&
+      isEditableCustomMeasurementEntry(k, value)
+    ))
     setCustomMeasurements(
       extras.map(([name, value]) => ({
         id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
@@ -646,17 +851,10 @@ export default function MeasurementsScreen() {
         value: value != null ? String(value) : '',
       }))
     )
-    const modulesWithValues = MEASUREMENT_MODULE_OPTIONS
-      .filter((module) => {
-        if (module.value === 'custom') return extras.length > 0
-        return MODULE_FIELD_KEYS[module.value].some((key) => typeof m[key] === 'number')
-      })
-      .map((module) => module.value)
-    setVisibleMeasurementModules(modulesWithValues)
   }
 
   const loadMeasurements = useCallback(async () => {
-    if (!user?.id) {
+    if (!userId) {
       setFetchError(false)
       return
     }
@@ -664,7 +862,7 @@ export default function MeasurementsScreen() {
     const { data, error } = await supabase
       .from('customer_profiles')
       .select('measurements')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
 
     if (error) {
@@ -672,47 +870,74 @@ export default function MeasurementsScreen() {
       return
     }
 
-    applyMeasurements((data?.measurements as Record<string, unknown> | null) ?? null)
-  }, [user?.id])
+    const loadedMeasurements = (data?.measurements as Record<string, unknown> | null) ?? null
+    const normalizedMeasurements = normalizeLoadedMeasurementProfile(loadedMeasurements)
+    applyMeasurements(normalizedMeasurements)
+
+    if (loadedMeasurements && normalizedMeasurements && normalizedMeasurements !== loadedMeasurements) {
+      const now = new Date().toISOString()
+      void supabase
+        .from('customer_profiles')
+        .update({ measurements: normalizedMeasurements, updated_at: now })
+        .eq('user_id', userId)
+      void supabase
+        .from('customer_measurement_profiles')
+        .update({
+          measurements: buildMeasurementProfileStoragePayload(normalizedMeasurements),
+          updated_at: now,
+          last_measured_at: typeof normalizedMeasurements.measurementProfileUpdatedAt === 'string'
+            ? normalizedMeasurements.measurementProfileUpdatedAt
+            : now,
+        })
+        .eq('customer_id', userId)
+        .eq('is_default', true)
+    }
+  }, [userId])
 
   const loadMeasurementProfiles = useCallback(async () => {
-    if (!user?.id) {
+    if (!userId) {
       setMeasurementProfiles([])
       return
     }
     const { data, error } = await supabase
       .from('customer_measurement_profiles')
       .select('id, label, relationship, measurements, unit_preference, source, is_default, last_measured_at, updated_at')
-      .eq('customer_id', user.id)
+      .eq('customer_id', userId)
       .order('is_default', { ascending: false })
       .order('updated_at', { ascending: false })
 
     if (!error) {
       setMeasurementProfiles((data ?? []) as MeasurementProfileRow[])
     }
-  }, [user?.id])
+  }, [userId])
 
   useEffect(() => {
-    if (!user?.id) return
+    if (!userId) return
+    let cancelled = false
     const timer = setTimeout(() => {
-      void loadMeasurements()
-      void loadMeasurementProfiles()
+      if (cancelled) return
+      void Promise.allSettled([loadMeasurements(), loadMeasurementProfiles()])
     }, 0)
-    return () => clearTimeout(timer)
-  }, [loadMeasurementProfiles, loadMeasurements, user?.id])
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [loadMeasurementProfiles, loadMeasurements, userId])
 
   useEffect(() => {
-    AsyncStorage.getItem(`${MEASUREMENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
+    AsyncStorage.getItem(`${MEASUREMENTS_GUIDE_KEY}:${userId ?? 'guest'}`)
+      .then((value) => {
+        setShowGuide(value !== '1')
+      })
       .catch(() => {
         // Best effort: showing guidance again is safer than hiding help.
       })
-  }, [user?.id])
+  }, [userId])
 
   async function dismissGuide() {
     setShowGuide(false)
     try {
-      await AsyncStorage.setItem(`${MEASUREMENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+      await AsyncStorage.setItem(`${MEASUREMENTS_GUIDE_KEY}:${userId ?? 'guest'}`, '1')
     } catch {
       // Best effort persistence only; dismiss immediately for this session.
     }
@@ -780,7 +1005,8 @@ export default function MeasurementsScreen() {
   }
 
   function applyMeasurementProfile(profile: MeasurementProfileRow) {
-    const storedUnit = profile.measurements?.unit
+    const normalizedMeasurements = normalizeLoadedMeasurementProfile(profile.measurements)
+    const storedUnit = normalizedMeasurements?.unit
     const nextUnit =
       profile.unit_preference === 'cm' || profile.unit_preference === 'in'
         ? profile.unit_preference
@@ -788,10 +1014,10 @@ export default function MeasurementsScreen() {
           ? storedUnit
           : unit
     applyMeasurements({
-      ...(profile.measurements ?? {}),
+      ...(normalizedMeasurements ?? {}),
       unit: nextUnit,
       measurementProfileLabel: profile.label,
-      measurementSource: profile.measurements?.measurementSource ?? measurementSource,
+      measurementSource: normalizedMeasurements?.measurementSource ?? measurementSource,
     })
     setProfileSheetOpen(false)
   }
@@ -808,8 +1034,13 @@ export default function MeasurementsScreen() {
       underBust,
       bicepCircumference,
       wristCircumference,
+      palmWidth,
+      palmLength,
+      sleeveOpening,
+      banglePassOver,
       thighCircumference,
       kneeCircumference,
+      ankleHemOpening,
       headCircumference,
       hatBandLine,
       headLength,
@@ -902,17 +1133,23 @@ export default function MeasurementsScreen() {
   }
 
   function openDrapeVision() {
-    router.push({
+    const measurementsReturnTarget = '/(customer)/profile/measurements'
+    router.replace({
       pathname: DRAPE_VISION_ROUTE,
       params: {
         mode: 'customer_scan',
-        returnTo: safeReturnTo ?? '/(customer)/profile/measurements',
+        returnTo: measurementsReturnTarget,
+        historyChain: appendToHistory(safeReturnTo, measurementsReturnTarget),
       },
     } as never)
   }
 
   async function save() {
     if (saving) return
+    if (!userId) {
+      Alert.alert('Sign in required', 'Please sign in again before saving measurements.')
+      return
+    }
     if (!validateBodyNote(bodyNote)) return
 
     setSaving(true)
@@ -950,6 +1187,11 @@ export default function MeasurementsScreen() {
       kneeCircumference: safeParse(kneeCircumference),
       bicepCircumference: safeParse(bicepCircumference),
       wristCircumference: safeParse(wristCircumference),
+      palmWidth: safeParse(palmWidth),
+      palmLength: safeParse(palmLength),
+      sleeveOpening: safeParse(sleeveOpening),
+      banglePassOver: safeParse(banglePassOver),
+      ankleHemOpening: safeParse(ankleHemOpening),
       headCircumference: safeParse(headCircumference),
       hatBandLine: safeParse(hatBandLine),
       headLength: safeParse(headLength),
@@ -980,7 +1222,7 @@ export default function MeasurementsScreen() {
     const { error } = await supabase
       .from('customer_profiles')
       .upsert(
-        { user_id: user?.id, measurements: payload, updated_at: now },
+        { user_id: userId, measurements: payload, updated_at: now },
         { onConflict: 'user_id' }
       )
 
@@ -993,39 +1235,37 @@ export default function MeasurementsScreen() {
           : 'Could not save your measurements right now. Please try again in a moment.'
       )
     } else {
-      if (user?.id) {
-        const { data: existingDefault } = await supabase
+      const { data: existingDefault } = await supabase
+        .from('customer_measurement_profiles')
+        .select('id')
+        .eq('customer_id', userId)
+        .eq('is_default', true)
+        .maybeSingle()
+
+      const namedProfilePayload = {
+        customer_id: userId,
+        label: measurementProfileLabel.trim() || 'Me',
+        relationship: 'SELF',
+        measurements: buildMeasurementProfileStoragePayload(payload),
+        unit_preference: unit,
+        source: measurementSource === 'DRAPE_VISION'
+          ? 'DRAPE_VISION'
+          : measurementSource === 'TAILOR_ASSISTED_DRAPE_VISION' || measurementSource === 'TAILOR_CAPTURED'
+            ? 'TAILOR_ASSISTED'
+            : 'MANUAL',
+        is_default: true,
+        last_measured_at: payload.measurementProfileUpdatedAt,
+      }
+
+      if (existingDefault?.id) {
+        await supabase
           .from('customer_measurement_profiles')
-          .select('id')
-          .eq('customer_id', user.id)
-          .eq('is_default', true)
-          .maybeSingle()
-
-        const namedProfilePayload = {
-          customer_id: user.id,
-          label: measurementProfileLabel.trim() || 'Me',
-          relationship: 'SELF',
-          measurements: buildMeasurementProfileStoragePayload(payload),
-          unit_preference: unit,
-          source: measurementSource === 'DRAPE_VISION'
-            ? 'DRAPE_VISION'
-            : measurementSource === 'TAILOR_ASSISTED_DRAPE_VISION' || measurementSource === 'TAILOR_CAPTURED'
-              ? 'TAILOR_ASSISTED'
-              : 'MANUAL',
-          is_default: true,
-          last_measured_at: payload.measurementProfileUpdatedAt,
-        }
-
-        if (existingDefault?.id) {
-          await supabase
-            .from('customer_measurement_profiles')
-            .update(namedProfilePayload)
-            .eq('id', existingDefault.id)
-        } else {
-          await supabase
-            .from('customer_measurement_profiles')
-            .insert(namedProfilePayload)
-        }
+          .update(namedProfilePayload)
+          .eq('id', existingDefault.id)
+      } else {
+        await supabase
+          .from('customer_measurement_profiles')
+          .insert(namedProfilePayload)
       }
       setSaving(false)
       capture('measurements_saved', { unit, measurement_source: measurementSource })
@@ -1044,7 +1284,7 @@ export default function MeasurementsScreen() {
   }
 
   function back() {
-    if (step > 0) setStep(step - 1)
+    if (editingMeasurements && step > 0) setStep(step - 1)
     else goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
@@ -1100,12 +1340,23 @@ export default function MeasurementsScreen() {
     {
       key: 'upper' as const,
       title: 'Upper body detail',
-      subtitle: 'Use for cuffs, sleeves, bodice, corset, shirts, and fitted tops.',
+      subtitle: 'Use for bodice, corset, shirts, and fitted tops.',
       fields: [
         { label: 'Neck', value: neckCircumference, set: setNeckCircumference },
         { label: 'Under bust', value: underBust, set: setUnderBust },
         { label: 'Bicep', value: bicepCircumference, set: setBicepCircumference },
+      ],
+    },
+    {
+      key: 'hand_wrist' as const,
+      title: 'Hand & wrist',
+      subtitle: 'Use for cuffs, bangles, bracelets, and sleeve openings.',
+      fields: [
         { label: 'Wrist', value: wristCircumference, set: setWristCircumference },
+        { label: 'Palm width', value: palmWidth, set: setPalmWidth },
+        { label: 'Palm length', value: palmLength, set: setPalmLength },
+        { label: 'Sleeve opening', value: sleeveOpening, set: setSleeveOpening },
+        { label: 'Bangle pass-over', value: banglePassOver, set: setBanglePassOver },
       ],
     },
     {
@@ -1115,6 +1366,7 @@ export default function MeasurementsScreen() {
       fields: [
         { label: 'Thigh', value: thighCircumference, set: setThighCircumference },
         { label: 'Knee', value: kneeCircumference, set: setKneeCircumference },
+        { label: 'Ankle / hem opening', value: ankleHemOpening, set: setAnkleHemOpening },
       ],
     },
     {
@@ -1154,6 +1406,272 @@ export default function MeasurementsScreen() {
     )
   }
 
+  function renderReadOnlyMeasurementGrid(
+    fields: Array<{ label: string; value: string }>
+  ) {
+    const savedFields = fields.filter((field) => field.value.trim())
+    if (!savedFields.length) {
+      return (
+        <Text style={styles.emptyReadText}>No values saved here yet.</Text>
+      )
+    }
+    return (
+      <View style={styles.readValueGrid}>
+        {savedFields.map((field) => (
+          <View key={field.label} style={styles.readValueTile}>
+            <Text style={styles.readValueLabel}>{field.label}</Text>
+            <Text style={styles.readValueNumber}>{field.value.trim()} {unit}</Text>
+          </View>
+        ))}
+      </View>
+    )
+  }
+
+  function renderSpecialistSection(section: SpecialistMeasurementSection) {
+    return (
+      <View key={section.id} style={styles.specialistSectionCard}>
+        <View style={styles.moduleHeader}>
+          <View style={styles.moduleIcon}>
+            <MaterialCommunityIcons name={section.icon} size={18} color={Colors.needleGreen} />
+          </View>
+          <View style={styles.moduleCopy}>
+            <Text style={styles.moduleTitle}>{section.title}</Text>
+            <Text style={styles.moduleSubtitle}>{section.subtitle}</Text>
+          </View>
+        </View>
+        <View style={styles.specialistValueGrid}>
+          {section.values.map((value) => (
+            <View key={`${section.id}:${value.key}`} style={styles.specialistValueTile}>
+              <Text style={styles.specialistValueLabel}>{value.label}</Text>
+              <Text style={styles.specialistValueNumber}>{value.value}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    )
+  }
+
+  const anchoredSpecialistSectionIds = new Set(
+    specialistMeasurementSections
+      .filter((section) => {
+        const moduleKey = SPECIALIST_SECTION_MODULE[section.id]
+        return moduleKey ? shouldShowModule(moduleKey) : false
+      })
+      .map((section) => section.id)
+  )
+  const looseSpecialistMeasurementSections = specialistMeasurementSections.filter(
+    (section) => !anchoredSpecialistSectionIds.has(section.id)
+  )
+  const savedMeasurementValueCount =
+    coreFields.filter((field) => field.value.trim()).length +
+    optionalModules.reduce((total, module) => (
+      total + module.fields.filter((field) => field.value.trim()).length
+    ), 0) +
+    customMeasurements.filter((measurement) => measurement.name.trim() && measurement.value.trim()).length +
+    specialistMeasurementSections.reduce((total, section) => total + section.values.length, 0)
+  const hasSavedMeasurementValues = savedMeasurementValueCount > 0
+  const contextRows = [
+    fitStyle ? { label: 'Fit style', value: fitStyle } : null,
+    garmentContext
+      ? {
+          label: 'Garment cuts',
+          value: GARMENT_CONTEXT_OPTIONS.find((option) => option.value === garmentContext)?.label ?? garmentContext,
+        }
+      : null,
+    bodyShapes.length
+      ? {
+          label: 'Body shape',
+          value: bodyShapes
+            .map((shape) => BODY_SHAPE_OPTIONS.find((option) => option.value === shape)?.label ?? shape)
+            .join(', '),
+        }
+      : null,
+    fitFlags.length
+      ? {
+          label: 'Fit context',
+          value: fitFlags
+            .map((flag) => FIT_FLAG_OPTIONS.find((option) => option.value === flag)?.label ?? flag)
+            .join(', '),
+        }
+      : null,
+    bodyNote.trim() ? { label: 'Tailor note', value: bodyNote.trim() } : null,
+  ].filter((row): row is { label: string; value: string } => !!row)
+
+  function enterEditMode() {
+    setStep(0)
+    setEditingMeasurements(true)
+  }
+
+  function confirmEditMeasurements() {
+    if (!hasSavedMeasurementValues) {
+      enterEditMode()
+      return
+    }
+    Alert.alert(
+      'Edit saved measurements?',
+      'Changes will update this fit profile when you save.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Edit profile', onPress: enterEditMode },
+      ]
+    )
+  }
+
+  function renderReadOnlyMeasurements() {
+    return (
+      <View style={styles.fields}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Open Drapeon Vision"
+          onPress={openDrapeVision}
+          style={styles.visionPassportCard}
+        >
+          <View style={styles.visionPassportIcon}>
+            <Feather name="aperture" size={20} color={PRIMARY_GREEN} />
+          </View>
+          <View style={styles.visionPassportCopy}>
+            <Text style={styles.visionPassportTitle}>Drapeon Vision</Text>
+            <Text style={styles.visionPassportText}>
+              Scan to update this profile, then review the saved values here.
+            </Text>
+          </View>
+          <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+        </TouchableOpacity>
+
+        <View style={styles.passportSummaryCard}>
+          <View style={styles.passportSummaryHeader}>
+            <View>
+              <Text style={styles.summaryEyebrow}>Fit profile</Text>
+              <Text style={styles.summaryTitle}>{measurementProfileLabel.trim() || 'Me'}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.smallAction}
+              onPress={() => setProfileSheetOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Choose measurement profile"
+            >
+              <Text style={styles.smallActionText}>Switch</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.profileMeta}>
+            {hasSavedMeasurementValues
+              ? `${savedMeasurementValueCount} saved value${savedMeasurementValueCount === 1 ? '' : 's'} · ${sourceLabel}`
+              : 'No saved values yet'}
+          </Text>
+        </View>
+
+        {hasSavedMeasurementValues ? (
+          <>
+            <View style={styles.moduleCard}>
+              <View style={styles.moduleHeader}>
+                <View style={styles.moduleIcon}>
+                  <Feather name="target" size={17} color={Colors.needleGreen} />
+                </View>
+                <View style={styles.moduleCopy}>
+                  <Text style={styles.moduleTitle}>Core measurements</Text>
+                  <Text style={styles.moduleSubtitle}>
+                    Key values most orders and fit checks use first.
+                  </Text>
+                </View>
+              </View>
+              {renderReadOnlyMeasurementGrid(coreFields)}
+            </View>
+
+            {optionalModules
+              .filter((module) => module.fields.some((field) => field.value.trim()))
+              .map((module) => {
+                const option = MEASUREMENT_MODULE_OPTIONS.find((item) => item.value === module.key)
+                return (
+                  <View key={module.key} style={styles.moduleGroup}>
+                    <View style={styles.moduleCard}>
+                      <View style={styles.moduleHeader}>
+                        <View style={styles.moduleIcon}>
+                          {option?.materialIcon ? (
+                            <MaterialCommunityIcons
+                              name={option.materialIcon}
+                              size={18}
+                              color={Colors.needleGreen}
+                            />
+                          ) : (
+                            <Feather name="sliders" size={17} color={Colors.needleGreen} />
+                          )}
+                        </View>
+                        <View style={styles.moduleCopy}>
+                          <Text style={styles.moduleTitle}>{module.title}</Text>
+                          <Text style={styles.moduleSubtitle}>{module.subtitle}</Text>
+                        </View>
+                      </View>
+                      {renderReadOnlyMeasurementGrid(module.fields)}
+                    </View>
+                    {specialistMeasurementSections
+                      .filter((section) => SPECIALIST_SECTION_MODULE[section.id] === module.key)
+                      .map(renderSpecialistSection)}
+                  </View>
+                )
+              })}
+
+            {looseSpecialistMeasurementSections.map(renderSpecialistSection)}
+
+            {customMeasurements.length > 0 ? (
+              <View style={styles.moduleCard}>
+                <View style={styles.moduleHeader}>
+                  <View style={styles.moduleIcon}>
+                    <MaterialCommunityIcons name="plus-circle-outline" size={18} color={Colors.needleGreen} />
+                  </View>
+                  <View style={styles.moduleCopy}>
+                    <Text style={styles.moduleTitle}>Custom tape points</Text>
+                    <Text style={styles.moduleSubtitle}>Named points saved for tailor requests.</Text>
+                  </View>
+                </View>
+                <View style={styles.readValueGrid}>
+                  {customMeasurements.map((measurement) => (
+                    <View key={measurement.id} style={styles.readValueTile}>
+                      <Text style={styles.readValueLabel}>{measurement.name.trim() || 'Custom point'}</Text>
+                      <Text style={styles.readValueNumber}>{measurement.value.trim()} {unit}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            {contextRows.length > 0 ? (
+              <View style={styles.moduleCard}>
+                <View style={styles.moduleHeader}>
+                  <View style={styles.moduleIcon}>
+                    <Feather name="clipboard" size={17} color={Colors.needleGreen} />
+                  </View>
+                  <View style={styles.moduleCopy}>
+                    <Text style={styles.moduleTitle}>Fit context</Text>
+                    <Text style={styles.moduleSubtitle}>Optional notes saved with this profile.</Text>
+                  </View>
+                </View>
+                <View style={styles.contextList}>
+                  {contextRows.map((row) => (
+                    <View key={row.label} style={styles.contextRow}>
+                      <Text style={styles.contextLabel}>{row.label}</Text>
+                      <Text style={styles.contextValue}>{row.value}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <View style={styles.emptyProfileCard}>
+            <View style={styles.moduleIcon}>
+              <Feather name="clipboard" size={17} color={Colors.needleGreen} />
+            </View>
+            <Text style={styles.emptyProfileTitle}>No measurements saved yet.</Text>
+            <Text style={styles.emptyProfileText}>
+              Add measurements manually or scan with Drapeon Vision, then this screen becomes your
+              read-only fit profile.
+            </Text>
+          </View>
+        )}
+      </View>
+    )
+  }
+
   if (fetchError) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -1168,7 +1686,7 @@ export default function MeasurementsScreen() {
             <TouchableOpacity
               style={styles.errorRetry}
               onPress={() => {
-                void loadMeasurements()
+                void Promise.allSettled([loadMeasurements(), loadMeasurementProfiles()])
               }}
             >
               <Text style={styles.errorRetryText}>Try again</Text>
@@ -1189,7 +1707,7 @@ export default function MeasurementsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1199,19 +1717,23 @@ export default function MeasurementsScreen() {
           <TouchableOpacity onPress={back} style={styles.backButton}>
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.stepIndicator}>Step {step + 1} of 4</Text>
+          <Text style={styles.stepIndicator}>
+            {editingMeasurements ? `Step ${step + 1} of 4` : 'Measurements'}
+          </Text>
           <View style={styles.headerSpacer} />
         </View>
 
         {/* Progress */}
-        <View style={styles.progressRow}>
-          {[0, 1, 2, 3].map((i) => (
-            <View
-              key={i}
-              style={[styles.progressSegment, i <= step && styles.progressSegmentDone]}
-            />
-          ))}
-        </View>
+        {editingMeasurements ? (
+          <View style={styles.progressRow}>
+            {[0, 1, 2, 3].map((i) => (
+              <View
+                key={i}
+                style={[styles.progressSegment, i <= step && styles.progressSegmentDone]}
+              />
+            ))}
+          </View>
+        ) : null}
 
         <ScrollView
           style={styles.scroll}
@@ -1235,12 +1757,20 @@ export default function MeasurementsScreen() {
             )}
 
             <View style={styles.stepHeading}>
-              <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
-              <Text style={styles.stepSub}>{STEP_SUBTITLES[step]}</Text>
+              <Text style={styles.stepTitle}>
+                {editingMeasurements ? STEP_TITLES[step] : 'Saved measurements'}
+              </Text>
+              <Text style={styles.stepSub}>
+                {editingMeasurements
+                  ? STEP_SUBTITLES[step]
+                  : 'Review what is saved. Switch into edit mode only when you need to change this profile.'}
+              </Text>
             </View>
 
             {/* ── Step 0: Body measurements ── */}
-            {step === 0 && (
+            {!editingMeasurements ? renderReadOnlyMeasurements() : null}
+
+            {editingMeasurements && step === 0 && (
               <View style={styles.fields}>
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -1254,8 +1784,8 @@ export default function MeasurementsScreen() {
                   <View style={styles.visionPassportCopy}>
                     <Text style={styles.visionPassportTitle}>Drapeon Vision</Text>
                     <Text style={styles.visionPassportText}>
-                      Scan flow, manual entry, and tailor-assisted measurements all save into this
-                      Fit Passport.
+                      Scan flow, manual entry, and tailor-assisted measurements all update this
+                      fit profile.
                     </Text>
                   </View>
                   <Feather name="chevron-right" size={18} color={Colors.midGrey} />
@@ -1264,7 +1794,7 @@ export default function MeasurementsScreen() {
                 <View style={styles.passportSummaryCard}>
                   <View style={styles.passportSummaryHeader}>
                     <View>
-                      <Text style={styles.summaryEyebrow}>Fit Passport</Text>
+                      <Text style={styles.summaryEyebrow}>Fit profile</Text>
                       <Text style={styles.summaryTitle}>
                         {measurementProfileLabel.trim() || 'Me'}
                       </Text>
@@ -1378,31 +1908,49 @@ export default function MeasurementsScreen() {
 
                 {optionalModules
                   .filter((module) => shouldShowModule(module.key))
-                  .map((module) => (
-                    <View key={module.key} style={styles.moduleCard}>
-                      <View style={styles.moduleHeader}>
-                        <View style={styles.moduleIcon}>
-                          <Feather
-                            name={MEASUREMENT_MODULE_OPTIONS.find((option) => option.value === module.key)?.icon ?? 'sliders'}
-                            size={17}
-                            color={Colors.needleGreen}
-                          />
+                  .map((module) => {
+                    const option = MEASUREMENT_MODULE_OPTIONS.find((item) => item.value === module.key)
+                    const moduleWasAdded = visibleMeasurementModules.includes(module.key)
+                    const fieldsToRender = moduleWasAdded
+                      ? module.fields
+                      : module.fields.filter((field) => field.value.trim())
+                    return (
+                      <View key={module.key} style={styles.moduleGroup}>
+                        <View style={styles.moduleCard}>
+                          <View style={styles.moduleHeader}>
+                            <View style={styles.moduleIcon}>
+                              {option?.materialIcon ? (
+                                <MaterialCommunityIcons
+                                  name={option.materialIcon}
+                                  size={18}
+                                  color={Colors.needleGreen}
+                                />
+                              ) : (
+                                <Feather name="sliders" size={17} color={Colors.needleGreen} />
+                              )}
+                            </View>
+                            <View style={styles.moduleCopy}>
+                              <Text style={styles.moduleTitle}>{module.title}</Text>
+                              <Text style={styles.moduleSubtitle}>{module.subtitle}</Text>
+                            </View>
+                          </View>
+                          {renderMeasurementInputGrid(fieldsToRender)}
                         </View>
-                        <View style={styles.moduleCopy}>
-                          <Text style={styles.moduleTitle}>{module.title}</Text>
-                          <Text style={styles.moduleSubtitle}>{module.subtitle}</Text>
-                        </View>
+                        {specialistMeasurementSections
+                          .filter((section) => SPECIALIST_SECTION_MODULE[section.id] === module.key)
+                          .map(renderSpecialistSection)}
                       </View>
-                      {renderMeasurementInputGrid(module.fields)}
-                    </View>
-                  ))}
+                    )
+                  })}
+
+                {looseSpecialistMeasurementSections.map(renderSpecialistSection)}
 
                 {/* Custom measurements */}
                 {shouldShowModule('custom') ? (
                   <View style={styles.moduleCard}>
                     <View style={styles.moduleHeader}>
                       <View style={styles.moduleIcon}>
-                        <Feather name="plus-circle" size={17} color={Colors.needleGreen} />
+                        <MaterialCommunityIcons name="plus-circle-outline" size={18} color={Colors.needleGreen} />
                       </View>
                       <View style={styles.moduleCopy}>
                         <Text style={styles.moduleTitle}>Custom tape points</Text>
@@ -1465,7 +2013,7 @@ export default function MeasurementsScreen() {
                   icon="shield"
                 >
                   <Text style={styles.disclosureText}>
-                    Only reviewed measurements save to your Fit Passport. Tailors can still request
+                    Only reviewed measurements save to your fit profile. Tailors can still request
                     tape checks before cutting high-risk garments.
                   </Text>
                 </DisclosureSection>
@@ -1473,7 +2021,7 @@ export default function MeasurementsScreen() {
             )}
 
             {/* ── Step 1: Garment context ── */}
-            {step === 1 && (
+            {editingMeasurements && step === 1 && (
               <View style={styles.optionList}>
                 {GARMENT_CONTEXT_OPTIONS.map((opt) => (
                   <TouchableOpacity
@@ -1507,7 +2055,7 @@ export default function MeasurementsScreen() {
             )}
 
             {/* ── Step 2: Body shape ── */}
-            {step === 2 && (
+            {editingMeasurements && step === 2 && (
               <View style={styles.optionList}>
                 {BODY_SHAPE_OPTIONS.map((opt) => {
                   const active = bodyShapes.includes(opt.value)
@@ -1533,7 +2081,7 @@ export default function MeasurementsScreen() {
             )}
 
             {/* ── Step 3: Fit flags + body note ── */}
-            {step === 3 && (
+            {editingMeasurements && step === 3 && (
               <View style={styles.fields}>
                 <View style={styles.flagGrid}>
                   {FIT_FLAG_OPTIONS.map((opt) => {
@@ -1583,9 +2131,13 @@ export default function MeasurementsScreen() {
         {/* Bottom CTA */}
         <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 12) }]}>
           <Button
-            label={step < 3 ? 'Continue' : 'Save measurements'}
+            label={
+              editingMeasurements
+                ? step < 3 ? 'Continue' : 'Save measurements'
+                : hasSavedMeasurementValues ? 'Edit measurements' : 'Add measurements'
+            }
             size="md"
-            onPress={next}
+            onPress={editingMeasurements ? next : confirmEditMeasurements}
             loading={saving}
             disabled={saving}
           />
@@ -1903,6 +2455,9 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     fontWeight: FontWeight.semibold,
   },
+  moduleGroup: {
+    gap: Spacing.sm,
+  },
   moduleCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -1972,6 +2527,126 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.textInverse,
   },
+  specialistSectionCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  specialistValueGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  specialistValueTile: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 68,
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+  },
+  specialistValueLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  specialistValueNumber: {
+    marginTop: 3,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  readValueGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  readValueTile: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 68,
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+  },
+  readValueLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  readValueNumber: {
+    marginTop: 3,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  emptyReadText: {
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  emptyProfileCard: {
+    alignItems: 'center',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  emptyProfileTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+    textAlign: 'center',
+  },
+  emptyProfileText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  contextList: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    overflow: 'hidden',
+    backgroundColor: Colors.white,
+  },
+  contextRow: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+    gap: 3,
+  },
+  contextLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  contextValue: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 20,
+  },
   customActionsRow: {
     flexDirection: 'row',
     gap: Spacing.sm,
@@ -1999,42 +2674,6 @@ const styles = StyleSheet.create({
   fitStyleLabel: { fontSize: 13, fontWeight: FontWeight.medium, color: Colors.inkLight },
   fitStyleLabelActive: { color: PRIMARY_GREEN },
 
-  // Custom measurements
-  customSection: { gap: 8 },
-  customHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 16, marginTop: -2 },
-  customSuggestionGroup: {
-    gap: 6,
-    marginTop: 4,
-  },
-  customSuggestionGroupTitle: {
-    fontSize: 12,
-    fontWeight: FontWeight.semibold,
-    color: CHARCOAL,
-  },
-  customSuggestionList: {
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    borderRadius: Radius.lg,
-    overflow: 'hidden',
-    marginTop: 2,
-  },
-  customSuggestionRow: {
-    minHeight: 44,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.lightGrey,
-  },
-  customSuggestionText: {
-    fontSize: 12,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-  },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   customNameField: { flex: 2 },
   customValueField: { flex: 1 },

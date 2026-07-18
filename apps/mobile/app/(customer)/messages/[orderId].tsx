@@ -27,9 +27,11 @@ import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import { getCallLifecycleState } from '@drape/shared/call-scheduling-policy'
 import type { OrderCallMeta } from '@/lib/order-support'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
@@ -56,12 +58,10 @@ function isOrderCallStage(stage: OrderStage | null | undefined) {
 function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
   if (!orderCall || orderCall.status !== 'SCHEDULED' || !orderCall.scheduledStartAt) return 'needs-schedule' as const
   if (orderCall.expiredAt) return 'expired' as const
-  const startsAt = new Date(orderCall.scheduledStartAt).getTime()
-  if (!Number.isFinite(startsAt)) return 'expired' as const
-  const now = Date.now()
-  if (now < startsAt - 10 * 60 * 1000) return 'too-early' as const
-  if (now > startsAt + 45 * 60 * 1000) return 'expired' as const
-  return 'join' as const
+  const lifecycle = getCallLifecycleState(orderCall.scheduledStartAt)
+  if (lifecycle.status === 'upcoming') return 'too-early' as const
+  if (lifecycle.status === 'active') return 'join' as const
+  return 'expired' as const
 }
 
 function formatOrderCallTime(value: string | null | undefined) {
@@ -78,10 +78,15 @@ function formatOrderCallTime(value: string | null | undefined) {
 }
 
 export default function CustomerMessagesScreen() {
-  const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
+  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
+    orderId: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const keyboard = useKeyboardState()
   const {
     data: orderInfo,
     isLoading,
@@ -100,6 +105,12 @@ export default function CustomerMessagesScreen() {
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
   const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
+  const consultationMeta = orderInfo?.supportMeta.consultation ?? null
+  const consultationPaymentBlocked =
+    orderInfo?.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS' &&
+    !consultationMeta.paidAt
 
   const refreshConversationAccess = useCallback(async () => {
     if (!resolvedOrderId) return
@@ -129,11 +140,23 @@ export default function CustomerMessagesScreen() {
   }, [refreshConversationAccess])
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, returnTo, '/(customer)/messages')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(customer)/messages')
   }
 
   async function openCallUrl(url: string) {
     await openConsultationCallUrl(url, 'customer')
+  }
+
+  function openConsultationPayment() {
+    if (!resolvedOrderId) return
+    router.push({
+      pathname: '/(customer)/orders/[id]',
+      params: {
+        id: resolvedOrderId,
+        returnTo: `/(customer)/messages/${resolvedOrderId}`,
+        historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+      },
+    })
   }
 
   async function startConsultationCall(callType: 'audio' | 'video') {
@@ -164,14 +187,14 @@ export default function CustomerMessagesScreen() {
     if (startingCall) return
     setStartingCall(callType)
     try {
-      const room = await createOrderCallRoom(resolvedOrderId, callType)
+      const room = await createOrderCallRoom(resolvedOrderId, callType, 'customer')
       if (room?.fallback === 'MESSAGES') {
         await refetch()
         return
       }
       if (!room?.url) return
       await refetch()
-      await openDrapeCallUrl(room.url)
+      await openDrapeCallUrl(room.url, 'customer')
     } finally {
       setStartingCall(null)
     }
@@ -183,6 +206,17 @@ export default function CustomerMessagesScreen() {
     const readyMade = orderInfo.orderKind === 'READY_MADE'
     if (readyMade && !consultation) {
       showReadyMadeOrderCallOptions()
+      return
+    }
+    if (consultation && consultationPaymentBlocked) {
+      Alert.alert(
+        'Consultation fee required',
+        'Consultation fee required before the room can open',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Pay fee', onPress: openConsultationPayment },
+        ],
+      )
       return
     }
     const title = consultation ? 'Consultation call' : readyMade ? 'Order call' : 'Drapeon call'
@@ -413,11 +447,51 @@ export default function CustomerMessagesScreen() {
     )
   }
 
+  const scheduledConsultation = orderInfo.stage === 'CONSULTATION' &&
+    consultationMeta?.status === 'SCHEDULED' &&
+    consultationMeta.scheduledStartAt
+  const scheduledOrderCall = orderInfo.orderKind === 'READY_MADE' &&
+    orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
+    orderInfo.supportMeta.orderCall.scheduledStartAt
+  const callLifecycleEvent = scheduledConsultation
+    ? {
+        kind: 'consultation' as const,
+        scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
+        timezone: consultationMeta?.timezone ?? null,
+        status: consultationMeta?.status ?? null,
+        paymentRequired: !!consultationMeta?.feeAmount && consultationMeta?.paymentTiming === 'BEFORE_CALL_STARTS',
+        paymentPaid: !!consultationMeta?.paidAt,
+        actionLoading: !!startingCall,
+        onJoinVideo: () => {
+          void startConsultationCall('video')
+        },
+        onReschedule: openConsultationPayment,
+        rescheduleLabel: 'View order',
+        paymentActionLabel: 'Pay fee',
+        onPressPayment: openConsultationPayment,
+      }
+    : scheduledOrderCall
+      ? {
+          kind: 'ready-made' as const,
+          scheduledStartAt: orderInfo.supportMeta.orderCall?.scheduledStartAt,
+          timezone: orderInfo.supportMeta.orderCall?.timezone,
+          status: orderInfo.supportMeta.orderCall?.status,
+          reason: orderInfo.supportMeta.orderCall?.reason,
+          actionLoading: !!startingCall,
+          onJoinVideo: () => {
+            void startOrderCall('video')
+          },
+          onReschedule: () => setShowOrderCallScheduler(true),
+          rescheduleLabel: 'Reschedule',
+        }
+      : null
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        enabled={Platform.OS === 'ios' || keyboard.visible}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -451,6 +525,7 @@ export default function CustomerMessagesScreen() {
                     params: {
                       itemId: orderInfo.sellerItemId,
                       returnTo: `/(customer)/messages/${resolvedOrderId}`,
+                      historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
                     },
                   })
                   return
@@ -461,6 +536,7 @@ export default function CustomerMessagesScreen() {
                   params: {
                     id: resolvedOrderId,
                     returnTo: `/(customer)/messages/${resolvedOrderId}`,
+                    historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
                   },
                 })
               }}
@@ -535,6 +611,11 @@ export default function CustomerMessagesScreen() {
                 ? 'Schedule or join order call'
                 : 'Open Drapeon call options'
           }
+          callBlocked={consultationPaymentBlocked}
+          callGateMessage={consultationPaymentBlocked && !callLifecycleEvent ? 'Consultation fee required before the room can open' : null}
+          callGateActionLabel={consultationPaymentBlocked ? 'Pay fee' : null}
+          onPressCallGateAction={consultationPaymentBlocked ? openConsultationPayment : undefined}
+          callLifecycleEvent={callLifecycleEvent}
           locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
           lockedMessage={
             conversationAccess.blocked

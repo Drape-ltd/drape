@@ -58,10 +58,10 @@ export default function TrustPage(): React.JSX.Element {
         />
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {DRAPE_EXCEPTION_BUCKETS.map((bucket) => (
-            <div key={bucket.id} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+            <div key={bucket.id} className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm">
               <div className="text-lg text-ink">{bucket.title}</div>
               <div className="mt-2 text-sm leading-7 text-ink/68">{bucket.principle}</div>
-              <div className="mt-4 rounded-[1.1rem] border border-needle/10 bg-needle/8 p-4 text-sm leading-7 text-ink/68">
+              <div className="mt-4 rounded-[8px] border border-needle/10 bg-needle/8 p-4 text-sm leading-7 text-ink/68">
                 {bucket.launchRule}
               </div>
             </div>
@@ -71,14 +71,14 @@ export default function TrustPage(): React.JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="rounded-[1.6rem] bg-ink p-7 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
+          <div className="rounded-[8px] bg-ink p-7 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/60">Trust principle</p>
             <h3 className="mt-4 text-3xl sm:text-4xl">People can feel the difference before they sign in.</h3>
             <p className="mt-4 text-sm leading-7 text-white/74">Clarity beats noise.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             {DRAPE_PUBLIC_TRUST_SECTIONS.map((section) => (
-              <div key={section.title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+              <div key={section.title} className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm">
                 <div className="text-lg text-ink">{section.title}</div>
                 <ul className="mt-3 grid gap-2 text-sm leading-7 text-ink/68">
                   {section.bullets.map((bullet) => (
@@ -103,7 +103,7 @@ export default function TrustPage(): React.JSX.Element {
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <a
             href={`mailto:${CONTACTS.verify}`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Verification</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.verify}</h3>
@@ -111,7 +111,7 @@ export default function TrustPage(): React.JSX.Element {
           </a>
           <a
             href={`mailto:${CONTACTS.privacy}`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.privacy}</h3>
@@ -119,7 +119,7 @@ export default function TrustPage(): React.JSX.Element {
           </a>
           <a
             href={`mailto:${CONTACTS.security}`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.security}</h3>
@@ -127,7 +127,7 @@ export default function TrustPage(): React.JSX.Element {
           </a>
           <a
             href={`mailto:${CONTACTS.payouts}`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+            className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Payouts</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.payouts}</h3>

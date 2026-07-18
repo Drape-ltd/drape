@@ -150,7 +150,7 @@ async function fetchTailorShop(supabase: any, tailorId: string) {
     await Promise.all([
       supabase
         .from('tailor_profiles')
-        .select('display_name, availability, is_live, supports_custom_orders')
+        .select('display_name, availability, accepts_custom_orders_now, shop_paused, is_live, supports_custom_orders')
         .eq('id', tailorId)
         .maybeSingle(),
       supabase
@@ -213,6 +213,8 @@ async function fetchTailorShop(supabase: any, tailorId: string) {
     sellerAvailability: asString(profile.availability),
     sellerLive: profile.is_live === true,
     supportsCustomOrders: profile.supports_custom_orders !== false,
+    acceptsCustomOrdersNow: profile.accepts_custom_orders_now !== false,
+    shopPaused: profile.shop_paused === true,
     items: safeItems,
   }
 }
@@ -237,7 +239,7 @@ async function fetchSellerItem(supabase: any, itemId: string) {
       pickup_available,
       delivery_available,
       shipping_available,
-      tailor_profiles(display_name, user_id, location, availability, is_live)
+      tailor_profiles(display_name, user_id, location, availability, shop_paused, is_live)
     `)
     .eq('id', itemId)
     .eq('is_live', true)
@@ -266,6 +268,7 @@ async function fetchSellerItem(supabase: any, itemId: string) {
     sellerLocation: sellerProfile ? asString(asRecord(sellerProfile).location) : null,
     sellerAvailability: sellerProfile ? asString(asRecord(sellerProfile).availability) : null,
     sellerLive: sellerProfile ? asRecord(sellerProfile).is_live === true : false,
+    shopPaused: sellerProfile ? asRecord(sellerProfile).shop_paused === true : false,
     title: row.title,
     description: row.description ?? null,
     category: row.category ?? null,
@@ -359,7 +362,7 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
   const strictLocation = payload.strictLocation === true
   let builder = supabase
     .from('tailor_profiles')
-    .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, avatar_url, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, price_range_min, price_range_max, avg_response_hours, ranking_score')
+    .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, availability, accepts_custom_orders_now, shop_paused, specialty_tags, avatar_url, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, price_range_min, price_range_max, avg_response_hours, ranking_score')
     .eq('is_live', true)
     .order('ranking_score', { ascending: false, nullsFirst: false })
     .order('avg_rating', { ascending: false, nullsFirst: false })
@@ -396,13 +399,13 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
   const [profileRes, reviewsRes, portfolioRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+      .select('id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
       .eq('id', tailorId)
       .eq('is_live', true)
       .maybeSingle(),
     supabase
       .from('reviews')
-      .select('id, rating, body, tags, created_at, reviewer_name, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))')
+      .select('id, rating, body, tags, media_urls, created_at, reviewer_name, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))')
       .eq('tailor_profile_id', tailorId)
       .eq('flagged', false)
       .not('published_at', 'is', null)
@@ -461,6 +464,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
   return {
     profile: {
       id: profileRow.id,
+      userId: asString(profileRow.user_id),
       displayName: asString(profileRow.display_name) ?? 'Drape tailor',
       location: asString(profileRow.location) ?? 'Location not listed',
       sellerType: asString(profileRow.seller_type) ?? 'TAILOR',
@@ -470,6 +474,8 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       totalOrders: typeof profileRow.total_orders === 'number' ? profileRow.total_orders : 0,
       avgResponseHours: typeof profileRow.avg_response_hours === 'number' ? profileRow.avg_response_hours : null,
       availability: asString(profileRow.availability) ?? 'OPEN',
+      acceptsCustomOrdersNow: profileRow.accepts_custom_orders_now !== false,
+      shopPaused: profileRow.shop_paused === true,
       bio: asString(profileRow.bio),
       specialtyTags: asStringList(profileRow.specialty_tags),
       languages: asStringList(profileRow.languages),
@@ -499,6 +505,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
         reviewerName: asString(row.reviewer_name) ?? 'Customer',
         reviewerAvatarUrl: reviewerAvatarUrl && !blockedReviewerAvatarUrls.has(reviewerAvatarUrl) ? reviewerAvatarUrl : null,
         response: asString(row.tailor_response),
+        mediaUrls: asStringList(row.media_urls),
         createdAt: asString(row.created_at) ?? new Date().toISOString(),
       }
     }),

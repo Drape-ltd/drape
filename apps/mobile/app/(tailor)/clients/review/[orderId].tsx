@@ -7,10 +7,11 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { Sentry } from '@/lib/sentry'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 
 const REVIEW_TAGS = [
   'Clear communication',
@@ -49,7 +50,11 @@ function reviewWindowClosed(stageUpdatedAt: string | null) {
 }
 
 export default function TailorCustomerReviewScreen() {
-  const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
+  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
+    orderId: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -68,8 +73,8 @@ export default function TailorCustomerReviewScreen() {
   const [alreadyReviewed, setAlreadyReviewed] = useState(false)
 
   const goBack = useCallback(() => {
-    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/clients')
-  }, [navigation, returnTo, router])
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
+  }, [historyChain, navigation, returnTo, router])
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {
     const value = payload?.[key]
@@ -255,6 +260,9 @@ export default function TailorCustomerReviewScreen() {
     setSubmitting(false)
 
     if (error) {
+      Sentry.captureException(error, {
+        extra: { context: 'tailor_customer_review_submit', orderId, customerId, rating, tags, bodyLength: body.trim().length },
+      })
       const failure = await resolveReviewFailure(error)
       if (failure.bodyError) setBodyError(failure.bodyError)
       setSubmitError(failure.message)
@@ -317,7 +325,7 @@ export default function TailorCustomerReviewScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.topBar}>
         <TouchableOpacity style={styles.backLink} onPress={goBack}>
           <Text style={styles.backLinkText}>← Clients</Text>
@@ -329,7 +337,7 @@ export default function TailorCustomerReviewScreen() {
             <Text style={styles.eyebrow}>Customer review</Text>
             <Text style={styles.title}>Rate how it was working with {customerName}.</Text>
             <Text style={styles.stateHint}>
-              This note is for Drapeon’s internal trust record, not public profile feedback. Keep it factual and respectful, and submit it within {REVIEW_WINDOW_DAYS} days of delivery or collection.
+              This note is for Drapeon's internal trust record, not public profile feedback. Keep it factual and respectful, and submit it within {REVIEW_WINDOW_DAYS} days of delivery or collection.
             </Text>
           </View>
 

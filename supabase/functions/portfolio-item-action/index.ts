@@ -6,6 +6,8 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { isApprovedTailorProfile, stageProfileChangeRequest } from '../_shared/verification-review.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'portfolio-item-action'
@@ -34,6 +36,10 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('delete-item'),
     itemId: uuid,
+  }),
+  z.object({
+    action: z.literal('reorder-items'),
+    itemIds: z.array(uuid).min(1).max(24),
   }),
   z.object({
     action: z.literal('set-cover'),
@@ -90,7 +96,7 @@ Deno.serve(async (req) => {
 
     const { data: profile, error: profileError } = await supabase
       .from('tailor_profiles')
-      .select('id')
+      .select('id, user_id, display_name, id_verification_status, is_live')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -171,6 +177,61 @@ Deno.serve(async (req) => {
         if (blocked) return blocked
       }
 
+      if (isApprovedTailorProfile(profile)) {
+        const itemDraft = {
+          image_url: body.item.imageUrl,
+          title: body.item.title,
+          description: body.item.description?.trim() || null,
+          category: body.item.category?.trim() || null,
+          sort_order: 0,
+        }
+        const request = await stageProfileChangeRequest(supabase, {
+          tailorUserId: caller.id,
+          tailorProfileId: profile.id,
+          changes: { portfolio_item_upserts: [itemDraft] },
+          metadata: { action: body.action, surface: 'portfolio_item.public' },
+        })
+
+        await createOrRefreshOpsIssue(supabase, {
+          issueType: 'TAILOR_VERIFICATION',
+          severity: 'HIGH',
+          source: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          userId: caller.id,
+          tailorProfileId: profile.id,
+          relatedEntityType: 'profile_change_request',
+          relatedEntityId: request?.id ?? null,
+          title: 'Tailor portfolio item needs review',
+          description: `${profile.display_name ?? 'A tailor'} added a portfolio item after approval. The approved storefront stays live until ops reviews it.`,
+          recommendedAction: 'Review the requested work sample for quality, stolen media, off-platform contact, and identity fit before approving.',
+          dedupeKey: `profile-change:${caller.id}`,
+          metadata: { request_id: request?.id ?? null, image_url: body.item.imageUrl, title: body.item.title },
+        })
+
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: 'portfolio.public.pending',
+          publicUrls: [body.item.imageUrl],
+          purpose: 'PORTFOLIO',
+          tailorProfileId: profile.id,
+          relatedEntityType: 'profile_change_request',
+          relatedEntityId: request?.id ?? profile.id,
+          metadata: { action: body.action, pendingReview: true },
+        })
+
+        await audit(supabase, {
+          event: 'portfolio_item.change_requested',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          payload: { function: FN, request_id: request?.id ?? null, action: body.action },
+        })
+
+        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
+      }
+
       const { data: created, error } = await supabase
         .from('portfolio_items')
         .insert({
@@ -223,6 +284,61 @@ Deno.serve(async (req) => {
         if (blocked) return blocked
       }
 
+      if (isApprovedTailorProfile(profile)) {
+        const itemDraft = {
+          id: body.itemId,
+          image_url: body.item.imageUrl,
+          title: body.item.title,
+          description: body.item.description?.trim() || null,
+          category: body.item.category?.trim() || null,
+        }
+        const request = await stageProfileChangeRequest(supabase, {
+          tailorUserId: caller.id,
+          tailorProfileId: profile.id,
+          changes: { portfolio_item_upserts: [itemDraft] },
+          metadata: { action: body.action, surface: 'portfolio_item.public', item_id: body.itemId },
+        })
+
+        await createOrRefreshOpsIssue(supabase, {
+          issueType: 'TAILOR_VERIFICATION',
+          severity: 'HIGH',
+          source: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          userId: caller.id,
+          tailorProfileId: profile.id,
+          relatedEntityType: 'profile_change_request',
+          relatedEntityId: request?.id ?? null,
+          title: 'Tailor portfolio item edit needs review',
+          description: `${profile.display_name ?? 'A tailor'} edited a portfolio item after approval. The approved item stays live until ops reviews the requested change.`,
+          recommendedAction: 'Compare the live portfolio item with the requested item values and approve only safe, authentic media and copy.',
+          dedupeKey: `profile-change:${caller.id}`,
+          metadata: { request_id: request?.id ?? null, item_id: body.itemId, image_url: body.item.imageUrl, title: body.item.title },
+        })
+
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: 'portfolio.public.pending',
+          publicUrls: [body.item.imageUrl],
+          purpose: 'PORTFOLIO',
+          tailorProfileId: profile.id,
+          relatedEntityType: 'profile_change_request',
+          relatedEntityId: request?.id ?? profile.id,
+          metadata: { action: body.action, pendingReview: true, itemId: body.itemId },
+        })
+
+        await audit(supabase, {
+          event: 'portfolio_item.change_requested',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          payload: { function: FN, request_id: request?.id ?? null, item_id: body.itemId, action: body.action },
+        })
+
+        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
+      }
+
       const { error } = await supabase
         .from('portfolio_items')
         .update({
@@ -247,6 +363,44 @@ Deno.serve(async (req) => {
         relatedEntityType: 'portfolio_item',
         relatedEntityId: body.itemId,
         metadata: { action: body.action },
+      })
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (body.action === 'reorder-items') {
+      const nextItemIds = [...new Set(body.itemIds)]
+      if (nextItemIds.length !== body.itemIds.length) {
+        return jsonResponse({ error: 'Portfolio order cannot include duplicate items.' }, 400, cors)
+      }
+
+      const { data: rows, error: rowsError } = await supabase
+        .from('portfolio_items')
+        .select('id')
+        .eq('tailor_profile_id', profile.id)
+        .in('id', nextItemIds)
+
+      if (rowsError) return jsonResponse({ error: 'We could not load your portfolio order right now. Please try again.' }, 500, cors)
+
+      const ownedIds = new Set(((rows ?? []) as Array<{ id: string }>).map((row) => row.id))
+      if (ownedIds.size !== nextItemIds.length) {
+        return jsonResponse({ error: 'That portfolio order includes an item we could not verify. Refresh and try again.' }, 404, cors)
+      }
+
+      for (const [index, itemId] of nextItemIds.entries()) {
+        const { error } = await supabase
+          .from('portfolio_items')
+          .update({ sort_order: index })
+          .eq('id', itemId)
+          .eq('tailor_profile_id', profile.id)
+        if (error) return jsonResponse({ error: 'We could not update your portfolio order right now. Please try again.' }, 500, cors)
+      }
+
+      await syncProfilePhotoUrls(supabase, profile.id)
+      await audit(supabase, {
+        event: 'portfolio_item.reordered',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        payload: { function: FN, item_ids: nextItemIds },
       })
       return jsonResponse({ ok: true }, 200, cors)
     }

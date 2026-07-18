@@ -1,0 +1,97 @@
+appId: com.drape.app
+name: "Customer brief — fit notes child flow returns to measurements step"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites (created by seed-e2e.ts):
+#   - DRAPE_TEST_CUSTOMER_EMAIL signed up as CUSTOMER with saved measurements
+#   - Test Tailor is searchable from the customer marketplace
+---
+
+- launchApp:
+    clearState: true
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+
+- tapOn:
+    id: "tab-search"
+- extendedWaitUntil:
+    visible:
+      id: "search-input"
+    timeout: 8000
+- tapOn:
+    id: "search-input"
+- inputText: "Test Tailor"
+- tapOn:
+    id: "search-submit-btn"
+- extendedWaitUntil:
+    visible: "Test Tailor card"
+    timeout: 8000
+- tapOn: "Test Tailor card"
+
+- extendedWaitUntil:
+    visible:
+      id: "tailor-back-btn"
+    timeout: 8000
+- tapOn:
+    id: "book-tailor-btn"
+
+# Step 0
+- extendedWaitUntil:
+    visible:
+      id: "description-input"
+    timeout: 8000
+- tapOn: "Suit"
+- tapOn:
+    id: "description-input"
+- inputText: "Two-piece navy suit, slim fit, for a wedding in June."
+- tapOn:
+    id: "occasion-input"
+- inputText: "Wedding"
+- tapOn:
+    id: "brief-continue-btn"
+
+# Step 1
+- extendedWaitUntil:
+    visible:
+      id: "brief-continue-btn"
+    timeout: 5000
+- tapOn:
+    id: "brief-continue-btn"
+
+# Step 2
+- extendedWaitUntil:
+    visible: "Review measurements"
+    timeout: 8000
+- assertVisible: "Add fit notes"
+- tapOn: "Add fit notes"
+
+- extendedWaitUntil:
+    visible: "Fit notes"
+    timeout: 8000
+- assertVisible: "Add fit notes when the garment needs it."
+- tapOn: "← Back"
+
+- extendedWaitUntil:
+    visible: "Review measurements"
+    timeout: 8000
+- extendedWaitUntil:
+    visible:
+      id: "brief-continue-btn"
+    timeout: 5000
+- assertVisible: "Add fit notes"

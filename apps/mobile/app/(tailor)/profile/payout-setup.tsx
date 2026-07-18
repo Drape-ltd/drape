@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,7 +18,7 @@ import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
 import { Button, Input, RemoteImage } from '@/components/ui'
 import { useAuth } from '@/lib/auth'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import {
   MANUAL_BANK_COUNTRIES,
   MANUAL_BANK_ENTRY_NOTE,
@@ -204,7 +206,7 @@ export default function TailorPayoutSetupScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
+  const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [successScale] = useState(() => new Animated.Value(0.72))
@@ -212,6 +214,7 @@ export default function TailorPayoutSetupScreen() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [status, setStatus] = useState<TailorPayoutStatus | null>(null)
+  const [payoutReviewPending, setPayoutReviewPending] = useState(false)
   const [activeStep, setActiveStep] = useState<SetupStep>('INTRO')
   const [editingVerifiedAccount, setEditingVerifiedAccount] = useState(false)
   const [selectedCurrency, setSelectedCurrency] = useState<PayoutSetupCurrency>('USD')
@@ -274,6 +277,7 @@ export default function TailorPayoutSetupScreen() {
   const successIsManualPending =
     status?.manualBankEntry === true
     && status.payoutAccountVerified !== true
+  const successIsReviewPending = payoutReviewPending
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -380,7 +384,7 @@ export default function TailorPayoutSetupScreen() {
   ])
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/profile' as never)
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/profile' as never)
   }
 
   function startSetupFlow() {
@@ -483,11 +487,19 @@ export default function TailorPayoutSetupScreen() {
     const result = await submitManualBankEntry(validation.value)
     setSubmitting(false)
 
-    if (result.error || !result.account) {
+    if (result.error || (!result.account && !result.pendingReview)) {
       setFieldError(result.error ?? 'We could not submit these manual bank details right now.')
       return
     }
 
+    if (result.pendingReview) {
+      setPayoutReviewPending(true)
+      setEditingVerifiedAccount(false)
+      setActiveStep('SUCCESS')
+      return
+    }
+
+    setPayoutReviewPending(false)
     setStatus(result.account)
     await load()
     setEditingVerifiedAccount(false)
@@ -512,11 +524,19 @@ export default function TailorPayoutSetupScreen() {
     })
     setSubmitting(false)
 
-    if (result.error || !result.account) {
+    if (result.error || (!result.account && !result.pendingReview)) {
       setFieldError(result.error ?? 'We could not save this payout account right now.')
       return
     }
 
+    if (result.pendingReview) {
+      setPayoutReviewPending(true)
+      setEditingVerifiedAccount(false)
+      setActiveStep('SUCCESS')
+      return
+    }
+
+    setPayoutReviewPending(false)
     setStatus(result.account)
     setEditingVerifiedAccount(false)
     setActiveStep('SUCCESS')
@@ -549,14 +569,28 @@ export default function TailorPayoutSetupScreen() {
 
     const refresh = await refreshStripeConnectPayoutStatus()
     setSubmitting(false)
-    if (refresh.error || !refresh.account) {
+    if (refresh.error || (!refresh.account && !refresh.pendingReview)) {
       setFieldError(refresh.error ?? 'We could not refresh the Stripe payout status yet.')
       return
     }
 
-    setStripeStatus(refresh.account as StripeRefreshAccount)
+    if (refresh.pendingReview) {
+      setPayoutReviewPending(true)
+      setEditingVerifiedAccount(false)
+      setActiveStep('SUCCESS')
+      return
+    }
+
+    const refreshedAccount = refresh.account
+    if (!refreshedAccount) {
+      setFieldError('We could not refresh the Stripe payout status yet.')
+      return
+    }
+
+    setPayoutReviewPending(false)
+    setStripeStatus(refreshedAccount as StripeRefreshAccount)
     await load()
-    if (refresh.account.payoutAccountVerified) {
+    if (refreshedAccount.payoutAccountVerified) {
       setEditingVerifiedAccount(false)
       setActiveStep('SUCCESS')
       return
@@ -665,27 +699,38 @@ export default function TailorPayoutSetupScreen() {
         <View style={styles.successWrap}>
           <Animated.View style={[
             styles.successOrb,
-            successIsManualPending && styles.successOrbPending,
+            (successIsManualPending || successIsReviewPending) && styles.successOrbPending,
             { transform: [{ scale: successScale }] },
           ]}>
-            <Feather name={successIsManualPending ? 'clock' : 'check'} size={38} color={Colors.textInverse} />
+            <Feather name={(successIsManualPending || successIsReviewPending) ? 'clock' : 'check'} size={38} color={Colors.textInverse} />
           </Animated.View>
           <Text style={styles.successTitle}>
-            {successIsManualPending ? 'Manual bank details submitted' : "You're all set to get paid"}
+            {successIsReviewPending
+              ? 'Payout change submitted for review'
+              : successIsManualPending
+                ? 'Manual bank details submitted'
+                : "You're all set to get paid"}
           </Text>
           <Text style={styles.successBody}>
-            {successIsManualPending
-              ? MANUAL_BANK_ENTRY_NOTE
-              : 'Your payout account is verified. Earnings from completed orders will be sent automatically after the 72-hour delivery window closes.'}
+            {successIsReviewPending
+              ? 'Your current payout destination stays active while ops reviews the new destination. Earnings release pauses during the review for account safety.'
+              : successIsManualPending
+                ? MANUAL_BANK_ENTRY_NOTE
+                : 'Your payout account is verified. Earnings from completed orders will be sent automatically after the 72-hour delivery window closes.'}
           </Text>
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>
-              {successIsManualPending ? 'Pending verification summary' : 'Verified account summary'}
+              {successIsReviewPending
+                ? 'Submitted for payout review'
+                : successIsManualPending
+                  ? 'Pending verification summary'
+                  : 'Verified account summary'}
             </Text>
             <SummaryRow label="Payout method" value={status.payoutBankName ? `${status.payoutBankName} · ${formatMaskedAccount(status.payoutAccountMasked)}` : providerLabel(status.payoutAccountType)} />
             <SummaryRow label="Payout currency" value={status.payoutCurrency} />
             <SummaryRow label="Provider" value={successIsManualPending ? 'Ops verification' : providerLabel(status.payoutAccountType)} />
+            {successIsReviewPending ? <SummaryRow label="Status" value="Pending ops review" /> : null}
             {successIsManualPending ? <SummaryRow label="Status" value="Pending review" /> : null}
             {!successIsManualPending && payoutDestinationHoldActive ? (
               <SummaryRow label="Release guard" value={`Payouts resume after ${formatGuardDate(status.payoutDestinationHoldUntil)}`} />
@@ -720,6 +765,7 @@ export default function TailorPayoutSetupScreen() {
         <Text style={styles.headerTitle}>Payout setup</Text>
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       {(showVerifiedSummary || showManualPendingSummary) && status ? (
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -1263,6 +1309,7 @@ export default function TailorPayoutSetupScreen() {
           ) : null}
         </>
       )}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
@@ -1756,13 +1803,6 @@ const styles = StyleSheet.create({
   verifiedAccountText: {
     fontSize: FontSize.xs,
     color: Colors.inkLight,
-  },
-  inlineActions: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  inlineButton: {
-    flex: 1,
   },
   compactActionMenuButton: {
     minHeight: 46,

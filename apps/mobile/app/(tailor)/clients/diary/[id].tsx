@@ -16,7 +16,7 @@ import { Feather } from '@expo/vector-icons'
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { sharePassportInvite } from '@/lib/invite'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -87,6 +87,7 @@ type DiaryEntryRow = {
   style_preference: string | null
   event_type: EventType | null
   special_fitting_notes: string | null
+  custom_measurements: Record<string, unknown> | null
   measured_at: string | null
   measured_location: MeasuredLocation | null
 }
@@ -135,6 +136,26 @@ const EMPTY_FORM: DiaryForm = {
   measuredAt: new Date(), measuredLocation: 'SHOP',
 }
 
+function readDiaryCustomMeasurements(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+  return Object.entries(value as Record<string, unknown>)
+    .map(([name, rawValue]) => {
+      const numericValue = typeof rawValue === 'number'
+        ? rawValue
+        : typeof rawValue === 'string'
+          ? Number.parseFloat(rawValue)
+          : null
+      if (numericValue == null || !Number.isFinite(numericValue)) return null
+      if (/(confidence|output kind|pipeline|scan flow|height input)$/i.test(name)) return null
+      return {
+        name,
+        value: numericValue.toFixed(2).replace(/\.?0+$/, ''),
+      }
+    })
+    .filter((item): item is { name: string; value: string } => !!item)
+}
+
 const DIARY_MEASUREMENT_MODULES: Array<{
   value: DiaryMeasurementModuleKey
   title: string
@@ -164,7 +185,11 @@ const DIARY_MEASUREMENT_MODULES: Array<{
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DiaryEntryScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, historyChain, returnTo } = useLocalSearchParams<{
+    id: string
+    historyChain?: string
+    returnTo?: string
+  }>()
   const isNew = id === 'new'
   const router = useRouter()
   const navigation = useNavigation()
@@ -189,9 +214,10 @@ export default function DiaryEntryScreen() {
   const [fetchError, setFetchError] = useState(false)
   const [measurementModuleSheetOpen, setMeasurementModuleSheetOpen] = useState(false)
   const [visibleMeasurementModules, setVisibleMeasurementModules] = useState<DiaryMeasurementModuleKey[]>([])
+  const [diaryCustomMeasurements, setDiaryCustomMeasurements] = useState<Array<{ name: string; value: string }>>([])
 
   function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)/clients')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
   }
 
   function openDrapeVisionClientScan() {
@@ -207,6 +233,7 @@ export default function DiaryEntryScreen() {
         mode: 'tailor_client_scan',
         diaryId,
         returnTo: `/(tailor)/clients/diary/${diaryId}`,
+        historyChain: appendToHistory(historyChain, `/(tailor)/clients/diary/${diaryId}`),
       },
     } as never)
   }
@@ -283,6 +310,7 @@ export default function DiaryEntryScreen() {
       measuredAt: r.measured_at ? new Date(r.measured_at) : null,
       measuredLocation: r.measured_location ?? 'SHOP',
     })
+    setDiaryCustomMeasurements(readDiaryCustomMeasurements(r.custom_measurements))
     setLoading(false)
   }, [id, isNew])
 
@@ -587,9 +615,11 @@ export default function DiaryEntryScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Offline client diary</Text>
             </View>
-            <Text style={styles.heroTitle}>New diary client</Text>
+            <Text style={styles.heroTitle}>{isNew ? 'New diary client' : (form.fullName || 'Edit diary client')}</Text>
             <Text style={styles.heroSub}>
-              Save measurements, fitting notes, and consented scans here. Send a passport invite only when the client is ready to continue on Drapeon.
+              {isNew
+                ? 'Save measurements, fitting notes, and consented scans here. Send a passport invite only when the client is ready to continue on Drapeon.'
+                : 'Update measurements, fitting notes, and any scan results for this client.'}
             </Text>
           </View>
 
@@ -718,6 +748,27 @@ export default function DiaryEntryScreen() {
                 <View style={styles.measureGrid}>
                   <MeasureField label="Thigh" value={form.thigh} unit={form.unit} onChange={(v) => set('thigh', v)} />
                   <MeasureField label="Ankle / cuff" value={form.ankle} unit={form.unit} onChange={(v) => set('ankle', v)} />
+                </View>
+              </View>
+            ) : null}
+            {diaryCustomMeasurements.length > 0 ? (
+              <View style={styles.measureModuleCard}>
+                <View style={styles.measureModuleHeader}>
+                  <View style={styles.measureModuleIcon}>
+                    <Feather name="aperture" size={16} color={Colors.needleGreen} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.measureModuleTitle}>Custom measurements</Text>
+                    <Text style={styles.measureModuleSub}>Extra saved points that do not have a standard diary field.</Text>
+                  </View>
+                </View>
+                <View style={styles.diaryCustomGrid}>
+                  {diaryCustomMeasurements.map((measurement) => (
+                    <View key={measurement.name} style={styles.diaryCustomPill}>
+                      <Text style={styles.diaryCustomLabel}>{measurement.name}</Text>
+                      <Text style={styles.diaryCustomValue}>{measurement.value} {form.unit}</Text>
+                    </View>
+                  ))}
                 </View>
               </View>
             ) : null}
@@ -1094,6 +1145,29 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.inkLight,
     lineHeight: 17,
+  },
+  diaryCustomGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  diaryCustomPill: {
+    flexGrow: 1,
+    minWidth: '45%',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+  },
+  diaryCustomLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  diaryCustomValue: {
+    marginTop: 2,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
   },
   addModuleRow: {
     minHeight: 58,

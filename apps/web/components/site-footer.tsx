@@ -1,7 +1,7 @@
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import Link from 'next/link'
 import type { Route } from 'next'
-import { publicPhoneDisplay, publicPhoneE164 } from '../lib/metadata'
+import { publicPhoneE164 } from '../lib/metadata'
 import { SocialIconLinks } from './social-links'
 
 const productLinks: Array<{ href: Route; label: string }> = [
@@ -35,14 +35,17 @@ export function SiteFooter(): React.JSX.Element {
 
         {/* Brand */}
         <div>
-          <div className="text-2xl font-semibold tracking-[-0.04em] text-needle">Drapeon</div>
+          <div className="text-2xl font-semibold text-needle">Drapeon</div>
           <p className="mt-3 max-w-xs text-sm leading-7 text-ink/62">
             Custom tailoring, finally digital. Connecting customers with verified tailors across Africa and the diaspora.
           </p>
           <div className="mt-5 grid gap-1.5 text-xs text-ink/48">
             <a href={`mailto:${CONTACTS.hello}`} className="transition hover:text-needle">{CONTACTS.hello}</a>
             <a href={`mailto:${CONTACTS.support}`} className="transition hover:text-needle">{CONTACTS.support}</a>
-            <a href={`tel:${publicPhoneE164}`} className="transition hover:text-needle">{publicPhoneDisplay}</a>
+            <a href={buildWhatsAppSupportUrl('Hi Drapeon, I need support.')} target="_blank" rel="noopener noreferrer" className="transition hover:text-needle">
+              WhatsApp support
+            </a>
+            <a href={`tel:${publicPhoneE164}`} className="transition hover:text-needle">Call or text Drapeon</a>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             <SocialIconLinks size="sm" />

@@ -21,10 +21,12 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
+import { appendToHistory, resetTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { promoteSpecialistMeasurementsToProfileValues } from '@drape/shared/measurement-profile'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -45,6 +47,10 @@ type MeasurementProfile = {
   kneeCircumference?: number | null
   bicepCircumference?: number | null
   wristCircumference?: number | null
+  palmWidth?: number | null
+  palmLength?: number | null
+  sleeveOpening?: number | null
+  banglePassOver?: number | null
   headCircumference?: number | null
   hatBandLine?: number | null
   headLength?: number | null
@@ -53,6 +59,7 @@ type MeasurementProfile = {
   frontToBackOverCrown?: number | null
   filaHeight?: number | null
   torsoLength?: number | null
+  ankleHemOpening?: number | null
   unit: 'in' | 'cm'
 }
 
@@ -81,6 +88,10 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
   'kneeCircumference',
   'bicepCircumference',
   'wristCircumference',
+  'palmWidth',
+  'palmLength',
+  'sleeveOpening',
+  'banglePassOver',
   'headCircumference',
   'hatBandLine',
   'headLength',
@@ -89,6 +100,7 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
   'frontToBackOverCrown',
   'filaHeight',
   'torsoLength',
+  'ankleHemOpening',
 ]
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -121,8 +133,11 @@ export default function CustomerProfileScreen() {
     refetch,
   } = useCustomerProfileOverview(user?.id, lastNotifCheck)
 
-  const measurements = (overview?.measurements ?? null) as MeasurementProfile | null
-  const measurementMeta = (overview?.measurements ?? null) as Record<string, unknown> | null
+  const rawMeasurements = (overview?.measurements ?? null) as Record<string, unknown> | null
+  const normalizedMeasurements = rawMeasurements
+    ? promoteSpecialistMeasurementsToProfileValues(rawMeasurements).measurements
+    : null
+  const measurements = normalizedMeasurements as MeasurementProfile | null
   const recentOrders = (overview?.recentOrders ?? []) as RecentOrder[]
   const reviewCount = overview?.reviewCount ?? 0
   const averageRating = overview?.averageRating ?? null
@@ -137,7 +152,7 @@ export default function CustomerProfileScreen() {
 
   useRefreshOnFocus(() => {
     void refetch()
-  })
+  }, 0)
 
   const displayName =
     String(user?.user_metadata?.display_name ?? '').trim() ||
@@ -164,18 +179,10 @@ export default function CustomerProfileScreen() {
       )
     : false
   const measurementProgressLabel = coreFitReady
-    ? 'Core ready'
+    ? 'Saved'
     : filledCount > 0
-      ? 'In progress'
+      ? `${filledCount} saved`
       : 'Set up'
-  const guidedFitStatus =
-    measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEW_REQUIRED'
-      ? 'Tailor review pending'
-      : measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEWED'
-        ? 'Tailor reviewed'
-        : measurementMeta?.latestMeasurementScanStatus === 'CAPTURED'
-          ? 'Ready for orders'
-          : 'Add guided fit notes'
 
   const memberSince = createdAt
     ? new Date(createdAt).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
@@ -282,7 +289,7 @@ export default function CustomerProfileScreen() {
                   Alert.alert('Could not switch modes', error)
                   return
                 }
-                router.replace('/(tailor)')
+                resetTo(router, '/(tailor)')
               })
               .finally(() => setSwitchingRole(false))
           },
@@ -382,7 +389,14 @@ export default function CustomerProfileScreen() {
           <View style={styles.quickLinksRow}>
             <TouchableOpacity
               style={styles.quickLinkCard}
-              onPress={() => router.push('/(customer)/profile/measurements')}
+              onPress={() => {
+                router.push({
+                  pathname: '/(customer)/profile/measurements',
+                  params: {
+                    historyChain: appendToHistory(undefined, '/(customer)/profile'),
+                  },
+                })
+              }}
               activeOpacity={0.75}
             >
               <Text style={styles.quickLinkValue}>{measurementProgressLabel}</Text>
@@ -405,7 +419,13 @@ export default function CustomerProfileScreen() {
             <TouchableOpacity
               style={styles.quickLinkCard}
               onPress={() =>
-                router.navigate({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
+                router.navigate({
+                  pathname: '/(customer)/orders',
+                  params: {
+                    tab: 'completed',
+                    historyChain: appendToHistory(undefined, '/(customer)/profile'),
+                  },
+                })
               }
               activeOpacity={0.75}
             >
@@ -415,21 +435,6 @@ export default function CustomerProfileScreen() {
           </View>
 
           <TouchableOpacity
-            style={styles.workspaceCard}
-            onPress={() => router.push('/(customer)/profile/guided-fit')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.workspaceHeader}>
-              <Text style={styles.workspaceEyebrow}>Fit preferences</Text>
-              <Feather name="chevron-right" size={16} color={Colors.midGrey} />
-            </View>
-            <Text style={styles.workspaceText}>
-              Tell tailors how you like clothes to sit, move, and feel before they start your order.
-            </Text>
-            <Text style={styles.workspaceStatus}>{guidedFitStatus}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
             style={styles.visionCard}
             onPress={() => {
               router.push({
@@ -437,6 +442,7 @@ export default function CustomerProfileScreen() {
                 params: {
                   mode: 'customer_scan',
                   returnTo: '/(customer)/profile',
+                  historyChain: appendToHistory(undefined, '/(customer)/profile'),
                 },
               } as never)
             }}
@@ -448,7 +454,7 @@ export default function CustomerProfileScreen() {
             <View style={styles.visionCopy}>
               <Text style={styles.visionTitle}>Drapeon Vision</Text>
               <Text style={styles.visionText}>
-                Capture measurements or jump into manual fit details before ordering.
+                Capture measurements or update your fit profile before ordering.
               </Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.inkLight} />
@@ -671,8 +677,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
   bellBadge: {
     position: 'absolute',
@@ -698,8 +703,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
     borderRadius: 18,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     paddingVertical: Spacing.md,
     gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
@@ -711,8 +714,6 @@ const styles = StyleSheet.create({
     height: 76,
     borderRadius: 38,
     backgroundColor: Colors.needleGreenLight,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -721,8 +722,6 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 38,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     overflow: 'hidden',
   },
   avatarText: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.needleGreen },
@@ -753,39 +752,6 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingHorizontal: Spacing.xl,
     gap: Spacing.md,
-  },
-  workspaceCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-    ...Shadow.sm,
-  },
-  workspaceHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  workspaceClose: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  workspaceEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  workspaceText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
-  },
-  workspaceStatus: {
-    marginTop: Spacing.xs,
-    fontSize: FontSize.sm,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
   },
   visionCard: {
     backgroundColor: Colors.white,
@@ -921,7 +887,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.md,
     padding: Spacing.md,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
   },
   orderTitle: {
@@ -981,7 +947,7 @@ const styles = StyleSheet.create({
   flatRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.lg,
+    gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,

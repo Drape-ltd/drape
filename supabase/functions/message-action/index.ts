@@ -10,9 +10,11 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
+import { sendPushToUser } from '../_shared/notify.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
+import { sendOrderEventEmail } from '../_shared/order-email.ts'
 
 const FN = 'message-action'
 
@@ -21,14 +23,43 @@ const THREATENING_LANGUAGE_PATTERNS = [
   /\b(you('re| are) (dead|finished|done)|watch your back|i know where you live)\b/i,
 ]
 
-const BodySchema = z.object({
-  action: z.literal('send-message'),
-  orderId: uuid,
-  type: z.enum(['TEXT', 'PHOTO', 'VOICE']),
-  body: z.string().trim().max(2000).optional(),
-  photoUrl: z.string().url().optional(),
-  voiceUrl: z.string().url().optional(),
-})
+const UNSEND_WINDOW_MS = 15 * 60 * 1000
+const messageId = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9:_-]+$/u, { message: "Must be a valid message id" })
+const messageMediaReference = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .refine((value) => isValidMessageMediaReference(value), {
+    message: "Must be a valid message media reference",
+  })
+
+const BodySchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('send-message'),
+    orderId: uuid,
+    type: z.enum(['TEXT', 'PHOTO', 'VOICE']),
+    body: z.string().trim().max(2000).optional(),
+    photoUrl: messageMediaReference.optional(),
+    voiceUrl: messageMediaReference.optional(),
+    voiceDuration: z.number().int().min(0).max(3600).optional(),
+    replyToId: messageId.optional(),
+  }),
+  z.object({
+    action: z.literal('unsend'),
+    messageId,
+  }),
+  z.object({
+    action: z.literal('edit'),
+    messageId,
+    body: z.string().trim().min(1).max(2000),
+  }),
+])
 
 function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
   return new Response(JSON.stringify(body), {
@@ -43,6 +74,49 @@ function jsonError(cors: HeadersInit, status: number, code: string, error: strin
 
 function hasThreateningLanguage(text: string) {
   return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+function isHttpMessageMediaUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost")
+  } catch {
+    return false
+  }
+}
+
+function normalizeMessageMediaPath(value: string) {
+  let path = value.trim()
+  if (path.startsWith("message-media/")) path = path.slice("message-media/".length)
+  while (path.startsWith("/")) path = path.slice(1)
+  return path
+}
+
+function isValidMessageMediaReference(value: string) {
+  const trimmed = value.trim()
+  if (isHttpMessageMediaUrl(trimmed)) return true
+
+  const path = normalizeMessageMediaPath(trimmed)
+  const lowerPath = path.toLowerCase()
+  const backslash = String.fromCharCode(92)
+  if (!path.startsWith("messages/")) return false
+  if (path.includes("..") || path.includes(backslash) || Array.from(path).some((char) => char.charCodeAt(0) < 32)) return false
+
+  return [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".mp4", ".mov", ".m4v", ".webm", ".m4a", ".mp3", ".wav", ".aac", ".ogg"].some((ext) => lowerPath.endsWith(ext))
+}
+
+function mediaReviewUrls(value: string) {
+  const trimmed = value.trim()
+  return isHttpMessageMediaUrl(trimmed) ? [trimmed] : []
+}
+
+function runBackgroundTask(task: Promise<unknown>, event: string) {
+  const guarded = task.catch((error) => {
+    log('warn', FN, event, { error: error instanceof Error ? error.message : String(error) })
+  })
+  const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(guarded)
+  else void guarded
 }
 
 function buildMessagePreview(type: 'TEXT' | 'PHOTO' | 'VOICE', text: string) {
@@ -96,6 +170,120 @@ async function resolveSenderName(
   return actorRole === 'TAILOR' ? 'Tailor' : 'Customer'
 }
 
+async function handleUnsend(
+  supabase: any,
+  callerId: string,
+  messageId: string,
+  cors: HeadersInit,
+) {
+  const { data: msg, error: msgError } = await supabase
+    .from('messages')
+    .select('id, sender_id, body, type, order_id, created_at, is_deleted')
+    .eq('id', messageId)
+    .maybeSingle()
+
+  if (msgError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this message right now.')
+  if (!msg) return jsonError(cors, 404, 'MESSAGE_NOT_FOUND', 'Message not found.')
+
+  const msgRow = msg as { id: string; sender_id: string; body: string | null; type: string; order_id: string; created_at: string; is_deleted: boolean }
+
+  if (msgRow.sender_id !== callerId) {
+    return jsonError(cors, 403, 'FORBIDDEN', 'You can only unsend your own messages.')
+  }
+  if (msgRow.is_deleted) {
+    return jsonError(cors, 409, 'ALREADY_UNSENT', 'This message was already unsent.')
+  }
+
+  const sentAt = new Date(msgRow.created_at).getTime()
+  if (isNaN(sentAt) || Date.now() - sentAt > UNSEND_WINDOW_MS) {
+    return jsonError(cors, 409, 'UNSEND_WINDOW_EXPIRED', 'Messages can only be unsent within 15 minutes of sending.')
+  }
+
+  await supabase.from('message_audit_log').insert({
+    message_id: msgRow.id,
+    original_body: msgRow.body,
+    action: 'unsend',
+    actor_id: callerId,
+  })
+
+  const { error: updateError } = await supabase
+    .from('messages')
+    .update({ is_deleted: true, body: null })
+    .eq('id', msgRow.id)
+
+  if (updateError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not unsend this message right now.')
+
+  await audit(supabase, {
+    event: 'message.unsent',
+    actor_id: callerId,
+    actor_role: 'UNKNOWN',
+    order_id: msgRow.order_id,
+    payload: { function: FN, message_id: msgRow.id },
+  })
+
+  return jsonResponse({ ok: true }, 200, cors)
+}
+
+async function handleEdit(
+  supabase: any,
+  callerId: string,
+  messageId: string,
+  newBody: string,
+  cors: HeadersInit,
+) {
+  const { data: msg, error: msgError } = await supabase
+    .from('messages')
+    .select('id, sender_id, body, type, order_id, is_deleted')
+    .eq('id', messageId)
+    .maybeSingle()
+
+  if (msgError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this message right now.')
+  if (!msg) return jsonError(cors, 404, 'MESSAGE_NOT_FOUND', 'Message not found.')
+
+  const msgRow = msg as { id: string; sender_id: string; body: string | null; type: string; order_id: string; is_deleted: boolean }
+
+  if (msgRow.sender_id !== callerId) {
+    return jsonError(cors, 403, 'FORBIDDEN', 'You can only edit your own messages.')
+  }
+  if (msgRow.is_deleted) {
+    return jsonError(cors, 409, 'MESSAGE_DELETED', 'Deleted messages cannot be edited.')
+  }
+  if (msgRow.type !== 'TEXT') {
+    return jsonError(cors, 409, 'WRONG_TYPE', 'Only text messages can be edited.')
+  }
+
+  if (hasBlockedContact(newBody)) {
+    return jsonError(cors, 400, 'BLOCKED_CONTACT', "Contact details can't be shared in messages. Keep everything on Drape so your order and payment stay protected.")
+  }
+  if (hasThreateningLanguage(newBody)) {
+    return jsonError(cors, 400, 'THREATENING_LANGUAGE', "That message can't be sent. Keep communication respectful — our team reviews flagged messages.")
+  }
+
+  await supabase.from('message_audit_log').insert({
+    message_id: msgRow.id,
+    original_body: msgRow.body,
+    action: 'edit',
+    actor_id: callerId,
+  })
+
+  const { error: updateError } = await supabase
+    .from('messages')
+    .update({ body: newBody, edited_at: new Date().toISOString() })
+    .eq('id', msgRow.id)
+
+  if (updateError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not edit this message right now.')
+
+  await audit(supabase, {
+    event: 'message.edited',
+    actor_id: callerId,
+    actor_role: 'UNKNOWN',
+    order_id: msgRow.order_id,
+    payload: { function: FN, message_id: msgRow.id },
+  })
+
+  return jsonResponse({ ok: true }, 200, cors)
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -108,6 +296,24 @@ Deno.serve(async (req) => {
     if (!parsed.ok) return jsonError(cors, 400, 'VALIDATION_FAILED', parsed.error)
 
     const body = parsed.data
+    const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+
+    // Unsend and edit bypass order-level checks — they only need message ownership
+    if (body.action === 'unsend') {
+      const clientIp = getClientIp(req)
+      const limit = await rateLimit(supabase, caller.id, `${FN}:unsend`, 20, 60_000, { ip: clientIp, userId: caller.id })
+      if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+      return handleUnsend(supabase, caller.id, body.messageId, cors)
+    }
+
+    if (body.action === 'edit') {
+      const clientIp = getClientIp(req)
+      const limit = await rateLimit(supabase, caller.id, `${FN}:edit`, 20, 60_000, { ip: clientIp, userId: caller.id })
+      if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+      return handleEdit(supabase, caller.id, body.messageId, body.body, cors)
+    }
+
+    // send-message
     if (body.type === 'TEXT' && !body.body?.trim()) {
       return jsonError(cors, 400, 'MESSAGE_BODY_REQUIRED', 'Message body is required.')
     }
@@ -118,7 +324,6 @@ Deno.serve(async (req) => {
       return jsonError(cors, 400, 'VOICE_URL_REQUIRED', 'Voice URL is required.')
     }
 
-    const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
     const limit = await rateLimit(
       supabase,
@@ -132,13 +337,13 @@ Deno.serve(async (req) => {
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('id, customer_id, tailor_id, stage')
+      .select('id, reference, customer_id, tailor_id, stage, order_kind, garment_type, item_title, item_size, delivery_method, quoted_amount, quoted_currency, currency')
       .eq('id', body.orderId)
       .maybeSingle()
 
     if (orderError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not check this conversation right now.')
 
-    const orderRow = order as { id?: string; customer_id?: string | null; tailor_id?: string | null; stage?: string | null } | null
+    const orderRow = order as { id?: string; reference?: string | null; customer_id?: string | null; tailor_id?: string | null; stage?: string | null; order_kind?: string | null; garment_type?: string | null; item_title?: string | null; item_size?: string | null; delivery_method?: string | null; quoted_amount?: number | null; quoted_currency?: string | null; currency?: string | null } | null
     const isCustomer = orderRow?.customer_id === caller.id
     const isTailor = orderRow?.tailor_id === caller.id
     const messagePreflight = runPreflight([
@@ -254,6 +459,20 @@ Deno.serve(async (req) => {
       )
     }
 
+    // Validate reply target is in the same order thread
+    if (body.replyToId) {
+      const { data: replyTarget } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('id', body.replyToId)
+        .eq('order_id', body.orderId)
+        .maybeSingle()
+
+      if (!replyTarget) {
+        return jsonError(cors, 404, 'REPLY_TARGET_NOT_FOUND', 'The message you are replying to was not found in this thread.')
+      }
+    }
+
     const payload: Record<string, unknown> = {
       order_id: body.orderId,
       sender_id: caller.id,
@@ -263,7 +482,11 @@ Deno.serve(async (req) => {
     }
     if (body.type === 'TEXT') payload.body = body.body!.trim()
     if (body.type === 'PHOTO') payload.photo_url = body.photoUrl!
-    if (body.type === 'VOICE') payload.voice_url = body.voiceUrl!
+    if (body.type === 'VOICE') {
+      payload.voice_url = body.voiceUrl!
+      if (body.voiceDuration != null) payload.body = String(body.voiceDuration)
+    }
+    if (body.replyToId) payload.reply_to_id = body.replyToId
 
     const { data: insertedMessage, error } = await supabase
       .from('messages')
@@ -279,36 +502,94 @@ Deno.serve(async (req) => {
       typeof insertedMessage?.id === 'string' ? insertedMessage.id : crypto.randomUUID()
     const recipientId = actorRole === 'CUSTOMER' ? orderRow.tailor_id : orderRow.customer_id
     if (recipientId && recipientId !== caller.id) {
-      await enqueuePushJob(supabase, {
-        userId: recipientId,
-        source: FN,
-        orderId: body.orderId,
-        idempotencyKey: `message-created:${insertedMessageId}`,
-        priority: 20,
-        notification: {
-          title: senderName,
-          body: buildMessagePreview(body.type, messageText),
-          preferenceKey: 'messages',
-          data: {
-            orderId: body.orderId,
-            target: 'messages',
-          },
+      const notification = {
+        title: senderName,
+        body: buildMessagePreview(body.type, messageText),
+        preferenceKey: 'messages' as const,
+        channelId: 'default',
+        sound: 'default',
+        data: {
+          orderId: body.orderId,
+          target: 'messages',
         },
-      })
+      }
+      runBackgroundTask((async () => {
+        const delivery = await sendPushToUser(supabase, recipientId, notification)
+        if (delivery.status === 'ERROR') {
+          await enqueuePushJob(supabase, {
+            userId: recipientId,
+            source: FN,
+            orderId: body.orderId,
+            idempotencyKey: `message-created:${insertedMessageId}`,
+            priority: 20,
+            notification,
+          })
+          log('warn', FN, 'notification.deferred', {
+            order_id: body.orderId,
+            recipient_id: recipientId,
+            reason: delivery.reason,
+          })
+          return
+        }
+
+        log('info', FN, 'notification.delivered', {
+          order_id: body.orderId,
+          recipient_id: recipientId,
+          status: delivery.status,
+          reason: delivery.status === 'SKIPPED' ? delivery.reason : null,
+        })
+      })(), 'notification.delivery_failed')
+
+      const shouldEmailTailorBeforeQuote =
+        actorRole === 'CUSTOMER' &&
+        recipientId === orderRow.tailor_id &&
+        ['PENDING_QUOTE', 'CONSULTATION'].includes(orderRow.stage ?? '')
+
+      if (shouldEmailTailorBeforeQuote && orderRow.id && orderRow.tailor_id) {
+        const messageKind = body.type === 'VOICE' ? 'voice note' : body.type === 'PHOTO' ? 'media update' : 'message'
+        runBackgroundTask(
+          sendOrderEventEmail(supabase, {
+            order: {
+            id: orderRow.id,
+            reference: orderRow.reference ?? null,
+            order_kind: orderRow.order_kind ?? 'CUSTOM',
+            customer_id: orderRow.customer_id ?? null,
+            tailor_id: orderRow.tailor_id ?? null,
+            garment_type: orderRow.garment_type ?? null,
+            item_title: orderRow.item_title ?? null,
+            item_size: orderRow.item_size ?? null,
+            delivery_method: orderRow.delivery_method ?? null,
+            quoted_amount: orderRow.quoted_amount ?? null,
+            quoted_currency: orderRow.quoted_currency ?? null,
+            currency: orderRow.currency ?? orderRow.quoted_currency ?? null,
+          },
+          recipientUserId: orderRow.tailor_id,
+          audience: 'TAILOR',
+          subject: 'New customer message before quote',
+          headline: 'Customer added details before your quote',
+          body: senderName + ' sent a ' + messageKind + ' while this brief is still waiting for your quote.',
+          ctaLabel: 'Review order',
+        }),
+          'prequote_message.email_failed',
+        )
+      }
     }
 
     if (body.type === 'PHOTO' || body.type === 'VOICE') {
-      await queueMediaSafetyReview(supabase, {
-        fn: FN,
-        actorId: caller.id,
-        actorRole,
-        surface: body.type === 'PHOTO' ? 'messages.photo' : 'messages.voice',
-        publicUrls: body.type === 'PHOTO' ? [body.photoUrl!] : [body.voiceUrl!],
-        purpose: 'MESSAGE_MEDIA',
-        orderId: body.orderId,
-        relatedEntityType: 'message',
-        metadata: { messageType: body.type },
-      })
+      const reviewUrls = body.type === 'PHOTO' ? mediaReviewUrls(body.photoUrl!) : mediaReviewUrls(body.voiceUrl!)
+      if (reviewUrls.length > 0) {
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole,
+          surface: body.type === 'PHOTO' ? 'messages.photo' : 'messages.voice',
+          publicUrls: reviewUrls,
+          purpose: 'MESSAGE_MEDIA',
+          orderId: body.orderId,
+          relatedEntityType: 'message',
+          metadata: { messageType: body.type },
+        })
+      }
     }
 
     await audit(supabase, {

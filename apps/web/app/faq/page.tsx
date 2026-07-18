@@ -87,7 +87,7 @@ export default async function FaqPage(): Promise<React.JSX.Element> {
           />
           <div className="mt-10 grid gap-4">
             {FAQ.map((item) => (
-              <details key={item.question} className="group rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+              <details key={item.question} className="group rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm">
                 <summary className="cursor-pointer list-none text-xl text-ink marker:hidden focus-visible:outline-none sm:text-2xl">
                   <span className="inline-flex w-full items-center justify-between gap-4">
                     {item.question}

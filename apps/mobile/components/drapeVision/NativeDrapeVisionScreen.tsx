@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Image,
   Platform,
   ScrollView,
@@ -17,7 +18,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio'
 import type * as ExpoSpeech from 'expo-speech'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
@@ -74,9 +75,16 @@ import type {
 import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
-import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, goBackOrReturnToIfNeeded, pickSafeReturnTo } from '@/lib/navigation'
 import { promptProductFeedback } from '@/lib/productFeedback'
 import { Sentry } from '@/lib/sentry'
+import {
+  clearPreservedVisionNavigationContext,
+  loadPreservedVisionNavigationContext,
+  mergeVisionNavigationContext,
+  preserveVisionNavigationContext,
+  readPreservedVisionNavigationContextSync,
+} from '@/lib/vision-navigation-context'
 import {
   MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS,
   MEASUREMENT_SOURCE_LABELS,
@@ -88,7 +96,13 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { buildMeasurementProfileStoragePayload } from '@drape/shared/measurement-profile'
+import {
+  buildMeasurementProfileStoragePayload,
+  mergeMeasurementProfileValues,
+  promoteSpecialistMeasurementsToProfileValues,
+  stripDrapeVisionFit360DraftFields,
+  type MeasurementProfileValueConflict,
+} from '@drape/shared/measurement-profile'
 import {
   DRAPE_VISION_CALCULATION_MESSAGES,
   DRAPE_VISION_COLORS,
@@ -124,6 +138,7 @@ function loadExpoSpeech(): ExpoSpeechModule | null {
 type VisionParams = {
   mode?: string
   returnTo?: string
+  historyChain?: string
   diaryId?: string
   orderId?: string
   itemId?: string
@@ -306,6 +321,7 @@ const SPECIALIST_GUIDE_LOWER_BODY_LOCK_MIN_RATIO = 0.075
 const SPECIALIST_GUIDE_BODICE_CAPTURE_MIN_RATIO = 0.16
 const SPECIALIST_GUIDE_LOWER_BODY_CAPTURE_MIN_RATIO = 0.095
 const SPECIALIST_GUIDE_PROGRESS_COMPLETE = 1
+const CALCULATION_CANCEL_DELAY_MS = 20000
 const SPECIALIST_GUIDE_MODE_CODES: Record<DrapeVisionSpecialistScanMode, number> = {
   fit_360: 0,
   hand_wrist: 1,
@@ -381,10 +397,11 @@ const SCAN_FRAME_PIXEL_FORMAT = 'rgb'
 const SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER = Platform.OS === 'ios' ? 1000 : 1 / 1_000_000
 const NATIVE_ANALYZER_CLEAR_DRAIN_MS = Platform.OS === 'ios' ? 180 : 220
 const VISION_CAMERA_SESSION_RESET_MS = Platform.OS === 'ios' ? 240 : 260
+const VISION_EXIT_NAVIGATION_DELAY_MS = 120
 const SCAN_LITE_FRAME_INTERVAL_MS = Platform.OS === 'android' ? 1400 : DRAPE_VISION_LITE_FRAME_INTERVAL_MS
 const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1050
 const SCAN_IOS_NEXT_POSE_MIN_TURN_MS = 1800
-const SCAN_IOS_BACK_POSE_MIN_TURN_MS = 2100
+const SCAN_IOS_BACK_POSE_MIN_TURN_MS = 3400
 const SCAN_POSE_LOCK_CONFIDENCE = 0.05
 const SCAN_FULL_BODY_LOCK_CONFIDENCE = 0.05
 const SCAN_POSE_MODEL_CONFIDENCE = Platform.OS === 'android' ? 0.15 : 0.5
@@ -417,7 +434,7 @@ const SCAN_IOS_FRONTLIKE_MIN_SHOULDER_BODY_RATIO = 0.1
 const SCAN_ANDROID_SEQUENTIAL_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS = 2600
 const SCAN_ANDROID_CAPTURE_ANGLES_DEGREES = [0, 60, 120] as const
-const SCAN_IOS_GUIDED_CAPTURE_INDICES = [0, 2, 6, 4] as const
+const SCAN_IOS_GUIDED_CAPTURE_INDICES = [0, 2, 4, 6] as const
 const SCAN_IOS_GUIDED_CAPTURE_MASK = SCAN_IOS_GUIDED_CAPTURE_INDICES.reduce<number>(
   (mask, index) => mask | (1 << index),
   0,
@@ -951,7 +968,7 @@ function defaultReturnForMode(mode: DrapeVisionMode) {
 }
 
 function returnTargetForVisionParams(mode: DrapeVisionMode, params: VisionParams) {
-  const safeReturnTo = sanitizeReturnTo(params.returnTo)
+  const safeReturnTo = pickSafeReturnTo(params.historyChain, params.returnTo)
   if (safeReturnTo) return safeReturnTo
   if (mode === 'customer_scan' && params.orderId?.trim()) return `/(customer)/orders/${params.orderId}`
   if (mode === 'garment_qc' && params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
@@ -964,7 +981,7 @@ function returnTargetForVisionParams(mode: DrapeVisionMode, params: VisionParams
 function primaryLabelForVisionParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
   if (params.orderId?.trim()) return 'Return to order'
-  if (sanitizeReturnTo(params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
+  if (pickSafeReturnTo(params.historyChain, params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
   return 'Open orders'
 }
 
@@ -1152,10 +1169,10 @@ function buildSpecialistMeasurementDrafts(input: {
     const banglePassOverCm = clampSpecialistDraftValue(palmWidthCm * 3.02, 19, 34)
     return [
       draft('wristCircumference', DRAPE_VISION_MEASUREMENT_LABELS.wristCircumference, wristCm, { field: 'wristCircumference' }),
-      draft('palmWidth', 'Palm width', palmWidthCm),
-      draft('palmLength', 'Palm length', palmLengthCm),
-      draft('sleeveOpening', 'Sleeve opening', sleeveOpeningCm),
-      draft('banglePassOver', 'Bangle pass-over', banglePassOverCm),
+      draft('palmWidth', DRAPE_VISION_MEASUREMENT_LABELS.palmWidth, palmWidthCm, { field: 'palmWidth' }),
+      draft('palmLength', DRAPE_VISION_MEASUREMENT_LABELS.palmLength, palmLengthCm, { field: 'palmLength' }),
+      draft('sleeveOpening', DRAPE_VISION_MEASUREMENT_LABELS.sleeveOpening, sleeveOpeningCm, { field: 'sleeveOpening' }),
+      draft('banglePassOver', DRAPE_VISION_MEASUREMENT_LABELS.banglePassOver, banglePassOverCm, { field: 'banglePassOver' }),
     ]
   }
 
@@ -1203,7 +1220,7 @@ function buildSpecialistMeasurementDrafts(input: {
       draft('kneeCircumference', DRAPE_VISION_MEASUREMENT_LABELS.kneeCircumference, heightCm * 0.205 * legShapeAdjustment, { field: 'kneeCircumference', note }),
       draft('inseam', DRAPE_VISION_MEASUREMENT_LABELS.inseam, heightCm * 0.43, { field: 'inseam', note }),
       draft('outseam', DRAPE_VISION_MEASUREMENT_LABELS.outseam, heightCm * 0.52, { field: 'outseam', note }),
-      draft('ankleHem', 'Ankle / hem opening', heightCm * 0.115 * legShapeAdjustment, { note }),
+      draft('ankleHemOpening', DRAPE_VISION_MEASUREMENT_LABELS.ankleHemOpening, heightCm * 0.115 * legShapeAdjustment, { field: 'ankleHemOpening', note }),
     ]
   }
 
@@ -1225,7 +1242,7 @@ function specialistScanUseCase(mode: DrapeVisionSpecialistScanMode) {
   if (mode === 'headwear') return 'Use for fila, gele, hat band, crown, and headwear prep.'
   if (mode === 'bodice_corset') return 'Use for bust, underbust, ribcage, waist, torso, and shoulder-slope detail.'
   if (mode === 'lower_body_detail') return 'Use for thigh, knee, ankle, hem, inseam, outseam, and trouser fit.'
-  return 'Use for the main full-body fit profile.'
+  return 'Use for the main core fit profile.'
 }
 
 function specialistScanSessionLabel(mode: DrapeVisionSpecialistScanMode) {
@@ -1934,6 +1951,16 @@ function parseTapeInput(value: string) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
+function parseTapeInputToCm(value: string, unit: MeasurementDisplayUnit) {
+  const parsed = parseTapeInput(value)
+  if (parsed == null) return null
+  return unit === 'cm' ? parsed : parsed * DRAPE_VISION_CM_PER_INCH
+}
+
+function tapeInputPlaceholder(unit: MeasurementDisplayUnit) {
+  return unit === 'cm' ? 'e.g. 16.5' : 'e.g. 6 1/2'
+}
+
 function specialistTapeInputKey(mode: DrapeVisionSpecialistScanMode, draftId: string) {
   return `${mode}:${draftId}`
 }
@@ -1966,13 +1993,14 @@ function specialistDraftTapeToleranceCm(draft: SpecialistMeasurementDraft) {
 function buildSpecialistTapeComparison(
   draft: SpecialistMeasurementDraft,
   rawTapeInput: string | undefined,
+  unit: MeasurementDisplayUnit,
 ): SpecialistTapeComparison | null {
   if (!Number.isFinite(draft.valueCm)) return null
 
-  const tapeIn = parseTapeInput(rawTapeInput ?? '')
-  if (tapeIn == null) return null
+  const tapeCm = parseTapeInputToCm(rawTapeInput ?? '', unit)
+  if (tapeCm == null) return null
 
-  const tapeCm = tapeIn * DRAPE_VISION_CM_PER_INCH
+  const tapeIn = tapeCm / DRAPE_VISION_CM_PER_INCH
   const valueCm = draft.valueCm as number
   const errorCm = Math.abs(tapeCm - valueCm)
   const toleranceCm = specialistDraftTapeToleranceCm(draft)
@@ -2054,12 +2082,6 @@ function isAndroidLiveScanPreflightBlocked() {
 
 function androidLiveScanPreflightMessage() {
   return 'Live body scanning is paused on Android while we finish native scanner validation. Your measurements are safe — use manual measurements for this build.'
-}
-
-function measurementConfidenceColor(confidence?: string) {
-  if (confidence === 'HIGH') return Colors.needleGreen
-  if (confidence === 'MEDIUM') return Colors.statusPending
-  return DRAPE_VISION_COLORS.textDim
 }
 
 function measurementConfidenceLabel(confidence?: string) {
@@ -2362,7 +2384,7 @@ function buildNextScanInstruction(captures: Array<{ angleDegrees: number; angleI
 function formatScanRecoveryMessage(capturedAngleCount: number) {
   if (Platform.OS === 'ios') {
     return capturedAngleCount > 0
-      ? 'Still scanning. Keep head-to-ankles visible, then follow right side, left side, and back prompts.'
+      ? 'Still scanning. Keep head-to-ankles visible, then follow right side, back, and left side prompts.'
       : 'Still scanning. Step back until your full body is visible, then face the phone and hold still for the first capture.'
   }
 
@@ -2796,6 +2818,18 @@ function buildVisionMeasurementSnapshot(measurements: DrapeVisionMeasurements, u
   }, { unit })
 }
 
+function buildVisionMeasurementSnapshotForFields(
+  measurements: DrapeVisionMeasurements,
+  fields: DrapeVisionMeasurementField[],
+  unit: MeasurementDisplayUnit = 'cm',
+) {
+  return fields.reduce<Record<string, unknown>>((snapshot, field) => {
+    const numericValue = finiteNumber(measurements[field])
+    if (numericValue != null) snapshot[field] = roundMeasurementValue(numericValue, unit)
+    return snapshot
+  }, { unit })
+}
+
 function buildSpecialistDraftSnapshot(drafts: SpecialistMeasurementDraft[], unit: MeasurementDisplayUnit = 'cm') {
   return drafts.reduce<Record<string, unknown>>((snapshot, draft) => {
     const numericValue = finiteNumber(draft.valueCm)
@@ -2903,6 +2937,88 @@ function addFinitePayloadValue(payload: Record<string, unknown>, key: string, va
   if (numericValue != null) payload[key] = numericValue
 }
 
+type MeasurementOverwriteDecision = 'cancel' | 'keep' | 'overwrite'
+
+const DIARY_MEASUREMENT_FIELD_LABELS: Record<string, string> = {
+  chest: 'Chest',
+  shoulder: 'Shoulder',
+  sleeve: 'Sleeve',
+  waist: 'Waist',
+  hip: 'Hip',
+  trouser_length: 'Trouser length',
+  neck: 'Neck',
+  thigh: 'Thigh',
+  inseam: 'Inseam',
+  ankle: 'Ankle / cuff',
+  bicep: 'Bicep',
+  wrist: 'Wrist',
+  back_length: 'Back length',
+  under_bust: 'Under bust',
+}
+
+const DRAPE_VISION_DIARY_FIELD_MAP: Partial<Record<DrapeVisionMeasurementField, string>> = {
+  chest: 'chest',
+  shoulderWidth: 'shoulder',
+  sleeveLength: 'sleeve',
+  waist: 'waist',
+  hips: 'hip',
+  outseam: 'trouser_length',
+  neckCircumference: 'neck',
+  thighCircumference: 'thigh',
+  inseam: 'inseam',
+  bicepCircumference: 'bicep',
+  wristCircumference: 'wrist',
+  backLength: 'back_length',
+  underBust: 'under_bust',
+}
+
+function readableMeasurementKey(key: string) {
+  return DRAPE_VISION_MEASUREMENT_LABELS[key as DrapeVisionMeasurementField] ??
+    DIARY_MEASUREMENT_FIELD_LABELS[key] ??
+    key
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function formatOverwriteValue(value: unknown, unit: MeasurementDisplayUnit) {
+  const numericValue = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : null
+  if (numericValue != null && Number.isFinite(numericValue)) return `${numericValue} ${unit}`
+  return String(value ?? 'saved')
+}
+
+function confirmMeasurementOverwrite(
+  conflicts: MeasurementProfileValueConflict[],
+  unit: MeasurementDisplayUnit,
+  options: { title: string; body: string },
+): Promise<MeasurementOverwriteDecision> {
+  if (conflicts.length === 0) return Promise.resolve('keep')
+  const preview = conflicts.slice(0, 4).map((conflict) => (
+    `${readableMeasurementKey(conflict.key)}: ${formatOverwriteValue(conflict.current, unit)} -> ${formatOverwriteValue(conflict.incoming, unit)}`
+  ))
+  const extraCount = conflicts.length - preview.length
+  const message = [
+    options.body,
+    '',
+    ...preview,
+    extraCount > 0 ? `+ ${extraCount} more` : null,
+  ].filter(Boolean).join('\n')
+
+  return new Promise((resolve) => {
+    Alert.alert(options.title, message, [
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve('cancel') },
+      { text: 'Keep current', onPress: () => resolve('keep') },
+      { text: 'Overwrite', style: 'destructive', onPress: () => resolve('overwrite') },
+    ])
+  })
+}
+
 function parsePositiveInput(value: string) {
   const parsed = parseTapeInput(value)
   return parsed != null ? Number(parsed.toFixed(2)) : null
@@ -2955,16 +3071,23 @@ export default function DrapeVisionScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const insets = useSafeAreaInsets()
   const cameraPermission = useCameraPermission()
   const frontCamera = useCameraDevice('front')
   const rawParams = useLocalSearchParams<VisionParams>()
-  const params = useMemo(() => ({
+  const routeParams = useMemo(() => ({
     mode: firstParam(rawParams.mode),
     returnTo: firstParam(rawParams.returnTo),
+    historyChain: firstParam(rawParams.historyChain),
     diaryId: firstParam(rawParams.diaryId),
     orderId: firstParam(rawParams.orderId),
     itemId: firstParam(rawParams.itemId),
-  }), [rawParams.diaryId, rawParams.itemId, rawParams.mode, rawParams.orderId, rawParams.returnTo])
+  }), [rawParams.diaryId, rawParams.historyChain, rawParams.itemId, rawParams.mode, rawParams.orderId, rawParams.returnTo])
+  const [preservedParams, setPreservedParams] = useState(() => readPreservedVisionNavigationContextSync())
+  const params = useMemo(
+    () => mergeVisionNavigationContext(routeParams, preservedParams),
+    [preservedParams, routeParams],
+  )
 
   const mode: DrapeVisionMode = isDrapeVisionMode(params.mode) ? params.mode : 'customer_scan'
   const meta = DRAPE_VISION_MODE_META[mode]
@@ -2973,6 +3096,31 @@ export default function DrapeVisionScreen() {
   const missingTailorDiaryTarget = mode === 'tailor_client_scan' && !hasDiaryTarget
   const canRunLiveBodyScan = supportsBodyScan && !missingTailorDiaryTarget
   const canStartLiveBodyScan = canRunLiveBodyScan && !isAndroidLiveScanPreflightBlocked()
+  const ctaBarInsetStyle = useMemo(() => ({
+    paddingBottom: Math.max(Spacing.sm, insets.bottom),
+  }), [insets.bottom])
+
+  useEffect(() => {
+    preserveVisionNavigationContext(routeParams)
+  }, [routeParams])
+
+  useEffect(() => {
+    if (preservedParams) return undefined
+
+    let active = true
+    void loadPreservedVisionNavigationContext().then((context) => {
+      if (active && context) setPreservedParams(context)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [preservedParams])
+
+  const preserveCurrentVisionNavigationContext = useCallback(() => {
+    const preserved = preserveVisionNavigationContext(params)
+    if (preserved) setPreservedParams(preserved)
+  }, [params])
 
   const [phase, setPhase] = useState<VisionPhase>(() => (
     canStartLiveBodyScan && mode !== 'garment_qc' && mode !== 'size_guide_scan' ? 'suite' : 'intro'
@@ -3022,9 +3170,12 @@ export default function DrapeVisionScreen() {
   })
   const [measurementResult, setMeasurementResult] = useState<DrapeVisionMeasurementResult | null>(null)
   const [resultReviewed, setResultReviewed] = useState(false)
+  const [resultChecksExpanded, setResultChecksExpanded] = useState(false)
   const [calculationStep, setCalculationStep] = useState(1)
+  const [calculationCanCancel, setCalculationCanCancel] = useState(false)
   const [savingResult, setSavingResult] = useState(false)
   const [resultSaveConfirmation, setResultSaveConfirmation] = useState<string | null>(null)
+  const [visionExitPending, setVisionExitPending] = useState(false)
   const feedbackPromptedRef = useRef(new Set<string>())
   const [reduceMotion, setReduceMotion] = useState(false)
   const [visionLabSampleCount, setVisionLabSampleCount] = useState(0)
@@ -3095,6 +3246,8 @@ export default function DrapeVisionScreen() {
   const specialistGuideUpdatedAtRef = useRef(0)
   const specialistGuideStageRef = useRef<SpecialistGuideStage | null>(null)
   const saveConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const visionExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const visionExitInProgressRef = useRef(false)
   const startCaptureCountdownRef = useRef<((options?: StartCaptureCountdownOptions) => Promise<void>) | null>(null)
   const audioPlayerRef = useRef<AudioPlayer | null>(null)
   const instructionFade = useRef(new Animated.Value(1)).current
@@ -3956,6 +4109,7 @@ export default function DrapeVisionScreen() {
       if (specialistResultTimerRef.current) clearTimeout(specialistResultTimerRef.current)
       if (specialistWatchdogTimerRef.current) clearTimeout(specialistWatchdogTimerRef.current)
       if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+      if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
       stopVisionAudio('screen_unmount')
       try {
         clearAllDrapeVisionAnalyzers()
@@ -4013,6 +4167,24 @@ export default function DrapeVisionScreen() {
 
   const returnTarget = useMemo(() => returnTargetForVisionParams(mode, params), [mode, params])
   const primaryActionLabel = useMemo(() => primaryLabelForVisionParams(mode, params), [mode, params])
+  const resolveVisionExitReturnTarget = useCallback(() => {
+    const cachedParams = readPreservedVisionNavigationContextSync()
+    return pickSafeReturnTo(
+      params.historyChain,
+      preservedParams?.historyChain,
+      cachedParams?.historyChain,
+      params.returnTo,
+      preservedParams?.returnTo,
+      cachedParams?.returnTo,
+      returnTarget,
+    ) ?? returnTarget
+  }, [
+    params.historyChain,
+    params.returnTo,
+    preservedParams?.historyChain,
+    preservedParams?.returnTo,
+    returnTarget,
+  ])
 
   const garmentQcHasUnsavedWork = useMemo(() => {
     if (mode !== 'garment_qc') return false
@@ -4067,10 +4239,89 @@ export default function DrapeVisionScreen() {
   ])
 
   const leaveVision = useCallback(() => {
-    goBackOrReturnToIfNeeded(router, navigation, returnTarget, DRAPE_VISION_MODE_META[mode].fallbackRoute as never)
-  }, [mode, navigation, returnTarget, router])
+    if (visionExitInProgressRef.current) return
+
+    const exitReturnTarget = resolveVisionExitReturnTarget()
+    const fallbackTarget = DRAPE_VISION_MODE_META[mode].fallbackRoute as never
+    visionExitInProgressRef.current = true
+    setVisionExitPending(true)
+
+    preserveCurrentVisionNavigationContext()
+    stopVisionAudio('vision_exit')
+    clearAutoCountdownTimer()
+    if (calculationTimerRef.current) {
+      clearTimeout(calculationTimerRef.current)
+      calculationTimerRef.current = null
+    }
+    if (captureNoticeTimerRef.current) {
+      clearTimeout(captureNoticeTimerRef.current)
+      captureNoticeTimerRef.current = null
+    }
+    if (finalBackCompletionTimerRef.current) {
+      clearTimeout(finalBackCompletionTimerRef.current)
+      finalBackCompletionTimerRef.current = null
+    }
+    if (specialistResultTimerRef.current) {
+      clearTimeout(specialistResultTimerRef.current)
+      specialistResultTimerRef.current = null
+    }
+    if (specialistWatchdogTimerRef.current) {
+      clearTimeout(specialistWatchdogTimerRef.current)
+      specialistWatchdogTimerRef.current = null
+    }
+
+    setCaptureArmed(false)
+    setScanCountdown(null)
+    setCameraRestarting(false)
+    cameraRestartingRef.current = false
+    engineStatusRef.current = 'idle'
+    captureArmedRef.current = false
+    scanCountdownRef.current = null
+    bodyScanActiveValue.value = 0
+    bodyScanActiveSync.setBlocking(0)
+    specialistScanActiveValue.value = 0
+    specialistScanActiveSync.setBlocking(0)
+    specialistModeCodeValue.value = 0
+    specialistModeCodeSync.setBlocking(0)
+    specialistCapturedValue.value = 0
+    setBodyWorkletActiveTrace(false)
+    setSpecialistWorkletTrace({ active: false, modeCode: 0 })
+    setEngineStatus('idle')
+
+    if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
+    visionExitTimerRef.current = setTimeout(() => {
+      goBackOrReturnTo(
+        router,
+        navigation,
+        exitReturnTarget,
+        fallbackTarget,
+        { fromPath: '/vision' },
+      )
+      clearPreservedVisionNavigationContext()
+      visionExitTimerRef.current = null
+    }, VISION_EXIT_NAVIGATION_DELAY_MS)
+  }, [
+    clearAutoCountdownTimer,
+    bodyScanActiveSync,
+    bodyScanActiveValue,
+    captureArmedRef,
+    engineStatusRef,
+    mode,
+    navigation,
+    preserveCurrentVisionNavigationContext,
+    resolveVisionExitReturnTarget,
+    router,
+    scanCountdownRef,
+    specialistCapturedValue,
+    specialistModeCodeSync,
+    specialistModeCodeValue,
+    specialistScanActiveSync,
+    specialistScanActiveValue,
+    stopVisionAudio,
+  ])
 
   const closeVision = useCallback(() => {
+    if (visionExitInProgressRef.current || visionExitPending) return
     if (savingResult || workflowSaving) {
       Alert.alert('Still saving', 'Wait for this save to finish before leaving Drapeon Vision.')
       return
@@ -4093,15 +4344,30 @@ export default function DrapeVisionScreen() {
     }
 
     leaveVision()
-  }, [leaveVision, savingResult, shouldConfirmClose, workflowSaving])
+  }, [leaveVision, savingResult, shouldConfirmClose, visionExitPending, workflowSaving])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeVision()
+      return true
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [closeVision])
 
   useEffect(() => {
     if (phase !== 'calculating') {
       setCalculationStep(1)
+      setCalculationCanCancel(false)
       return undefined
     }
 
     setCalculationStep(1)
+    setCalculationCanCancel(false)
     const timer = setInterval(() => {
       setCalculationStep((current) => (
         current >= DRAPE_VISION_CALCULATION_MESSAGES.length
@@ -4109,46 +4375,99 @@ export default function DrapeVisionScreen() {
           : current + 1
       ))
     }, 520)
+    const cancelTimer = setTimeout(() => {
+      setCalculationCanCancel(true)
+    }, CALCULATION_CANCEL_DELAY_MS)
 
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      clearTimeout(cancelTimer)
+    }
   }, [phase])
 
   const openPrimary = useCallback(() => {
+    const primaryReturnTarget = resolveVisionExitReturnTarget()
     addVisionBreadcrumb('vision_return_selected', {
       mode,
-      returnTarget,
+      returnTarget: primaryReturnTarget,
     }, 'info')
 
     if (mode === 'customer_scan') {
-      router.replace({
+      // Only forward returnTarget if it points somewhere specific (e.g. an order page).
+      // The bare home tab '/(customer)' is Vision's own return destination, not a
+      // meaningful return for the measurements screen — omit it so measurements uses
+      // its own back logic instead of replacing to home.
+      const measurementsReturnTo = primaryReturnTarget !== '/(customer)' && primaryReturnTarget !== '/(customer)/profile/measurements'
+        ? primaryReturnTarget
+        : undefined
+      router.navigate({
         pathname: '/(customer)/profile/measurements',
-        params: { returnTo: returnTarget },
+        params: measurementsReturnTo
+          ? { returnTo: measurementsReturnTo, historyChain: measurementsReturnTo }
+          : {},
       } as never)
+      clearPreservedVisionNavigationContext()
       return
     }
 
     if (mode === 'tailor_client_scan') {
       if (params.diaryId) {
-        router.replace(returnTarget as never)
+        goBackOrReturnToIfNeeded(
+          router,
+          navigation,
+          primaryReturnTarget,
+          `/(tailor)/clients/diary/${params.diaryId}` as never,
+          { fromPath: '/vision' },
+        )
+        clearPreservedVisionNavigationContext()
         return
       }
-      router.replace({
+      router.navigate({
         pathname: '/(tailor)/clients/diary/new',
-        params: { returnTo: returnTarget },
+        params: { returnTo: primaryReturnTarget, historyChain: primaryReturnTarget },
       } as never)
+      clearPreservedVisionNavigationContext()
       return
     }
 
     if (mode === 'garment_qc' && params.orderId) {
-      router.replace({
+      router.navigate({
         pathname: '/(tailor)/orders/[id]',
-        params: { id: params.orderId, returnTo: returnTarget },
+        params: { id: params.orderId, returnTo: primaryReturnTarget, historyChain: primaryReturnTarget },
       } as never)
+      clearPreservedVisionNavigationContext()
       return
     }
 
-    router.replace(returnTarget as never)
-  }, [mode, params.diaryId, params.orderId, returnTarget, router])
+    goBackOrReturnToIfNeeded(
+      router,
+      navigation,
+      primaryReturnTarget,
+      DRAPE_VISION_MODE_META[mode].fallbackRoute as never,
+      { fromPath: '/vision' },
+    )
+    clearPreservedVisionNavigationContext()
+  }, [mode, navigation, params.diaryId, params.orderId, resolveVisionExitReturnTarget, router])
+
+  const openManualMeasurementsFromResult = useCallback(() => {
+    if (measurementResult && !savedMeasurementScanId) {
+      Alert.alert(
+        'Open manual measurements?',
+        'This leaves the scan result screen. Save reviewed values first if you want to keep them.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Open manual',
+            style: 'destructive',
+            onPress: openPrimary,
+          },
+        ],
+      )
+      return
+    }
+
+    openPrimary()
+  }, [measurementResult, openPrimary, savedMeasurementScanId])
 
   const upsertDefaultCustomerMeasurementProfile = useCallback(async (
     measurements: Record<string, unknown>,
@@ -4260,6 +4579,8 @@ export default function DrapeVisionScreen() {
   }, [])
 
   const pickGarmentQcPhoto = useCallback(async (source: 'camera' | 'library') => {
+    preserveCurrentVisionNavigationContext()
+
     if (!params.orderId || !user?.id) {
       Alert.alert('Sign in required', 'Please sign in again before attaching quality check photos.')
       return
@@ -4320,7 +4641,7 @@ export default function DrapeVisionScreen() {
     } finally {
       setWorkflowSaving(false)
     }
-  }, [params.orderId, user?.id])
+  }, [params.orderId, preserveCurrentVisionNavigationContext, user?.id])
 
   const saveGarmentQcWorkflow = useCallback(async () => {
     if (!params.orderId) {
@@ -4407,7 +4728,7 @@ export default function DrapeVisionScreen() {
     }
 
     if (Object.keys(selectedRanges).length === 0) {
-      Alert.alert('Add a size range', 'Add at least one min or max measurement so shoppers can match this listing to their Fit Passport.')
+      Alert.alert('Add a size range', 'Add at least one min or max measurement so shoppers can match this listing to their fit profile.')
       return
     }
 
@@ -4882,7 +5203,10 @@ export default function DrapeVisionScreen() {
       return
     }
 
-    const existingMeasurements = isPlainRecord(profile?.measurements) ? profile.measurements : {}
+    const storedMeasurements = isPlainRecord(profile?.measurements) ? profile.measurements : {}
+    const existingMeasurements = storedMeasurements.captureMethod === CUSTOMER_VISION_CAPTURE_METHOD
+      ? stripDrapeVisionFit360DraftFields(storedMeasurements)
+      : storedMeasurements
     const existingFitProfile = isPlainRecord(existingMeasurements.latestFitProfile)
       ? existingMeasurements.latestFitProfile
       : {}
@@ -4893,7 +5217,22 @@ export default function DrapeVisionScreen() {
       : resultUnit
     const scanMeasurements = buildVisionMeasurementSnapshot(result.measurements, profileUnit)
     const scanMeasurementsCm = buildVisionMeasurementSnapshot(result.measurements, 'cm')
+    const profileScanMeasurements = buildVisionMeasurementSnapshotForFields(result.measurements, BODY_SCAN_REQUIRED_FIELDS, profileUnit)
     let measurementScanId = savedMeasurementScanId
+    const conflictPreview = mergeMeasurementProfileValues(existingMeasurements, profileScanMeasurements)
+    const overwriteDecision = await confirmMeasurementOverwrite(conflictPreview.conflicts, profileUnit, {
+      title: 'Overwrite saved measurements?',
+      body: 'Some profile measurements already exist. Save only empty fields, or overwrite them with this scan?',
+    })
+
+    if (overwriteDecision === 'cancel') {
+      setSavingResult(false)
+      return
+    }
+
+    const profileValueMerge = mergeMeasurementProfileValues(existingMeasurements, profileScanMeasurements, {
+      overwriteConflicts: overwriteDecision === 'overwrite',
+    })
 
     if (!measurementScanId) {
       const { data: inserted, error: scanError } = await supabase
@@ -4969,8 +5308,8 @@ export default function DrapeVisionScreen() {
     }
 
     const nextMeasurements = {
-      ...existingMeasurements,
-      ...scanMeasurements,
+      ...profileValueMerge.measurements,
+      unit: profileUnit,
       fitPassportVersion: 1,
       measurementSource: CUSTOMER_VISION_SOURCE,
       measurementSourceLabel: MEASUREMENT_SOURCE_LABELS[CUSTOMER_VISION_SOURCE],
@@ -5032,8 +5371,8 @@ export default function DrapeVisionScreen() {
       Alert.alert(
         'Scan saved, profile not updated',
         isLikelyConnectivityIssue(updateError)
-          ? 'The scan session saved, but your Fit Passport summary did not finish updating yet.'
-          : 'The scan session saved, but your Fit Passport summary did not finish updating. Please try again.',
+          ? 'The scan session saved, but your fit profile did not finish updating yet.'
+          : 'The scan session saved, but your fit profile did not finish updating. Please try again.',
       )
       return
     }
@@ -5050,7 +5389,7 @@ export default function DrapeVisionScreen() {
       }, 'error')
       Alert.alert(
         'Scan saved, profile link incomplete',
-        'The scan saved to your Fit Passport summary, but the default measurement profile did not finish updating. Retry save before relying on this in a checkout or brief.',
+        'The scan saved to your fit profile, but the default measurement profile did not finish updating. Retry save before relying on this in a checkout or brief.',
       )
       return
     }
@@ -5059,7 +5398,7 @@ export default function DrapeVisionScreen() {
       mode,
       confidence_overall: confidenceOverall,
       requires_tailor_review: requiresTailorReview,
-      measurement_count: Object.keys(scanMeasurements).filter((field) => field !== 'unit').length,
+      measurement_count: Object.keys(profileScanMeasurements).filter((field) => field !== 'unit').length,
       pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
       output_kind: DRAPE_VISION_OUTPUT_KIND,
       scan_flow: DRAPE_VISION_SCAN_FLOW,
@@ -5067,7 +5406,7 @@ export default function DrapeVisionScreen() {
     })
 
     markSessionScanSaved('fit_360')
-    setResultSaveConfirmation(requiresTailorReview ? 'Saved for review' : 'Saved to Fit Passport')
+    setResultSaveConfirmation(requiresTailorReview ? 'Saved for review' : 'Saved to fit profile')
     if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
     saveConfirmationTimerRef.current = setTimeout(() => {
       setResultSaveConfirmation(null)
@@ -5113,14 +5452,15 @@ export default function DrapeVisionScreen() {
     const confidenceByField = buildSpecialistDraftConfidence(drafts)
     const tapeInputsIn = drafts.reduce<Record<string, number>>((payload, draft) => {
       const key = specialistTapeInputKey(selectedMode, draft.id)
-      const parsed = parseTapeInput(specialistTapeInputs[key] ?? '')
-      if (parsed != null) payload[draft.field ?? draft.label] = parsed
+      const parsedCm = parseTapeInputToCm(specialistTapeInputs[key] ?? '', resultUnit)
+      if (parsedCm != null) payload[draft.field ?? draft.label] = parsedCm / DRAPE_VISION_CM_PER_INCH
       return payload
     }, {})
     const tapeComparisons = drafts
       .map((draft) => buildSpecialistTapeComparison(
         draft,
         specialistTapeInputs[specialistTapeInputKey(selectedMode, draft.id)],
+        resultUnit,
       ))
       .filter((comparison): comparison is SpecialistTapeComparison => !!comparison)
     const tapeSummary = deriveSpecialistTapeSummary(tapeComparisons)
@@ -5152,12 +5492,27 @@ export default function DrapeVisionScreen() {
         return
       }
 
-      const existingMeasurements = isPlainRecord(profile?.measurements) ? profile.measurements : {}
+      const storedMeasurements = isPlainRecord(profile?.measurements) ? profile.measurements : {}
+      const existingMeasurements = promoteSpecialistMeasurementsToProfileValues(storedMeasurements).measurements
       const profileUnit: MeasurementDisplayUnit = existingMeasurements.unit === 'cm' || existingMeasurements.unit === 'in'
         ? existingMeasurements.unit
         : resultUnit
       const scanMeasurements = buildSpecialistDraftSnapshot(drafts, profileUnit)
       const scanMeasurementsCm = buildSpecialistDraftSnapshot(drafts, 'cm')
+      const conflictPreview = mergeMeasurementProfileValues(existingMeasurements, scanMeasurements)
+      const overwriteDecision = await confirmMeasurementOverwrite(conflictPreview.conflicts, profileUnit, {
+        title: 'Overwrite saved measurements?',
+        body: 'Some profile measurements already exist. Save only empty fields, or overwrite them with this specialist scan?',
+      })
+
+      if (overwriteDecision === 'cancel') {
+        setSavingResult(false)
+        return
+      }
+
+      const profileValueMerge = mergeMeasurementProfileValues(existingMeasurements, scanMeasurements, {
+        overwriteConflicts: overwriteDecision === 'overwrite',
+      })
       const sourceDevice = {
         platform: Platform.OS,
         osVersion: Platform.Version,
@@ -5274,8 +5629,7 @@ export default function DrapeVisionScreen() {
         ? existingMeasurements.visionSpecialistProfile
         : {}
       const nextMeasurements = {
-        ...existingMeasurements,
-        ...scanMeasurements,
+        ...profileValueMerge.measurements,
         unit: profileUnit,
         fitPassportVersion: 1,
         measurementSource: CUSTOMER_VISION_SOURCE,
@@ -5354,7 +5708,7 @@ export default function DrapeVisionScreen() {
         }, 'error')
         Alert.alert(
           'Specialist scan saved, profile link incomplete',
-          'The specialist scan saved to your Fit Passport summary, but the default measurement profile did not finish updating. Retry save before using it in a brief.',
+          'The specialist scan saved to your fit profile, but the default measurement profile did not finish updating. Retry save before using it in a brief.',
         )
         return
       }
@@ -5370,7 +5724,7 @@ export default function DrapeVisionScreen() {
       })
 
       markSessionScanSaved(selectedMode)
-      setResultSaveConfirmation('Saved to Fit Passport')
+      setResultSaveConfirmation('Saved to fit profile')
       if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
       saveConfirmationTimerRef.current = setTimeout(() => {
         setResultSaveConfirmation(null)
@@ -5394,7 +5748,7 @@ export default function DrapeVisionScreen() {
       setResultSaveConfirmation(null)
       const { data: existing, error: fetchError } = await supabase
         .from('diary_entries')
-        .select('custom_measurements')
+        .select('measurement_unit, chest, shoulder, sleeve, waist, hip, trouser_length, neck, thigh, inseam, ankle, bicep, wrist, back_length, under_bust, custom_measurements')
         .eq('id', params.diaryId)
         .maybeSingle()
 
@@ -5404,20 +5758,53 @@ export default function DrapeVisionScreen() {
         return
       }
 
-      const customMeasurements = isPlainRecord(existing?.custom_measurements) ? existing.custom_measurements : {}
-      const nextCustomMeasurements = { ...customMeasurements }
+      const diaryUnit: MeasurementDisplayUnit = existing?.measurement_unit === 'in' ? 'in' : 'cm'
+      const incomingDiaryMeasurements: Record<string, unknown> = {}
+      const incomingCustomMeasurements: Record<string, unknown> = {}
+
       for (const draft of drafts) {
         const valueCm = finiteNumber(draft.valueCm)
-        if (valueCm != null) nextCustomMeasurements[`${specialistMeta.title} ${draft.label}`] = roundMeasurementValue(valueCm, 'cm')
+        if (valueCm == null) continue
+        const roundedValue = roundMeasurementValue(valueCm, diaryUnit)
+        const diaryColumn = draft.field ? DRAPE_VISION_DIARY_FIELD_MAP[draft.field] : null
+        if (diaryColumn) {
+          incomingDiaryMeasurements[diaryColumn] = roundedValue
+        } else {
+          incomingCustomMeasurements[draft.label] = roundedValue
+        }
       }
-      nextCustomMeasurements[`${specialistMeta.title} confidence`] = 'LOW'
-      nextCustomMeasurements[`${specialistMeta.title} scan flow`] = scanFlow
-      nextCustomMeasurements[`${specialistMeta.title} captured at`] = now
+
+      const customMeasurements = isPlainRecord(existing?.custom_measurements) ? existing.custom_measurements : {}
+      const existingDiaryMeasurements = isPlainRecord(existing) ? existing : {}
+      const diaryMergePreview = mergeMeasurementProfileValues(existingDiaryMeasurements, incomingDiaryMeasurements)
+      const customMergePreview = mergeMeasurementProfileValues(customMeasurements, incomingCustomMeasurements)
+      const overwriteDecision = await confirmMeasurementOverwrite(
+        [...diaryMergePreview.conflicts, ...customMergePreview.conflicts],
+        diaryUnit,
+        {
+          title: 'Overwrite diary measurements?',
+          body: 'Some diary measurements already exist. Save only empty fields, or overwrite them with this specialist scan?',
+        },
+      )
+
+      if (overwriteDecision === 'cancel') {
+        setSavingResult(false)
+        return
+      }
+
+      const diaryValueMerge = mergeMeasurementProfileValues(existingDiaryMeasurements, incomingDiaryMeasurements, {
+        overwriteConflicts: overwriteDecision === 'overwrite',
+      })
+      const customValueMerge = mergeMeasurementProfileValues(customMeasurements, incomingCustomMeasurements, {
+        overwriteConflicts: overwriteDecision === 'overwrite',
+      })
 
       const { error: updateError } = await supabase
         .from('diary_entries')
         .update({
-          custom_measurements: nextCustomMeasurements,
+          measurement_unit: diaryUnit,
+          ...diaryValueMerge.measurements,
+          custom_measurements: customValueMerge.measurements,
           updated_at: now,
         })
         .eq('id', params.diaryId)
@@ -5577,29 +5964,9 @@ export default function DrapeVisionScreen() {
 
     setSavingResult(true)
 
-    const now = new Date().toISOString()
-    const scanMeasurements = buildVisionMeasurementSnapshot(result.measurements)
-    const confidenceOverall = deriveVisionOverallConfidence(result)
-    const payload: Record<string, unknown> = {
-      measurement_unit: 'cm',
-      measured_at: now.split('T')[0],
-      updated_at: now,
-    }
-
-    addFinitePayloadValue(payload, 'chest', scanMeasurements.chest)
-    addFinitePayloadValue(payload, 'shoulder', scanMeasurements.shoulderWidth)
-    addFinitePayloadValue(payload, 'sleeve', scanMeasurements.sleeveLength)
-    addFinitePayloadValue(payload, 'waist', scanMeasurements.waist)
-    addFinitePayloadValue(payload, 'hip', scanMeasurements.hips)
-    addFinitePayloadValue(payload, 'trouser_length', scanMeasurements.outseam)
-    addFinitePayloadValue(payload, 'neck', scanMeasurements.neckCircumference)
-    addFinitePayloadValue(payload, 'thigh', scanMeasurements.thighCircumference)
-    addFinitePayloadValue(payload, 'inseam', scanMeasurements.inseam)
-    addFinitePayloadValue(payload, 'back_length', scanMeasurements.backLength)
-
     const { data: existing, error: fetchError } = await supabase
       .from('diary_entries')
-      .select('custom_measurements')
+      .select('measurement_unit, chest, shoulder, sleeve, waist, hip, trouser_length, neck, thigh, inseam, ankle, bicep, wrist, back_length, under_bust, custom_measurements')
       .eq('id', params.diaryId)
       .maybeSingle()
 
@@ -5615,26 +5982,68 @@ export default function DrapeVisionScreen() {
       return
     }
 
+    const now = new Date().toISOString()
+    const diaryUnit: MeasurementDisplayUnit = existing?.measurement_unit === 'in' ? 'in' : 'cm'
+    const scanMeasurements = buildVisionMeasurementSnapshot(result.measurements, diaryUnit)
+    const confidenceOverall = deriveVisionOverallConfidence(result)
+    const incomingDiaryMeasurements: Record<string, unknown> = {}
+
+    addFinitePayloadValue(incomingDiaryMeasurements, 'chest', scanMeasurements.chest)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'shoulder', scanMeasurements.shoulderWidth)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'sleeve', scanMeasurements.sleeveLength)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'waist', scanMeasurements.waist)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'hip', scanMeasurements.hips)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'trouser_length', scanMeasurements.outseam)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'neck', scanMeasurements.neckCircumference)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'thigh', scanMeasurements.thighCircumference)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'inseam', scanMeasurements.inseam)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'bicep', scanMeasurements.bicepCircumference)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'wrist', scanMeasurements.wristCircumference)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'back_length', scanMeasurements.backLength)
+    addFinitePayloadValue(incomingDiaryMeasurements, 'under_bust', scanMeasurements.underBust)
+
     const customMeasurements = isPlainRecord(existing?.custom_measurements) ? existing.custom_measurements : {}
-    const nextCustomMeasurements = { ...customMeasurements }
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision height', scanMeasurements.height)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision knee', scanMeasurements.kneeCircumference)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision torso length', scanMeasurements.torsoLength)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision under bust', scanMeasurements.underBust)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision bicep', scanMeasurements.bicepCircumference)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision wrist', scanMeasurements.wristCircumference)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head circumference', scanMeasurements.headCircumference)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision hat band line', scanMeasurements.hatBandLine)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head length', scanMeasurements.headLength)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head width', scanMeasurements.headWidth)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision ear to ear over crown', scanMeasurements.earToEarOverCrown)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision front to back over crown', scanMeasurements.frontToBackOverCrown)
-    nextCustomMeasurements['Drapeon Vision confidence'] = confidenceOverall
-    nextCustomMeasurements['Drapeon Vision output kind'] = DRAPE_VISION_OUTPUT_KIND
-    nextCustomMeasurements['Drapeon Vision pipeline'] = DRAPE_VISION_PIPELINE_VERSION
-    nextCustomMeasurements['Drapeon Vision scan flow'] = DRAPE_VISION_SCAN_FLOW
-    nextCustomMeasurements['Drapeon Vision height input'] = heightInputConfidence
-    payload.custom_measurements = nextCustomMeasurements
+    const incomingCustomMeasurements: Record<string, unknown> = {}
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision height', scanMeasurements.height)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision knee', scanMeasurements.kneeCircumference)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision torso length', scanMeasurements.torsoLength)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision head circumference', scanMeasurements.headCircumference)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision hat band line', scanMeasurements.hatBandLine)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision head length', scanMeasurements.headLength)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision head width', scanMeasurements.headWidth)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision ear to ear over crown', scanMeasurements.earToEarOverCrown)
+    addFinitePayloadValue(incomingCustomMeasurements, 'Drapeon Vision front to back over crown', scanMeasurements.frontToBackOverCrown)
+
+    const existingDiaryMeasurements = isPlainRecord(existing) ? existing : {}
+    const diaryMergePreview = mergeMeasurementProfileValues(existingDiaryMeasurements, incomingDiaryMeasurements)
+    const customMergePreview = mergeMeasurementProfileValues(customMeasurements, incomingCustomMeasurements)
+    const overwriteDecision = await confirmMeasurementOverwrite(
+      [...diaryMergePreview.conflicts, ...customMergePreview.conflicts],
+      diaryUnit,
+      {
+        title: 'Overwrite diary measurements?',
+        body: 'Some diary measurements already exist. Save only empty fields, or overwrite them with this scan?',
+      },
+    )
+
+    if (overwriteDecision === 'cancel') {
+      setSavingResult(false)
+      return
+    }
+
+    const diaryValueMerge = mergeMeasurementProfileValues(existingDiaryMeasurements, incomingDiaryMeasurements, {
+      overwriteConflicts: overwriteDecision === 'overwrite',
+    })
+    const customValueMerge = mergeMeasurementProfileValues(customMeasurements, incomingCustomMeasurements, {
+      overwriteConflicts: overwriteDecision === 'overwrite',
+    })
+    const payload: Record<string, unknown> = {
+      measurement_unit: diaryUnit,
+      measured_at: now.split('T')[0],
+      updated_at: now,
+      ...diaryValueMerge.measurements,
+      custom_measurements: customValueMerge.measurements,
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('diary_entries')
@@ -5829,6 +6238,7 @@ export default function DrapeVisionScreen() {
     if (!options.preserveBodyResult) {
       setMeasurementResult(null)
       setResultReviewed(false)
+      setResultChecksExpanded(false)
       setSavedMeasurementScanId(null)
       setGroundTruthRows([])
       setGroundTruthMessage(null)
@@ -5945,6 +6355,12 @@ export default function DrapeVisionScreen() {
     stablePoseYawDegrees,
     stopVisionAudio,
   ])
+
+  const cancelLongCalculation = useCallback(() => {
+    resetScanState()
+    setEngineError('Scan processing took longer than expected. You can retake the scan or continue manually.')
+    setPhase('fallback')
+  }, [resetScanState])
 
   const resetNativeVisionSession = useCallback(async (
     reason: string,
@@ -6177,6 +6593,7 @@ export default function DrapeVisionScreen() {
         setMeasurementResult(result)
         markSessionScanComplete('fit_360')
         setResultReviewed(false)
+        setResultChecksExpanded(false)
         setPhase('results')
         void uploadVisionLabLog('COMPLETED', result, { silent: true })
       } catch (error) {
@@ -7709,7 +8126,8 @@ export default function DrapeVisionScreen() {
         const targetUsesYawGate = SCAN_ANDROID_SEQUENTIAL_CAPTURE ||
           (!targetIsIosFrontCapture && !targetIsIosBackCapture)
         const targetIsBackPoseReady = targetIsIosBackCapture &&
-          targetHasPoseTransitionWindow
+          targetHasPoseTransitionWindow &&
+          targetFrontishDistance <= SCAN_FRONT_CAPTURE_TARGET_TOLERANCE_DEGREES
         const targetIsCaptureReady =
           targetIsIosFrontCapture ||
           targetIsBackPoseReady ||
@@ -8287,6 +8705,7 @@ export default function DrapeVisionScreen() {
 
   async function startBodyScan() {
     if (cameraRestartingRef.current) return
+    preserveCurrentVisionNavigationContext()
 
     if (!canRunLiveBodyScan) {
       openPrimary()
@@ -8562,6 +8981,7 @@ export default function DrapeVisionScreen() {
     options: { skipHeightCheck?: boolean; watchdogRepair?: boolean } = {},
   ) {
     if (cameraRestartingRef.current) return
+    preserveCurrentVisionNavigationContext()
 
     setSpecialistStatusMessage(null)
     setSpecialistReadinessStatus(null)
@@ -8746,8 +9166,10 @@ export default function DrapeVisionScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel="Close Drapeon Vision"
+          accessibilityState={{ disabled: visionExitPending }}
           onPress={closeVision}
-          style={styles.headerButton}
+          disabled={visionExitPending}
+          style={[styles.headerButton, visionExitPending && styles.headerButtonDisabled]}
         >
           <Feather name="x" size={20} color={DRAPE_VISION_COLORS.text} />
         </TouchableOpacity>
@@ -8779,7 +9201,7 @@ export default function DrapeVisionScreen() {
   function renderGarmentQcWorkflow() {
     if (!params.orderId) {
       return (
-        <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <SafeAreaView style={styles.safe} edges={['top']}>
           {renderHeader('Order needed')}
           <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.heroCompact}>
@@ -8793,8 +9215,18 @@ export default function DrapeVisionScreen() {
               </Text>
             </View>
           </ScrollView>
-          <View style={styles.ctaBar}>
-            <TouchableOpacity accessibilityRole="button" onPress={() => router.push('/(tailor)/orders' as never)} style={styles.primaryButton}>
+          <View style={[styles.ctaBar, ctaBarInsetStyle]}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => goBackOrReturnToIfNeeded(
+                router,
+                navigation,
+                resolveVisionExitReturnTarget(),
+                '/(tailor)/orders' as never,
+                { fromPath: '/vision' },
+              )}
+              style={styles.primaryButton}
+            >
               <Text style={styles.primaryText}>Open orders</Text>
               <Feather name="arrow-right" size={18} color={Colors.textInverse} />
             </TouchableOpacity>
@@ -8810,7 +9242,7 @@ export default function DrapeVisionScreen() {
       GARMENT_QC_PRESETS.find((preset) => preset.key === garmentQcPreset)?.fields ?? GARMENT_QC_FIELDS
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader('Garment QC')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -8857,7 +9289,7 @@ export default function DrapeVisionScreen() {
 
           <View style={styles.workflowCard}>
             <View style={styles.workflowCardHeader}>
-              <View>
+              <View style={styles.workflowCardHeaderCopy}>
                 <Text style={styles.sectionTitle}>Final measurements</Text>
                 <Text style={styles.sectionBody}>Enter only the fields that matter for this garment.</Text>
               </View>
@@ -8938,7 +9370,7 @@ export default function DrapeVisionScreen() {
           {workflowMessage ? <Text style={styles.workflowMessage}>{workflowMessage}</Text> : null}
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity
             accessibilityRole="button"
             onPress={() => { void saveGarmentQcWorkflow() }}
@@ -8961,7 +9393,7 @@ export default function DrapeVisionScreen() {
     const title = sizeGuideItem?.title ?? 'Ready-made item'
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader('Size guide')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -8971,7 +9403,7 @@ export default function DrapeVisionScreen() {
             <Text style={styles.eyebrow}>Ready-made sizing</Text>
             <Text style={styles.titleSmall}>Build a real fit guide</Text>
             <Text style={styles.body}>
-              Add body-fit ranges for each listing size so shoppers can match their Fit Passport before paying.
+              Add body-fit ranges for each listing size so shoppers can match their fit profile before paying.
             </Text>
           </View>
 
@@ -9026,7 +9458,7 @@ export default function DrapeVisionScreen() {
 
           <View style={styles.workflowCard}>
             <View style={styles.workflowCardHeader}>
-              <View>
+              <View style={styles.workflowCardHeaderCopy}>
                 <Text style={styles.sectionTitle}>Fit ranges</Text>
                 <Text style={styles.sectionBody}>Use body measurements, not flat garment width.</Text>
               </View>
@@ -9072,7 +9504,7 @@ export default function DrapeVisionScreen() {
           {workflowMessage ? <Text style={styles.workflowMessage}>{workflowMessage}</Text> : null}
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity
             accessibilityRole="button"
             onPress={sizeGuideSuccess ? openPrimary : () => { void saveSizeGuideWorkflow() }}
@@ -9100,7 +9532,7 @@ export default function DrapeVisionScreen() {
     const hasReusableHeight = savedVisionHeight != null
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader(engineStatus === 'ready' ? 'Ready to scan' : 'Drapeon Vision')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -9206,14 +9638,22 @@ export default function DrapeVisionScreen() {
           <View style={styles.inlineTrustNote}>
             <Feather name="shield" size={15} color={Colors.needleGreen} />
             <Text style={styles.inlineTrustText}>
-              No scan video is saved. You decide which estimates go into your Fit Passport.
+              No scan video is saved. You decide which estimates go into your fit profile.
             </Text>
           </View>
         </ScrollView>
 
-        <View style={styles.ctaBar}>
-          <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>{mode === 'customer_scan' ? 'Enter measurements manually' : primaryActionLabel}</Text>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={openPrimary}
+            style={styles.suiteManualLink}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.suiteManualLinkText}>
+              {mode === 'customer_scan' ? 'Enter measurements manually' : primaryActionLabel}
+            </Text>
+            <Feather name="chevron-right" size={15} color={DRAPE_VISION_COLORS.textMuted} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -9230,7 +9670,7 @@ export default function DrapeVisionScreen() {
       : 'Pick the measurement scan you need now. Save only the values you review.'
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader(engineStatus === 'ready' ? 'Ready to scan' : 'Drapeon Vision')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.hero}>
@@ -9295,7 +9735,7 @@ export default function DrapeVisionScreen() {
           </View>
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity
             accessibilityRole="button"
             onPress={primaryAction}
@@ -9304,9 +9744,12 @@ export default function DrapeVisionScreen() {
             <Text style={styles.primaryText}>{primaryLabel}</Text>
             <Feather name="arrow-right" size={18} color={Colors.textInverse} />
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>{canStartLiveBodyScan ? 'Enter manually instead' : 'Go to workflow'}</Text>
-          </TouchableOpacity>
+          {canStartLiveBodyScan ? (
+            <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.secondaryButton}>
+              <Text style={styles.secondaryText}>Enter manually instead</Text>
+              <Feather name="chevron-right" size={15} color={DRAPE_VISION_COLORS.textMuted} />
+            </TouchableOpacity>
+          ) : null}
         </View>
       </SafeAreaView>
     )
@@ -9326,7 +9769,7 @@ export default function DrapeVisionScreen() {
       : 'This scan is coming soon on Android.'
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader(activeNow ? 'Ready to scan' : 'Coming soon')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -9341,14 +9784,16 @@ export default function DrapeVisionScreen() {
           <View style={styles.workflowCard}>
             <Text style={styles.sectionTitle}>What this scan measures</Text>
             <Text style={styles.sectionBody}>{platformCopy}</Text>
-            <View style={styles.specialMeasurementGrid}>
-              {uniqueFields.map((field) => (
-                <View key={field} style={styles.specialMeasurementChip}>
-                  <Feather name="target" size={14} color={Colors.needleGreen} />
-                  <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
-                </View>
-              ))}
-            </View>
+            {activeNow ? (
+              <View style={styles.specialMeasurementGrid}>
+                {uniqueFields.map((field) => (
+                  <View key={field} style={styles.specialMeasurementChip}>
+                    <Feather name="target" size={14} color={Colors.needleGreen} />
+                    <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.noticeBand}>
@@ -9390,15 +9835,15 @@ export default function DrapeVisionScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityState={{ disabled: !activeNow }}
             onPress={() => { void startSpecialistMode(selectedMode) }}
             disabled={!activeNow}
-            style={[styles.primaryButton, !activeNow && styles.primaryButtonDisabled]}
+            style={activeNow ? styles.primaryButton : styles.unavailableButton}
           >
-            <Text style={styles.primaryText}>{activeNow ? selectedMode === 'fit_360' ? 'Start body scan' : 'Start scan' : 'Coming soon'}</Text>
+            <Text style={activeNow ? styles.primaryText : styles.unavailableButtonText}>{activeNow ? selectedMode === 'fit_360' ? 'Start body scan' : 'Start scan' : 'Coming soon'}</Text>
             {activeNow ? <Feather name="arrow-right" size={18} color={Colors.textInverse} /> : null}
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
@@ -9455,6 +9900,10 @@ export default function DrapeVisionScreen() {
   function renderSpecialistGuidedScan() {
     if (!frontCamera) {
       return renderFallback('No front camera was found on this device.')
+    }
+
+    if (!cameraPermission.hasPermission) {
+      return renderFallback('Camera permission is required to run this specialist scan.')
     }
 
     const selectedMode = selectedSpecialistMode === 'fit_360' ? 'hand_wrist' : selectedSpecialistMode
@@ -9695,7 +10144,7 @@ export default function DrapeVisionScreen() {
     const result = specialistGuideResult
     if (!result) {
       return (
-        <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <SafeAreaView style={styles.safe} edges={['top']}>
           {renderHeader('Run scan first')}
           <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.heroCompact}>
@@ -9709,7 +10158,7 @@ export default function DrapeVisionScreen() {
             </Text>
             </View>
           </ScrollView>
-          <View style={styles.ctaBar}>
+          <View style={[styles.ctaBar, ctaBarInsetStyle]}>
             <TouchableOpacity
               accessibilityRole="button"
               onPress={() => { void startSpecialistMode(selectedMode) }}
@@ -9720,6 +10169,7 @@ export default function DrapeVisionScreen() {
             </TouchableOpacity>
             <TouchableOpacity accessibilityRole="button" onPress={() => setPhase(measurementResult ? 'results' : 'suite')} style={styles.secondaryButton}>
               <Text style={styles.secondaryText}>{measurementResult ? 'Back to my results' : 'Back to scan picker'}</Text>
+              <Feather name="chevron-left" size={15} color={DRAPE_VISION_COLORS.textMuted} />
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -9738,6 +10188,7 @@ export default function DrapeVisionScreen() {
       .map((draft) => buildSpecialistTapeComparison(
         draft,
         specialistTapeInputs[specialistTapeInputKey(selectedMode, draft.id)],
+        resultUnit,
       ))
       .filter((comparison): comparison is SpecialistTapeComparison => !!comparison)
     const specialistTapeSummary = deriveSpecialistTapeSummary(specialistTapeComparisons)
@@ -9746,12 +10197,10 @@ export default function DrapeVisionScreen() {
         key={draft.id}
         accessible
         accessibilityLabel={`${draft.label}. ${formatMeasurementValue(draft.valueCm, resultUnit)}. ${measurementConfidenceLabel(draft.confidence)}.`}
-        style={[styles.measurementCard, { borderLeftColor: measurementConfidenceColor(draft.confidence) }]}
+        style={styles.measurementCard}
       >
-        <View style={[styles.measurementAccent, { backgroundColor: measurementConfidenceColor(draft.confidence) }]} />
         <View style={styles.measurementHeader}>
           <Text style={styles.measurementLabel}>{draft.label}</Text>
-          <View style={[styles.confidenceDot, { backgroundColor: measurementConfidenceColor(draft.confidence) }]} />
         </View>
         <Text style={styles.measurementValue}>{formatMeasurementValue(draft.valueCm, resultUnit)}</Text>
         <Text style={styles.measurementConfidenceCaption}>{measurementConfidenceLabel(draft.confidence)}</Text>
@@ -9763,7 +10212,7 @@ export default function DrapeVisionScreen() {
     )
     const renderSpecialistTapeRow = (draft: SpecialistMeasurementDraft) => {
       const key = specialistTapeInputKey(selectedMode, draft.id)
-      const comparison = buildSpecialistTapeComparison(draft, specialistTapeInputs[key])
+      const comparison = buildSpecialistTapeComparison(draft, specialistTapeInputs[key], resultUnit)
       const comparisonToneStyle = comparison?.tone === 'good'
         ? styles.specialistTapeToneGood
         : comparison?.tone === 'watch'
@@ -9777,21 +10226,21 @@ export default function DrapeVisionScreen() {
           <View style={styles.tapeInputCopy}>
             <Text style={styles.tapeInputLabel}>{draft.label}</Text>
             <Text style={styles.tapeScanValue}>
-              Vision estimate: {formatMeasurementValue(draft.valueCm, 'in')}
+              Vision estimate: {formatMeasurementValue(draft.valueCm, resultUnit)}
             </Text>
             {comparison ? (
               <Text style={[styles.specialistTapeDelta, comparisonToneStyle]}>
-                off by {formatLabNumber(comparison.errorCm, 'cm')} · {specialistTapeToneLabel(comparison.tone)}
+                off by {formatMeasurementValue(comparison.errorCm, resultUnit)} · {specialistTapeToneLabel(comparison.tone)}
               </Text>
             ) : (
               <Text style={styles.tapePromptText}>Enter tape to see comparison</Text>
             )}
           </View>
           <TextInput
-            accessibilityLabel={`${draft.label} tape value in inches`}
+            accessibilityLabel={`${draft.label} tape value in ${resultUnit === 'cm' ? 'centimetres' : 'inches'}`}
             keyboardType={FRACTIONAL_TAPE_KEYBOARD_TYPE}
             onChangeText={(value) => updateSpecialistTapeInput(key, value)}
-            placeholder="e.g. 6 1/2"
+            placeholder={tapeInputPlaceholder(resultUnit)}
             placeholderTextColor={DRAPE_VISION_COLORS.textDim}
             style={styles.tapeInput}
             value={specialistTapeInputs[key] ?? ''}
@@ -9801,7 +10250,7 @@ export default function DrapeVisionScreen() {
     }
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader(`${specialistMeta.title} ready`)}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -9843,7 +10292,7 @@ export default function DrapeVisionScreen() {
           <View style={styles.workflowCard}>
             <Text style={styles.sectionTitle}>Tape check</Text>
             <Text style={styles.sectionBody}>
-              Enter your tape measurement in inches. Fractions like 6 1/2 work.
+              Enter your tape measurement in {resultUnit === 'cm' ? 'centimetres' : 'inches'}. {resultUnit === 'cm' ? 'Decimals like 16.5 work.' : 'Fractions like 6 1/2 work.'}
             </Text>
             <View style={styles.tapeInputList}>
               {draftMeasurements.map(renderSpecialistTapeRow)}
@@ -9858,7 +10307,7 @@ export default function DrapeVisionScreen() {
                 <Text style={styles.comparisonSummaryBody}>{specialistTapeSummary.body}</Text>
                 {DRAPE_VISION_DEBUG_UI_ENABLED ? (
                   <Text style={styles.comparisonSummaryMeta}>
-                    max {formatLabNumber(specialistTapeSummary.maxErrorCm, 'cm')} · mean {formatLabNumber(specialistTapeSummary.meanErrorCm, 'cm')}
+                    max {formatMeasurementValue(specialistTapeSummary.maxErrorCm, resultUnit)} · mean {formatMeasurementValue(specialistTapeSummary.meanErrorCm, resultUnit)}
                   </Text>
                 ) : null}
               </View>
@@ -9906,7 +10355,7 @@ export default function DrapeVisionScreen() {
           {renderScanAnotherSection(selectedMode)}
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           {resultSaveConfirmation ? (
             <View
               accessible
@@ -9940,7 +10389,7 @@ export default function DrapeVisionScreen() {
                     {savingResult
                       ? 'Saving...'
                       : mode === 'customer_scan'
-                        ? 'Save to Fit Passport'
+                        ? 'Save to fit profile'
                         : hasDiaryTarget
                           ? 'Save to Diary'
                           : primaryActionLabel}
@@ -9956,6 +10405,7 @@ export default function DrapeVisionScreen() {
                   style={styles.ctaSecondaryHalf}
                 >
                   <Text style={[styles.secondaryText, styles.secondaryTextDestructive]}>Run again</Text>
+                  <Feather name="refresh-cw" size={15} color={Colors.kanteRust} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -9964,6 +10414,7 @@ export default function DrapeVisionScreen() {
                   style={styles.ctaSecondaryHalf}
                 >
                   <Text style={styles.secondaryText}>{measurementResult ? 'My results' : 'Vision hub'}</Text>
+                  <Feather name="chevron-right" size={15} color={DRAPE_VISION_COLORS.textMuted} />
                 </TouchableOpacity>
               </View>
             </>
@@ -9981,7 +10432,7 @@ export default function DrapeVisionScreen() {
       : `Continue to ${targetMeta.title.replace(' Scan', '')}`
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader('Set height')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.centerContent} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -10065,16 +10516,6 @@ export default function DrapeVisionScreen() {
             </View>
           ) : null}
 
-          <View style={styles.noticeBand}>
-            <Feather name="user-check" size={18} color={Colors.needleGreen} />
-            <View style={styles.noticeCopy}>
-              <Text style={styles.noticeTitle}>Quick fit check</Text>
-              <Text style={styles.noticeText}>
-                Best result: fitted top and trousers/leggings, bare feet or flat shoes, bright room, full body visible. Loose outfits like a boubou are better measured manually with tape.
-              </Text>
-            </View>
-          </View>
-
           {isAndroidLiveScanPreflightBlocked() ? (
             <View style={styles.noticeBand}>
               <Feather name="shield" size={18} color={Colors.needleGreen} />
@@ -10100,7 +10541,7 @@ export default function DrapeVisionScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity
             accessibilityRole="button"
             onPress={() => { void confirmHeightAndContinue() }}
@@ -10127,6 +10568,10 @@ export default function DrapeVisionScreen() {
   function renderScan() {
     if (!frontCamera) {
       return renderFallback('No front camera was found on this device.')
+    }
+
+    if (!cameraPermission.hasPermission) {
+      return renderFallback('Camera permission is required to run Drapeon Vision.')
     }
 
     const capturedAngleCount = capturedSetRef.current.size
@@ -10262,7 +10707,7 @@ export default function DrapeVisionScreen() {
               accessible
               accessibilityLiveRegion="polite"
               accessibilityLabel={formatScanCaptureProgress(capturedAngleCount)}
-              style={styles.scanRadarDock}
+              style={[styles.scanRadarDock, { bottom: Math.max(Spacing.xl, insets.bottom + Spacing.lg) }]}
             >
               <Radar capturedSegments={capturedSegments} currentSegment={currentSegment} />
               {captureNotice ? (
@@ -10277,7 +10722,7 @@ export default function DrapeVisionScreen() {
                 </View>
               ) : capturedAngleCount === 0 ? (
                 <View style={styles.scanActiveStatus}>
-                  <Text style={styles.scanActiveStatusText}>Capturing - hold still</Text>
+                  <Text style={styles.scanActiveStatusText}>Capturing. Hold still</Text>
                 </View>
               ) : null}
             </View>
@@ -10323,7 +10768,7 @@ export default function DrapeVisionScreen() {
           {renderLiveVisionTrace()}
 
           {!captureArmed ? (
-            <View style={styles.scanCaptureDock}>
+            <View style={[styles.scanCaptureDock, { bottom: Math.max(Spacing.lg, insets.bottom + Spacing.md) }]}>
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel={scanStartLabel}
@@ -10349,7 +10794,7 @@ export default function DrapeVisionScreen() {
     )
   }
 
-	  function renderCalculating() {
+  function renderCalculating() {
     const visibleMessages = DRAPE_VISION_CALCULATION_MESSAGES.slice(0, calculationStep)
     const wireOpacity = wireBreath.interpolate({
       inputRange: [0, 1],
@@ -10360,8 +10805,8 @@ export default function DrapeVisionScreen() {
       outputRange: [0.985, 1.015],
     })
 
-	    return (
-	      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {renderHeader('Building profile')}
         <View style={styles.calculatingContent}>
           <Animated.View style={[styles.wireframe, { opacity: wireOpacity, transform: [{ scale: wireScale }] }]}>
@@ -10400,11 +10845,29 @@ export default function DrapeVisionScreen() {
               </View>
             ))}
           </View>
-          <Text style={styles.calculationDurationText}>Usually under 10 seconds</Text>
+          <Text style={styles.calculationDurationText}>
+            {calculationStep >= 3 ? 'Usually under 10 seconds' : 'Processing locally on this phone'}
+          </Text>
+          <View style={styles.inlineTrustNote}>
+            <Feather name="shield" size={15} color={Colors.needleGreen} />
+            <Text style={styles.inlineTrustText}>
+              No incomplete scan is saved while Drapeon builds this result.
+            </Text>
+          </View>
+          {calculationCanCancel ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={cancelLongCalculation}
+              style={styles.calculationCancelButton}
+            >
+              <Text style={styles.calculationCancelText}>Cancel and choose another path</Text>
+              <Feather name="chevron-right" size={15} color={DRAPE_VISION_COLORS.textMuted} />
+            </TouchableOpacity>
+          ) : null}
         </View>
       </SafeAreaView>
-	    )
-	  }
+    )
+  }
 
 	  function renderVisionLabRepeatability() {
 	    if (!DRAPE_VISION_LAB_ENABLED || mode !== 'customer_scan') return null
@@ -10413,12 +10876,9 @@ export default function DrapeVisionScreen() {
 	    return (
 	      <View style={styles.visionLabCard}>
 	        <View style={styles.visionLabHeader}>
-	          <View>
+	          <View style={styles.visionLabHeaderCopy}>
 	            <Text style={styles.visionLabTitle}>Repeatability check</Text>
 	            <Text style={styles.visionLabText}>Save three scans from the same setup before trusting any measurement.</Text>
-	          </View>
-	          <View style={styles.visionLabBadge}>
-	            <Text style={styles.visionLabBadgeText}>DEV</Text>
 	          </View>
 	        </View>
 
@@ -10455,12 +10915,9 @@ export default function DrapeVisionScreen() {
 	    return (
 	      <View style={styles.visionLabCard}>
 	        <View style={styles.visionLabHeader}>
-	          <View>
+	          <View style={styles.visionLabHeaderCopy}>
 	            <Text style={styles.visionLabTitle}>Tape comparison</Text>
-	            <Text style={styles.visionLabText}>Optional TestFlight check: save this scan, then enter tape values in inches.</Text>
-	          </View>
-	          <View style={styles.visionLabBadge}>
-	            <Text style={styles.visionLabBadgeText}>{DRAPE_VISION_LAB_ENABLED ? 'DEV' : 'TEST'}</Text>
+	            <Text style={styles.visionLabText}>Compare this scan with tape values when you want an extra accuracy check.</Text>
 	          </View>
 	        </View>
 
@@ -10554,12 +11011,9 @@ export default function DrapeVisionScreen() {
 	    return (
 	      <View style={styles.visionLabCard}>
 	        <View style={styles.visionLabHeader}>
-	          <View>
+	          <View style={styles.visionLabHeaderCopy}>
 	            <Text style={styles.visionLabTitle}>Engine diagnostics</Text>
-	            <Text style={styles.visionLabText}>Use this while tape-testing to see why each field passed or needs review.</Text>
-	          </View>
-	          <View style={styles.visionLabBadge}>
-	            <Text style={styles.visionLabBadgeText}>DEV</Text>
+	            <Text style={styles.visionLabText}>Advanced scan details for troubleshooting accuracy.</Text>
 	          </View>
 	        </View>
 
@@ -10621,6 +11075,50 @@ export default function DrapeVisionScreen() {
 	    )
 	  }
 
+  function renderResultChecks(result: DrapeVisionMeasurementResult) {
+    const hasDiagnosticsPanel = DRAPE_VISION_LAB_ENABLED && !!result.diagnostics
+    const hasRepeatabilityPanel = DRAPE_VISION_LAB_ENABLED &&
+      mode === 'customer_scan' &&
+      (!!repeatabilityMessage || repeatabilityRows.length > 0)
+    const hasGroundTruthPanel = DRAPE_VISION_VALIDATION_ENABLED && mode === 'customer_scan'
+
+    if (!hasDiagnosticsPanel && !hasRepeatabilityPanel && !hasGroundTruthPanel) return null
+
+    return (
+      <View style={styles.resultChecksSection}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityState={{ expanded: resultChecksExpanded }}
+          onPress={() => setResultChecksExpanded((current) => !current)}
+          style={styles.resultChecksToggle}
+        >
+          <View style={styles.resultChecksIcon}>
+            <Feather name="sliders" size={16} color={Colors.needleGreen} />
+          </View>
+          <View style={styles.resultChecksCopy}>
+            <Text style={styles.resultChecksTitle}>Scan checks</Text>
+            <Text style={styles.resultChecksText}>
+              Accuracy details and tape comparison are optional.
+            </Text>
+          </View>
+          <Feather
+            name={resultChecksExpanded ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={DRAPE_VISION_COLORS.textMuted}
+          />
+        </TouchableOpacity>
+
+        {resultChecksExpanded ? (
+          <View style={styles.resultChecksBody}>
+            {renderVisionLabDiagnostics(result)}
+            {renderVisionLabRepeatability()}
+            {renderVisionLabGroundTruth(result)}
+          </View>
+        ) : null}
+      </View>
+    )
+  }
+
 	  function renderResults() {
     const result = measurementResult
     if (!result) return renderCalculating()
@@ -10644,14 +11142,6 @@ export default function DrapeVisionScreen() {
       ? 'I reviewed these measurements with the client'
       : 'These measurements look right'
     const showAndroidReviewNotice = Platform.OS === 'android'
-    const advancedResultFields = isDrapeVisionBodyScanMode(mode)
-      ? BODY_SCAN_RESULT_FIELDS.filter((field) => (
-          !BODY_SCAN_REQUIRED_FIELDS.includes(field) &&
-          !BODY_SCAN_PRECISION_SCAN_FIELDS.has(field) &&
-          field !== 'neckCircumference' &&
-          finiteNumber(result.measurements[field]) != null
-        ))
-      : []
     const precisionModules = DRAPE_VISION_SPECIALIST_SCAN_MODULES.filter((item) => (
       item.mode !== 'fit_360' &&
       !completedSessionScanSet.has(item.mode) &&
@@ -10661,7 +11151,6 @@ export default function DrapeVisionScreen() {
       const value = result.measurements[field]
       const confidence = result.confidenceByField[field]
       const confidenceLabel = measurementConfidenceLabel(confidence)
-      const confidenceColor = measurementConfidenceColor(confidence)
       const isCoreMeasurement = BODY_SCAN_REQUIRED_FIELDS.includes(field) && !options.moduleLabel
       const revealStart = Math.min(0.24 + (options.index ?? 0) * 0.06, 0.72)
       const cardRevealStyle = {
@@ -10684,14 +11173,11 @@ export default function DrapeVisionScreen() {
           style={[
             styles.measurementCard,
             isCoreMeasurement && styles.measurementCardCore,
-            { borderLeftColor: confidenceColor },
             cardRevealStyle,
           ]}
         >
-          <View style={[styles.measurementAccent, { backgroundColor: confidenceColor }]} />
           <View style={styles.measurementHeader}>
             <Text style={styles.measurementLabel}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
-            <View style={[styles.confidenceDot, { backgroundColor: confidenceColor }]} />
           </View>
           <Text style={[styles.measurementValue, isCoreMeasurement && styles.measurementValueCore]}>
             {formatMeasurementValue(value, resultUnit)}
@@ -10704,7 +11190,7 @@ export default function DrapeVisionScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Edit ${DRAPE_VISION_MEASUREMENT_LABELS[field]} measurement`}
             accessibilityHint="Opens your measurement profile so you can adjust this value manually"
-            onPress={openPrimary}
+            onPress={openManualMeasurementsFromResult}
             style={styles.measurementEdit}
           >
             <Feather name="edit-2" size={14} color={Colors.needleGreen} />
@@ -10745,9 +11231,8 @@ export default function DrapeVisionScreen() {
         }),
       }],
     }
-
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader('Scan complete')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Animated.View style={[styles.heroCompact, revealHeroStyle]}>
@@ -10790,82 +11275,6 @@ export default function DrapeVisionScreen() {
             </View>
           </Animated.View>
 
-          {advancedResultFields.length ? (
-            <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
-              <Text style={styles.sectionTitle}>More detail</Text>
-              <Text style={styles.sectionBody}>
-                Extra values from the same body scan. Check anything marked for tape or tailor review.
-              </Text>
-              <View style={styles.measurementGrid}>
-                {advancedResultFields.map((field, index) => renderMeasurementCard(field, {
-                  index: resultFields.length + index,
-                }))}
-              </View>
-            </Animated.View>
-          ) : null}
-
-          {isDrapeVisionBodyScanMode(mode) ? (
-            <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
-              <View style={styles.workflowCardHeader}>
-                <View style={styles.workflowCheckCopy}>
-                  <Text style={styles.sectionTitle}>Complete your fit profile</Text>
-                  <Text style={styles.sectionBody}>
-                    Fit 360 captures the core. These focused scans fill in the measurements it should not guess.
-                  </Text>
-                </View>
-              </View>
-              {precisionModules.length ? (
-                <View style={styles.specialistResultList}>
-                  {precisionModules.map((item) => {
-                    const moduleFields = specialistPrecisionFieldsForMode(item.mode)
-                    return (
-                      <TouchableOpacity
-                        key={item.mode}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Start ${item.title}. Measures ${moduleFields.map((field) => DRAPE_VISION_MEASUREMENT_LABELS[field]).join(', ')}`}
-                        onPress={() => openSpecialistMode(item.mode)}
-                        style={styles.specialistResultCard}
-                      >
-                        <View style={styles.specialistModeHeader}>
-                          <View style={styles.specialistModeIcon}>
-                            <MaterialCommunityIcons name={item.icon as MaterialCommunityIconName} size={17} color={Colors.needleGreen} />
-                          </View>
-                          <View style={styles.specialistModeCopy}>
-                            <Text style={styles.specialistModeTitle}>{item.title}</Text>
-                            <Text style={styles.specialistModeStatus}>Starts a focused scan</Text>
-                          </View>
-                          <Feather name="chevron-right" size={18} color={DRAPE_VISION_COLORS.textMuted} />
-                        </View>
-                        <Text style={styles.specialistModeBody}>{specialistScanUseCase(item.mode)}</Text>
-                        <View style={styles.specialMeasurementGrid}>
-                          {moduleFields.map((field) => (
-                            <View key={`${item.mode}-${field}`} style={styles.specialMeasurementChip}>
-                              <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    )
-                  })}
-                </View>
-              ) : (
-                <Text style={styles.sectionBody}>
-                  Every focused scan has been run in this session. Open the scan picker if you want to retake one.
-                </Text>
-              )}
-            </Animated.View>
-          ) : null}
-
-          <View style={styles.privacyBand}>
-            <Text style={[styles.sectionTitle, styles.privacyTitle]}>Privacy</Text>
-            {DRAPE_VISION_PRIVACY_POINTS.map((point) => (
-              <View key={point} style={styles.privacyRow}>
-                <Feather name="check-circle" size={16} color={Colors.needleGreen} />
-                <Text style={styles.privacyText}>{point}</Text>
-              </View>
-            ))}
-          </View>
-
           <View style={styles.workflowCard}>
             <Text style={styles.sectionTitle}>
               {mode === 'tailor_client_scan' ? 'Confirm with client' : 'Do these look right?'}
@@ -10875,7 +11284,7 @@ export default function DrapeVisionScreen() {
               <View style={styles.workflowInsight}>
                 <Feather name="info" size={16} color={Colors.needleGreen} />
                 <Text style={styles.workflowInsightText}>
-                  Specialist scans can add more detail after this body scan. Check tape or tailor-review values before cutting.
+                  Fit 360 saves launch-safe core values. Run focused scans or use tape for measurements it should not guess.
                 </Text>
               </View>
             ) : null}
@@ -10931,13 +11340,65 @@ export default function DrapeVisionScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
-              onPress={openPrimary}
+              onPress={hasBlockingFields ? openPrimary : openManualMeasurementsFromResult}
               style={styles.workflowSmallButton}
             >
               <Feather name="edit-2" size={16} color={Colors.needleGreen} />
               <Text style={styles.workflowSmallButtonText}>Use manual measurements instead</Text>
             </TouchableOpacity>
           </View>
+
+          {isDrapeVisionBodyScanMode(mode) ? (
+            <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
+              <View style={styles.workflowCardHeader}>
+                <View style={styles.workflowCheckCopy}>
+                  <Text style={styles.sectionTitle}>Complete your fit profile</Text>
+                  <Text style={styles.sectionBody}>
+                    Fit 360 captures the core. These focused scans fill in the measurements it should not guess.
+                  </Text>
+                </View>
+              </View>
+              {precisionModules.length ? (
+                <View style={styles.specialistResultList}>
+                  {precisionModules.map((item) => {
+                    const moduleFields = specialistPrecisionFieldsForMode(item.mode)
+                    return (
+                      <TouchableOpacity
+                        key={item.mode}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Start ${item.title}. Measures ${moduleFields.map((field) => DRAPE_VISION_MEASUREMENT_LABELS[field]).join(', ')}`}
+                        onPress={() => openSpecialistMode(item.mode)}
+                        style={styles.specialistResultCard}
+                      >
+                        <View style={styles.specialistModeHeader}>
+                          <View style={styles.specialistModeIcon}>
+                            <MaterialCommunityIcons name={item.icon as MaterialCommunityIconName} size={17} color={Colors.needleGreen} />
+                          </View>
+                          <View style={styles.specialistModeCopy}>
+                            <Text style={styles.specialistModeTitle}>{item.title}</Text>
+                            <Text style={styles.specialistModeStatus}>Starts a focused scan</Text>
+                          </View>
+                          <Feather name="chevron-right" size={18} color={DRAPE_VISION_COLORS.textMuted} />
+                        </View>
+                        <Text style={styles.specialistModeBody}>{specialistScanUseCase(item.mode)}</Text>
+                        <View style={styles.specialMeasurementGrid}>
+                          {moduleFields.map((field) => (
+                            <View key={`${item.mode}-${field}`} style={styles.specialMeasurementChip}>
+                              <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+              ) : (
+                <Text style={styles.sectionBody}>
+                  Every focused scan has been run in this session. Open the scan picker if you want to retake one.
+                </Text>
+              )}
+            </Animated.View>
+          ) : null}
 
 	          {result.warnings.length ? (
 	            <View style={[styles.noticeBand, styles.noticeBandWarning]}>
@@ -10951,14 +11412,10 @@ export default function DrapeVisionScreen() {
 	            </View>
 	          ) : null}
 
-	          {renderVisionLabDiagnostics(result)}
-
-	          {renderVisionLabRepeatability()}
-
-	          {renderVisionLabGroundTruth(result)}
+          {renderResultChecks(result)}
         </ScrollView>
 
-        <Animated.View style={[styles.ctaBar, revealCtaStyle]}>
+        <Animated.View style={[styles.ctaBar, ctaBarInsetStyle, revealCtaStyle]}>
           {resultSaveConfirmation ? (
             <View
               accessible
@@ -10987,6 +11444,7 @@ export default function DrapeVisionScreen() {
                     style={styles.secondaryButton}
                   >
                     <Text style={styles.secondaryText}>{primaryActionLabel}</Text>
+                    <Feather name="chevron-right" size={15} color={DRAPE_VISION_COLORS.textMuted} />
                   </TouchableOpacity>
                 </>
               ) : (
@@ -11017,6 +11475,11 @@ export default function DrapeVisionScreen() {
                     <Text style={[styles.secondaryText, styles.secondaryTextDestructive]}>
                       {hasBlockingFields ? 'Use manual instead' : 'Retake scan'}
                     </Text>
+                    <Feather
+                      name={hasBlockingFields ? 'chevron-right' : 'refresh-cw'}
+                      size={15}
+                      color={hasBlockingFields ? Colors.kanteRust : DRAPE_VISION_COLORS.textMuted}
+                    />
                   </TouchableOpacity>
                 </>
               )}
@@ -11031,7 +11494,7 @@ export default function DrapeVisionScreen() {
     const friendlyMessage = userFacingVisionWarning(message)
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         {renderHeader("Couldn't start scan")}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
@@ -11053,7 +11516,7 @@ export default function DrapeVisionScreen() {
           </View>
         </ScrollView>
 
-        <View style={styles.ctaBar}>
+        <View style={[styles.ctaBar, ctaBarInsetStyle]}>
           <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.primaryButton}>
             <Text style={styles.primaryText}>{primaryActionLabel}</Text>
             <Feather name="arrow-right" size={18} color={Colors.textInverse} />
@@ -11061,6 +11524,7 @@ export default function DrapeVisionScreen() {
           {canRunLiveBodyScan && frontCamera ? (
             <TouchableOpacity accessibilityRole="button" onPress={startBodyScan} style={styles.secondaryButton}>
               <Text style={styles.secondaryText}>Retake scan</Text>
+              <Feather name="refresh-cw" size={15} color={DRAPE_VISION_COLORS.textMuted} />
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
@@ -11077,9 +11541,11 @@ export default function DrapeVisionScreen() {
             style={styles.secondaryButton}
           >
             <Text style={styles.secondaryText}>Report scan issue</Text>
+            <Feather name="message-circle" size={15} color={DRAPE_VISION_COLORS.textMuted} />
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
             <Text style={styles.secondaryText}>Back to scan picker</Text>
+            <Feather name="chevron-left" size={15} color={DRAPE_VISION_COLORS.textMuted} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -11204,10 +11670,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: DRAPE_VISION_COLORS.panel,
   },
+  headerButtonDisabled: {
+    opacity: 0.56,
+  },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
+    minWidth: 140,
     minHeight: 34,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.md,
@@ -11216,8 +11686,8 @@ const styles = StyleSheet.create({
     borderColor: DRAPE_VISION_COLORS.line,
   },
   statusDot: {
-    width: 7,
-    height: 7,
+    width: 8,
+    height: 8,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
   },
@@ -11235,23 +11705,24 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
-    paddingBottom: 220,
+    paddingBottom: 172,
     gap: Spacing.md,
   },
   centerContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.xl,
     gap: Spacing.xl,
   },
   hero: {
-    gap: Spacing.xs,
+    gap: Spacing.sm,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
   },
   heroCompact: {
-    gap: Spacing.xs,
+    gap: Spacing.sm,
+    paddingBottom: Spacing.sm,
   },
   heroIcon: {
     width: 58,
@@ -11299,6 +11770,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     lineHeight: 23,
     color: DRAPE_VISION_COLORS.textMuted,
+    fontFamily: Fonts.body,
   },
   benefitBand: {
     borderRadius: Radius.md,
@@ -11336,9 +11808,9 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.md,
-    backgroundColor: 'rgba(255,255,255,0.045)',
+    backgroundColor: 'rgba(255,255,255,0.09)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.09)',
+    borderColor: 'rgba(255,255,255,0.13)',
   },
   noticeBandInfo: {
     borderColor: 'rgba(255,255,255,0.09)',
@@ -11405,6 +11877,11 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: Spacing.md,
+  },
+  workflowCardHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: Spacing.xs,
   },
   workflowActionRow: {
     flexDirection: 'row',
@@ -11479,10 +11956,10 @@ const styles = StyleSheet.create({
   },
   workflowPresetRow: {
     gap: Spacing.sm,
-    paddingVertical: Spacing.xs,
+    paddingVertical: Spacing.sm,
   },
   workflowPresetChip: {
-    minHeight: 36,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.full,
@@ -11551,6 +12028,7 @@ const styles = StyleSheet.create({
   },
   workflowCheckCopy: {
     flex: 1,
+    minWidth: 0,
     gap: 3,
   },
   workflowCheckTitle: {
@@ -11711,7 +12189,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     backgroundColor: DRAPE_VISION_COLORS.panel,
     borderWidth: 1,
-    borderColor: Colors.needleGreen + '44',
+    borderColor: Colors.needleGreen + '66',
   },
   savedHeightCopy: {
     flex: 1,
@@ -11719,7 +12197,8 @@ const styles = StyleSheet.create({
   },
   savedHeightEyebrow: {
     color: Colors.needleGreenLight,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
     fontWeight: FontWeight.bold,
     textTransform: 'uppercase',
   },
@@ -11734,7 +12213,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   savedHeightButton: {
-    minHeight: 38,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.md,
@@ -11745,31 +12224,30 @@ const styles = StyleSheet.create({
   },
   savedHeightButtonText: {
     color: Colors.needleGreenLight,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
   },
   specialistModeList: {
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
   specialistModeCard: {
     gap: Spacing.sm,
-    padding: Spacing.md,
+    padding: Spacing.lg,
     borderRadius: Radius.md,
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
     borderColor: DRAPE_VISION_COLORS.line,
   },
   specialistModeCardRecommended: {
-    backgroundColor: 'rgba(29,158,117,0.1)',
-    borderColor: Colors.needleGreen + '55',
+    backgroundColor: 'rgba(29,158,117,0.12)',
+    borderColor: Colors.needleGreen + '88',
   },
   specialistModeCardComplete: {
-    opacity: 0.78,
     borderColor: Colors.needleGreen + '66',
     backgroundColor: 'rgba(29,158,117,0.08)',
   },
   specialistModeCardDisabled: {
-    opacity: 0.55,
+    opacity: 0.68,
   },
   specialistModeHeader: {
     flexDirection: 'row',
@@ -11777,12 +12255,12 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   specialistModeIcon: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(29,158,117,0.12)',
+    backgroundColor: 'rgba(29,158,117,0.15)',
   },
   specialistModeCopy: {
     flex: 1,
@@ -11796,7 +12274,7 @@ const styles = StyleSheet.create({
   },
   specialistModeTitle: {
     color: DRAPE_VISION_COLORS.text,
-    fontSize: FontSize.sm,
+    fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
   },
   specialistRecommendedPill: {
@@ -11810,8 +12288,8 @@ const styles = StyleSheet.create({
   },
   specialistRecommendedText: {
     color: Colors.needleGreenLight,
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: FontSize.xs,
+    lineHeight: 16,
     fontWeight: FontWeight.bold,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
@@ -11828,18 +12306,20 @@ const styles = StyleSheet.create({
   },
   specialistModeHint: {
     color: Colors.needleGreenLight,
-    fontSize: FontSize.xs,
-    lineHeight: 17,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
     fontWeight: FontWeight.semibold,
   },
   privacyBand: {
     gap: Spacing.sm,
     padding: Spacing.lg,
     borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreenLight,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
   },
   privacyTitle: {
-    color: Colors.ink,
+    color: DRAPE_VISION_COLORS.text,
   },
   privacyRow: {
     flexDirection: 'row',
@@ -11850,13 +12330,13 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.sm,
     lineHeight: 20,
-    color: Colors.ink,
+    color: DRAPE_VISION_COLORS.textMuted,
   },
   ctaBar: {
     gap: Spacing.sm,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: DRAPE_VISION_COLORS.line,
     backgroundColor: DRAPE_VISION_COLORS.screen,
@@ -11884,9 +12364,11 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
   },
   secondaryButton: {
-    minHeight: 46,
+    minHeight: 44,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.xs,
   },
   secondaryButtonDisabled: {
     opacity: 0.55,
@@ -11897,11 +12379,29 @@ const styles = StyleSheet.create({
   },
   ctaSecondaryHalf: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 44,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.xs,
     borderRadius: Radius.md,
     backgroundColor: 'rgba(255,255,255,0.045)',
+  },
+  unavailableButton: {
+    minHeight: 54,
+    borderRadius: Radius.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  unavailableButtonText: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
   },
   tertiaryButton: {
     minHeight: 34,
@@ -11912,6 +12412,19 @@ const styles = StyleSheet.create({
     color: DRAPE_VISION_COLORS.textMuted,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
+  },
+  suiteManualLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    minHeight: 46,
+  },
+  suiteManualLinkText: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    opacity: 0.6,
   },
   secondaryTextDestructive: {
     color: Colors.kanteRustLight,
@@ -11940,22 +12453,22 @@ const styles = StyleSheet.create({
     borderColor: DRAPE_VISION_COLORS.line,
   },
   inlineTrustNote: {
-    minHeight: 42,
+    alignSelf: 'stretch',
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: Spacing.sm,
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    borderRadius: Radius.full,
-    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
   inlineTrustText: {
     flex: 1,
     color: DRAPE_VISION_COLORS.textMuted,
-    fontSize: FontSize.xs,
-    lineHeight: 17,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
     fontWeight: FontWeight.semibold,
   },
   unitOption: {
@@ -12017,11 +12530,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.sm,
-    paddingVertical: Spacing.lg,
+    paddingVertical: Spacing.xl,
   },
   heightButton: {
     width: 58,
-    height: 48,
+    height: 58,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -12137,7 +12650,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 42,
+    bottom: 0,
     alignItems: 'center',
     gap: Spacing.sm,
     zIndex: 5,
@@ -12376,7 +12889,7 @@ const styles = StyleSheet.create({
     shadowColor: Colors.needleGreen,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.48,
-    shadowRadius: 10,
+    shadowRadius: 6,
   },
   captureNoticeText: {
     color: Colors.textInverse,
@@ -12443,7 +12956,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 24,
+    bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 8,
@@ -12561,7 +13074,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(29,158,117,0.25)',
   },
   measureLineActive: {
-    height: 3,
     backgroundColor: Colors.needleGreen,
   },
   measureLineChest: {
@@ -12597,8 +13109,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   calculationDotActive: {
-    width: 12,
-    height: 12,
+    transform: [{ scale: 1.4 }],
     backgroundColor: Colors.needleGreenLight,
   },
   calculationText: {
@@ -12608,6 +13119,23 @@ const styles = StyleSheet.create({
   calculationDurationText: {
     color: DRAPE_VISION_COLORS.textDim,
     fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  calculationCancelButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  calculationCancelText: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
   resultBadge: {
@@ -12668,7 +13196,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     backgroundColor: DRAPE_VISION_COLORS.panel,
     borderWidth: 1,
-    borderLeftWidth: 4,
     borderColor: DRAPE_VISION_COLORS.line,
     overflow: 'hidden',
   },
@@ -12676,14 +13203,6 @@ const styles = StyleSheet.create({
     minHeight: 176,
     paddingVertical: Spacing.lg,
     backgroundColor: DRAPE_VISION_COLORS.panelSoft,
-  },
-  measurementAccent: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 3,
-    opacity: 0.85,
   },
   measurementHeader: {
     flexDirection: 'row',
@@ -12698,11 +13217,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-  },
-  confidenceDot: {
-    width: 9,
-    height: 9,
-    borderRadius: Radius.full,
   },
   measurementValue: {
     marginTop: Spacing.md,
@@ -12756,6 +13270,46 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: DRAPE_VISION_COLORS.line,
   },
+  resultChecksSection: {
+    gap: Spacing.sm,
+  },
+  resultChecksToggle: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  resultChecksIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(29,158,117,0.15)',
+  },
+  resultChecksCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  resultChecksTitle: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+  },
+  resultChecksText: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 19,
+  },
+  resultChecksBody: {
+    gap: Spacing.sm,
+  },
 	  visionLabCard: {
 	    gap: Spacing.md,
 	    padding: Spacing.lg,
@@ -12769,6 +13323,10 @@ const styles = StyleSheet.create({
 	    alignItems: 'flex-start',
 	    justifyContent: 'space-between',
 	    gap: Spacing.md,
+	  },
+	  visionLabHeaderCopy: {
+	    flex: 1,
+	    minWidth: 0,
 	  },
 	  visionLabTitle: {
 	    color: DRAPE_VISION_COLORS.text,

@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: profileError.message })
-      return jsonResponse({ error: 'We could not load your seller profile right now. Please try again.' }, 500, cors)
+      return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
     }
 
     if (!profile?.id) {

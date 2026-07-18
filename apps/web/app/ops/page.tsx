@@ -3,9 +3,11 @@ import {
   CONTACTS,
   DRAPE_EXCEPTION_BUCKETS,
   DRAPE_EXCEPTION_RUNBOOK_ENTRIES,
+  formatDatabaseEnumLabel,
   OPS_ISSUE_SEVERITIES,
   OPS_ISSUE_TYPES,
 } from '@drape/shared'
+import { isVideoMediaUrl, videoPosterFrameUrl } from '@drape/shared/media-policy'
 import type { JSX, ReactNode } from 'react'
 import {
   getOpsAccessMode,
@@ -46,6 +48,7 @@ import {
   type OpsWorkflowIssue,
 } from '../../lib/ops-data'
 import { OpsPulseAlerts } from '../../components/ops-pulse-alerts'
+import { StatusChip } from '../../components/ui/status-chip'
 
 export const dynamic = 'force-dynamic'
 
@@ -88,6 +91,10 @@ const NOTICE_COPY: Record<string, string> = {
   'application-saved': 'Application status updated.',
   'verification-approved': 'Verification approved and the tailor is now live.',
   'verification-rejected': 'Verification rejected.',
+  'profile-change-approved': 'Profile change approved and merged.',
+  'profile-change-rejected': 'Profile change rejected.',
+  'payout-change-approved': 'Payout destination change approved.',
+  'payout-change-rejected': 'Payout destination change rejected.',
   'deletion-saved': 'Deletion request status updated.',
   'dispatch-saved': 'Dispatch stage updated.',
   'review-published': 'Review is public now.',
@@ -362,7 +369,7 @@ function SummaryCard({
   hint: string
 }): React.JSX.Element {
   return (
-    <div className="rounded-[1.5rem] border border-ink/8 bg-white/88 p-5 shadow-sm">
+    <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
       <div className="mt-4 text-4xl text-ink">{value}</div>
       <p className="mt-2 text-sm leading-7 text-ink/62">{hint}</p>
@@ -429,7 +436,7 @@ function CompactMetric({
         : 'border-ink/8 bg-white text-ink/72'
 
   return (
-    <div className={`rounded-[1.15rem] border px-4 py-3 ${toneClass}`}>
+    <div className={`rounded-[8px] border px-4 py-3 ${toneClass}`}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">{label}</p>
       <p className="mt-1 text-2xl text-ink">{value}</p>
     </div>
@@ -527,7 +534,7 @@ function QueueRow({ item }: { item: OpsQueueItem }): React.JSX.Element {
   return (
     <a
       href={buildOpsHref(item.view)}
-      className={`grid gap-3 rounded-[1.25rem] border px-4 py-4 transition hover:-translate-y-0.5 hover:bg-white sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${toneClass}`}
+      className={`grid gap-3 rounded-[8px] border px-4 py-4 transition hover:-translate-y-0.5 hover:bg-white sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${toneClass}`}
     >
       <div className="flex size-11 items-center justify-center rounded-full border border-white/70 bg-white text-lg text-ink shadow-sm">
         {item.count}
@@ -589,7 +596,7 @@ function CardCollapse({
   children: ReactNode
 }): React.JSX.Element {
   return (
-    <article className={`rounded-[1.5rem] border border-ink/8 ${background} shadow-sm`}>
+    <article className={`rounded-[8px] border border-ink/8 ${background} shadow-sm`}>
       <details className="group">
         <summary className="flex cursor-pointer list-none items-center gap-3 p-5 [&::-webkit-details-marker]:hidden">
           {summary}
@@ -611,7 +618,7 @@ function EmptyState({
   body: string
 }): React.JSX.Element {
   return (
-    <div className="rounded-[1.5rem] border border-dashed border-ink/12 bg-bone/60 p-6">
+    <div className="rounded-[8px] border border-dashed border-ink/12 bg-bone/60 p-6">
       <h3 className="text-xl text-ink">{title}</h3>
       <p className="mt-2 text-sm leading-7 text-ink/64">{body}</p>
     </div>
@@ -626,7 +633,7 @@ function DetailList({
   return (
     <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {items.map((item) => (
-        <div key={`${item.label}:${item.value}`} className="rounded-[1.1rem] border border-ink/6 bg-bone/56 px-4 py-3">
+        <div key={`${item.label}:${item.value}`} className="rounded-[8px] border border-ink/6 bg-bone/56 px-4 py-3">
           <dt className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/42">{item.label}</dt>
           <dd className="mt-1 text-sm leading-6 text-ink">{item.value}</dd>
         </div>
@@ -639,7 +646,7 @@ function JobQueueCard({ queue }: { queue: OpsJobQueueHealth }): React.JSX.Elemen
   const queueRisk = queue.dead > 0 ? 'CRITICAL' : queue.retryable > 0 ? 'ESCALATED' : queue.pending > 25 ? 'IN_REVIEW' : 'RESOLVED'
 
   return (
-    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+    <article className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Background queue</p>
@@ -670,16 +677,14 @@ function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): Rea
   const status = normalizedStatus === 'OK' ? 'RESOLVED' : normalizedStatus === 'OPEN' ? 'ESCALATED' : normalizedStatus
 
   return (
-    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+    <article className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">{provider.provider}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(status)}`}>
-              {provider.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={provider.status} className={statusPillClass(status)} />
           </div>
-          <p className="mt-2 text-sm leading-7 text-ink/66">{provider.operation.replace(/_/g, ' ')}</p>
+          <p className="mt-2 text-sm leading-7 text-ink/66">{formatDatabaseEnumLabel(provider.operation)}</p>
         </div>
         <a
           href={sectionMailto(`Provider circuit review: ${provider.provider} ${provider.operation}`)}
@@ -698,7 +703,7 @@ function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): Rea
         />
       </div>
       {provider.lastError ? (
-        <div className="mt-5 rounded-[1.2rem] border border-rust/14 bg-rust/8 p-4 text-sm leading-7 text-rust-700">
+        <div className="mt-5 rounded-[8px] border border-rust/14 bg-rust/8 p-4 text-sm leading-7 text-rust-700">
           {provider.lastError}
         </div>
       ) : null}
@@ -711,11 +716,11 @@ function RoleAccessCard({ role }: { role: OpsRole }): React.JSX.Element {
   const actions = getOpsRoleActions(role)
 
   return (
-    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+    <article className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Role</p>
-          <h3 className="mt-2 text-2xl text-ink">{role.replace(/_/g, ' ')}</h3>
+          <h3 className="mt-2 text-2xl text-ink">{formatDatabaseEnumLabel(role)}</h3>
           <p className="mt-2 text-sm leading-7 text-ink/64">{OPS_ROLE_DESCRIPTIONS[role]}</p>
         </div>
         <span className="rounded-full border border-ink/8 bg-bone px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
@@ -723,13 +728,13 @@ function RoleAccessCard({ role }: { role: OpsRole }): React.JSX.Element {
         </span>
       </div>
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-[1.2rem] border border-ink/6 bg-bone/50 p-4">
+        <div className="rounded-[8px] border border-ink/6 bg-bone/50 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Visible sections</p>
           <p className="mt-2 text-sm leading-7 text-ink/72">
             {sections.map((section) => getOpsSection(section).label).join(', ')}
           </p>
         </div>
-        <div className="rounded-[1.2rem] border border-ink/6 bg-bone/50 p-4">
+        <div className="rounded-[8px] border border-ink/6 bg-bone/50 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Allowed actions</p>
           <p className="mt-2 text-sm leading-7 text-ink/72">
             {actions.length > 0 ? actions.map((action) => action.replace(/-/g, ' ')).join(', ') : 'Read only'}
@@ -748,11 +753,11 @@ function IssueHistoryBlock({
   if (history.length === 0) return null
 
   return (
-    <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+    <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Audit trail</p>
       <div className="mt-3 grid gap-3">
         {history.slice(0, 4).map((entry) => (
-          <div key={entry.id} className="rounded-[1rem] border border-ink/6 bg-bone/52 px-4 py-3">
+          <div key={entry.id} className="rounded-lg border border-ink/6 bg-bone/52 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-ink">{formatHistoryAction(entry.actionTaken)}</p>
               <p className="text-xs uppercase tracking-[0.14em] text-ink/46">{formatDateTime(entry.createdAt)}</p>
@@ -776,7 +781,7 @@ function ManualIssueCreateCard({
   redirectTo: string
 }): React.JSX.Element {
   return (
-    <article className="rounded-[1.5rem] border border-needle/12 bg-[linear-gradient(180deg,#ffffff_0%,#eef8f4_100%)] p-5 shadow-sm">
+    <article className="rounded-[8px] border border-needle/12 bg-[linear-gradient(180deg,#ffffff_0%,#eef8f4_100%)] p-5 shadow-sm">
       <form action="/ops/action" method="post" className="grid gap-3">
         <input type="hidden" name="kind" value="manual-issue-create" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
@@ -826,7 +831,7 @@ function ManualIssueCreateCard({
             required
             rows={3}
             placeholder="What is wrong, who is affected, and why this needs a case."
-            className="rounded-[1.2rem] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            className="rounded-[8px] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
           />
         </label>
         <label className="grid gap-1.5 text-sm text-ink/70">
@@ -836,7 +841,7 @@ function ManualIssueCreateCard({
             required
             rows={2}
             placeholder="Tell the next teammate exactly what should happen next."
-            className="rounded-[1.2rem] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            className="rounded-[8px] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
           />
         </label>
         <details className="group">
@@ -879,7 +884,7 @@ function ManualIssueCreateCard({
             </div>
             <label className="grid gap-1.5 text-sm text-ink/70">
               Internal note
-              <textarea name="note" rows={2} placeholder="Optional audit trail context." className="rounded-[1.2rem] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40" />
+              <textarea name="note" rows={2} placeholder="Optional audit trail context." className="rounded-[8px] border border-ink/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40" />
             </label>
           </div>
         </details>
@@ -911,9 +916,7 @@ function DisputeCard({
       background="bg-[linear-gradient(180deg,#fffdf9_0%,#f6efe5_100%)]"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(dispute.status)}`}>
-            {dispute.status.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={dispute.status} className={`shrink-0 ${statusPillClass(dispute.status)}`} />
           <span className="font-semibold text-ink">Order {dispute.orderReference ? `#${dispute.orderReference}` : dispute.orderId.slice(0, 8)}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{dispute.reason}</span>
           <span className="shrink-0 text-sm font-semibold text-ink/60">{formatMoney(dispute.amount, dispute.currency)}</span>
@@ -925,9 +928,7 @@ function DisputeCard({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">Order {dispute.orderReference ? `#${dispute.orderReference}` : dispute.orderId.slice(0, 8)}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(dispute.status)}`}>
-              {dispute.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={dispute.status} className={statusPillClass(dispute.status)} />
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">{dispute.reason}</p>
         </div>
@@ -963,7 +964,7 @@ function DisputeCard({
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Customer description</p>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">{dispute.description}</p>
         {dispute.resolution ? (
@@ -994,7 +995,7 @@ function DisputeCard({
         <div className="mt-5 border-t border-ink/8 pt-5">
           <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
           <div className="grid gap-4">
-            <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
+            <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
               <input type="hidden" name="kind" value="dispute-status" />
               <input type="hidden" name="redirectTo" value={redirectTo} />
               <input type="hidden" name="disputeId" value={dispute.id} />
@@ -1018,7 +1019,7 @@ function DisputeCard({
             </form>
 
             {canResolve ? (
-              <form action="/ops/action" method="post" className="grid gap-3 rounded-[1.25rem] border border-ink/6 bg-white/76 p-4">
+              <form action="/ops/action" method="post" className="grid gap-3 rounded-[8px] border border-ink/6 bg-white/76 p-4">
                 <input type="hidden" name="kind" value="dispute-resolution" />
                 <input type="hidden" name="redirectTo" value={redirectTo} />
                 <input type="hidden" name="disputeId" value={dispute.id} />
@@ -1028,7 +1029,7 @@ function DisputeCard({
                     name="resolution"
                     rows={3}
                     placeholder="Optional context that both parties should see on the resolution."
-                    className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+                    className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
                   />
                 </label>
                 <div className="flex flex-col gap-3 sm:flex-row">
@@ -1051,7 +1052,7 @@ function DisputeCard({
                 </div>
               </form>
             ) : (
-              <div className="rounded-[1.25rem] border border-dashed border-ink/10 bg-white/68 px-4 py-3 text-sm leading-7 text-ink/62">
+              <div className="rounded-[8px] border border-dashed border-ink/10 bg-white/68 px-4 py-3 text-sm leading-7 text-ink/62">
                 Refresh before resolving if the order is no longer in `IN_DISPUTE`. This card can still be triaged, but only active disputes can be closed here.
               </div>
             )}
@@ -1122,7 +1123,7 @@ function BypassLogCard({
         />
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-bone/56 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-bone/56 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Blocked content</p>
         <p className="mt-2 whitespace-pre-wrap break-words font-mono text-sm leading-7 text-ink/78">{log.content}</p>
       </div>
@@ -1144,9 +1145,7 @@ function ApplicationCard({
       background="bg-white/86"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(application.status)}`}>
-            {application.status.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={application.status} className={`shrink-0 ${statusPillClass(application.status)}`} />
           <span className="font-semibold text-ink">{application.businessName}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{application.displayName} · {application.location}</span>
           <span className="shrink-0 text-xs text-ink/38">{formatRelativeTime(application.createdAt)}</span>
@@ -1160,9 +1159,7 @@ function ApplicationCard({
               {application.displayId}
             </span>
             <span className="text-lg text-ink">{application.businessName}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(application.status)}`}>
-              {application.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={application.status} className={statusPillClass(application.status)} />
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">
             {application.displayName} · {application.email}
@@ -1187,7 +1184,7 @@ function ApplicationCard({
         />
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Notes</p>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">{application.notes}</p>
       </div>
@@ -1217,7 +1214,7 @@ function ApplicationCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
           <input type="hidden" name="kind" value="application-status" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="applicationId" value={application.id} />
@@ -1249,6 +1246,176 @@ function ApplicationCard({
   )
 }
 
+function EvidenceMediaTile({
+  url,
+  label,
+}: {
+  url: string
+  label: string
+}): React.JSX.Element {
+  const video = isVideoMediaUrl(url)
+
+  if (video) {
+    return (
+      <div className="overflow-hidden rounded-lg border border-ink/8 bg-white transition hover:border-needle/28 hover:bg-bone/55">
+        <div className="relative aspect-[4/3] bg-ink">
+          <video
+            src={videoPosterFrameUrl(url)}
+            controls
+            muted
+            playsInline
+            preload="metadata"
+            aria-label={label}
+            className="h-full w-full bg-ink object-cover"
+          />
+          <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-ink/72 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">
+            Video
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
+          <span className="min-w-0 truncate text-xs font-semibold text-ink/56">{label}</span>
+          <a href={url} target="_blank" rel="noreferrer" className="shrink-0 text-xs font-semibold text-needle hover:text-needle/80">
+            Open
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="group block overflow-hidden rounded-lg border border-ink/8 bg-white transition hover:border-needle/28 hover:bg-bone/55"
+    >
+      <div className="relative aspect-[4/3] bg-bone">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={label} className="h-full w-full object-cover" />
+        <span className="absolute left-2 top-2 rounded-full bg-ink/72 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">
+          Photo
+        </span>
+      </div>
+      <span className="block truncate px-3 py-2 text-xs font-semibold text-ink/56 group-hover:text-needle">{label}</span>
+    </a>
+  )
+}
+
+function VerificationProofItemEvidence({
+  item,
+}: {
+  item: OpsVerification['proofItems'][number]
+}): React.JSX.Element {
+  const mediaUrls = item.mediaUrls.slice(0, 6)
+
+  return (
+    <div className="border-t border-ink/8 py-4 first:border-t-0 first:pt-0 last:pb-0">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-base font-semibold text-ink">{item.title}</p>
+          <p className="mt-1 text-sm text-ink/56">{item.category ?? 'Uncategorized'} / {item.isLive ? 'Live listing' : 'Hidden proof item'}</p>
+        </div>
+        <span className="inline-flex w-fit rounded-full border border-needle/14 bg-needle/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-needle">
+          {item.stockStatus ?? 'Hidden'}
+        </span>
+      </div>
+      {item.description ? <p className="mt-3 text-sm leading-7 text-ink/66">{item.description}</p> : null}
+      <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-ink/52">
+        <span className="rounded-full bg-bone px-3 py-1">Sizes: {item.sizes.length > 0 ? item.sizes.join(', ') : 'None'}</span>
+        <span className="rounded-full bg-bone px-3 py-1">Stock units: {item.inventoryQuantity}</span>
+        <span className="rounded-full bg-bone px-3 py-1">Updated {formatRelativeTime(item.updatedAt)}</span>
+      </div>
+      {mediaUrls.length > 0 ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {mediaUrls.map((url, index) => (
+            <EvidenceMediaTile key={item.id + '-' + url + '-' + index} url={url} label={'Proof media ' + (index + 1)} />
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-rust/14 bg-rust/8 px-4 py-3 text-sm font-semibold text-rust-700">No proof item media attached.</p>
+      )}
+    </div>
+  )
+}
+
+function VerificationEvidencePanel({
+  profile,
+}: {
+  profile: OpsVerification
+}): React.JSX.Element {
+  const portfolioMedia = [
+    ...profile.portfolioPhotoUrls.map((url, index) => ({ url, label: 'Portfolio photo ' + (index + 1) })),
+    ...profile.portfolioVideoUrls.map((url, index) => ({ url, label: 'Portfolio video ' + (index + 1) })),
+  ]
+  const evidence = profile.evidenceSummary
+
+  return (
+    <div className="mt-5 border-t border-ink/8 pt-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Review evidence</p>
+          <p className="mt-1 text-sm leading-6 text-ink/58">
+            {evidence.readyCount}/4 evidence checks ready. Use this as the approval checklist before moving the tailor live.
+          </p>
+        </div>
+        {evidence.missingLabels.length > 0 ? (
+          <span className="inline-flex w-fit rounded-full border border-rust/14 bg-rust/8 px-3 py-1 text-xs font-semibold text-rust-700">
+            Missing: {evidence.missingLabels.join(', ')}
+          </span>
+        ) : (
+          <span className="inline-flex w-fit rounded-full border border-needle/14 bg-needle/8 px-3 py-1 text-xs font-semibold text-needle">Evidence complete</span>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {evidence.checklist.map((item) => (
+          <div key={item.key} className="rounded-lg border border-ink/8 bg-bone/48 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-ink">{item.label}</p>
+              <span className={item.ready ? 'rounded-full bg-needle/12 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-needle' : 'rounded-full bg-rust/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-rust-700'}>
+                {item.ready ? 'Ready' : 'Missing'}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-ink/50">{item.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Portfolio media</p>
+          <span className="text-xs font-semibold text-ink/42">{evidence.portfolioMediaCount} items</span>
+        </div>
+        {portfolioMedia.length > 0 ? (
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {portfolioMedia.map((media, index) => (
+              <EvidenceMediaTile key={media.url + '-' + index} url={media.url} label={media.label} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-lg border border-rust/14 bg-rust/8 px-4 py-3 text-sm font-semibold text-rust-700">No portfolio media available for review.</p>
+        )}
+      </div>
+
+      <div className="mt-5 rounded-[8px] border border-ink/8 bg-white/70 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Onboarding proof item</p>
+          <span className="text-xs font-semibold text-ink/42">{evidence.proofItemCount} items / {evidence.proofItemMediaCount} media</span>
+        </div>
+        {profile.proofItems.length > 0 ? (
+          <div className="mt-4">
+            {profile.proofItems.map((item) => (
+              <VerificationProofItemEvidence key={item.id} item={item} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-lg border border-rust/14 bg-rust/8 px-4 py-3 text-sm font-semibold text-rust-700">No hidden proof item has been captured yet.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function VerificationCard({
   profile,
   redirectTo,
@@ -1261,9 +1428,7 @@ function VerificationCard({
       background="bg-white/86"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(profile.status)}`}>
-            {profile.status.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={profile.status} className={`shrink-0 ${statusPillClass(profile.status)}`} />
           <span className="font-semibold text-ink">{profile.displayName}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{profile.email ?? 'No email'}{profile.location ? ` · ${profile.location}` : ''}</span>
           <span className="shrink-0 text-xs text-ink/38">{formatRelativeTime(profile.createdAt)}</span>
@@ -1277,9 +1442,7 @@ function VerificationCard({
               {profile.displayId}
             </span>
             <span className="text-lg text-ink">{profile.displayName}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(profile.status)}`}>
-              {profile.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={profile.status} className={statusPillClass(profile.status)} />
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">{profile.email ?? 'No email on file'}</p>
         </div>
@@ -1307,42 +1470,83 @@ function VerificationCard({
             items={[
               { label: 'Payout path', value: profile.payoutProvider ? `${profile.payoutProvider} · ${profile.payoutCurrency ?? '—'}` : 'Not set up yet' },
               { label: 'Payout verified', value: profile.payoutAccountVerified ? 'Yes' : 'No' },
-              { label: 'Submitted', value: formatDateTime(profile.createdAt) },
+              { label: 'Submitted', value: formatDateTime(profile.idVerificationSubmittedAt ?? profile.createdAt) },
               { label: 'Last updated', value: formatDateTime(profile.updatedAt) },
             ]}
           />
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-3">
-        {profile.idDocumentUrl ? (
-          <a
-            href={profile.idDocumentUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle/90"
-          >
-            Open ID document
-          </a>
-        ) : null}
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="rounded-[8px] border border-ink/6 bg-bone/56 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Public avatar</p>
+          {profile.avatarUrl ? (
+            <a href={profile.avatarUrl} target="_blank" rel="noreferrer" className="mt-3 block overflow-hidden rounded-lg border border-ink/8 bg-white">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={profile.avatarUrl} alt="Public avatar" className="aspect-square w-full object-cover" />
+            </a>
+          ) : (
+            <div className="mt-3 flex aspect-square items-center justify-center rounded-lg border border-ink/8 bg-white px-4 text-center text-sm font-semibold text-ink/42">
+              No public avatar
+            </div>
+          )}
+          {profile.avatarUrl ? (
+            <a href={profile.avatarUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm font-semibold text-needle">
+              Open public avatar
+            </a>
+          ) : null}
+        </div>
+        <div className="rounded-[8px] border border-ink/6 bg-bone/56 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Live selfie + ID</p>
+          <p className="mt-3 text-sm leading-7 text-ink/66">
+            Private evidence remains behind a signed Supabase Storage URL.
+          </p>
+          {profile.idDocumentUrl ? (
+            <a
+              href={profile.idDocumentUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex items-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle/90"
+            >
+              Open live selfie ID
+            </a>
+          ) : (
+            <p className="mt-3 text-sm font-semibold text-rust-700">Signed ID link unavailable</p>
+          )}
+        </div>
       </div>
+
+      <VerificationEvidencePanel profile={profile} />
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <input type="hidden" name="kind" value="verification-decision" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="tailorUserId" value={profile.userId} />
-        <label className="grid gap-2 text-sm text-ink/72">
-          Trust note / rejection reason
-          <textarea
-            name="reason"
-            rows={3}
-            required
-            placeholder="Add what you verified, or explain exactly what needs resubmission before rejecting."
-            className="min-h-[104px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
-          />
-        </label>
+        <div className="grid gap-3 md:grid-cols-[0.85fr_1.15fr]">
+          <label className="grid gap-2 text-sm text-ink/72">
+            Rejection code
+            <select
+              name="rejectionCode"
+              defaultValue=""
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            >
+              <option value="">General ID / trust issue</option>
+              <option value="INVALID_PROFILE_IMAGE">Invalid profile image</option>
+            </select>
+            <span className="text-xs leading-5 text-ink/46">Use profile-image only when the live ID is usable but the public avatar is not.</span>
+          </label>
+          <label className="grid gap-2 text-sm text-ink/72">
+            Trust note / rejection reason
+            <textarea
+              name="reason"
+              rows={3}
+              placeholder="Add what you verified, or explain exactly what needs resubmission before rejecting."
+              className="min-h-[104px] rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+        </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <button
             type="submit"
@@ -1382,9 +1586,7 @@ function DeletionRequestCard({
       background="bg-white/86"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(request.status)}`}>
-            {request.status.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={request.status} className={`shrink-0 ${statusPillClass(request.status)}`} />
           <span className="font-semibold text-ink">{request.displayName}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{request.role}</span>
           <span className="shrink-0 text-xs text-ink/38">{formatRelativeTime(request.requestedAt)}</span>
@@ -1398,9 +1600,7 @@ function DeletionRequestCard({
               {request.displayId}
             </span>
             <span className="text-lg text-ink">{request.displayName}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(request.status)}`}>
-              {request.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={request.status} className={statusPillClass(request.status)} />
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">
             {request.email ?? 'No email on file'} · {request.role}
@@ -1425,7 +1625,7 @@ function DeletionRequestCard({
         />
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Reason</p>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">
           {request.reason?.trim() ? request.reason : 'No deletion note was provided in-app.'}
@@ -1434,7 +1634,7 @@ function DeletionRequestCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
           <input type="hidden" name="kind" value="deletion-status" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="deletionRequestId" value={request.id} />
@@ -1482,9 +1682,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
       background="bg-white/86"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(payout.status)}`}>
-            {payout.status.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={payout.status} className={`shrink-0 ${statusPillClass(payout.status)}`} />
           <span className="font-semibold text-ink">{payout.tailorDisplayName}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{formatMoney(payout.amount, payout.currency)}{payout.provider ? ` · ${payout.provider}` : ''}</span>
           {isBlockedOrFailed ? <span className="shrink-0 text-xs font-semibold text-rust-700">Blocked</span> : null}
@@ -1493,23 +1691,23 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
       }
     >
       {isTestPayout ? (
-        <div className="mb-4 flex items-center gap-2 rounded-[1rem] border border-ink/8 bg-bone px-3 py-2 text-xs font-semibold text-ink/50">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-ink/8 bg-bone px-3 py-2 text-xs font-semibold text-ink/50">
           <span className="inline-block size-2 rounded-full bg-ink/20" />
           Test / QA payout — not a live transaction
         </div>
       ) : null}
 
       {isBlockedOrFailed ? (
-        <div className="mb-5 rounded-[1.2rem] border border-rust/16 bg-rust/7 p-4">
+        <div className="mb-5 rounded-[8px] border border-rust/16 bg-rust/7 p-4">
           <div className="grid gap-3 sm:grid-cols-[1fr_2fr]">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-rust-700/72">What</p>
-              <p className="mt-1 text-sm font-semibold text-ink">Payout {payout.status.toLowerCase().replace(/_/g, ' ')}</p>
+              <p className="mt-1 text-sm font-semibold text-ink">Payout {formatDatabaseEnumLabel(payout.status).toLowerCase()}</p>
               <p className="mt-0.5 text-xs text-ink/56">{formatMoney(payout.amount, payout.currency)}</p>
             </div>
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-rust-700/72">Why blocked</p>
-              <p className="mt-1 text-sm text-ink">{payout.blockedReasonMessage ?? (payout.blockedReason ? payout.blockedReason.replace(/_/g, ' ') : 'No reason on record')}</p>
+              <p className="mt-1 text-sm text-ink">{payout.blockedReasonMessage ?? formatDatabaseEnumLabel(payout.blockedReason, 'No reason on record')}</p>
             </div>
           </div>
           <div className="mt-3 grid gap-3 border-t border-rust/14 pt-3 sm:grid-cols-2">
@@ -1529,9 +1727,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">{payout.tailorDisplayName}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(payout.status)}`}>
-              {payout.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={payout.status} className={statusPillClass(payout.status)} />
             <span className="inline-flex rounded-full border border-ink/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/70">
               {payout.provider}
             </span>
@@ -1573,13 +1769,13 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
           <DetailList
             items={[
               { label: 'Order', value: payout.orderReference ? `#${payout.orderReference}` : payout.orderId ?? '—' },
-              { label: 'Stage', value: payout.orderStage?.replace(/_/g, ' ') ?? '—' },
-              { label: 'Kind', value: payout.orderKind?.replace(/_/g, ' ') ?? '—' },
+              { label: 'Stage', value: formatDatabaseEnumLabel(payout.orderStage, '—') },
+              { label: 'Kind', value: formatDatabaseEnumLabel(payout.orderKind, '—') },
               { label: 'Payment', value: payout.paymentProvider ? `${payout.paymentProvider} · ${payout.paymentStatus ?? '—'}` : payout.paymentStatus ?? '—' },
-              { label: 'Status', value: payout.status.replace(/_/g, ' ') },
+              { label: 'Status', value: formatDatabaseEnumLabel(payout.status) },
               { label: 'Escrow released', value: payout.escrowReleased ? 'Yes' : 'No' },
               { label: 'Provider ID', value: payout.providerPayoutId ?? '—' },
-              { label: 'Blocked reason', value: payout.blockedReasonMessage ?? (payout.blockedReason ? payout.blockedReason.replace(/_/g, ' ') : '—') },
+              { label: 'Blocked reason', value: payout.blockedReasonMessage ?? formatDatabaseEnumLabel(payout.blockedReason, '—') },
             ]}
           />
         </div>
@@ -1589,7 +1785,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
             items={[
               { label: 'Handoff complete', value: formatDateTime(payout.handoffCompletedAt) },
               { label: 'Customer confirmed', value: formatDateTime(payout.customerHandoffConfirmedAt) },
-              { label: 'Confirmation source', value: payout.handoffConfirmationSource?.replace(/_/g, ' ') ?? '—' },
+              { label: 'Confirmation source', value: formatDatabaseEnumLabel(payout.handoffConfirmationSource, '—') },
               { label: 'Release window', value: payout.payoutReadyAt ? `${formatDateTime(payout.payoutReadyAt)} · ${releaseLabel}` : releaseLabel },
               { label: 'Initiated', value: formatDateTime(payout.initiatedAt) },
               { label: 'Processed', value: formatDateTime(payout.processedAt) },
@@ -1603,7 +1799,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
       {canRetryRelease ? (
         <div className="mt-5 border-t border-ink/8 pt-5">
           <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-          <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-rust/12 bg-rust/6 p-4 sm:flex-row sm:items-center">
+          <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-rust/12 bg-rust/6 p-4 sm:flex-row sm:items-center">
             <input type="hidden" name="kind" value="payout-release" />
             <input type="hidden" name="redirectTo" value={buildOpsRedirectTarget('payouts', 'payouts')} />
             <input type="hidden" name="orderId" value={payout.orderId ?? ''} />
@@ -1637,7 +1833,7 @@ function ShopItemCard({
   redirectTo: string
 }): React.JSX.Element {
   const canRestore = !item.isLive || item.stockStatus === 'HIDDEN'
-  const imageUrl = item.photoUrls[0] ?? null
+  const imageUrl = item.photoUrls.find((url) => !isVideoMediaUrl(url)) ?? null
 
   return (
     <CardCollapse
@@ -1645,7 +1841,7 @@ function ShopItemCard({
       summary={
         <>
           <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(item.isLive ? item.stockStatus : 'REJECTED')}`}>
-            {item.isLive ? item.stockStatus.replace(/_/g, ' ') : 'Hidden'}
+            {item.isLive ? formatDatabaseEnumLabel(item.stockStatus) : 'Hidden'}
           </span>
           <span className="font-semibold text-ink">{item.title}</span>
           <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{item.tailorDisplayName} · {formatMoney(item.priceAmount, item.currency)}</span>
@@ -1655,7 +1851,7 @@ function ShopItemCard({
       }
     >
       <div className="grid gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]">
-        <div className="overflow-hidden rounded-[1.2rem] border border-ink/8 bg-bone">
+        <div className="overflow-hidden rounded-[8px] border border-ink/8 bg-bone">
           {imageUrl ? (
             <a href={imageUrl} target="_blank" rel="noreferrer" className="block">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1674,7 +1870,7 @@ function ShopItemCard({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-lg text-ink">{item.title}</span>
                 <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(item.isLive ? item.stockStatus : 'REJECTED')}`}>
-                  {item.isLive ? item.stockStatus.replace(/_/g, ' ') : 'Hidden'}
+                  {item.isLive ? formatDatabaseEnumLabel(item.stockStatus) : 'Hidden'}
                 </span>
               </div>
               <p className="mt-2 text-sm leading-7 text-ink/66">
@@ -1716,12 +1912,12 @@ function ShopItemCard({
               ))}
             </div>
           ) : (
-            <div className="mt-4 rounded-[1rem] border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle-700">
+            <div className="mt-4 rounded-lg border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle-700">
               This listing has photos, stock, and at least one fulfillment path.
             </div>
           )}
 
-          <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+          <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
             <input type="hidden" name="kind" value="seller-item-visibility" />
             <input type="hidden" name="redirectTo" value={redirectTo} />
             <input type="hidden" name="itemId" value={item.id} />
@@ -1775,7 +1971,7 @@ function SupportThreadCard({
       summary={
         <>
           <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(thread.conversationBlocked ? 'ESCALATED' : thread.orderStage ?? 'OPEN')}`}>
-            {thread.conversationBlocked ? 'Paused' : thread.orderStage?.replace(/_/g, ' ') ?? 'Open'}
+            {thread.conversationBlocked ? 'Paused' : formatDatabaseEnumLabel(thread.orderStage, 'Open')}
           </span>
           {thread.unreadCount > 0 ? <span className="shrink-0 rounded-full border border-rust/16 bg-rust/8 px-2 py-0.5 text-[11px] font-semibold text-rust-700">{thread.unreadCount} unread</span> : null}
           <span className="font-semibold text-ink">{thread.orderReference ? `Order #${thread.orderReference}` : `Order ${thread.orderId.slice(0, 8)}`}</span>
@@ -1789,7 +1985,7 @@ function SupportThreadCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">{thread.orderReference ? `Order #${thread.orderReference}` : `Order ${thread.orderId.slice(0, 8)}`}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(thread.conversationBlocked ? 'ESCALATED' : thread.orderStage ?? 'OPEN')}`}>
-              {thread.conversationBlocked ? 'Paused' : thread.orderStage?.replace(/_/g, ' ') ?? 'Open'}
+              {thread.conversationBlocked ? 'Paused' : formatDatabaseEnumLabel(thread.orderStage, 'Open')}
             </span>
             {thread.unreadCount > 0 ? (
               <span className="inline-flex rounded-full border border-rust/16 bg-rust/8 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">
@@ -1821,7 +2017,7 @@ function SupportThreadCard({
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-bone/56 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-bone/56 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Latest message</p>
         <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-ink/78">{thread.latestMessagePreview}</p>
       </div>
@@ -1840,9 +2036,9 @@ function SupportThreadCard({
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Order</p>
           <DetailList
             items={[
-              { label: 'Kind', value: thread.orderKind?.replace(/_/g, ' ') ?? '—' },
-              { label: 'Stage', value: thread.orderStage?.replace(/_/g, ' ') ?? '—' },
-              { label: 'Delivery', value: thread.deliveryMethod?.replace(/_/g, ' ') ?? '—' },
+              { label: 'Kind', value: formatDatabaseEnumLabel(thread.orderKind, '—') },
+              { label: 'Stage', value: formatDatabaseEnumLabel(thread.orderStage, '—') },
+              { label: 'Delivery', value: formatDatabaseEnumLabel(thread.deliveryMethod, '—') },
               { label: 'Payment', value: thread.paymentProvider ? `${thread.paymentStatus ?? '—'} · ${thread.paymentProvider}` : thread.paymentStatus ?? '—' },
             ]}
           />
@@ -1862,11 +2058,11 @@ function SupportThreadCard({
       </div>
 
       {closedThread ? (
-        <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-bone/56 p-4 text-sm leading-7 text-ink/64">
+        <div className="mt-5 rounded-[8px] border border-ink/6 bg-bone/56 p-4 text-sm leading-7 text-ink/64">
           This order thread is closed in the app. Use the email links above for aftercare or account support instead of changing conversation access.
         </div>
       ) : (
-        <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
           <input type="hidden" name="kind" value="conversation-access" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="orderId" value={thread.orderId} />
@@ -1925,6 +2121,16 @@ function WorkflowIssueCard({
     issueOpen
     && !!issue.materialAdvanceId
     && getOpsRoleActions(role).includes('material-advance-release')
+  const canDecideProfileChange =
+    issueOpen
+    && issue.relatedEntityType === 'profile_change_request'
+    && !!issue.relatedEntityId
+    && getOpsRoleActions(role).includes('profile-change-decision')
+  const canDecidePayoutChange =
+    issueOpen
+    && issue.relatedEntityType === 'payout_change_request'
+    && !!issue.relatedEntityId
+    && getOpsRoleActions(role).includes('payout-change-decision')
 
   return (
     <CardCollapse
@@ -1949,22 +2155,20 @@ function WorkflowIssueCard({
             </span>
             <span className="text-lg text-ink">{workflowIssueLabel(issue.event)}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${severityPillClass(issue.severity)}`}>
-              {issue.severity}
+              {formatDatabaseEnumLabel(issue.severity)}
             </span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(issue.status)}`}>
-              {issue.status.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={issue.status} className={statusPillClass(issue.status)} />
           </div>
           <p className="mt-2 text-sm font-medium leading-7 text-ink/80">{issue.summary}</p>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
             <span className="text-xs text-ink/52">
               <span className="font-semibold uppercase tracking-[0.14em] text-ink/34">Who</span>
-              {'  '}{issue.actorName}{issue.actorRole ? ` · ${issue.actorRole.replace(/_/g, ' ').toLowerCase()}` : ''}
+              {'  '}{issue.actorName}{issue.actorRole ? ` · ${formatDatabaseEnumLabel(issue.actorRole).toLowerCase()}` : ''}
             </span>
             {issue.blockedReasonCode ? (
               <span className="text-xs text-rust-700/80">
                 <span className="font-semibold uppercase tracking-[0.14em] text-rust-700/50">Blocked</span>
-                {'  '}{issue.blockedReasonCode.replace(/_/g, ' ')}
+                {'  '}{formatDatabaseEnumLabel(issue.blockedReasonCode)}
               </span>
             ) : null}
             {issue.maxRefundableAmount > 0 ? (
@@ -1983,7 +2187,7 @@ function WorkflowIssueCard({
         </a>
       </div>
 
-      <div className="mt-4 rounded-[1.2rem] border border-needle/14 bg-needle/7 px-4 py-3">
+      <div className="mt-4 rounded-[8px] border border-needle/14 bg-needle/7 px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-needle/70">Next action</p>
         <p className="mt-1 text-sm leading-7 text-ink/76">{issue.recommendedAction}</p>
       </div>
@@ -2020,7 +2224,7 @@ function WorkflowIssueCard({
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Details</p>
           <DetailList
             items={[
-              { label: 'Reason', value: issue.reason ? issue.reason.replace(/_/g, ' ') : '—' },
+              { label: 'Reason', value: formatDatabaseEnumLabel(issue.reason, '—') },
               {
                 label: 'Currency conflict',
                 value:
@@ -2037,12 +2241,12 @@ function WorkflowIssueCard({
 
       <IssueHistoryBlock history={issue.history} />
 
-      {(canUpdateIssueStatus || canResolveBlockedPayout || canReleaseMaterialAdvance || canPartialRefund || canManageConversation) ? (
+      {(canUpdateIssueStatus || canResolveBlockedPayout || canReleaseMaterialAdvance || canPartialRefund || canManageConversation || canDecideProfileChange || canDecidePayoutChange) ? (
         <div className="mt-5 border-t border-ink/8 pt-5">
           <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
           <div className="grid gap-4">
       {canUpdateIssueStatus ? (
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
           <input type="hidden" name="kind" value="ops-issue-status" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="issueId" value={issue.id} />
@@ -2083,8 +2287,68 @@ function WorkflowIssueCard({
         </form>
       ) : null}
 
+      {canDecideProfileChange ? (
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
+          <input type="hidden" name="kind" value="profile-change-decision" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="requestId" value={issue.relatedEntityId ?? ''} />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Profile change review</p>
+            <p className="mt-2 text-sm leading-7 text-ink/72">Approve to merge the staged public profile changes into the live storefront. Reject to keep the previously vetted profile visible.</p>
+          </div>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Reason or ops note
+            <textarea name="reason" rows={2} placeholder="Required for rejection; useful for approval notes" className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40" />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Rejection code
+            <select name="rejectionCode" defaultValue="GENERAL_TRUST_REVIEW" className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40">
+              <option value="INVALID_PROFILE_IMAGE">Invalid profile image</option>
+              <option value="INVALID_PORTFOLIO_MEDIA">Invalid portfolio media</option>
+              <option value="OFF_PLATFORM_CONTACT">Off-platform contact</option>
+              <option value="BUSINESS_IDENTITY_MISMATCH">Business identity mismatch</option>
+              <option value="LOCATION_MISMATCH">Location mismatch</option>
+              <option value="GENERAL_TRUST_REVIEW">General trust review</option>
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button type="submit" name="decision" value="APPROVE" className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90">Approve staged profile change</button>
+            <button type="submit" name="decision" value="REJECT" className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/10 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/14">Reject change</button>
+          </div>
+        </form>
+      ) : null}
+
+      {canDecidePayoutChange ? (
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-rust/12 bg-rust/6 p-4">
+          <input type="hidden" name="kind" value="payout-change-decision" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="requestId" value={issue.relatedEntityId ?? ''} />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">Payout destination review</p>
+            <p className="mt-2 text-sm leading-7 text-ink/72">Approve to replace the live payout destination and start the normal cooldown/hold window. Reject to keep the current payout destination active.</p>
+          </div>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Reason or ops note
+            <textarea name="reason" rows={2} placeholder="Required for rejection; useful for approval notes" className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40" />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Rejection code
+            <select name="rejectionCode" defaultValue="PAYOUT_DESTINATION_MISMATCH" className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40">
+              <option value="PAYOUT_DESTINATION_MISMATCH">Payout destination mismatch</option>
+              <option value="BUSINESS_IDENTITY_MISMATCH">Business identity mismatch</option>
+              <option value="NEEDS_LIVE_SELFIE_RETAKE">Needs live selfie retake</option>
+              <option value="GENERAL_TRUST_REVIEW">General trust review</option>
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button type="submit" name="decision" value="APPROVE" className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90">Approve payout destination</button>
+            <button type="submit" name="decision" value="REJECT" className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/10 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/14">Reject destination</button>
+          </div>
+        </form>
+      ) : null}
+
       {canResolveBlockedPayout ? (
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-rust/12 bg-rust/6 p-4">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-rust/12 bg-rust/6 p-4">
           <input type="hidden" name="kind" value="payout-block-resolution" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="issueId" value={issue.id} />
@@ -2096,15 +2360,15 @@ function WorkflowIssueCard({
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order total</p>
               <p className="mt-2 text-sm text-ink">{formatMoney(issue.orderTotalAmount, issue.lockedPayoutCurrency ?? issue.orderCurrency)}</p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Current setup</p>
               <p className="mt-2 text-sm text-ink">{issue.payoutCurrency ?? 'No payout currency'}</p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Refundable</p>
               <p className="mt-2 text-sm text-ink">{formatMoney(issue.maxRefundableAmount, issue.orderCurrency)}</p>
             </div>
@@ -2116,7 +2380,7 @@ function WorkflowIssueCard({
               required
               rows={3}
               placeholder="Explain why this resolution is safe and what ops approved."
-              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+              className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
             />
           </label>
           <div className="flex flex-wrap gap-3">
@@ -2149,7 +2413,7 @@ function WorkflowIssueCard({
       ) : null}
 
       {canReleaseMaterialAdvance ? (
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-needle/14 bg-needle/6 p-4">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
           <input type="hidden" name="kind" value="material-advance-release" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="advanceId" value={issue.materialAdvanceId ?? ''} />
@@ -2160,7 +2424,7 @@ function WorkflowIssueCard({
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Advance</p>
               <p className="mt-2 text-sm text-ink">
                 {issue.materialAdvanceAmount && issue.materialAdvanceAmount > 0
@@ -2168,11 +2432,11 @@ function WorkflowIssueCard({
                   : 'Customer-approved amount'}
               </p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order</p>
               <p className="mt-2 text-sm text-ink">{issue.orderReference ? `#${issue.orderReference}` : issue.orderId ?? '—'}</p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-white/82 px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Record</p>
               <p className="mt-2 break-all text-sm text-ink">{issue.materialAdvanceId}</p>
             </div>
@@ -2184,7 +2448,7 @@ function WorkflowIssueCard({
               required
               rows={3}
               placeholder="Confirm what was reviewed before releasing this material advance."
-              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+              className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
             />
           </label>
           <button
@@ -2197,7 +2461,7 @@ function WorkflowIssueCard({
       ) : null}
 
       {canPartialRefund ? (
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-rust/12 bg-white/92 p-4">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-rust/12 bg-white/92 p-4">
           <input type="hidden" name="kind" value="order-partial-refund" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="issueId" value={issue.id} />
@@ -2210,15 +2474,15 @@ function WorkflowIssueCard({
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-bone px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order total</p>
               <p className="mt-2 text-sm text-ink">{formatMoney(issue.orderTotalAmount, issue.orderCurrency)}</p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-bone px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Already refunded</p>
               <p className="mt-2 text-sm text-ink">{formatMoney(issue.alreadyRefundedAmount, issue.orderCurrency)}</p>
             </div>
-            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+            <div className="rounded-lg border border-ink/8 bg-bone px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Maximum now</p>
               <p className="mt-2 text-sm text-ink">{formatMoney(issue.maxRefundableAmount, issue.orderCurrency)}</p>
             </div>
@@ -2242,7 +2506,7 @@ function WorkflowIssueCard({
               required
               rows={3}
               placeholder="Explain why this partial refund is being issued and what the customer was told."
-              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+              className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
             />
           </label>
           <label className="inline-flex items-center gap-3 text-sm text-ink/72">
@@ -2259,7 +2523,7 @@ function WorkflowIssueCard({
       ) : null}
 
       {canManageConversation ? (
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-center">
+        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-center">
           <input type="hidden" name="kind" value="conversation-access" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="orderId" value={issue.orderId ?? ''} />
@@ -2367,7 +2631,7 @@ function ReviewQueueCard({
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Review body</p>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">
           {review.body?.trim() ? review.body : 'No written review was included.'}
@@ -2382,7 +2646,7 @@ function ReviewQueueCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="flex flex-wrap gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <form action="/ops/action" method="post" className="flex flex-wrap gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
           <input type="hidden" name="kind" value="review-visibility" />
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="reviewId" value={review.id} />
@@ -2430,11 +2694,9 @@ function DispatchCard({
       background="bg-[linear-gradient(180deg,#fffdf9_0%,#f5eee3_100%)]"
       summary={
         <>
-          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(item.stage)}`}>
-            {item.stage.replace(/_/g, ' ')}
-          </span>
+          <StatusChip status={item.stage} className={`shrink-0 ${statusPillClass(item.stage)}`} />
           <span className="font-semibold text-ink">Order #{item.orderReference}</span>
-          <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{item.itemTitle ?? item.garmentType} · {item.deliveryMethod?.replace(/_/g, ' ')}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{item.itemTitle ?? item.garmentType} · {formatDatabaseEnumLabel(item.deliveryMethod, 'Fulfillment')}</span>
           <span className="shrink-0 text-xs text-ink/38">{formatRelativeTime(item.stageUpdatedAt)}</span>
         </>
       }
@@ -2443,9 +2705,7 @@ function DispatchCard({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">Order #{item.orderReference}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(item.stage)}`}>
-              {item.stage.replace(/_/g, ' ')}
-            </span>
+            <StatusChip status={item.stage} className={statusPillClass(item.stage)} />
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">
             {item.itemTitle ?? item.garmentType} · {formatMoney(item.amount, item.currency)}
@@ -2478,7 +2738,7 @@ function DispatchCard({
               { label: 'Recipient', value: item.recipientName ?? '—' },
               { label: 'Recipient phone', value: item.recipientPhone ?? '—' },
               { label: 'Address', value: item.deliveryAddress ?? '—' },
-              { label: 'Method', value: item.deliveryMethod?.replace(/_/g, ' ') ?? '—' },
+              { label: 'Method', value: formatDatabaseEnumLabel(item.deliveryMethod, '—') },
               { label: 'Ready since', value: formatDateTime(item.stageUpdatedAt) },
             ]}
           />
@@ -2487,7 +2747,7 @@ function DispatchCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="grid gap-4 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <form action="/ops/action" method="post" className="grid gap-4 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <input type="hidden" name="kind" value="dispatch-stage" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="orderId" value={item.orderId} />
@@ -2580,7 +2840,7 @@ function DispatchCard({
             name="note"
             rows={3}
             defaultValue=""
-            className="rounded-[1.6rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
             placeholder={
               isLocalDelivery
                 ? 'Optional note like: Your rider has collected the parcel and is on the way.'
@@ -2618,7 +2878,7 @@ function OrderReviewCard({
     review.reviewType === 'CANCELLATION'
       ? 'Keep order active'
       : review.requestedFromStage
-        ? `Return to ${review.requestedFromStage.toLowerCase().replace(/_/g, ' ')}`
+        ? `Return to ${formatDatabaseEnumLabel(review.requestedFromStage).toLowerCase()}`
         : 'Keep order active'
   const refundLabel =
     review.reviewType === 'CANCELLATION'
@@ -2681,13 +2941,13 @@ function OrderReviewCard({
       </div>
 
       {review.note ? (
-        <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <div className="mt-5 rounded-[8px] border border-ink/6 bg-white/82 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Note</p>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">{review.note}</p>
         </div>
       ) : null}
 
-      <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <input type="hidden" name="kind" value="order-review-resolution" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="orderId" value={review.orderId} />
@@ -2698,7 +2958,7 @@ function OrderReviewCard({
             name="resolution"
             rows={3}
             defaultValue=""
-            className="rounded-[1.6rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
             placeholder={
               review.reviewType === 'CANCELLATION'
                 ? 'Optional note like: We approved the cancellation and refund because the seller cannot fulfil the order.'
@@ -2749,7 +3009,7 @@ function LoginView({
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
       <div className="mx-auto flex min-h-screen max-w-3xl items-center px-5 py-12 sm:px-8">
         <div className="grid w-full gap-4 lg:grid-cols-[1fr_1.4fr]">
-          <div className="rounded-[2rem] bg-ink p-8 text-white">
+          <div className="rounded-[8px] bg-ink p-8 text-white">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/46">Internal ops</p>
             <h1 className="mt-5 text-4xl leading-[1.06] text-white">Drapeon<br />control plane</h1>
             <p className="mt-4 text-sm leading-7 text-white/56">
@@ -2767,7 +3027,7 @@ function LoginView({
             </div>
           </div>
 
-          <div className="rounded-[2rem] border border-white/70 bg-white/88 p-8 shadow-[0_28px_90px_rgba(22,28,24,0.10)] backdrop-blur">
+          <div className="rounded-[8px] border border-white/70 bg-white/88 p-8 shadow-[0_28px_90px_rgba(22,28,24,0.10)] backdrop-blur">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle/80">Bootstrap token</p>
             <h2 className="mt-3 text-3xl text-ink">Unlock ops</h2>
             <p className="mt-2 text-sm leading-7 text-ink/60">
@@ -2775,7 +3035,7 @@ function LoginView({
             </p>
 
             {error ? (
-              <div className="mt-5 rounded-[1.25rem] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
+              <div className="mt-5 rounded-[8px] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
                 {error}
               </div>
             ) : null}
@@ -2798,8 +3058,8 @@ function LoginView({
               </button>
             </form>
 
-            <div className="mt-6 rounded-[1.2rem] border border-ink/6 bg-bone/60 px-4 py-3 text-[11px] leading-6 text-ink/50">
-              Bootstrap role: <span className="font-semibold uppercase tracking-[0.12em] text-ink/68">{bootstrapRole.replace(/_/g, ' ')}</span>
+            <div className="mt-6 rounded-[8px] border border-ink/6 bg-bone/60 px-4 py-3 text-[11px] leading-6 text-ink/50">
+              Bootstrap role: <span className="font-semibold text-ink/68">{formatDatabaseEnumLabel(bootstrapRole)}</span>
               {' · '}
               Per-person enforcement moves to workforce SSO.
             </div>
@@ -2818,7 +3078,7 @@ function WorkforceAccessView({
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
-        <section className="w-full rounded-[2.4rem] border border-white/70 bg-white/82 p-7 shadow-[0_28px_90px_rgba(22,28,24,0.12)] backdrop-blur sm:p-10">
+        <section className="w-full rounded-lg border border-white/70 bg-white/82 p-7 shadow-[0_28px_90px_rgba(22,28,24,0.12)] backdrop-blur sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
           <h1 className="mt-4 text-5xl leading-[0.94] text-ink sm:text-6xl">Use Drapeon workforce access, not a shared token.</h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
@@ -2826,7 +3086,7 @@ function WorkforceAccessView({
           </p>
 
           <div className="mt-8 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-[1.75rem] bg-ink p-6 text-white">
+            <div className="rounded-lg bg-ink p-6 text-white">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/62">What happens here</p>
               <div className="mt-4 grid gap-3 text-sm leading-7 text-white/78">
                 <p>Cloudflare Access gates the route before page load.</p>
@@ -2836,7 +3096,7 @@ function WorkforceAccessView({
               </div>
             </div>
 
-            <div className="rounded-[1.75rem] border border-ink/8 bg-[linear-gradient(180deg,#faf5ed_0%,#f2eade_100%)] p-6">
+            <div className="rounded-lg border border-ink/8 bg-[linear-gradient(180deg,#faf5ed_0%,#f2eade_100%)] p-6">
               <h2 className="text-3xl text-ink">Workforce checklist</h2>
               <div className="mt-4 grid gap-3 text-sm leading-7 text-ink/66">
                 <p>1. The route is behind Cloudflare Access.</p>
@@ -2845,7 +3105,7 @@ function WorkforceAccessView({
                 <p>4. Your email or group is assigned to a Drapeon control-plane role.</p>
               </div>
               {error ? (
-                <div className="mt-5 rounded-[1.25rem] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
+                <div className="mt-5 rounded-[8px] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
                   {error}
                 </div>
               ) : null}
@@ -2871,7 +3131,7 @@ function SetupView(): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f1e8_0%,#efe7da_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
-        <section className="w-full rounded-[2.2rem] border border-ink/8 bg-white/86 p-8 shadow-[0_24px_80px_rgba(22,28,24,0.08)]">
+        <section className="w-full rounded-lg border border-ink/8 bg-white/86 p-8 shadow-[0_24px_80px_rgba(22,28,24,0.08)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
           <h1 className="mt-4 text-4xl text-ink sm:text-5xl">
             {productionBootstrapBlocked
@@ -2887,23 +3147,23 @@ function SetupView(): React.JSX.Element {
                 ? 'The configured bootstrap token is too short or uses a placeholder value. Use Cloudflare Access for production, or set a 32+ character emergency token.'
                 : 'This route is intentionally locked until the shared ops token is configured in the web environment.'}
           </p>
-          <div className="mt-8 rounded-[1.5rem] border border-ink/8 bg-bone/70 p-5">
+          <div className="mt-8 rounded-[8px] border border-ink/8 bg-bone/70 p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/46">Required env</p>
             {workforceConfigured ? (
               <>
-                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   CF_ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
                 </code>
-                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   CF_ACCESS_AUD=your_access_application_audience
                 </code>
               </>
             ) : (
               <>
-                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   OPS_DASHBOARD_TOKEN=your_shared_internal_token
                 </code>
-                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   OPS_DASHBOARD_BOOTSTRAP_ROLE={bootstrapRole}
                 </code>
               </>
@@ -2933,7 +3193,7 @@ function OpsNavItem({
   return (
     <a
       href={href}
-      className={`flex items-center justify-between rounded-[1.1rem] border px-4 py-2.5 transition ${
+      className={`flex items-center justify-between rounded-[8px] border px-4 py-2.5 transition ${
         active
           ? 'border-needle/18 bg-needle/10 text-ink'
           : 'border-transparent text-ink/64 hover:border-ink/8 hover:bg-white/70 hover:text-ink'
@@ -3000,7 +3260,7 @@ function IncidentSurface({
       <div className="grid gap-5">
         <JobQueueCard queue={data.systemHealth.jobQueue} />
 
-        <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+        <div className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Incident posture</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <SummaryCard
@@ -3022,7 +3282,7 @@ function IncidentSurface({
         </div>
 
         <details>
-          <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-[1.25rem] border border-needle/14 bg-needle/7 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/10 [&::-webkit-details-marker]:hidden">
+          <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-[8px] border border-needle/14 bg-needle/7 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/10 [&::-webkit-details-marker]:hidden">
             <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-needle/22 bg-white text-[15px] font-bold leading-none text-needle">+</span>
             New case
           </summary>
@@ -3088,7 +3348,7 @@ function AccessControlSurface({ context }: { context: OpsRenderContext }): React
     >
       <div className="grid gap-5">
         <div className="grid gap-5 lg:grid-cols-3">
-          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+          <div className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Access mode</p>
             <h3 className="mt-3 text-2xl text-ink">{accessModeLabel}</h3>
             <p className="mt-3 text-sm leading-7 text-ink/64">
@@ -3097,14 +3357,14 @@ function AccessControlSurface({ context }: { context: OpsRenderContext }): React
                 : 'This environment is using the shared bootstrap token. Keep it dev-only and move production behind workforce access.'}
             </p>
           </div>
-          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+          <div className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current session</p>
-            <h3 className="mt-3 text-2xl text-ink">{context.session.role.replace(/_/g, ' ')}</h3>
+            <h3 className="mt-3 text-2xl text-ink">{formatDatabaseEnumLabel(context.session.role)}</h3>
             <p className="mt-3 text-sm leading-7 text-ink/64">
               {context.session.email ?? 'Shared-token session without an individual email claim.'}
             </p>
           </div>
-          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+          <div className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current reach</p>
             <h3 className="mt-3 text-2xl text-ink">{currentSections.length} sections</h3>
             <p className="mt-3 text-sm leading-7 text-ink/64">
@@ -3113,7 +3373,7 @@ function AccessControlSurface({ context }: { context: OpsRenderContext }): React
           </div>
         </div>
 
-        <div className="rounded-[1.5rem] border border-ink/8 bg-bone/58 p-5">
+        <div className="rounded-[8px] border border-ink/8 bg-bone/58 p-5">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Launch rule</p>
           <p className="mt-2 text-sm leading-7 text-ink/68">
             Production should use Cloudflare Access plus app-level role checks. The shared token is useful for dev unblockers, but it should never become the long-term production control plane.
@@ -3164,7 +3424,7 @@ function OpsRunbookSurface({ context }: { context: OpsRenderContext }): React.JS
           entries.map((entry) => (
             <article
               key={entry.title}
-              className="rounded-[1.5rem] border border-ink/8 bg-white/88 p-5 shadow-sm"
+              className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-sm"
             >
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -3187,28 +3447,28 @@ function OpsRunbookSurface({ context }: { context: OpsRenderContext }): React.JS
               </div>
 
               <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
-                <div className="rounded-[1.2rem] border border-needle/12 bg-needle/8 p-4">
+                <div className="rounded-[8px] border border-needle/12 bg-needle/8 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">First move</p>
                   <p className="mt-2 text-sm leading-7 text-ink/70">{entry.firstMove}</p>
                 </div>
-                <div className="rounded-[1.2rem] border border-ink/8 bg-bone/62 p-4">
+                <div className="rounded-[8px] border border-ink/8 bg-bone/62 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Search terms</p>
                   <p className="mt-2 text-sm leading-7 text-ink/62">{entry.keywords.join(', ')}</p>
                 </div>
               </div>
 
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-[1.2rem] border border-ink/8 bg-white p-4">
+                <div className="rounded-[8px] border border-ink/8 bg-white p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Customer copy</p>
                   <p className="mt-2 text-sm leading-7 text-ink/68">{entry.customerCopy}</p>
                 </div>
-                <div className="rounded-[1.2rem] border border-ink/8 bg-white p-4">
+                <div className="rounded-[8px] border border-ink/8 bg-white p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Tailor copy</p>
                   <p className="mt-2 text-sm leading-7 text-ink/68">{entry.tailorCopy}</p>
                 </div>
               </div>
 
-              <div className="mt-4 rounded-[1.2rem] border border-ink/8 bg-bone/52 p-4">
+              <div className="mt-4 rounded-[8px] border border-ink/8 bg-bone/52 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Ops actions</p>
                 <ul className="mt-3 grid gap-2 text-sm leading-7 text-ink/68">
                   {entry.opsActions.map((action) => (
@@ -3259,7 +3519,7 @@ function buildNextDecisions(data: OpsDashboardData, visibleSections: OpsVisibleS
         view: 'workflow-issues',
         label: `${issue.displayId} · ${workflowIssueLabel(issue.event)}`,
         what: issue.summary,
-        who: `${issue.actorName}${issue.actorRole ? ` · ${issue.actorRole.replace(/_/g, ' ').toLowerCase()}` : ''}`,
+        who: `${issue.actorName}${issue.actorRole ? ` · ${formatDatabaseEnumLabel(issue.actorRole).toLowerCase()}` : ''}`,
         nextAction: issue.recommendedAction,
         danger: sev === 'CRITICAL' ? 'destructive' : sev === 'HIGH' || issue.maxRefundableAmount > 0 ? 'caution' : 'safe',
         age: formatRelativeTime(issue.createdAt),
@@ -3277,7 +3537,7 @@ function buildNextDecisions(data: OpsDashboardData, visibleSections: OpsVisibleS
         id: `pay-${payout.id}`,
         view: 'payouts',
         label: payout.orderReference ? `Order #${payout.orderReference}` : 'Blocked payout',
-        what: `Payout ${payout.status.toLowerCase().replace(/_/g, ' ')}: ${payout.blockedReasonMessage ?? payout.blockedReason?.replace(/_/g, ' ') ?? 'no reason recorded'}`,
+        what: `Payout ${formatDatabaseEnumLabel(payout.status).toLowerCase()}: ${payout.blockedReasonMessage ?? formatDatabaseEnumLabel(payout.blockedReason, 'no reason recorded')}`,
         who: `${payout.tailorDisplayName} (tailor)`,
         nextAction: 'Check escrow, customer confirmation, dispute state, and provider account — then retry payout release.',
         danger: 'destructive',
@@ -3378,7 +3638,7 @@ function NextDecisionRow({ item }: { item: OpsNextDecisionItem }): React.JSX.Ele
   return (
     <a
       href={buildOpsHref(item.view)}
-      className={`grid gap-3 rounded-[1.25rem] border p-4 transition hover:-translate-y-0.5 hover:bg-white sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start ${dangerClass}`}
+      className={`grid gap-3 rounded-[8px] border p-4 transition hover:-translate-y-0.5 hover:bg-white sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start ${dangerClass}`}
     >
       <div className="grid gap-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -3401,7 +3661,7 @@ function NextDecisionRow({ item }: { item: OpsNextDecisionItem }): React.JSX.Ele
             <span className="font-semibold uppercase tracking-[0.13em] text-ink/30">Age</span>{'  '}{item.age}
           </p>
         </div>
-        <div className="rounded-[0.85rem] border border-needle/12 bg-needle/7 px-3 py-2 text-xs leading-6 text-ink/72">
+        <div className="rounded-lg border border-needle/12 bg-needle/7 px-3 py-2 text-xs leading-6 text-ink/72">
           <span className="font-semibold uppercase tracking-[0.13em] text-needle/68">Next</span>{'  '}{item.nextAction}
         </div>
       </div>
@@ -3425,7 +3685,7 @@ function OpsOverviewSurface({
   return (
     <div className="grid gap-6">
       {nextDecisions.length > 0 ? (
-        <section className="rounded-[1.6rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6">
+        <section className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6">
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle/76">My next decisions</p>
@@ -3442,7 +3702,7 @@ function OpsOverviewSurface({
           </div>
         </section>
       ) : (
-        <section className="rounded-[1.6rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6">
+        <section className="rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle/76">My next decisions</p>
           <h2 className="mt-2 text-2xl text-ink sm:text-3xl">Queues are clear.</h2>
           <p className="mt-2 text-sm leading-7 text-ink/60">No blocked payouts, open disputes, or high-severity issues need your attention right now.</p>
@@ -3450,7 +3710,7 @@ function OpsOverviewSurface({
       )}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
-        <section className="rounded-[1.6rem] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
+        <section className="rounded-[8px] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">All queues</p>
@@ -3468,16 +3728,16 @@ function OpsOverviewSurface({
           </div>
         </section>
 
-        <section className="rounded-[1.6rem] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
+        <section className="rounded-[8px] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">System pulse</p>
           <div className="mt-4 grid gap-3">
-            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+            <div className="rounded-[8px] border border-ink/8 bg-bone/48 p-4">
               <p className="text-sm font-semibold text-ink">Background queue</p>
               <p className="mt-2 text-sm leading-7 text-ink/62">
                 {data.systemHealth.jobQueue.pending} pending · {data.systemHealth.jobQueue.processing} processing · {data.systemHealth.jobQueue.retryable} retrying · {data.systemHealth.jobQueue.dead} dead.
               </p>
             </div>
-            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+            <div className="rounded-[8px] border border-ink/8 bg-bone/48 p-4">
               <p className="text-sm font-semibold text-ink">Provider circuits</p>
               <p className="mt-2 text-sm leading-7 text-ink/62">
                 {data.systemHealth.providers.length === 0
@@ -3485,7 +3745,7 @@ function OpsOverviewSurface({
                   : `${data.summary.providersDegraded} degraded across ${data.systemHealth.providers.length} tracked lanes.`}
               </p>
             </div>
-            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+            <div className="rounded-[8px] border border-ink/8 bg-bone/48 p-4">
               <p className="text-sm font-semibold text-ink">Escrow</p>
               <p className="mt-2 text-sm leading-7 text-ink/62">
                 {data.summary.ordersInEscrowValueLabel} protected across {data.summary.ordersInEscrowCount} paid orders.
@@ -3825,7 +4085,7 @@ function renderOpsSection(
           id="verification"
           eyebrow="Verification"
           title="Pending verification stays visible even before a fuller admin system exists."
-          description="This gives ops one place to spot pending tailor profiles and open the uploaded ID document quickly."
+          description="This gives ops one place to spot pending tailor profiles and open the live selfie-ID submission quickly."
         >
           {data.pendingVerifications.length > 0 ? (
             <div className="grid gap-5">
@@ -3893,7 +4153,7 @@ function renderOpsSection(
             ]}
           />
           <details>
-            <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-[1.25rem] border border-needle/14 bg-needle/7 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/10 [&::-webkit-details-marker]:hidden">
+            <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-[8px] border border-needle/14 bg-needle/7 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/10 [&::-webkit-details-marker]:hidden">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-needle/22 bg-white text-[15px] font-bold leading-none text-needle">+</span>
               New case
             </summary>
@@ -4073,7 +4333,7 @@ export default async function OpsPage({
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(216,90,48,0.10),transparent_26%),linear-gradient(180deg,#f7f1e8_0%,#f1eadf_100%)]">
       <div className="mx-auto max-w-[95rem] px-5 py-6 sm:px-8 lg:px-12">
-        <header className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-white/72 bg-white/82 px-5 py-3 shadow-sm backdrop-blur sm:px-6">
+        <header className="flex items-center justify-between gap-4 rounded-[8px] border border-white/72 bg-white/82 px-5 py-3 shadow-sm backdrop-blur sm:px-6">
           <div className="flex min-w-0 items-center gap-2.5">
             <p className="shrink-0 text-sm font-semibold text-ink">Drapeon Ops</p>
             <span className="text-ink/20">/</span>
@@ -4081,7 +4341,7 @@ export default async function OpsPage({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="rounded-full border border-needle/14 bg-needle/8 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-needle-700">
-              {session.role.replace(/_/g, ' ')}
+              {formatDatabaseEnumLabel(session.role)}
             </span>
             <span className="hidden rounded-full border border-ink/8 bg-bone px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/52 sm:inline-flex">
               {accessMode.replace(/-/g, ' ')}
@@ -4106,20 +4366,20 @@ export default async function OpsPage({
         <OpsPulsePanel enabled={pulseEnabled} snapshot={pulseSnapshot} />
 
         {notice ? (
-          <div className="mt-4 rounded-[1.2rem] border border-needle/16 bg-needle/8 px-5 py-3 text-sm leading-7 text-needle-700">
+          <div className="mt-4 rounded-[8px] border border-needle/16 bg-needle/8 px-5 py-3 text-sm leading-7 text-needle-700">
             {notice}
           </div>
         ) : null}
 
         {roleError ? (
-          <div className="mt-4 rounded-[1.2rem] border border-rust/16 bg-rust/8 px-5 py-3 text-sm leading-7 text-rust-700">
+          <div className="mt-4 rounded-[8px] border border-rust/16 bg-rust/8 px-5 py-3 text-sm leading-7 text-rust-700">
             <p>{roleError}</p>
             {errorDetail ? <p className="mt-1.5 text-xs text-rust-700/78">{errorDetail}</p> : null}
           </div>
         ) : null}
 
         {data.issues.length > 0 ? (
-          <div className="mt-4 rounded-[1.2rem] border border-rust/16 bg-rust/8 px-5 py-3 text-sm leading-7 text-rust-700">
+          <div className="mt-4 rounded-[8px] border border-rust/16 bg-rust/8 px-5 py-3 text-sm leading-7 text-rust-700">
             <p className="font-semibold text-rust-700">Some ops data could not be loaded cleanly.</p>
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {data.issues.map((issue) => (
@@ -4130,7 +4390,7 @@ export default async function OpsPage({
         ) : null}
 
         {query ? (
-          <div className="mt-4 rounded-[1.2rem] border border-needle/16 bg-needle/8 px-5 py-3 text-sm leading-7 text-needle-700">
+          <div className="mt-4 rounded-[8px] border border-needle/16 bg-needle/8 px-5 py-3 text-sm leading-7 text-needle-700">
             Showing records matching &ldquo;{query}&rdquo;. Queue counts stay global so you can still see the full workload.
           </div>
         ) : null}
@@ -4158,7 +4418,7 @@ export default async function OpsPage({
         </div>
 
         <div className="mt-5 grid gap-6 xl:grid-cols-[19rem_minmax(0,1fr)]">
-          <aside className="hidden h-fit rounded-[1.6rem] border border-ink/8 bg-white/86 p-3 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur xl:block xl:sticky xl:top-5">
+          <aside className="hidden h-fit rounded-[8px] border border-ink/8 bg-white/86 p-3 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur xl:block xl:sticky xl:top-5">
             <form action="/ops" method="get" className="flex gap-2 px-1 pb-1 pt-1">
               <input type="hidden" name="view" value={safeView} />
               <label className="sr-only" htmlFor="ops-search">Search ops</label>
@@ -4167,18 +4427,18 @@ export default async function OpsPage({
                 name="q"
                 defaultValue={query}
                 placeholder="Search…"
-                className="h-9 min-w-0 flex-1 rounded-[1rem] border border-ink/10 bg-white/88 px-4 text-sm text-ink outline-none transition placeholder:text-ink/32 focus:border-needle/40"
+                className="h-9 min-w-0 flex-1 rounded-lg border border-ink/10 bg-white/88 px-4 text-sm text-ink outline-none transition placeholder:text-ink/32 focus:border-needle/40"
               />
               <button
                 type="submit"
-                className="inline-flex h-9 shrink-0 items-center justify-center rounded-[1rem] bg-needle px-4 text-sm font-semibold text-white transition hover:bg-needle/90"
+                className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg bg-needle px-4 text-sm font-semibold text-white transition hover:bg-needle/90"
               >
                 Go
               </button>
               {query ? (
                 <a
                   href={buildOpsHref(safeView)}
-                  className="inline-flex h-9 shrink-0 items-center justify-center rounded-[1rem] border border-ink/10 bg-white px-3 text-sm font-semibold text-ink/70 transition hover:bg-bone"
+                  className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-ink/10 bg-white px-3 text-sm font-semibold text-ink/70 transition hover:bg-bone"
                 >
                   ✕
                 </a>

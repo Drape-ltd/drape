@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
-import { useRouter } from 'next/navigation'
 import type { Session } from '@supabase/supabase-js'
+import { formatDatabaseEnumLabel } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import { safeEntityName, safeUserText } from '../lib/safe-display'
 import { OpenAppButton } from './open-app-button'
@@ -12,7 +12,9 @@ import {
   bootstrapWebOnboarding,
   webOnboardingFromUser,
 } from '../lib/account-bootstrap'
-import { clearWebSessionScope } from '../lib/web-session-scope'
+import { signOutWebSession } from '../lib/web-auth-session'
+import { GettingStartedCard } from './getting-started-card'
+import { StatusChip } from './ui/status-chip'
 
 type DrapeRole = 'CUSTOMER' | 'TAILOR'
 type JoinedProfile = { display_name?: string | null }
@@ -174,13 +176,7 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 }
 
 function cleanLabel(value: string | null | undefined, fallback: string) {
-  if (!value) return fallback
-  return value
-    .toLowerCase()
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
+  return formatDatabaseEnumLabel(value, fallback)
 }
 
 function formatMoney(amountMinor: number | null | undefined, currency: string | null | undefined) {
@@ -352,7 +348,7 @@ function buildNextAction({
     return {
       eyebrow: 'Setup',
       title: 'Finish your customer profile.',
-      body: 'Add fit preferences and basic profile details before placing your first order.',
+      body: 'Add basic profile details, then save measurements before placing your first order.',
       cta: 'Open settings',
       href: '/account/settings',
     }
@@ -531,7 +527,6 @@ async function fetchAccountActivity(userId: string): Promise<AccountActivity> {
 }
 
 export function AccountDashboard(): React.JSX.Element {
-  const router = useRouter()
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
   const [activity, setActivity] = useState<AccountActivity>(emptyActivity)
@@ -618,15 +613,16 @@ export function AccountDashboard(): React.JSX.Element {
   }
 
   async function signOut() {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    clearWebSessionScope()
-    router.replace('/sign-in')
+    await signOutWebSession({
+      reason: 'manual',
+      redirectTo: '/sign-in',
+      scope: 'local',
+    })
   }
 
   if (loading) {
     return (
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
         <p className="text-sm font-semibold text-ink/62">Loading account...</p>
       </div>
     )
@@ -634,7 +630,7 @@ export function AccountDashboard(): React.JSX.Element {
 
   if (!session) {
     return (
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Account</p>
         <h1 className="mt-3 text-4xl text-ink sm:text-5xl">Sign in to continue.</h1>
         <p className="mt-4 text-sm leading-7 text-ink/66">
@@ -703,7 +699,7 @@ export function AccountDashboard(): React.JSX.Element {
 
   return (
     <div className="grid gap-4">
-      <div className="rounded-[1rem] border border-ink/8 bg-white/88 p-4 shadow-[0_10px_34px_rgba(22,28,24,0.05)]">
+      <div className="rounded-lg border border-ink/8 bg-white/88 p-4 shadow-[0_10px_34px_rgba(22,28,24,0.05)]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-[0.68rem] font-semibold uppercase text-needle/80">Drapeon account</p>
@@ -723,7 +719,7 @@ export function AccountDashboard(): React.JSX.Element {
               Review orders, fit records, messages, saved items, shop work, and payments.
             </p>
           </div>
-          <div className="rounded-[0.85rem] border border-ink/6 bg-bone/70 px-3 py-2 lg:min-w-56">
+          <div className="rounded-lg border border-ink/6 bg-bone/70 px-3 py-2 lg:min-w-56">
             <p className="text-[0.68rem] font-semibold uppercase text-needle/80">Viewing</p>
             <p className="mt-1 text-base font-semibold text-ink">
               {workspaceRole === 'TAILOR' ? 'Tailor workspace' : 'Customer account'}
@@ -765,12 +761,12 @@ export function AccountDashboard(): React.JSX.Element {
           </div>
         </div>
         {error ? (
-          <div className="mt-3 rounded-[0.75rem] border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
+          <div className="mt-3 rounded-lg border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
             {error}
           </div>
         ) : null}
         {activity.warning ? (
-          <div className="mt-3 rounded-[0.75rem] border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
+          <div className="mt-3 rounded-lg border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
             {activity.warning}
           </div>
         ) : null}
@@ -787,31 +783,49 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </div>
 
+      <GettingStartedCard
+        role={workspaceRole}
+        userId={userId}
+        hasCustomerProfile={Boolean(activity.customerProfile)}
+        hasMeasurements={measurementCount > 0}
+        hasCustomerOrder={customerOrders.length > 0}
+        hasTailorProfileComplete={Boolean(activity.tailorProfile?.profile_completed)}
+        hasPayoutVerified={Boolean(activity.tailorProfile?.payout_account_verified) && !activity.tailorProfile?.payout_reverification_required}
+        hasSellerItem={activity.sellerItems.length > 0}
+        hasTailorOrder={tailorOrders.length > 0}
+      />
+
       <div className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-[1rem] border border-ink/6 bg-white/84 p-4 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/84 p-4 shadow-sm">
           <p className="text-[0.68rem] font-semibold uppercase text-needle/80">Orders</p>
-          <p className="mt-2 text-3xl font-semibold text-ink">{activityLoading ? '...' : activity.orders.length}</p>
+          <p className="mt-2 text-3xl font-semibold text-ink">
+            {activityLoading ? <span className="text-base font-semibold text-ink/46">Loading</span> : activity.orders.length}
+          </p>
           <p className="mt-2 text-sm leading-6 text-ink/62">
             {activeOrders.length} active, {completedOrders} completed
           </p>
         </div>
-        <div className="rounded-[1rem] border border-ink/6 bg-white/84 p-4 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/84 p-4 shadow-sm">
           <p className="text-[0.68rem] font-semibold uppercase text-needle/80">Messages</p>
-          <p className="mt-2 text-3xl font-semibold text-ink">{activityLoading ? '...' : activity.messages.length}</p>
+          <p className="mt-2 text-3xl font-semibold text-ink">
+            {activityLoading ? <span className="text-base font-semibold text-ink/46">Loading</span> : activity.messages.length}
+          </p>
           <p className="mt-2 text-sm leading-6 text-ink/62">
             {unreadMessages > 0 ? `${unreadMessages} unread` : 'Threads are caught up'}
           </p>
         </div>
-        <div className="rounded-[1rem] border border-ink/6 bg-white/84 p-4 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/84 p-4 shadow-sm">
           <p className="text-[0.68rem] font-semibold uppercase text-needle/80">{workspaceRole === 'TAILOR' ? 'Shop' : 'Fit'}</p>
-          <p className="mt-2 text-3xl font-semibold text-ink">{activityLoading ? '...' : workspaceRole === 'TAILOR' ? liveSellerItems : measurementCount}</p>
+          <p className="mt-2 text-3xl font-semibold text-ink">
+            {activityLoading ? <span className="text-base font-semibold text-ink/46">Loading</span> : workspaceRole === 'TAILOR' ? liveSellerItems : measurementCount}
+          </p>
           <p className="mt-2 text-sm leading-6 text-ink/62">
             {workspaceRole === 'TAILOR' ? `${activity.sellerItems.length} ready-made records` : 'Measurement records on file'}
           </p>
         </div>
       </div>
 
-      <div className="rounded-[1rem] border border-needle/14 bg-needle/8 p-4 shadow-sm">
+      <div className="rounded-lg border border-needle/14 bg-needle/8 p-4 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-[0.68rem] font-semibold uppercase text-needle/80">{nextAction.eyebrow}</p>
@@ -836,37 +850,38 @@ export function AccountDashboard(): React.JSX.Element {
 
       {workspaceRole === 'TAILOR' ? (
         <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+          <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailor cockpit</p>
-                <h2 className="mt-2 text-3xl text-ink">Your work queue</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-ink">Your work queue</h2>
               </div>
               <p className="text-sm leading-6 text-ink/62">{tailorOrders.length} tailor-side orders</p>
             </div>
             <div className="mt-5 grid gap-3">
               {activityLoading ? (
-                <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+                <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
                   Loading tailor orders...
                 </div>
               ) : tailorOrders.length === 0 ? (
-                <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+                <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
                   No tailor orders yet. New briefs, ready-made orders, consultations, and production work will appear here.
                 </div>
               ) : (
                 tailorOrders.slice(0, 4).map((order) => {
                   const latestUpdate = latestStageUpdateFor(order.id, activity.stageUpdates)
                   return (
-                    <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                    <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">
                             {cleanLabel(order.order_kind, 'Custom order')}
                           </p>
                           <h3 className="mt-2 text-xl font-semibold text-ink">{orderTitle(order)}</h3>
-                          <p className="mt-1 text-sm leading-6 text-ink/62">
-                            {orderCounterparty(order, userId)} · {cleanLabel(order.stage, 'In progress')}
-                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/62">
+                            <span>{orderCounterparty(order, userId)}</span>
+                            <StatusChip status={order.stage} fallback="In progress" />
+                          </div>
                           {latestUpdate?.note ? (
                             <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/58">{safeUserText(latestUpdate.note)}</p>
                           ) : null}
@@ -884,40 +899,43 @@ export function AccountDashboard(): React.JSX.Element {
           </div>
 
           <div className="grid gap-5">
-            <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+            <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Profile readiness</p>
-              <h2 className="mt-2 text-3xl text-ink">
+              <h2 className="mt-2 text-2xl font-semibold text-ink">
                 {safeEntityName(activity.tailorProfile?.business_name || activity.tailorProfile?.display_name, 'Tailor profile')}
               </h2>
               <div className="mt-5 grid gap-2 text-sm leading-6 text-ink/66">
                 <p>Profile: <span className="font-semibold text-ink">{activity.tailorProfile?.profile_completed ? 'Complete' : 'Setup in progress'}</span></p>
                 <p>Verification: <span className="font-semibold text-ink">{activity.tailorProfile?.is_verified ? 'Verified' : 'Not verified yet'}</span></p>
-                <p>Availability: <span className="font-semibold text-ink">{cleanLabel(activity.tailorProfile?.availability, 'Not set')}</span></p>
+                <div className="flex flex-wrap items-center gap-2">Availability: <StatusChip status={activity.tailorProfile?.availability} fallback="Not set" /></div>
                 <p>Payout: <span className="font-semibold text-ink">{activity.tailorProfile?.payout_account_verified ? 'Ready' : 'Needs setup'}</span></p>
               </div>
-              <Link href="/account/profile" className="mt-5 inline-flex min-h-10 items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone">
+              <Link href="/account/profile" className="mt-5 inline-flex min-h-10 items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone">
                 Edit profile
               </Link>
             </div>
-            <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+            <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Ready-made shop</p>
-              <h2 className="mt-2 text-3xl text-ink">{liveSellerItems} live</h2>
+              <h2 className="mt-2 text-2xl font-semibold text-ink">{liveSellerItems} live</h2>
               <div className="mt-5 grid gap-3">
                 {activityLoading ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
                     Loading shop items...
                   </p>
                 ) : activity.sellerItems.length === 0 ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
                     Ready-made shop items will appear here with stock and live status.
                   </p>
                 ) : (
                   activity.sellerItems.slice(0, 4).map((item) => (
-                    <Link key={item.id} href={itemDetailRoute(item.id)} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                    <Link key={item.id} href={itemDetailRoute(item.id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <h3 className="font-semibold text-ink">{safeUserText(item.title, 'Ready-made item')}</h3>
-                          <p className="mt-1 text-sm text-ink/60">{cleanLabel(item.stock_status, 'Stock')} · {item.is_live ? 'Live' : 'Draft'}</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <StatusChip status={item.stock_status} fallback="Stock" />
+                            <StatusChip status={item.is_live ? 'LIVE' : 'DRAFT'} />
+                          </div>
                         </div>
                         <p className="text-sm font-semibold text-ink">{formatMoney(item.price_amount, item.currency)}</p>
                       </div>
@@ -930,37 +948,38 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       ) : (
         <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+          <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Customer account</p>
-                <h2 className="mt-2 text-3xl text-ink">Orders and fit travel together</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-ink">Orders and fit travel together</h2>
               </div>
               <p className="text-sm leading-6 text-ink/62">{customerOrders.length} customer-side orders</p>
             </div>
             <div className="mt-5 grid gap-3">
               {activityLoading ? (
-                <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+                <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
                   Loading customer orders...
                 </div>
               ) : customerOrders.length === 0 ? (
-                <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+                <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
                   No customer orders yet. Once you place a custom order or start ready-made checkout, the status appears here.
                 </div>
               ) : (
                 customerOrders.slice(0, 4).map((order) => {
                   const latestUpdate = latestStageUpdateFor(order.id, activity.stageUpdates)
                   return (
-                    <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                    <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">
                             {cleanLabel(order.order_kind, 'Custom order')}
                           </p>
                           <h3 className="mt-2 text-xl font-semibold text-ink">{orderTitle(order)}</h3>
-                          <p className="mt-1 text-sm leading-6 text-ink/62">
-                            {orderCounterparty(order, userId)} · {cleanLabel(order.stage, 'In progress')}
-                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/62">
+                            <span>{orderCounterparty(order, userId)}</span>
+                            <StatusChip status={order.stage} fallback="In progress" />
+                          </div>
                           <p className="mt-2 text-sm leading-6 text-ink/58">
                             {safeUserText(latestUpdate?.note, 'The next timeline update will appear here.')}
                           </p>
@@ -978,22 +997,22 @@ export function AccountDashboard(): React.JSX.Element {
           </div>
 
           <div className="grid gap-5">
-            <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+            <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Measurement profiles</p>
-              <h2 className="mt-2 text-3xl text-ink">{measurementCount} records</h2>
+              <h2 className="mt-2 text-2xl font-semibold text-ink">{measurementCount} records</h2>
               <div className="mt-5 grid gap-3">
                 {activityLoading ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
                     Loading measurements...
                   </p>
                 ) : activity.measurementProfiles.length === 0 && activity.measurementScans.length === 0 ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
                     Add manual measurements on web, or use Drapeon Vision in the app. Saved profile age and source appear here.
                   </p>
                 ) : (
                   <>
                     {activity.measurementProfiles.slice(0, 3).map((profile) => (
-                      <Link key={profile.id} href="/account/measurements" className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                      <Link key={profile.id} href="/account/measurements" className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <h3 className="font-semibold text-ink">{safeUserText(profile.label, 'Measurement profile')}</h3>
@@ -1006,32 +1025,35 @@ export function AccountDashboard(): React.JSX.Element {
                       </Link>
                     ))}
                     {activity.measurementScans.slice(0, 2).map((scan) => (
-                      <Link key={scan.id} href="/account/measurements" className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                      <Link key={scan.id} href="/account/measurements" className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                         <h3 className="font-semibold text-ink">Drapeon Vision scan</h3>
-                        <p className="mt-1 text-sm text-ink/60">
-                          {cleanLabel(scan.status, 'Captured')} · {cleanLabel(scan.confidence_overall, 'Confidence pending')} · {formatRelative(scan.created_at)}
-                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/60">
+                          <StatusChip status={scan.status} fallback="Captured" />
+                          <span>{cleanLabel(scan.confidence_overall, 'Confidence pending')}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatRelative(scan.created_at)}</span>
+                        </div>
                       </Link>
                     ))}
                   </>
                 )}
               </div>
             </div>
-            <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+            <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Wishlist</p>
-              <h2 className="mt-2 text-3xl text-ink">{activity.wishlistCollections.length} collections</h2>
+              <h2 className="mt-2 text-2xl font-semibold text-ink">{activity.wishlistCollections.length} collections</h2>
               <div className="mt-5 grid gap-3">
                 {activityLoading ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
                     Loading saved items...
                   </p>
                 ) : activity.wishlistCollections.length === 0 ? (
-                  <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+                  <p className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
                     Saved tailors and ready-made items will appear here.
                   </p>
                 ) : (
                   activity.wishlistCollections.slice(0, 4).map((collection) => (
-                    <Link key={collection.id} href="/account/saved" className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                    <Link key={collection.id} href="/account/saved" className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                       <div className="flex items-center justify-between gap-4">
                         <div>
                           <h3 className="font-semibold text-ink">{safeUserText(collection.name, 'Wishlist')}</h3>
@@ -1048,11 +1070,11 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       )}
 
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Messages</p>
-            <h2 className="mt-2 text-3xl text-ink">Order conversations</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Order conversations</h2>
           </div>
           <p className="text-sm leading-6 text-ink/62">
             {latestMessage ? `Latest ${formatRelative(latestMessage.created_at)}` : 'No recent thread activity'}
@@ -1060,11 +1082,11 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-2">
           {activityLoading ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
               Loading messages...
             </div>
           ) : activity.messages.length === 0 ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62 md:col-span-2">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62 md:col-span-2">
               Messages unlock around orders. When you or a tailor sends a note, call request, voice note, or photo update, the thread appears here.
             </div>
           ) : (
@@ -1072,7 +1094,7 @@ export function AccountDashboard(): React.JSX.Element {
               const order = activity.orders.find((entry) => entry.id === message.order_id)
               const sentByUser = message.sender_id === userId
               return (
-                <Link key={message.id} href={order ? orderDetailRoute(order.id) : '/account/messages'} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                <Link key={message.id} href={order ? orderDetailRoute(order.id) : '/account/messages'} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">
                     {sentByUser ? 'You sent' : 'Received'} · {cleanLabel(message.type, 'Message')}
                   </p>
@@ -1088,36 +1110,37 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </div>
 
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">App history</p>
-            <h2 className="mt-2 text-3xl text-ink">Recent orders</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Recent orders</h2>
           </div>
           <p className="text-sm leading-6 text-ink/62">Current status, payment state, and next steps.</p>
         </div>
         <div className="mt-5 grid gap-3">
           {activityLoading ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
               Loading your orders...
             </div>
           ) : activity.orders.length === 0 ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
               No orders yet. When you place, receive, or start an order, it will appear here.
             </div>
           ) : (
             activity.orders.slice(0, 6).map((order) => {
               const side = order.customer_id === userId ? 'Customer order' : 'Tailor order'
               return (
-                <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+                <Link key={order.id} href={orderDetailRoute(order.id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">{side}</p>
                       <h3 className="mt-2 text-xl font-semibold text-ink">{orderTitle(order)}</h3>
-                      <p className="mt-1 text-sm leading-6 text-ink/62">
-                        {orderCounterparty(order, userId)} · {cleanLabel(order.stage, 'In progress')}
-                        {order.delivery_method ? ` · ${cleanLabel(order.delivery_method, 'Fulfillment')}` : ''}
-                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/62">
+                        <span>{orderCounterparty(order, userId)}</span>
+                        <StatusChip status={order.stage} fallback="In progress" />
+                        {order.delivery_method ? <span>{cleanLabel(order.delivery_method, 'Fulfillment')}</span> : null}
+                      </div>
                     </div>
                     <div className="text-left sm:text-right">
                       <p className="text-sm font-semibold text-ink">{orderAmount(order)}</p>
@@ -1131,32 +1154,33 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </div>
 
-      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
+      <div className="rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Money</p>
-            <h2 className="mt-2 text-3xl text-ink">Recent payments</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Recent payments</h2>
           </div>
           <p className="text-sm leading-6 text-ink/62">Read-only web view for checkout and refund records.</p>
         </div>
         <div className="mt-5 grid gap-3">
           {activityLoading ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm font-semibold text-ink/62">
               Loading payment history...
             </div>
           ) : activity.payments.length === 0 ? (
-            <div className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
+            <div className="rounded-[8px] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
               No payment records yet. Successful checkouts and refunds will appear here.
             </div>
           ) : (
             activity.payments.slice(0, 6).map((payment) => (
-              <Link key={payment.id} href={orderDetailRoute(payment.order_id)} className="block rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
+              <Link key={payment.id} href={orderDetailRoute(payment.order_id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h3 className="text-lg font-semibold text-ink">{cleanLabel(payment.phase, 'Order payment')}</h3>
-                    <p className="mt-1 text-sm leading-6 text-ink/62">
-                      {cleanLabel(payment.status, 'Pending')} · {cleanLabel(payment.provider, 'Provider')}
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/62">
+                      <StatusChip status={payment.status} fallback="Pending" />
+                      <span>{cleanLabel(payment.provider, 'Provider')}</span>
+                    </div>
                   </div>
                   <div className="text-left sm:text-right">
                     <p className="text-sm font-semibold text-ink">{formatMoney(payment.amount, payment.currency)}</p>
@@ -1169,7 +1193,7 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </div>
 
-      <section className="rounded-[1.5rem] border border-ink/6 bg-white/86 p-5 shadow-sm">
+      <section className="rounded-[8px] border border-ink/6 bg-white/86 p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Account access</p>
@@ -1184,7 +1208,7 @@ export function AccountDashboard(): React.JSX.Element {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
             {workspaceRole === 'CUSTOMER' ? (
-              <Link href="/account/orders" className="inline-flex min-h-11 items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone">
+              <Link href="/account/orders" className="inline-flex min-h-11 items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone">
                 Review orders
               </Link>
             ) : (
@@ -1194,14 +1218,14 @@ export function AccountDashboard(): React.JSX.Element {
                   void setRole('CUSTOMER')
                 }}
                 disabled={savingRole === 'CUSTOMER'}
-                className="inline-flex min-h-11 items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/40"
+                className="inline-flex min-h-11 items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/40"
               >
                 {savingRole === 'CUSTOMER' ? 'Switching...' : 'Use customer account'}
               </button>
             )}
             {hasTailorProfile ? (
               workspaceRole === 'TAILOR' ? (
-                <Link href="/account/work" className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
+                <Link href="/account/work" className="inline-flex min-h-11 items-center justify-center rounded-[8px] bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
                   Open work queue
                 </Link>
               ) : (
@@ -1211,28 +1235,28 @@ export function AccountDashboard(): React.JSX.Element {
                     void setRole('TAILOR')
                   }}
                   disabled={savingRole === 'TAILOR'}
-                  className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
+                  className="inline-flex min-h-11 items-center justify-center rounded-[8px] bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
                 >
                   {savingRole === 'TAILOR' ? 'Switching...' : 'Use tailor workspace'}
                 </button>
               )
             ) : (
-              <Link href="/apply?source=account" className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
+              <Link href="/apply?source=account" className="inline-flex min-h-11 items-center justify-center rounded-[8px] bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
                 Apply as a tailor
               </Link>
             )}
           </div>
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-3">
-          <div className="rounded-[1rem] border border-ink/6 bg-bone/45 p-4">
+          <div className="rounded-lg border border-ink/6 bg-bone/45 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Current role</p>
             <p className="mt-2 text-sm font-semibold text-ink">{workspaceRole === 'TAILOR' ? 'Tailor' : 'Customer'}</p>
           </div>
-          <div className="rounded-[1rem] border border-ink/6 bg-bone/45 p-4">
+          <div className="rounded-lg border border-ink/6 bg-bone/45 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Tailor access</p>
             <p className="mt-2 text-sm font-semibold text-ink">{hasTailorProfile ? 'Profile found' : 'Not set up'}</p>
           </div>
-          <div className="rounded-[1rem] border border-ink/6 bg-bone/45 p-4">
+          <div className="rounded-lg border border-ink/6 bg-bone/45 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Native tools</p>
             <div className="mt-2">
               <OpenAppButton label="Open app" className="inline-flex rounded-full border border-ink/10 bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-bone" />
@@ -1241,7 +1265,7 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </section>
 
-      <div className="flex flex-col gap-3 rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 text-sm text-ink/66 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-5 text-sm text-ink/66 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-4">
           <Link href="/account/recovery" className="font-semibold text-needle">Recovery</Link>
           <Link href="/account-deletion" className="font-semibold text-needle">Account deletion</Link>

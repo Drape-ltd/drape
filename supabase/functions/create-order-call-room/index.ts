@@ -15,8 +15,8 @@ declare const EdgeRuntime: {
 
 const FN = 'create-order-call-room'
 const ROOM_TTL_SECONDS = 48 * 60 * 60
-const READY_MADE_JOIN_EARLY_MS = 10 * 60 * 1000
-const READY_MADE_JOIN_LATE_MS = 45 * 60 * 1000
+const READY_MADE_JOIN_EARLY_MS = 5 * 60 * 1000
+const READY_MADE_JOIN_LATE_MS = 30 * 60 * 1000
 const ORDER_CALL_STAGES = [
   'CONFIRMED',
   'DESIGNING',
@@ -35,6 +35,7 @@ const ORDER_CALL_STAGES = [
 const BodySchema = z.object({
   orderId: uuid,
   callType: z.enum(['video', 'audio']).default('video'),
+  notifyCounterpart: z.boolean().default(true),
 })
 
 function jsonResponse(body: Record<string, unknown>, status: number, corsHeaders: HeadersInit) {
@@ -148,16 +149,16 @@ function counterpartPush(actorRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
     return {
       title: audioOnly ? 'Tailor audio call ready' : 'Tailor call ready',
       body: audioOnly
-        ? 'Your tailor is trying to reach you on a Drape audio call. Open the order to join now.'
-        : 'Your tailor is trying to reach you on a Drape call. Open the order to join now.',
+        ? 'Your tailor is trying to reach you on a Drape audio call. Tap to join now.'
+        : 'Your tailor is trying to reach you on a Drape call. Tap to join now.',
     }
   }
 
   return {
     title: audioOnly ? 'Customer audio call ready' : 'Customer call ready',
     body: audioOnly
-      ? 'Your customer is trying to reach you on a Drape audio call. Open the order to join now.'
-      : 'Your customer is trying to reach you on a Drape call. Open the order to join now.',
+      ? 'Your customer is trying to reach you on a Drape audio call. Tap to join now.'
+      : 'Your customer is trying to reach you on a Drape call. Tap to join now.',
   }
 }
 
@@ -194,7 +195,8 @@ Deno.serve(async (req) => {
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) return jsonError(corsHeaders, 400, 'VALIDATION_FAILED', parsed.error)
 
-    const { orderId, callType } = parsed.data
+    const { orderId, notifyCounterpart } = parsed.data
+    const callType = parsed.data.callType ?? 'video'
     const audioOnly = callType === 'audio'
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -412,7 +414,7 @@ Deno.serve(async (req) => {
       },
     })
 
-    if (counterpartId) {
+    if (counterpartId && notifyCounterpart) {
       const push = counterpartPush(actorRole, audioOnly)
       EdgeRuntime.waitUntil(
         Promise.allSettled([
@@ -420,7 +422,15 @@ Deno.serve(async (req) => {
             title: push.title,
             body: push.body,
             preferenceKey: 'messages',
-            data: { orderId },
+            channelId: 'calls',
+            sound: 'default',
+            interruptionLevel: 'timeSensitive',
+            data: {
+              orderId,
+              target: 'call-join',
+              callKind: 'ready-made',
+              callType,
+            },
           }),
           enqueueSmsJob(supabase, {
             userId: counterpartId,

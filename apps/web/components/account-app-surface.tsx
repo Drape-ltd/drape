@@ -4,34 +4,139 @@ import Link from 'next/link'
 import type { Route } from 'next'
 import Image from 'next/image'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Session } from '@supabase/supabase-js'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import type { ColumnDef } from '@tanstack/react-table'
+import {
+  Archive,
+  ArchiveRestore,
+  Banknote,
+  BellRing,
+  Briefcase,
+  CheckCheck,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  CircleHelp,
+  ClipboardList,
+  Heart,
+  LoaderCircle,
+  LogOut,
+  MapPin,
+  Menu,
+  Mic,
+  MessageCircle,
+  MessageSquareText,
+  Paperclip,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Phone,
+  Reply,
+  Ruler,
+  ScanLine,
+  Search,
+  Send,
+  Share2,
+  Settings,
+  ShoppingBag,
+  SlidersHorizontal,
+  Square,
+  Star,
+  Trash2,
+  UserRound,
+  Users,
+  Video,
+  Volume2,
+  VolumeX,
+  WalletCards,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
+import type { Session, RealtimeChannel } from '@supabase/supabase-js'
 import {
   CONTACTS,
   CORE_MEASUREMENT_FIELDS,
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
   CUSTOM_ORDER_MAX_REFERENCE_PHOTOS,
   CUSTOM_ORDER_MAX_STYLE_LINKS,
+  SUPPORTED_ACCOUNT_CURRENCIES,
   MEASUREMENT_FIELD_KEYS,
   buildMeasurementProfileStoragePayload,
+  customOrderDefaultDeadline,
+  customOrderMinimumDeliveryDate,
   deriveCancellationPolicy,
   currencySymbol,
+  isAllowedCustomStyleReference,
+  isCustomOrderBriefLongEnough,
   isMeasurementFieldKey,
   isTransientMeasurementMetadataKey,
   measurementCoreCompleteness,
   mergeMeasurementRecords,
   normalizeAccountCurrency,
+  normalizePhoneForStorage,
+  payoutBlockReasonMessage,
+  promoteSpecialistMeasurementsToProfileValues,
   readMeasurementValue,
+  specialistMeasurementProfileValueKeys,
+  stripDrapeVisionFit360DraftFields,
+  TAILOR_SETUP_VALIDATION,
+  buildWhatsAppSupportUrl,
+  getOnboardingProofItemIssues,
+  getCustomOrderFabricIssues,
+  buildBriefDossier,
+  FABRIC_SUBSTITUTION_OPTIONS,
+  BULK_FABRIC_MODE_OPTIONS,
+  formatDatabaseEnumLabel,
+  validatePhoneForProfile,
   validatePasswordStrength,
 } from '@drape/shared'
-import { filterContactInfo } from '@drape/shared/contact-filter'
+import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
+import {
+  CALL_SCHEDULING_POLICY,
+  callSchedulingReasonFor,
+  formatCallCountdown,
+  getCallLifecycleState,
+  isCallSchedulingStartValid,
+} from '@drape/shared/call-scheduling-policy'
+import {
+  ALLOWED_MESSAGE_MEDIA_CONTENT_TYPES,
+  ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
+  ALLOWED_REVIEW_MEDIA_CONTENT_TYPES,
+  ALLOWED_READY_MADE_ITEM_CONTENT_TYPES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
+  VIDEO_DURATION_LIMIT_MESSAGE,
+  isVideoMediaUrl,
+  videoPosterFrameUrl,
+} from '@drape/shared/media-policy'
 import { canTransition, type OrderStage } from '@drape/shared/order-machine'
+import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-brief-dossier'
 import { createClient } from '../lib/supabase'
 import { safeEntityName, safeUserText } from '../lib/safe-display'
-import { clearWebSessionScope } from '../lib/web-session-scope'
+import { signOutWebSession } from '../lib/web-auth-session'
 import { registerWebPushSubscription } from '../lib/web-push-client'
+import { useSessionTimeout } from '../hooks/use-session-timeout'
 import { AccountContextProvider, useAccountContext, type AccountContextValue } from './account-context'
 import { OpenAppButton } from './open-app-button'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { DataTable } from './ui/data-table'
+import { Field } from './ui/field'
+import { IconButton } from './ui/icon-button'
+import { Input } from './ui/input'
+import { MediaViewerDialog } from './ui/media-viewer-dialog'
+import { MetricCard } from './ui/metric-card'
+import { NativeSelect } from './ui/native-select'
+import { SegmentedControl } from './ui/segmented-control'
+import { StatusChip } from './ui/status-chip'
+import { Surface, SurfaceHeader } from './ui/surface'
+import { Switch } from './ui/switch'
+import { Textarea } from './ui/textarea'
 
 type StripeCardElement = {
   mount: (element: HTMLElement) => void
@@ -93,6 +198,10 @@ const ORDER_REALTIME_CHILD_TABLES = [
   'reviews',
 ] as const
 
+const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+const PROFILE_IMAGE_REJECTION_MESSAGE =
+  'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
+
 function isRealtimeFilterValue(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{6,120}$/.test(value)
 }
@@ -112,6 +221,8 @@ type JoinedProfile = {
   avatar_url?: string | null
   location?: string | null
   availability?: string | null
+  accepts_custom_orders_now?: boolean | null
+  shop_paused?: boolean | null
   is_live?: boolean | null
 }
 
@@ -132,6 +243,13 @@ type AccountOrder = {
   fabric_source: string | null
   special_note: string | null
   fabric_tracking: string | null
+  tracking_number?: string | null
+  carrier?: string | null
+  fulfillment_provider?: string | null
+  fulfillment_reference?: string | null
+  fulfillment_contact_name?: string | null
+  fulfillment_contact_phone?: string | null
+  reference_photos?: string[] | null
   customer_measurements_snapshot?: Record<string, unknown> | null
   quoted_amount: number | null
   subtotal_amount: number | null
@@ -192,6 +310,9 @@ type AccountMessage = {
   voice_url: string | null
   read_at: string | null
   created_at: string | null
+  is_deleted?: boolean | null
+  edited_at?: string | null
+  reply_to_id?: string | null
 }
 
 type AccountMessageReaction = {
@@ -244,6 +365,8 @@ type TailorProfile = {
   currency: string | null
   tier: string | null
   availability: string | null
+  accepts_custom_orders_now?: boolean | null
+  shop_paused?: boolean | null
   seller_type?: string | null
   is_live: boolean | null
   is_verified: boolean | null
@@ -256,9 +379,15 @@ type TailorProfile = {
   delivery_available: boolean | null
   shipping_available: boolean | null
   portfolio_photo_urls: string[] | null
+  portfolio_video_urls: string[] | null
   avatar_url: string | null
   profile_completed?: boolean | null
   id_verification_status?: string | null
+  id_selfie_document_url?: string | null
+  id_verification_submitted_at?: string | null
+  id_verification_rejection_reason?: string | null
+  id_verification_rejected_at?: string | null
+  id_verification_metadata?: Record<string, unknown> | null
   payout_currency?: string | null
   payout_provider?: string | null
   payout_reverification_required?: boolean | null
@@ -336,6 +465,53 @@ type SellerItem = {
   tailor_profiles?: JoinedProfile | JoinedProfile[] | null
 }
 
+type ReadyMadeFitUnit = 'in' | 'cm'
+type ReadyMadeFitAdvice = 'SIZE_UP_IF_BETWEEN' | 'SIZE_DOWN_IF_BETWEEN' | 'ASK_SELLER'
+type ReadyMadeFitFieldKey =
+  | 'chest'
+  | 'waist'
+  | 'hips'
+  | 'shoulderWidth'
+  | 'inseam'
+  | 'sleeveLength'
+  | 'neckCircumference'
+  | 'underBust'
+  | 'height'
+  | 'backLength'
+  | 'outseam'
+  | 'thighCircumference'
+  | 'kneeCircumference'
+  | 'bicepCircumference'
+  | 'wristCircumference'
+  | 'headCircumference'
+  | 'hatBandLine'
+  | 'headLength'
+  | 'headWidth'
+  | 'earToEarOverCrown'
+  | 'frontToBackOverCrown'
+  | 'filaHeight'
+  | 'torsoLength'
+
+type ReadyMadeFitRange = {
+  min: number | null
+  max: number | null
+}
+
+type ReadyMadeSizeGuide = {
+  version: 1
+  unit: ReadyMadeFitUnit
+  fields: ReadyMadeFitFieldKey[]
+  sizeRanges: Record<string, Partial<Record<ReadyMadeFitFieldKey, ReadyMadeFitRange>>>
+  fitNotes: string | null
+  stretchNotes: string | null
+  sizeAdvice: ReadyMadeFitAdvice | null
+}
+
+type ReadyMadeSizeGuideDraft = Record<
+  string,
+  Partial<Record<ReadyMadeFitFieldKey, { min: string; max: string }>>
+>
+
 type ReadyMadeCheckoutPricingPreview = {
   currency: string
   displayCurrency?: string | null
@@ -380,6 +556,7 @@ type TailorReview = {
   rating: number | null
   body: string | null
   tags: string[] | null
+  media_urls: string[] | null
   reviewer_name: string | null
   tailor_response?: string | null
   created_at: string | null
@@ -428,11 +605,24 @@ type MaterialAdvance = {
 
 type CustomOrderDetail = {
   order_id: string
+  garment_type_other?: string | null
+  gender_presentation?: string | null
+  social_reference_links?: string[] | null
+  style_notes?: string | null
+  body_note?: string | null
+  fabric_description?: string | null
+  fabric_budget_amount?: number | null
+  fabric_budget_currency?: string | null
+  fabric_sourcing_deadline_days?: number | null
+  fabric_sourcing_deadline_at?: string | null
   fabric_approval_required: boolean | null
   fabric_approval_status: string | null
   fabric_approval_requested_at?: string | null
   fabric_approved_at?: string | null
   fabric_changes_requested_at?: string | null
+  shipping_preference?: string | null
+  delivery_instructions?: string | null
+  target_delivery_date?: string | null
 }
 
 type AccountPayout = {
@@ -921,13 +1111,16 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 }
 
 function cleanLabel(value: string | null | undefined, fallback = 'Not set') {
-  if (!value) return fallback
-  return value
-    .toLowerCase()
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
+  return formatDatabaseEnumLabel(value, fallback)
+}
+
+function payoutBlockedReasonCopy(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    return payoutBlockReasonMessage(value as Parameters<typeof payoutBlockReasonMessage>[0])
+  } catch {
+    return cleanLabel(value, 'Blocked')
+  }
 }
 
 function stringList(value: string[] | null | undefined) {
@@ -1156,12 +1349,15 @@ type OrderSupportMeta = {
     timezone?: string | null
     paidAt?: string | null
     paymentTiming?: string | null
+    reminderStartSentAt?: string | null
   } | null
   orderCall?: {
     status?: string | null
+    reason?: string | null
     scheduledStartAt?: string | null
     scheduledEndAt?: string | null
     timezone?: string | null
+    reminderStartSentAt?: string | null
     completedAt?: string | null
   } | null
   styleAlignment?: {
@@ -1348,9 +1544,9 @@ function partyKey(order: AccountOrder, userId: string | null): string {
     : (order.customer_id ?? `_${order.id}`)
 }
 
-type PublicMediaBucket = 'avatars' | 'portfolio-photos' | 'seller-item-media'
+type PublicMediaBucket = 'avatars' | 'portfolio-photos' | 'seller-item-media' | 'review-media'
 
-const PUBLIC_MEDIA_BUCKETS: PublicMediaBucket[] = ['avatars', 'portfolio-photos', 'seller-item-media']
+const PUBLIC_MEDIA_BUCKETS: PublicMediaBucket[] = ['avatars', 'portfolio-photos', 'seller-item-media', 'review-media']
 const TRUSTED_EXTERNAL_IMAGE_HOSTS = new Set(['images.unsplash.com'])
 
 function isPublicMediaBucket(value: string): value is PublicMediaBucket {
@@ -1432,16 +1628,277 @@ function initialsForName(value: string | null | undefined) {
 }
 
 function itemPhoto(item: SellerItem) {
-  return stringList(item.photo_urls).map((src) => safeMediaUrl(src, 'seller-item-media')).find(Boolean) ?? null
+  return stringList(item.photo_urls)
+    .map((src) => safeMediaUrl(src, 'seller-item-media'))
+    .filter((src): src is string => !!src)
+    .find((src) => !isVideoMediaUrl(src)) ?? null
 }
 
-function sizeGuideNotes(item: SellerItem) {
-  const guide = item.size_guide
-  return guide && typeof guide.notes === 'string' ? guide.notes : ''
+const READY_MADE_FIT_FIELDS: Array<{ key: ReadyMadeFitFieldKey; label: string; shortLabel: string }> = [
+  { key: 'chest', label: 'Chest', shortLabel: 'Chest' },
+  { key: 'waist', label: 'Waist', shortLabel: 'Waist' },
+  { key: 'hips', label: 'Hips', shortLabel: 'Hips' },
+  { key: 'shoulderWidth', label: 'Shoulders', shortLabel: 'Shoulders' },
+  { key: 'inseam', label: 'Inseam', shortLabel: 'Inseam' },
+  { key: 'sleeveLength', label: 'Sleeve length', shortLabel: 'Sleeve' },
+  { key: 'neckCircumference', label: 'Neck', shortLabel: 'Neck' },
+  { key: 'underBust', label: 'Under bust', shortLabel: 'Under bust' },
+  { key: 'height', label: 'Height', shortLabel: 'Height' },
+  { key: 'backLength', label: 'Back length', shortLabel: 'Back' },
+  { key: 'outseam', label: 'Outseam', shortLabel: 'Outseam' },
+  { key: 'thighCircumference', label: 'Thigh', shortLabel: 'Thigh' },
+  { key: 'kneeCircumference', label: 'Knee', shortLabel: 'Knee' },
+  { key: 'bicepCircumference', label: 'Bicep', shortLabel: 'Bicep' },
+  { key: 'wristCircumference', label: 'Wrist', shortLabel: 'Wrist' },
+  { key: 'headCircumference', label: 'Head circumference', shortLabel: 'Head' },
+  { key: 'hatBandLine', label: 'Hat band line', shortLabel: 'Hat band' },
+  { key: 'headLength', label: 'Head length', shortLabel: 'Head length' },
+  { key: 'headWidth', label: 'Head width', shortLabel: 'Head width' },
+  { key: 'earToEarOverCrown', label: 'Ear to ear over crown', shortLabel: 'Crown ear-to-ear' },
+  { key: 'frontToBackOverCrown', label: 'Front to back over crown', shortLabel: 'Crown front-back' },
+  { key: 'filaHeight', label: 'Fila height', shortLabel: 'Fila height' },
+  { key: 'torsoLength', label: 'Torso length', shortLabel: 'Torso' },
+]
+
+const READY_MADE_SIZE_GUIDE_ADVICE_OPTIONS: Array<{
+  value: ReadyMadeFitAdvice
+  label: string
+  hint: string
+}> = [
+  {
+    value: 'SIZE_UP_IF_BETWEEN',
+    label: 'Size up if between',
+    hint: 'Good for fitted pieces or fabric with little stretch.',
+  },
+  {
+    value: 'SIZE_DOWN_IF_BETWEEN',
+    label: 'Size down if between',
+    hint: 'Good for relaxed cuts or stretch fabrics.',
+  },
+  {
+    value: 'ASK_SELLER',
+    label: 'Ask seller if between',
+    hint: 'Use this when fit depends on styling or cut.',
+  },
+]
+
+const FALLBACK_READY_MADE_FIT_FIELDS: ReadyMadeFitFieldKey[] = ['chest', 'waist', 'hips']
+
+const READY_MADE_CATEGORY_FIELD_MAP: Record<string, ReadyMadeFitFieldKey[]> = {
+  agbada: ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  kaftan: ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  suit: ['chest', 'waist', 'shoulderWidth', 'sleeveLength', 'inseam', 'outseam'],
+  dress: ['chest', 'waist', 'hips', 'height', 'torsoLength'],
+  crochet: ['chest', 'waist', 'hips', 'height', 'torsoLength'],
+  'ready-made': ['chest', 'waist', 'hips'],
+  'two-piece set': ['chest', 'waist', 'hips', 'inseam', 'outseam'],
+  trousers: ['waist', 'hips', 'inseam', 'outseam', 'thighCircumference'],
+  skirt: ['waist', 'hips', 'height'],
+  shirt: ['chest', 'shoulderWidth', 'sleeveLength', 'neckCircumference'],
+  'native wear': ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  headwear: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  hat: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  cap: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  fila: ['headCircumference', 'hatBandLine', 'earToEarOverCrown', 'frontToBackOverCrown', 'filaHeight'],
+  gele: ['headCircumference', 'hatBandLine'],
+}
+
+const READY_MADE_FIT_FIELD_SET = new Set<ReadyMadeFitFieldKey>(READY_MADE_FIT_FIELDS.map((field) => field.key))
+
+function readyMadeFitFieldLabel(field: ReadyMadeFitFieldKey) {
+  return READY_MADE_FIT_FIELDS.find((entry) => entry.key === field)?.label ?? field
+}
+
+function recommendedReadyMadeFitFieldsForCategory(category: string | null | undefined) {
+  const normalized = category?.trim().toLowerCase() ?? ''
+  return READY_MADE_CATEGORY_FIELD_MAP[normalized] ?? FALLBACK_READY_MADE_FIT_FIELDS
+}
+
+function asPositiveFitNumber(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null
+  return Number(value.toFixed(2))
+}
+
+function normalizeReadyMadeFitFields(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((field): field is ReadyMadeFitFieldKey => typeof field === 'string' && READY_MADE_FIT_FIELD_SET.has(field as ReadyMadeFitFieldKey))
+    .filter((field, index, all) => all.indexOf(field) === index)
+}
+
+function normalizeReadyMadeFitRange(raw: unknown): ReadyMadeFitRange | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+
+  let min = asPositiveFitNumber((raw as Record<string, unknown>).min)
+  let max = asPositiveFitNumber((raw as Record<string, unknown>).max)
+
+  if (min == null && max == null) return null
+  if (min != null && max != null && max < min) {
+    const nextMin = max
+    max = min
+    min = nextMin
+  }
+
+  return { min, max }
+}
+
+function emptyReadyMadeSizeGuide(unit: ReadyMadeFitUnit = 'in'): ReadyMadeSizeGuide {
+  return {
+    version: 1,
+    unit,
+    fields: [],
+    sizeRanges: {},
+    fitNotes: null,
+    stretchNotes: null,
+    sizeAdvice: 'ASK_SELLER',
+  }
+}
+
+function normalizeWebReadyMadeSizeGuide(raw: unknown, sizes: string[]): ReadyMadeSizeGuide {
+  const base = emptyReadyMadeSizeGuide()
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base
+
+  const value = raw as Record<string, unknown>
+  const fields = normalizeReadyMadeFitFields(value.fields)
+  const sizeRanges: ReadyMadeSizeGuide['sizeRanges'] = {}
+
+  for (const size of sizes) {
+    const rawSizeRanges =
+      value.sizeRanges && typeof value.sizeRanges === 'object' && !Array.isArray(value.sizeRanges)
+        ? (value.sizeRanges as Record<string, unknown>)[size]
+        : null
+
+    if (!rawSizeRanges || typeof rawSizeRanges !== 'object' || Array.isArray(rawSizeRanges)) continue
+
+    const nextRanges: Partial<Record<ReadyMadeFitFieldKey, ReadyMadeFitRange>> = {}
+    for (const field of fields) {
+      const range = normalizeReadyMadeFitRange((rawSizeRanges as Record<string, unknown>)[field])
+      if (range) nextRanges[field] = range
+    }
+
+    if (Object.keys(nextRanges).length > 0) {
+      sizeRanges[size] = nextRanges
+    }
+  }
+
+  const sizeAdvice =
+    value.sizeAdvice === 'SIZE_UP_IF_BETWEEN' ||
+    value.sizeAdvice === 'SIZE_DOWN_IF_BETWEEN' ||
+    value.sizeAdvice === 'ASK_SELLER'
+      ? value.sizeAdvice
+      : 'ASK_SELLER'
+
+  return {
+    version: 1,
+    unit: value.unit === 'cm' ? 'cm' : 'in',
+    fields,
+    sizeRanges,
+    fitNotes: typeof value.fitNotes === 'string' && value.fitNotes.trim().length > 0 ? value.fitNotes.trim() : null,
+    stretchNotes: typeof value.stretchNotes === 'string' && value.stretchNotes.trim().length > 0 ? value.stretchNotes.trim() : null,
+    sizeAdvice,
+  }
+}
+
+function guideDraftFromWebReadyMadeSizeGuide(input: {
+  sizes: string[]
+  fields: ReadyMadeFitFieldKey[]
+  guide: ReadyMadeSizeGuide | null | undefined
+}): ReadyMadeSizeGuideDraft {
+  const normalizedGuide = input.guide ?? emptyReadyMadeSizeGuide()
+  const nextDraft: ReadyMadeSizeGuideDraft = {}
+
+  for (const size of input.sizes) {
+    nextDraft[size] = {}
+    for (const field of input.fields) {
+      const range = normalizedGuide.sizeRanges[size]?.[field]
+      nextDraft[size][field] = {
+        min: range?.min != null ? String(range.min) : '',
+        max: range?.max != null ? String(range.max) : '',
+      }
+    }
+  }
+
+  return nextDraft
+}
+
+function draftToWebReadyMadeSizeGuide(input: {
+  sizes: string[]
+  unit: ReadyMadeFitUnit
+  fields: ReadyMadeFitFieldKey[]
+  draft: ReadyMadeSizeGuideDraft
+  fitNotes: string
+  stretchNotes: string
+  sizeAdvice: ReadyMadeFitAdvice | null
+}): ReadyMadeSizeGuide {
+  const fields = normalizeReadyMadeFitFields(input.fields)
+  const sizeRanges: ReadyMadeSizeGuide['sizeRanges'] = {}
+
+  for (const size of input.sizes) {
+    const nextRanges: Partial<Record<ReadyMadeFitFieldKey, ReadyMadeFitRange>> = {}
+    for (const field of fields) {
+      const rangeDraft = input.draft[size]?.[field]
+      const range = normalizeReadyMadeFitRange({
+        min: typeof rangeDraft?.min === 'string' && rangeDraft.min.trim().length > 0 ? Number(rangeDraft.min) : null,
+        max: typeof rangeDraft?.max === 'string' && rangeDraft.max.trim().length > 0 ? Number(rangeDraft.max) : null,
+      })
+      if (range) nextRanges[field] = range
+    }
+
+    if (Object.keys(nextRanges).length > 0) {
+      sizeRanges[size] = nextRanges
+    }
+  }
+
+  return {
+    version: 1,
+    unit: input.unit,
+    fields,
+    sizeRanges,
+    fitNotes: input.fitNotes.trim().slice(0, 240) || null,
+    stretchNotes: input.stretchNotes.trim().slice(0, 240) || null,
+    sizeAdvice: input.sizeAdvice ?? 'ASK_SELLER',
+  }
+}
+
+function hasReadyMadeSizeGuide(guide: ReadyMadeSizeGuide | null | undefined, sizes?: string[]) {
+  if (!guide) return false
+  const relevantSizes = sizes?.length ? sizes : Object.keys(guide.sizeRanges)
+  if (guide.fields.length === 0 || relevantSizes.length === 0) return false
+
+  return relevantSizes.some((size) =>
+    guide.fields.some((field) => {
+      const range = guide.sizeRanges[size]?.[field]
+      return Boolean(range && (range.min != null || range.max != null))
+    }),
+  )
+}
+
+function fitGuideInputValue(value: string) {
+  const normalized = value.replace(/,/g, '.').replace(/[^\d.]/g, '')
+  const [whole = '', ...rest] = normalized.split('.')
+  return rest.length > 0 ? `${whole}.${rest.join('')}` : whole
+}
+
+function fitGuideFieldsSummary(fields: ReadyMadeFitFieldKey[]) {
+  if (fields.length === 0) return 'Choose fields'
+  const labels = fields.slice(0, 3).map((field) => readyMadeFitFieldLabel(field))
+  return fields.length > 3 ? `${labels.join(', ')} +${fields.length - 3}` : labels.join(', ')
 }
 
 function tailorPhoto(tailor: TailorProfile) {
   return stringList(tailor.portfolio_photo_urls).map((src) => safeMediaUrl(src, 'portfolio-photos')).find(Boolean) ?? safeMediaUrl(tailor.avatar_url, 'avatars') ?? null
+}
+
+function tailorProfileMedia(tailor: TailorProfile) {
+  const primaryPhoto = tailorPhoto(tailor)
+  const portfolioPhotos = stringList(tailor.portfolio_photo_urls)
+    .map((src) => safeMediaUrl(src, 'portfolio-photos'))
+    .filter((src): src is string => !!src)
+  const portfolioVideos = stringList(tailor.portfolio_video_urls)
+    .map((src) => safeMediaUrl(src, 'portfolio-photos'))
+    .filter((src): src is string => !!src)
+
+  return uniqueValues([primaryPhoto, ...portfolioPhotos, ...portfolioVideos])
 }
 
 function hasMeasurements(profile: CustomerProfile | null) {
@@ -1452,13 +1909,49 @@ function measurementCompleteness(measurements: Record<string, unknown> | null | 
   return measurementCoreCompleteness(measurements)
 }
 
+function measurementProfileStatusCopy(completeness: ReturnType<typeof measurementCoreCompleteness>) {
+  if (completeness.missing.length === 0) {
+    return {
+      lead: 'Measurements saved.',
+      detail: 'Tailors can use this profile in briefs.',
+    }
+  }
+
+  return {
+    lead: `${completeness.present.length}/${CORE_MEASUREMENT_FIELDS.length} key measurements saved.`,
+    detail: `Add: ${completeness.missing.map((field) => field.label).join(', ')}.`,
+  }
+}
+
+const DRAPE_VISION_FIT_360_CAPTURE_METHOD = 'DRAPE_VISION_ROTATION'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isFit360VisionProfile(measurements: Record<string, unknown>) {
+  const latestFitProfile = isRecord(measurements.latestFitProfile) ? measurements.latestFitProfile : null
+  return measurements.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    latestFitProfile?.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    measurements.scanFlow === 'FIT_TURN_360_V1' ||
+    latestFitProfile?.scanFlow === 'FIT_TURN_360_V1'
+}
+
+function normalizeMeasurementRecord(measurements: Record<string, unknown> | null | undefined) {
+  if (!measurements) return measurements
+  const promoted = promoteSpecialistMeasurementsToProfileValues(measurements).measurements
+  if (!isFit360VisionProfile(promoted)) return promoted
+  return stripDrapeVisionFit360DraftFields(promoted)
+}
+
 function measurementsForProfile(profile: MeasurementProfile, customerProfile: CustomerProfile | null) {
   const shouldMergeLegacy =
     profile.is_default === true &&
     (!profile.relationship || profile.relationship === 'SELF')
-  return shouldMergeLegacy
+  const measurements = shouldMergeLegacy
     ? mergeMeasurementRecords(customerProfile?.measurements, profile.measurements)
     : profile.measurements ?? {}
+  return normalizeMeasurementRecord(measurements) ?? {}
 }
 
 const MEASUREMENT_FIELD_LABELS: Record<(typeof MEASUREMENT_FIELD_KEYS)[number], string> = {
@@ -1477,6 +1970,10 @@ const MEASUREMENT_FIELD_LABELS: Record<(typeof MEASUREMENT_FIELD_KEYS)[number], 
   kneeCircumference: 'Knee circumference',
   bicepCircumference: 'Bicep circumference',
   wristCircumference: 'Wrist circumference',
+  palmWidth: 'Palm width',
+  palmLength: 'Palm length',
+  sleeveOpening: 'Sleeve opening',
+  banglePassOver: 'Bangle pass-over',
   headCircumference: 'Head circumference',
   hatBandLine: 'Hat band line',
   headLength: 'Head length',
@@ -1485,6 +1982,7 @@ const MEASUREMENT_FIELD_LABELS: Record<(typeof MEASUREMENT_FIELD_KEYS)[number], 
   frontToBackOverCrown: 'Front to back over crown',
   filaHeight: 'Fila height',
   torsoLength: 'Torso length',
+  ankleHemOpening: 'Ankle / hem opening',
 }
 
 const MEASUREMENT_PROFILE_METADATA_KEYS = new Set([
@@ -1511,6 +2009,14 @@ const MEASUREMENT_PROFILE_METADATA_KEYS = new Set([
   'bodyFlags',
   'symmetryFlags',
   'requiresTailorReview',
+  'latestFitProfile',
+  'specialistMeasurements',
+  'visionSpecialistProfile',
+  'latestSpecialistMeasurementScanId',
+  'latestSpecialistScanMode',
+  'latestSpecialistScanFlow',
+  'latestSpecialistScanStatus',
+  'latestSpecialistScanAt',
 ])
 
 function hasEditableMeasurementValue(value: unknown) {
@@ -1538,11 +2044,160 @@ function isEditableCustomMeasurementKey(key: string, value: unknown): boolean {
 }
 
 function coreMeasurementSummary(measurements: Record<string, unknown> | null | undefined) {
+  const normalizedMeasurements = normalizeMeasurementRecord(measurements)
   return CORE_MEASUREMENT_FIELDS.map((field) => {
-    const value = readMeasurementValue(measurements, field)
+    const value = readMeasurementValue(normalizedMeasurements, field)
     if (value == null) return null
     return `${field.label}: ${safeUserText(String(value), 'Saved')}`
   }).filter((value): value is string => Boolean(value))
+}
+
+const SPECIALIST_MEASUREMENT_META_KEYS = new Set([
+  'unit',
+  'cm',
+  'title',
+  'measurementScanId',
+  'captureMethod',
+  'captureMethodLabel',
+  'captureVersion',
+  'visionPipelineVersion',
+  'outputKind',
+  'scanFlow',
+  'scanFlowLabel',
+  'capturedAt',
+  'confidenceOverall',
+  'confidenceByField',
+  'requiresTailorReview',
+  'tapeInputsIn',
+  'tapeSummary',
+])
+
+const SPECIALIST_SECTION_COPY: Record<string, { title: string; subtitle: string }> = {
+  hand_wrist: {
+    title: 'Hand & wrist scan',
+    subtitle: 'Palm, cuff, bangle, and wrist values saved from Vision.',
+  },
+  headwear: {
+    title: 'Headwear scan',
+    subtitle: 'Head, crown, fila, and hat-band values saved from Vision.',
+  },
+  bodice_corset: {
+    title: 'Bodice & corset scan',
+    subtitle: 'Bodice, under-bust, torso, and ribcage values saved from Vision.',
+  },
+  lower_body_detail: {
+    title: 'Hem & ankle openings',
+    subtitle: 'Extra hem/opening values saved from the lower-body scan.',
+  },
+  fit_360: {
+    title: 'Fit 360 scan',
+    subtitle: 'Core body measurements saved from Vision.',
+  },
+}
+
+const SPECIALIST_PROFILE_FIELD_ALIASES: Record<string, string> = {
+  'Palm width': 'palmWidth',
+  'Palm length': 'palmLength',
+  'Sleeve opening': 'sleeveOpening',
+  'Bangle pass-over': 'banglePassOver',
+  'Bangle pass over': 'banglePassOver',
+  ankleHem: 'ankleHemOpening',
+  'Ankle / hem opening': 'ankleHemOpening',
+}
+
+function titleizeMeasurementKey(key: string) {
+  if (isMeasurementFieldKey(key)) return MEASUREMENT_FIELD_LABELS[key]
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function formatSpecialistMeasurementValue(value: unknown, unit: string) {
+  const numericValue = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : null
+  if (numericValue == null || !Number.isFinite(numericValue)) return null
+  return `${numericValue.toFixed(2).replace(/\.?0+$/, '')} ${unit}`
+}
+
+function specialistMeasurementSections(measurements: Record<string, unknown> | null | undefined) {
+  const normalizedMeasurements = normalizeMeasurementRecord(measurements)
+  if (!normalizedMeasurements || !isRecord(normalizedMeasurements.specialistMeasurements)) return []
+  return Object.entries(normalizedMeasurements.specialistMeasurements)
+    .map(([mode, rawValue]) => {
+      if (!isRecord(rawValue)) return null
+      const unit = rawValue.unit === 'cm' ? 'cm' : 'in'
+      const copy = SPECIALIST_SECTION_COPY[mode] ?? {
+        title: typeof rawValue.title === 'string' && rawValue.title.trim()
+          ? rawValue.title.trim()
+          : titleizeMeasurementKey(mode),
+        subtitle: 'Saved scan values for this profile.',
+      }
+      const values = Object.entries(rawValue)
+        .filter(([key]) => {
+          if (SPECIALIST_MEASUREMENT_META_KEYS.has(key)) return false
+          return !isMeasurementFieldKey(SPECIALIST_PROFILE_FIELD_ALIASES[key] ?? key)
+        })
+        .map(([key, value]) => {
+          const formattedValue = formatSpecialistMeasurementValue(value, unit)
+          if (!formattedValue) return null
+          return { key, label: titleizeMeasurementKey(key), value: formattedValue }
+        })
+        .filter((value): value is { key: string; label: string; value: string } => !!value)
+      if (!values.length) return null
+      return { id: mode, ...copy, values }
+    })
+    .filter((section): section is { id: string; title: string; subtitle: string; values: Array<{ key: string; label: string; value: string }> } => !!section)
+}
+
+function SpecialistMeasurementSections({ measurements }: { measurements: Record<string, unknown> | null | undefined }) {
+  const sections = specialistMeasurementSections(measurements)
+  if (sections.length === 0) return null
+
+  return (
+    <div className="mt-3 grid gap-2">
+      {sections.map((section) => (
+        <div key={section.id} className="rounded-lg border border-needle/12 bg-needle/8 p-3">
+          <p className="text-sm font-semibold text-ink">{safeUserText(section.title, 'Vision scan')}</p>
+          <p className="mt-1 text-xs leading-5 text-ink/54">{safeUserText(section.subtitle, 'Saved scan values for this profile.')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {section.values.map((value) => (
+              <span key={`${section.id}:${value.key}`} className="rounded-full border border-ink/8 bg-white px-3 py-1 text-xs text-ink/62">
+                {safeUserText(value.label, 'Measurement')}: {safeUserText(value.value, 'Saved')}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function preservedMeasurementMeta(measurements: Record<string, unknown> | null | undefined) {
+  const normalizedMeasurements = normalizeMeasurementRecord(measurements)
+  const meta: Record<string, unknown> = {}
+  if (!normalizedMeasurements) return meta
+  for (const key of [
+    'latestFitProfile',
+    'specialistMeasurements',
+    'visionSpecialistProfile',
+    'latestSpecialistMeasurementScanId',
+    'latestSpecialistScanMode',
+    'latestSpecialistScanFlow',
+    'latestSpecialistScanStatus',
+    'latestSpecialistScanAt',
+    'bodyFlags',
+    'symmetryFlags',
+    'requiresTailorReview',
+  ]) {
+    if (normalizedMeasurements[key] != null) meta[key] = normalizedMeasurements[key]
+  }
+  return meta
 }
 
 function scanConfidenceLabel(value: string | null | undefined) {
@@ -1608,18 +2263,6 @@ function productionEvidenceFor(orderId: string, evidence: ProductionEvidence[]) 
   return evidence.filter((item) => item.order_id === orderId)
 }
 
-function isVideoMediaUrl(src: string | null | undefined) {
-  if (!src) return false
-  try {
-    const pathname = src.startsWith('blob:') || src.startsWith('data:')
-      ? src
-      : new URL(src).pathname
-    return /\.(mp4|mov|m4v|webm|ogg)$/iu.test(pathname)
-  } catch {
-    return /\.(mp4|mov|m4v|webm|ogg)$/iu.test(src)
-  }
-}
-
 function mediaFingerprint(file: File) {
   return [file.name, file.type, file.size, file.lastModified]
     .join(':')
@@ -1628,13 +2271,13 @@ function mediaFingerprint(file: File) {
 }
 
 const publicTailorProfileSelect =
-  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, avatar_url'
+  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, accepts_custom_orders_now, shop_paused, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, portfolio_video_urls, avatar_url'
 
 const ownTailorProfileSelect =
-  `${publicTailorProfileSelect}, profile_completed, id_verification_status, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_bank_name, payout_account_name, payout_account_masked, payout_country_code, manual_bank_entry, manual_bank_name, manual_bank_country_code, manual_bank_country_name, manual_bank_swift_bic, manual_bank_account_name, manual_bank_verification_status, manual_bank_submitted_at, paystack_recipient_code, stripe_connect_account_id, paystack_account_id, stripe_account_id, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
+  `${publicTailorProfileSelect}, profile_completed, id_verification_status, id_selfie_document_url, id_verification_submitted_at, id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
 
 const sellerItemSelect =
-  'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location, availability, is_live)'
+  'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location, availability, shop_paused, is_live)'
 
 type WebTailorReadiness = {
   profileCompleted: boolean
@@ -1659,25 +2302,27 @@ function isVerifiedIdentityStatus(status: string | null | undefined) {
   return status === 'VERIFIED' || status === 'APPROVED'
 }
 
-function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): WebTailorReadiness {
-  const profileCompleted = profile?.profile_completed === true
-  const idStatus = profile?.id_verification_status ?? 'NOT_SUBMITTED'
-  const identityVerified = isVerifiedIdentityStatus(idStatus)
-  const legacyProviderLinked =
-    hasNonEmptyText(profile?.stripe_account_id) ||
-    hasNonEmptyText(profile?.paystack_account_id) ||
-    hasNonEmptyText(profile?.stripe_connect_account_id) ||
-    hasNonEmptyText(profile?.paystack_recipient_code)
-  const payoutVerified = profile?.payout_account_verified === true
-  const needsReverification = profile?.payout_reverification_required === true
-  const explicitPayoutStateKnown =
-    typeof profile?.payout_account_verified === 'boolean' ||
-    typeof profile?.payout_reverification_required === 'boolean'
-  const payoutReady = identityVerified && (
-    explicitPayoutStateKnown
-      ? payoutVerified && !needsReverification
-      : legacyProviderLinked
+function isPayoutReady(profile: TailorProfile | null | undefined) {
+  if (!profile || profile.payout_reverification_required === true) return false
+  if (profile.payout_account_verified === true) return true
+
+  const manualBankStatus = String(profile.manual_bank_verification_status ?? '').toUpperCase()
+  return (
+    hasNonEmptyText(profile.paystack_recipient_code) ||
+    hasNonEmptyText(profile.stripe_connect_account_id) ||
+    hasNonEmptyText(profile.paystack_account_id) ||
+    hasNonEmptyText(profile.stripe_account_id) ||
+    (profile.manual_bank_entry === true && ['VERIFIED', 'APPROVED'].includes(manualBankStatus))
   )
+}
+
+function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): WebTailorReadiness {
+  const profileReleased = profile?.is_live === true
+  const profileCompleted = profile?.profile_completed === true || profileReleased
+  const idStatus = profile?.id_verification_status ?? 'NOT_SUBMITTED'
+  const identityVerified = isVerifiedIdentityStatus(idStatus) || profile?.is_verified === true || profileReleased
+  const needsReverification = profile?.payout_reverification_required === true
+  const payoutReady = identityVerified && isPayoutReady(profile)
 
   if (!profileCompleted) {
     return {
@@ -1688,7 +2333,7 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
       canAcceptPaidOrders: false,
       canPublishPaidItems: false,
       code: 'PROFILE_INCOMPLETE',
-      title: 'Finish your seller profile first',
+      title: 'Finish your tailor profile first',
       body: 'Your public profile, portfolio, and selling setup need to be complete before customers can discover you as a normal live business.',
       actionLabel: 'Complete profile',
       actionHref: '/account/profile' as Route,
@@ -1708,10 +2353,10 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
       code: pending ? 'IDENTITY_REVIEW_PENDING' : 'IDENTITY_VERIFICATION_REQUIRED',
       title: pending ? 'Identity review is in progress' : 'Identity verification is still needed',
       body: pending
-        ? 'Your profile can finish review before it goes live. Paid work should wait until identity review and payout setup are both complete.'
+        ? 'Your profile can finish review before paid work opens. Paid quotes and live shop publishing stay paused until identity review and payout setup are both complete.'
         : idStatus === 'REJECTED'
           ? 'Your verification needs attention before Drapeon can show you publicly or let you take paid work.'
-          : 'Customers should not discover or pay an unverified seller profile as if it were fully ready.',
+          : 'Customers should not discover or pay an unverified tailor profile as if it were fully ready.',
       actionLabel: pending ? null : idStatus === 'REJECTED' ? 'Resubmit verification in app' : 'Finish verification in app',
       actionHref: null,
       tone: 'warning',
@@ -1728,10 +2373,14 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
       canAcceptPaidOrders: false,
       canPublishPaidItems: false,
       code: 'PAYOUT_SETUP_REQUIRED',
-      title: reconnect ? 'Reconnect your payout account' : 'Set up your payout account',
-      body: reconnect
-        ? 'Your payout details changed or need review again. Reconnect your payout account before paid quotes, shop publishing, and earnings release continue.'
-        : 'Set up your payout account before paid quotes and live shop items unlock.',
+      title: profileReleased ? 'Live profile, checkout paused' : reconnect ? 'Reconnect your payout account' : 'Set up your payout account',
+      body: profileReleased
+        ? reconnect
+          ? 'Your public profile is live, but payout details need review again before paid quotes, checkout, and earnings release continue.'
+          : 'Customers can browse your public profile, but paid quotes, checkout, and earnings release stay paused until payout is verified.'
+        : reconnect
+          ? 'Your payout details changed or need review again. Reconnect your payout account before paid quotes, shop publishing, and earnings release continue.'
+          : 'Set up your payout account before paid quotes and live shop items unlock.',
       actionLabel: reconnect ? 'Reconnect payout' : 'Set up payout',
       actionHref: '/account/payout' as Route,
       tone: 'warning',
@@ -1774,7 +2423,7 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
 const accountOrderSelect = `
   id, reference, order_kind, garment_type, item_title, item_size, garment_description, occasion, stage, delivery_method,
   delivery_address, recipient_name, recipient_phone,
-  fabric_source, special_note, fabric_tracking, customer_measurements_snapshot, quoted_amount, subtotal_amount, fulfillment_fee, shipping_amount,
+  fabric_source, special_note, fabric_tracking, tracking_number, carrier, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos, customer_measurements_snapshot, quoted_amount, subtotal_amount, fulfillment_fee, shipping_amount,
   tax_amount, platform_fee_amount, total_amount, currency, quoted_currency, created_at, updated_at, deadline,
   quoted_completion_date, customer_id, tailor_id, tailor_profile_id, seller_item_id, payment_provider,
   fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
@@ -1830,13 +2479,13 @@ function priceRange(tailor: TailorProfile) {
   return formatMoney(tailor.price_range_min ?? tailor.price_range_max, tailor.currency)
 }
 
-function sizeGuideSummary(sizeGuide: Record<string, unknown> | null | undefined) {
-  if (!sizeGuide || Object.keys(sizeGuide).length === 0) return 'Fit guidance continues in the app.'
-  const keys = Object.keys(sizeGuide)
-    .map((key) => safeUserText(key))
-    .filter(Boolean)
-    .slice(0, 4)
-  return keys.length > 0 ? `Fit guide saved for ${keys.join(', ')}.` : 'Fit guide saved.'
+function sizeGuideSummary(sizeGuide: Record<string, unknown> | null | undefined, sizes: string[] = []) {
+  const guide = normalizeWebReadyMadeSizeGuide(sizeGuide, sizes.length > 0 ? sizes : Object.keys((sizeGuide?.sizeRanges as Record<string, unknown> | undefined) ?? {}))
+  if (!hasReadyMadeSizeGuide(guide, sizes)) return 'Fit guidance is not available for this item yet.'
+  const fields = guide.fields.slice(0, 4).map((field) => readyMadeFitFieldLabel(field).toLowerCase())
+  const sizeCount = Object.keys(guide.sizeRanges).length
+  const fieldCopy = fields.length > 0 ? fields.join(', ') : 'saved measurements'
+  return `Fit ranges saved for ${fieldCopy} across ${sizeCount} size${sizeCount === 1 ? '' : 's'}.`
 }
 
 function readyMadeInventoryCount(item: SellerItem) {
@@ -1856,12 +2505,86 @@ function readyMadeInventoryCount(item: SellerItem) {
   }, 0)
 }
 
+function readyMadeSizeInventoryMap(item: SellerItem) {
+  const sizes = stringList(item.sizes)
+  const rawInventory = item.size_inventory && typeof item.size_inventory === 'object' && !Array.isArray(item.size_inventory)
+    ? item.size_inventory
+    : {}
+  const fallbackInventoryQuantity =
+    typeof item.inventory_quantity === 'number' && Number.isFinite(item.inventory_quantity)
+      ? Math.max(0, Math.floor(item.inventory_quantity))
+      : 0
+  let assignedUnits = 0
+  const nextInventory = Object.fromEntries(sizes.map((entry) => {
+    const rawValue = rawInventory[entry]
+    const parsedValue =
+      typeof rawValue === 'number'
+        ? Math.floor(rawValue)
+        : Number.parseInt(typeof rawValue === 'string' ? rawValue : '', 10)
+    const quantity = Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : 0
+    assignedUnits += quantity
+    return [entry, quantity]
+  }))
+
+  if (assignedUnits === 0 && fallbackInventoryQuantity > 0 && sizes[0]) {
+    nextInventory[sizes[0]] = fallbackInventoryQuantity
+  }
+
+  return nextInventory
+}
+
+function readyMadeQuantityForSize(item: SellerItem, requestedSize: string | null | undefined) {
+  const size = requestedSize?.trim()
+  if (!size) return readyMadeInventoryCount(item)
+  return Math.max(0, Math.floor(readyMadeSizeInventoryMap(item)[size] ?? 0))
+}
+
+function hasStructuredReadyMadeSizeGuide(sizeGuide: Record<string, unknown> | null | undefined, sizes: string[]) {
+  return hasReadyMadeSizeGuide(normalizeWebReadyMadeSizeGuide(sizeGuide, sizes), sizes)
+}
+
+function readyMadeLiveListingIssues(input: {
+  category: string | null | undefined
+  description: string
+  sizes: string[]
+  photoCount: number
+  inventoryQuantity: number
+  hasSizeGuide: boolean
+  requiresPickupAddress: boolean
+}) {
+  const issues: string[] = []
+
+  if (!input.category?.trim()) {
+    issues.push('Before this item can go live, choose a category so buyers know where it belongs.')
+  }
+  if (input.photoCount === 0) {
+    issues.push('Before this item can go live, add at least one clear photo so buyers can see the piece.')
+  }
+  if (input.sizes.length === 0) {
+    issues.push('Before this item can go live, add at least one size. Use One size if that is how you sell it.')
+  }
+  if (!input.hasSizeGuide) {
+    issues.push('Before this item can go live, add at least one fit-guide range so buyers can see what each size means and Drapeon can recommend the right fit.')
+  }
+  if (input.description.trim().length < 24) {
+    issues.push('Before this item can go live, add a fuller description. Aim for 1 or 2 sentences on the style, fit, fabric, or occasion so buyers understand the piece.')
+  }
+  if (input.inventoryQuantity < 1) {
+    issues.push('Before this item can go live, add at least 1 unit to at least one size so buyers can actually order it.')
+  }
+  if (input.requiresPickupAddress) {
+    issues.push('Before pickup items can go live, add your private pickup address in Profile.')
+  }
+
+  return issues
+}
+
 function isReadyMadeBuyableOnWeb(item: SellerItem, tailor: JoinedProfile | null) {
   const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
   return (
     item.is_live === true &&
     tailor?.is_live === true &&
-    tailor?.availability !== 'FULLY_BOOKED' &&
+    tailor?.shop_paused !== true &&
     !['SOLD_OUT', 'HIDDEN'].includes(stockStatus) &&
     readyMadeInventoryCount(item) > 0
   )
@@ -1871,6 +2594,7 @@ function canStartCustomBriefOnWeb(tailor: TailorProfile, userId: string | null) 
   return (
     tailor.is_live === true &&
     tailor.supports_custom_orders === true &&
+    tailor.accepts_custom_orders_now !== false &&
     tailor.availability !== 'FULLY_BOOKED' &&
     tailor.user_id !== userId
   )
@@ -1878,6 +2602,7 @@ function canStartCustomBriefOnWeb(tailor: TailorProfile, userId: string | null) 
 
 function customBriefUnavailableLabel(tailor: TailorProfile, userId: string | null) {
   if (tailor.user_id === userId) return 'Your tailor profile'
+  if (tailor.accepts_custom_orders_now === false) return 'Custom orders paused'
   if (tailor.availability === 'FULLY_BOOKED') return 'Fully booked'
   if (tailor.is_live !== true || tailor.supports_custom_orders !== true) return 'Custom orders unavailable'
   return 'Custom orders unavailable'
@@ -1885,7 +2610,8 @@ function customBriefUnavailableLabel(tailor: TailorProfile, userId: string | nul
 
 function readyMadeUnavailableLabel(item: SellerItem, tailor: JoinedProfile | null) {
   const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
-  if (tailor?.availability === 'FULLY_BOOKED' || tailor?.is_live !== true) return 'Seller unavailable'
+  if (tailor?.is_live !== true) return 'Seller unavailable'
+  if (tailor?.shop_paused === true) return 'Shop paused'
   if (item.is_live !== true || stockStatus === 'HIDDEN') return 'Unavailable'
   if (stockStatus === 'SOLD_OUT' || readyMadeInventoryCount(item) <= 0) return 'Sold out'
   return 'Unavailable'
@@ -1907,14 +2633,73 @@ function mailto(address: string, subject: string) {
   return `mailto:${address}?subject=${encodeURIComponent(subject)}`
 }
 
+function rawErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message.trim()
+  if (!error || typeof error !== 'object') return null
+  const message = (error as { message?: unknown }).message
+  return typeof message === 'string' && message.trim().length > 0 ? message.trim() : null
+}
+
+function isMachineErrorCodeMessage(value: string) {
+  const trimmed = value.trim()
+  return /^[A-Z0-9_:-]+$/.test(trimmed) && !trimmed.includes(' ')
+}
+
+const GENERIC_SERVER_ERROR_MESSAGES = new Set([
+  'database error',
+  'internal error',
+  'internal server error',
+  'unauthorized',
+  'forbidden',
+  'not found',
+])
+
+function isGenericServerErrorMessage(value: string) {
+  return GENERIC_SERVER_ERROR_MESSAGES.has(value.trim().toLowerCase())
+}
+
+function isValidationLeakMessage(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return (
+    normalized.startsWith('validation error') ||
+    normalized.includes('invalid discriminator') ||
+    normalized.includes('expected ') ||
+    normalized.includes('received ')
+  )
+}
+
+function isDisplayableFunctionError(value: string) {
+  return !isMachineErrorCodeMessage(value) && !isGenericServerErrorMessage(value) && !isValidationLeakMessage(value)
+}
+
+const CONNECTIVITY_ERROR_PATTERNS = [
+  'network request failed',
+  'failed to fetch',
+  'fetch failed',
+  'networkerror',
+  'timed out',
+  'connection lost',
+  'offline',
+  'internet connection appears to be offline',
+]
+
+function isLikelyConnectivityIssue(error: unknown) {
+  const message = rawErrorMessage(error)?.toLowerCase() ?? ''
+  return CONNECTIVITY_ERROR_PATTERNS.some((pattern) => message.includes(pattern))
+}
+
 function friendlyActionError(error: unknown, fallback = 'That action could not finish right now. Please try again.') {
+  if (isLikelyConnectivityIssue(error)) {
+    return 'Connection looks weak. Your details are still here, so retry when the signal improves.'
+  }
   if (error && typeof error === 'object') {
     const candidate = (error as { message?: unknown; error?: unknown }).message ?? (error as { error?: unknown }).error
     if (typeof candidate === 'string' && candidate.trim().length > 0) {
-      return candidate.replace(/^FunctionsHttpError:\s*/i, '').trim()
+      const message = candidate.replace(/^FunctionsHttpError:\s*/i, '').trim()
+      if (isDisplayableFunctionError(message)) return message
     }
   }
-  if (typeof error === 'string' && error.trim().length > 0) return error
+  if (typeof error === 'string' && error.trim().length > 0 && isDisplayableFunctionError(error)) return error
   return fallback
 }
 
@@ -1938,9 +2723,11 @@ async function functionHttpErrorMessage(error: unknown) {
         : typeof parsed.error === 'string'
           ? parsed.error
           : null
-      return message?.trim() || null
+      const trimmed = message?.trim()
+      return trimmed && isDisplayableFunctionError(trimmed) ? trimmed : null
     } catch {
-      return text.trim()
+      const trimmed = text.trim()
+      return isDisplayableFunctionError(trimmed) ? trimmed : null
     }
   } catch {
     return null
@@ -2108,9 +2895,11 @@ const WEB_OCCASION_OPTIONS = [
 ]
 
 function defaultDeadlineInput() {
-  const date = new Date()
-  date.setDate(date.getDate() + 28)
-  return date.toISOString().slice(0, 10)
+  return customOrderDefaultDeadline().toISOString().slice(0, 10)
+}
+
+function minimumDeadlineInput() {
+  return customOrderMinimumDeliveryDate().toISOString().slice(0, 10)
 }
 
 function dateInputToIso(value: string) {
@@ -2271,9 +3060,11 @@ function stagePillClass(stage: string | null | undefined) {
 
 function StagePill({ stage, label }: { stage: string | null | undefined; label?: string }) {
   return (
-    <span className={`inline-flex w-fit shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${stagePillClass(stage)}`}>
-      {label ?? cleanLabel(stage, 'In progress')}
-    </span>
+    <StatusChip
+      status={label ?? stage}
+      fallback="In progress"
+      className={`w-fit shrink-0 whitespace-nowrap ${stagePillClass(stage)}`}
+    />
   )
 }
 
@@ -2298,7 +3089,7 @@ function StageTimeline({ order }: { order: AccountOrder }) {
   const current = asOrderStage(order.stage)
   const currentIndex = current ? CUSTOMER_STAGE_FLOW.indexOf(current) : -1
   return (
-    <div className="rounded-[1.25rem] border border-ink/6 bg-bone/55 p-4">
+    <div className="rounded-[8px] border border-ink/6 bg-bone/55 p-4">
       <div className="flex items-center justify-between gap-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">Stage progress</p>
         <StagePill stage={order.stage} />
@@ -2313,7 +3104,7 @@ function StageTimeline({ order }: { order: AccountOrder }) {
           return (
             <li
               key={stage}
-              className={`rounded-[0.9rem] border px-3 py-2 text-xs font-semibold ${
+              className={`rounded-[8px] border px-3 py-2 text-xs font-semibold ${
                 active
                   ? 'border-needle bg-needle text-white'
                   : reached
@@ -2373,6 +3164,24 @@ function datetimeLocalToIso(value: string) {
 
 const MESSAGE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 const MESSAGE_PHOTO_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const PORTFOLIO_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.portfolioVideo
+const PORTFOLIO_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.portfolioVideo
+const PORTFOLIO_VIDEO_CONTENT_TYPES = new Set<string>(ALLOWED_VIDEO_CONTENT_TYPES)
+const READY_MADE_MEDIA_MAX_BYTES = MEDIA_LIMITS_BYTES.readyMadeItemVideo
+const READY_MADE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.readyMadeItemVideo
+const READY_MADE_MEDIA_CONTENT_TYPES = new Set<string>(ALLOWED_READY_MADE_ITEM_CONTENT_TYPES)
+const MESSAGE_MEDIA_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.messageVideo
+const MESSAGE_MEDIA_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.messageVideo
+const MESSAGE_MEDIA_CONTENT_TYPES = new Set<string>(ALLOWED_MESSAGE_MEDIA_CONTENT_TYPES)
+const ORDER_EVIDENCE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.orderUpdateVideo
+const ORDER_EVIDENCE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.orderUpdateVideo
+const ORDER_EVIDENCE_CONTENT_TYPES = new Set<string>(ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES)
+const REVIEW_MEDIA_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.reviewVideo
+const REVIEW_MEDIA_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.reviewVideo
+const REVIEW_MEDIA_CONTENT_TYPES = new Set<string>(ALLOWED_REVIEW_MEDIA_CONTENT_TYPES)
+const MAX_READY_MADE_MEDIA = 6
+const MAX_REVIEW_MEDIA = 6
+const MAX_WEB_FABRIC_REFERENCE_MEDIA = 4
 
 function validateMessagePhoto(file: File) {
   if (!MESSAGE_PHOTO_CONTENT_TYPES.has(file.type)) {
@@ -2382,6 +3191,182 @@ function validateMessagePhoto(file: File) {
     return 'Choose a photo under 10 MB.'
   }
   return null
+}
+
+function extensionBackedMediaContentType(file: File, allowedContentTypes: ReadonlySet<string>) {
+  const normalized = file.type.split(';')[0]?.trim().toLowerCase()
+  if (normalized && allowedContentTypes.has(normalized)) return normalized
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg'
+  if (extension === 'png') return 'image/png'
+  if (extension === 'webp') return 'image/webp'
+  if (extension === 'mov' || extension === 'qt') return 'video/quicktime'
+  if (extension === 'mp4' || extension === 'm4v') return 'video/mp4'
+  return null
+}
+
+function isVideoContentType(contentType: string | null | undefined) {
+  return typeof contentType === 'string' && contentType.startsWith('video/')
+}
+
+async function prepareOperationalMediaFile(
+  file: File,
+  options: {
+    allowedContentTypes: ReadonlySet<string>
+    videoMaxBytes: number
+    videoMaxSeconds: number
+  },
+) {
+  const contentType = extensionBackedMediaContentType(file, options.allowedContentTypes)
+  if (!contentType || !options.allowedContentTypes.has(contentType)) {
+    throw new Error('That file type is not supported here. Please choose a photo or video from your device.')
+  }
+
+  if (isVideoContentType(contentType)) {
+    if (!ALLOWED_VIDEO_CONTENT_TYPES.includes(contentType as (typeof ALLOWED_VIDEO_CONTENT_TYPES)[number])) {
+      throw new Error('Choose an MP4 or MOV video.')
+    }
+    if (file.size > options.videoMaxBytes) {
+      throw new Error(`Choose videos under ${Math.round(options.videoMaxBytes / (1024 * 1024))} MB.`)
+    }
+    const duration = await portfolioVideoDuration(file)
+    if (Number.isFinite(duration) && duration > options.videoMaxSeconds) {
+      throw new Error(OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE)
+    }
+    return new File([file], file.name, {
+      type: contentType,
+      lastModified: file.lastModified,
+    })
+  }
+
+  if (file.size > MEDIA_LIMITS_BYTES.image) {
+    throw new Error('Choose a photo under 10 MB.')
+  }
+  return reencodeImageFile(file)
+}
+
+function prepareMessageMediaFile(file: File) {
+  return prepareOperationalMediaFile(file, {
+    allowedContentTypes: MESSAGE_MEDIA_CONTENT_TYPES,
+    videoMaxBytes: MESSAGE_MEDIA_VIDEO_MAX_BYTES,
+    videoMaxSeconds: MESSAGE_MEDIA_VIDEO_MAX_SECONDS,
+  })
+}
+
+function prepareOrderEvidenceFile(file: File) {
+  return prepareOperationalMediaFile(file, {
+    allowedContentTypes: ORDER_EVIDENCE_CONTENT_TYPES,
+    videoMaxBytes: ORDER_EVIDENCE_VIDEO_MAX_BYTES,
+    videoMaxSeconds: ORDER_EVIDENCE_VIDEO_MAX_SECONDS,
+  })
+}
+
+async function prepareReviewMediaFile(file: File) {
+  const contentType = extensionBackedMediaContentType(file, REVIEW_MEDIA_CONTENT_TYPES)
+  if (!contentType || !REVIEW_MEDIA_CONTENT_TYPES.has(contentType)) {
+    throw new Error('That file type is not supported here. Please choose a photo or video from your device.')
+  }
+
+  if (isVideoContentType(contentType)) {
+    if (file.size > REVIEW_MEDIA_VIDEO_MAX_BYTES) {
+      throw new Error(`Choose videos under ${Math.round(REVIEW_MEDIA_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`)
+    }
+    const duration = await portfolioVideoDuration(file)
+    if (Number.isFinite(duration) && duration > REVIEW_MEDIA_VIDEO_MAX_SECONDS) {
+      throw new Error(VIDEO_DURATION_LIMIT_MESSAGE)
+    }
+    return new File([file], file.name, {
+      type: contentType,
+      lastModified: file.lastModified,
+    })
+  }
+
+  if (file.size > MEDIA_LIMITS_BYTES.image) {
+    throw new Error('Choose a photo under 10 MB.')
+  }
+  return reencodeImageFile(file)
+}
+
+function portfolioVideoContentType(file: File) {
+  const normalized = file.type.split(';')[0]?.trim().toLowerCase()
+  if (normalized && PORTFOLIO_VIDEO_CONTENT_TYPES.has(normalized)) return normalized
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (extension === 'mov' || extension === 'qt') return 'video/quicktime'
+  if (extension === 'mp4' || extension === 'm4v') return 'video/mp4'
+  return null
+}
+
+function readyMadeMediaContentType(file: File) {
+  const normalized = file.type.split(';')[0]?.trim().toLowerCase()
+  if (normalized && READY_MADE_MEDIA_CONTENT_TYPES.has(normalized)) return normalized
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg'
+  if (extension === 'png') return 'image/png'
+  if (extension === 'webp') return 'image/webp'
+  if (extension === 'mov' || extension === 'qt') return 'video/quicktime'
+  if (extension === 'mp4' || extension === 'm4v') return 'video/mp4'
+  return null
+}
+
+async function portfolioVideoDuration(file: File) {
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    return await new Promise<number>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve(video.duration)
+      video.onerror = () => reject(new Error('The video could not be read.'))
+      video.src = objectUrl
+    })
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+async function preparePortfolioVideoFile(file: File) {
+  const contentType = portfolioVideoContentType(file)
+  if (!contentType || !PORTFOLIO_VIDEO_CONTENT_TYPES.has(contentType)) {
+    throw new Error('Choose an MP4 or MOV video.')
+  }
+  if (file.size > PORTFOLIO_VIDEO_MAX_BYTES) {
+    throw new Error(`Choose a portfolio video under ${Math.round(PORTFOLIO_VIDEO_MAX_BYTES / (1024 * 1024))} MB.`)
+  }
+
+  const duration = await portfolioVideoDuration(file)
+  if (Number.isFinite(duration) && duration > PORTFOLIO_VIDEO_MAX_SECONDS) {
+    throw new Error(VIDEO_DURATION_LIMIT_MESSAGE)
+  }
+
+  return new File([file], file.name, {
+    type: contentType,
+    lastModified: file.lastModified,
+  })
+}
+
+async function prepareReadyMadeMediaFile(file: File) {
+  const contentType = readyMadeMediaContentType(file)
+  if (!contentType || !READY_MADE_MEDIA_CONTENT_TYPES.has(contentType)) {
+    throw new Error('That file type is not supported here. Please choose a photo or video from your device.')
+  }
+
+  if (contentType.startsWith('video/')) {
+    if (file.size > READY_MADE_MEDIA_MAX_BYTES) {
+      throw new Error(`Choose videos under ${Math.round(READY_MADE_MEDIA_MAX_BYTES / (1024 * 1024))} MB.`)
+    }
+    const duration = await portfolioVideoDuration(file)
+    if (Number.isFinite(duration) && duration > READY_MADE_VIDEO_MAX_SECONDS) {
+      throw new Error(VIDEO_DURATION_LIMIT_MESSAGE)
+    }
+    return new File([file], file.name, {
+      type: contentType,
+      lastModified: file.lastModified,
+    })
+  }
+
+  if (file.size > MESSAGE_PHOTO_MAX_BYTES) {
+    throw new Error('Choose a photo under 10 MB.')
+  }
+  return reencodeImageFile(file)
 }
 
 async function reencodeImageFile(file: File) {
@@ -2425,7 +3410,7 @@ async function uploadPublicFile(bucket: string, pathPrefix: string, file: File) 
     contentType: file.type || 'application/octet-stream',
     upsert: false,
   })
-  if (error) throw new Error('The image could not upload. Try a smaller clothing or product photo.')
+  if (error) throw new Error('The media could not upload. Try a smaller file.')
   return supabase.storage.from(bucket).getPublicUrl(filePath).data.publicUrl
 }
 
@@ -2437,7 +3422,7 @@ async function uploadPrivateFile(bucket: string, pathPrefix: string, file: File)
     contentType: file.type || 'application/octet-stream',
     upsert: false,
   })
-  if (error) throw new Error('The image could not upload. Try a smaller photo.')
+  if (error) throw new Error('The media could not upload. Try a smaller file.')
   return filePath
 }
 
@@ -2506,7 +3491,26 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
       .maybeSingle(),
   ])
 
-  const tailorProfile = tailorProfileRes.error ? null : ((tailorProfileRes.data ?? null) as TailorProfile | null)
+  let tailorProfile = tailorProfileRes.error ? null : ((tailorProfileRes.data ?? null) as TailorProfile | null)
+  if (tailorProfileRes.error) {
+    warning = warning ?? 'Tailor profile could not load. Refresh to retry.'
+  }
+  if (tailorProfile?.id) {
+    const ownTailorProfileRes = await supabase
+      .from('tailor_profiles')
+      .select(ownTailorProfileSelect)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (ownTailorProfileRes.error) {
+      warning = warning ?? 'Payout status could not load. Refresh to retry.'
+    } else if (ownTailorProfileRes.data) {
+      tailorProfile = {
+        ...tailorProfile,
+        ...(ownTailorProfileRes.data as TailorProfile),
+      }
+    }
+  }
   const pickupDetails = pickupDetailsRes.error ? null : ((pickupDetailsRes.data ?? null) as TailorPickupDetails | null)
   const orderFilter = tailorProfile?.id
     ? `customer_id.eq.${userId},tailor_id.eq.${userId},tailor_profile_id.eq.${tailorProfile.id}`
@@ -2570,7 +3574,7 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
     tailorActiveOrderCount,
     unreadCount,
     checkoutPendingCount,
-    payoutNeedsSetup: Boolean(tailorProfile && (!tailorProfile.payout_account_verified || tailorProfile.payout_reverification_required)),
+    payoutNeedsSetup: Boolean(tailorProfile && !isPayoutReady(tailorProfile)),
     warning,
   }
 }
@@ -2615,7 +3619,6 @@ async function fetchExploreSurfaceData(userId: string): Promise<ExploreSurfaceDa
     .from('tailor_profiles')
     .select(publicTailorProfileSelect)
     .eq('is_live', true)
-    .neq('availability', 'FULLY_BOOKED')
     .order('avg_rating', { ascending: false })
     .order('updated_at', { ascending: false })
     .limit(24)
@@ -2751,7 +3754,7 @@ async function fetchOrderDetailSurfaceData(
       .limit(60),
     supabase
       .from('custom_order_details')
-      .select('order_id, fabric_approval_required, fabric_approval_status, fabric_approval_requested_at, fabric_approved_at, fabric_changes_requested_at')
+      .select('order_id, garment_type_other, gender_presentation, social_reference_links, style_notes, body_note, fabric_description, fabric_budget_amount, fabric_budget_currency, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at, fabric_approval_required, fabric_approval_status, fabric_approval_requested_at, fabric_approved_at, fabric_changes_requested_at, shipping_preference, delivery_instructions, target_delivery_date')
       .eq('order_id', order.id)
       .maybeSingle(),
     supabase
@@ -3201,7 +4204,7 @@ async function fetchTailorDetailSurfaceData(userId: string, tailorId?: string): 
   if (!tailorId) return emptyTailorDetailSurfaceData
 
   const supabase = createClient()
-  const [tailorRes, readyMadeRes, tailorReviewsRes, isSaved] = await Promise.all([
+  const [tailorRes, readyMadeRes, tailorReviewsRes, portfolioItemsRes, isSaved] = await Promise.all([
     supabase
       .from('tailor_profiles')
       .select(publicTailorProfileSelect)
@@ -3215,12 +4218,18 @@ async function fetchTailorDetailSurfaceData(userId: string, tailorId?: string): 
       .limit(18),
     supabase
       .from('reviews')
-      .select('id, tailor_profile_id, rating, body, tags, reviewer_name, tailor_response, created_at, published_at')
+      .select('id, tailor_profile_id, rating, body, tags, media_urls, reviewer_name, tailor_response, created_at, published_at')
       .eq('tailor_profile_id', tailorId)
       .not('published_at', 'is', null)
       .eq('flagged', false)
       .order('created_at', { ascending: false })
       .limit(8),
+    supabase
+      .from('portfolio_items')
+      .select('image_url')
+      .eq('tailor_profile_id', tailorId)
+      .order('sort_order', { ascending: true })
+      .limit(20),
     isTailorSavedDirectly(userId, tailorId),
   ])
 
@@ -3234,9 +4243,20 @@ async function fetchTailorDetailSurfaceData(userId: string, tailorId?: string): 
   if (tailorReviewsRes.error) {
     warning = warning ?? 'Tailor reviews could not load. Refresh to retry.'
   }
+  if (portfolioItemsRes.error) {
+    warning = warning ?? 'Portfolio records could not load. Refresh to retry.'
+  }
+
+  const tailor = tailorRes.error ? null : ((tailorRes.data ?? null) as TailorProfile | null)
+  if (tailor && !portfolioItemsRes.error) {
+    const portfolioItemUrls = ((portfolioItemsRes.data ?? []) as Array<{ image_url?: string | null }>)
+      .map((item) => item.image_url)
+      .filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+    tailor.portfolio_photo_urls = uniqueValues([...stringList(tailor.portfolio_photo_urls), ...portfolioItemUrls])
+  }
 
   return {
-    tailor: tailorRes.error ? null : ((tailorRes.data ?? null) as TailorProfile | null),
+    tailor,
     readyMade: readyMadeRes.error ? [] : ((readyMadeRes.data ?? []) as SellerItem[]),
     tailorReviews: tailorReviewsRes.error ? [] : ((tailorReviewsRes.data ?? []) as TailorReview[]),
     isSaved,
@@ -3275,29 +4295,22 @@ type AccountNavIcon =
   | 'wallet'
 
 function AccountNavGlyph({ name }: { name: AccountNavIcon }) {
-  const common = {
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    strokeWidth: 2,
+  const icons: Record<AccountNavIcon, LucideIcon> = {
+    briefcase: Briefcase,
+    card: ShoppingBag,
+    heart: Heart,
+    help: CircleHelp,
+    logout: LogOut,
+    message: MessageCircle,
+    orders: ClipboardList,
+    profile: UserRound,
+    ruler: Ruler,
+    search: Search,
+    settings: Settings,
+    wallet: WalletCards,
   }
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 shrink-0">
-      {name === 'search' ? <path {...common} d="m21 21-4.4-4.4M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" /> : null}
-      {name === 'orders' ? <path {...common} d="M7 3h10l2 3v15H5V6l2-3Zm-2 3h14M9 10h6M9 14h6M9 18h4" /> : null}
-      {name === 'message' ? <path {...common} d="M4 5h16v11H8l-4 4V5Zm4 5h8M8 13h5" /> : null}
-      {name === 'ruler' ? <path {...common} d="M4 17 17 4l3 3L7 20l-3-3Zm4-4 2 2m1-5 2 2m1-5 2 2" /> : null}
-      {name === 'heart' ? <path {...common} d="M20.4 5.6a5 5 0 0 0-7.1 0L12 6.9l-1.3-1.3a5 5 0 1 0-7.1 7.1L12 21l8.4-8.3a5 5 0 0 0 0-7.1Z" /> : null}
-      {name === 'briefcase' ? <path {...common} d="M10 6V5a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v1m-9 0h14v13H5V6Zm0 5h14" /> : null}
-      {name === 'card' ? <path {...common} d="M3 6h18v12H3V6Zm0 4h18M7 15h4" /> : null}
-      {name === 'wallet' ? <path {...common} d="M4 7h15a2 2 0 0 1 2 2v8H4a2 2 0 0 1-2-2V5a2 2 0 0 0 2 2Zm13 5h4" /> : null}
-      {name === 'profile' ? <path {...common} d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 9a7 7 0 0 1 14 0" /> : null}
-      {name === 'settings' ? <path {...common} d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm0-13v3m0 13v3m8.2-15.2-2.1 2.1M5.9 18.1l-2.1 2.1m17.2-8.2h-3M6 12H3m15.2 6.2-2.1-2.1M5.9 5.9 3.8 3.8" /> : null}
-      {name === 'help' ? <path {...common} d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-5h.01M9.5 9a2.7 2.7 0 1 1 4.5 2c-1 .8-2 1.3-2 2.8" /> : null}
-      {name === 'logout' ? <path {...common} d="M10 17l5-5-5-5m5 5H3m7-9h8a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-8" /> : null}
-    </svg>
-  )
+  const Icon = icons[name]
+  return <Icon aria-hidden="true" className="size-5 shrink-0" strokeWidth={2} />
 }
 
 function AccountIdentityCard({
@@ -3358,7 +4371,7 @@ function AccountIdentityCard({
       <Link
         href="/account/settings"
         title="Account settings"
-        className={collapsed ? 'flex justify-center' : 'flex items-center gap-3 rounded-[0.85rem] px-1 py-1 transition hover:bg-white/8'}
+        className={collapsed ? 'flex justify-center' : 'flex items-center gap-3 rounded-[8px] px-2 py-2 transition-colors hover:bg-white/8'}
       >
         <div className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-sm font-semibold text-white ring-2 ring-white/14 transition group-hover:ring-white/28">
           {avatarUrl ? (
@@ -3384,12 +4397,12 @@ function AccountIdentityCard({
           title={signingOut ? 'Signing out' : signOutPending ? 'Tap again to confirm' : 'Sign out'}
           className={
             collapsed
-              ? `grid size-11 place-items-center rounded-[0.85rem] border transition disabled:cursor-not-allowed disabled:opacity-40 ${
+              ? `grid size-11 place-items-center rounded-[8px] border transition disabled:cursor-not-allowed disabled:opacity-40 ${
                   signOutPending
                     ? 'border-rust/40 bg-rust/20 text-rust'
                     : 'border-white/28 bg-white/14 text-white hover:border-white/40 hover:bg-white/20'
                 }`
-              : `inline-flex w-full items-center gap-3 rounded-[0.85rem] border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:text-white/30 ${
+              : `inline-flex w-full items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:text-white/30 ${
                   signOutPending
                     ? 'border-rust/30 bg-rust/14 text-rust'
                     : 'border-white/16 bg-white/8 text-white/80 hover:border-white/28 hover:bg-white/14 hover:text-white'
@@ -3405,7 +4418,7 @@ function AccountIdentityCard({
           <button
             type="button"
             onClick={cancelSignOut}
-            className="w-full rounded-[0.85rem] py-1 text-xs font-semibold text-white/44 transition hover:text-white/70"
+            className="w-full rounded-[8px] py-1 text-xs font-semibold text-white/44 transition hover:text-white/70"
           >
             Cancel
           </button>
@@ -3429,7 +4442,6 @@ function AccountRouteShell({
   children: ReactNode
 }) {
   const pathname = usePathname()
-  const router = useRouter()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
@@ -3524,15 +4536,15 @@ function AccountRouteShell({
     setSigningOut(true)
     setDrawerOpen(false)
     try {
-      const supabase = createClient()
-      await supabase.auth.signOut()
+      await signOutWebSession({
+        reason: 'manual',
+        redirectTo: '/sign-in?signed_out=1',
+        scope: 'local',
+      })
     } catch (error) {
       console.warn('[account-shell] Sign out failed.', error)
     }
-    clearWebSessionScope()
     setSigningOut(false)
-    router.replace('/sign-in?signed_out=1')
-    router.refresh()
   }
 
   function renderNav(collapsed = false) {
@@ -3552,11 +4564,11 @@ function AccountRouteShell({
                   className={
                     collapsed
                       ? active
-                        ? 'relative grid size-12 place-items-center rounded-[0.95rem] bg-needle text-white shadow-[0_10px_24px_rgba(45,111,82,0.3)]'
-                        : 'relative grid size-12 place-items-center rounded-[0.95rem] text-white/70 transition hover:bg-white/10 hover:text-white'
+                        ? 'relative grid size-11 place-items-center rounded-[8px] bg-needle text-white shadow-sm'
+                        : 'relative grid size-11 place-items-center rounded-[8px] text-white/70 transition-colors hover:bg-white/10 hover:text-white'
                       : active
-                        ? 'relative flex min-h-12 items-center justify-between gap-3 rounded-[0.95rem] bg-needle px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(45,111,82,0.3)]'
-                        : 'relative flex min-h-12 items-center justify-between gap-3 rounded-[0.95rem] px-4 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/10 hover:text-white'
+                        ? 'relative flex min-h-11 items-center justify-between gap-3 rounded-[8px] bg-needle px-3 py-2.5 text-sm font-semibold text-white shadow-sm'
+                        : 'relative flex min-h-11 items-center justify-between gap-3 rounded-[8px] px-3 py-2.5 text-sm font-semibold text-white/70 transition-colors hover:bg-white/10 hover:text-white'
                   }
                 >
                   <span className={collapsed ? 'grid place-items-center' : 'flex min-w-0 items-center gap-3'}>
@@ -3583,41 +4595,43 @@ function AccountRouteShell({
   }
 
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
+    <main className="min-h-screen bg-ui-canvas">
       <div className="w-full px-4 py-4 sm:px-6 lg:px-0 lg:py-0 lg:pr-6">
-        <div className="sticky top-2 z-30 rounded-[1rem] border border-white/10 bg-[#0f172a]/96 p-3 shadow-[0_10px_34px_rgba(15,23,42,0.16)] backdrop-blur lg:hidden">
+        <div className="sticky top-2 z-30 rounded-[8px] border border-white/10 bg-[#171a18]/96 p-3 shadow-lg backdrop-blur lg:hidden">
           <div className="flex items-center justify-between gap-4">
             <Link href={accountHomeHref} className="flex items-center gap-3 text-2xl font-semibold text-white">
-              <Image src="/icon-192.png" alt="" width={40} height={40} className="size-10 rounded-[0.85rem]" />
+              <Image src="/icon-192.png" alt="" width={40} height={40} className="size-10 rounded-[8px]" />
               <span>Drapeon</span>
             </Link>
-            <button
-              type="button"
+            <IconButton
               onClick={() => setDrawerOpen(true)}
-              className="inline-flex min-h-10 items-center justify-center rounded-full border border-white/10 bg-white/10 px-3 text-sm font-semibold text-white"
+              variant="ghost"
+              className="border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
               aria-expanded={drawerOpen}
               aria-controls="account-mobile-drawer"
+              label="Open account menu"
             >
-              Menu
-            </button>
+              <Menu />
+            </IconButton>
           </div>
         </div>
 
         {drawerOpen ? (
           <div id="account-mobile-drawer" className="fixed inset-0 z-50 bg-ink/45 p-4 backdrop-blur-sm lg:hidden">
-            <div className="flex max-h-full flex-col overflow-y-auto rounded-[1.2rem] border border-white/10 bg-[#0f172a] p-4 shadow-[0_24px_80px_rgba(15,23,42,0.36)]">
+            <div className="flex max-h-full flex-col overflow-y-auto rounded-[8px] border border-white/10 bg-[#171a18] p-4 shadow-2xl">
               <div className="flex items-center justify-between gap-4">
                 <Link href={accountHomeHref} onClick={() => setDrawerOpen(false)} className="flex items-center gap-3 text-2xl font-semibold text-white">
-                  <Image src="/icon-192.png" alt="" width={40} height={40} className="size-10 rounded-[0.85rem]" />
+                  <Image src="/icon-192.png" alt="" width={40} height={40} className="size-10 rounded-[8px]" />
                   <span>Drapeon</span>
                 </Link>
-                <button
-                  type="button"
+                <IconButton
                   onClick={() => setDrawerOpen(false)}
-                  className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white"
+                  variant="ghost"
+                  className="border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
+                  label="Close account menu"
                 >
-                  Close
-                </button>
+                  <X />
+                </IconButton>
               </div>
               <div className="mt-5">{renderNav(false)}</div>
               <div className="mt-5">
@@ -3635,21 +4649,19 @@ function AccountRouteShell({
         ) : null}
 
         <div className={sidebarCollapsed ? 'grid gap-4 lg:min-h-screen lg:grid-cols-[5.5rem_minmax(0,1fr)] lg:gap-6' : 'grid gap-4 lg:min-h-screen lg:grid-cols-[19rem_minmax(0,1fr)] lg:gap-6'}>
-          <aside className={sidebarCollapsed ? 'sticky top-0 hidden h-screen border-r border-white/10 bg-[#0f172a] p-3 lg:block' : 'sticky top-0 hidden h-screen border-r border-white/10 bg-[#0f172a] p-4 lg:block'}>
+          <aside className={sidebarCollapsed ? 'sticky top-0 hidden h-screen border-r border-white/10 bg-[#171a18] p-3 lg:block' : 'sticky top-0 hidden h-screen border-r border-white/10 bg-[#171a18] p-4 lg:block'}>
             <div className="flex h-full flex-col">
-              <button
-                type="button"
+              <IconButton
                 onClick={() => setSidebarCollapsed((current) => !current)}
-                className="absolute -right-4 top-24 z-10 grid size-9 place-items-center rounded-full border border-ink/10 bg-white text-ink shadow-[0_8px_20px_rgba(15,23,42,0.16)] transition hover:bg-bone"
-                aria-label={sidebarCollapsed ? 'Expand account menu' : 'Collapse account menu'}
-                title={sidebarCollapsed ? 'Expand account menu' : 'Collapse account menu'}
+                size="icon-sm"
+                variant="secondary"
+                className="absolute -right-4 top-24 z-10 rounded-full shadow-md"
+                label={sidebarCollapsed ? 'Expand account menu' : 'Collapse account menu'}
               >
-                <svg aria-hidden="true" viewBox="0 0 24 24" className={sidebarCollapsed ? 'size-4 rotate-180 transition' : 'size-4 transition'}>
-                  <path d="m15 18-6-6 6-6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
-                </svg>
-              </button>
+                <ChevronLeft className={sidebarCollapsed ? 'rotate-180 transition-transform' : 'transition-transform'} />
+              </IconButton>
               <Link href={accountHomeHref} className={sidebarCollapsed ? 'flex justify-center' : 'flex items-center gap-3'}>
-                <Image src="/icon-192.png" alt="" width={44} height={44} className="size-11 rounded-[0.9rem]" />
+                <Image src="/icon-192.png" alt="" width={44} height={44} className="size-11 rounded-[8px]" />
                 {sidebarCollapsed ? <span className="sr-only">Drapeon</span> : <span className="text-2xl font-semibold text-white">Drapeon</span>}
               </Link>
               <div className={sidebarCollapsed ? 'mt-8 flex-1 overflow-y-auto' : 'mt-8 flex-1 overflow-y-auto pr-1'}>{renderNav(sidebarCollapsed)}</div>
@@ -3670,7 +4682,7 @@ function AccountRouteShell({
           <div className="min-w-0 lg:py-4">
             {surface !== 'messages' ? (
               <section className="py-3 lg:pt-0">
-                <div className="rounded-[1rem] border border-ink/8 bg-white/88 p-4 shadow-[0_10px_34px_rgba(22,28,24,0.05)]">
+                <div className="app-surface p-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
                       <p className="text-[0.68rem] font-semibold uppercase text-needle/80">{copy.eyebrow}</p>
@@ -3679,25 +4691,19 @@ function AccountRouteShell({
                     </div>
                     <div className="flex flex-wrap gap-2 md:justify-end">
                       {checkoutPendingCount > 0 ? (
-                        <Link
-                          href="/account/checkout"
-                          className="inline-flex min-h-9 items-center rounded-full bg-rust px-3 text-xs font-semibold text-white"
-                        >
-                          Pay {checkoutPendingCount > 1 ? `(${checkoutPendingCount})` : ''}
-                        </Link>
+                        <Button asChild variant="destructive" size="sm">
+                          <Link href="/account/checkout">Pay {checkoutPendingCount > 1 ? `(${checkoutPendingCount})` : ''}</Link>
+                        </Button>
                       ) : null}
                       {!isOrdersPath ? (
-                        <Link
-                          href="/account/orders"
-                          className="inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-white px-3 text-xs font-semibold text-ink"
-                        >
-                          Orders
-                        </Link>
+                        <Button asChild variant="secondary" size="sm">
+                          <Link href="/account/orders"><ClipboardList /> Orders</Link>
+                        </Button>
                       ) : null}
                     </div>
                   </div>
                   {data.warning ? (
-                    <p className="mt-3 rounded-[0.75rem] border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
+                    <p className="mt-3 rounded-lg border border-rust/18 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
                       {data.warning}
                     </p>
                   ) : null}
@@ -3715,21 +4721,17 @@ function AccountRouteShell({
 
 function AuthRequiredCard() {
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
+    <main className="min-h-screen bg-ui-canvas">
       <div className="mx-auto max-w-3xl px-5 py-12">
-        <div className="rounded-[1.75rem] border border-ink/8 bg-white/86 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Account</p>
+        <div className="app-surface p-7">
+          <p className="text-xs font-semibold uppercase text-needle/80">Account</p>
           <h1 className="mt-3 text-4xl text-ink sm:text-5xl">Sign in to continue.</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">
             Access your protected orders, messages, measurements, payments, and support.
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <Link href="/sign-in" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
-              Sign in
-            </Link>
-            <Link href="/sign-up" className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink">
-              Create account
-            </Link>
+            <Button asChild size="lg"><Link href="/sign-in">Sign in</Link></Button>
+            <Button asChild size="lg" variant="secondary"><Link href="/sign-up">Create account</Link></Button>
           </div>
         </div>
       </div>
@@ -3739,32 +4741,19 @@ function AuthRequiredCard() {
 
 function LoadingCard() {
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
-      <div className="mx-auto grid max-w-7xl gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
-        <div className="hidden rounded-[1.5rem] border border-ink/8 bg-white/86 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.06)] lg:block">
-          <div className="h-10 w-32 animate-pulse rounded-full bg-ink/8" />
-          <div className="mt-10 grid gap-3">
-            {Array.from({ length: 8 }).map((_, index) => (
-              <div key={index} className="h-11 animate-pulse rounded-[1rem] bg-ink/6" />
-            ))}
-          </div>
-        </div>
-        <div className="grid gap-5">
-          <div className="rounded-[1.75rem] border border-ink/8 bg-white/86 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
-            <div className="h-4 w-28 animate-pulse rounded-full bg-needle/12" />
-            <div className="mt-5 h-12 w-2/3 animate-pulse rounded-[1rem] bg-ink/8" />
-            <div className="mt-4 h-4 w-full animate-pulse rounded-full bg-ink/6" />
-            <div className="mt-2 h-4 w-4/5 animate-pulse rounded-full bg-ink/6" />
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="rounded-[1.45rem] border border-ink/8 bg-white/80 p-5 shadow-sm">
-                <div className="h-4 w-24 animate-pulse rounded-full bg-needle/12" />
-                <div className="mt-4 h-8 w-3/4 animate-pulse rounded-[0.8rem] bg-ink/8" />
-                <div className="mt-4 h-3 w-full animate-pulse rounded-full bg-ink/6" />
-                <div className="mt-2 h-3 w-2/3 animate-pulse rounded-full bg-ink/6" />
-              </div>
-            ))}
+    <main className="min-h-screen bg-ui-canvas">
+      <p className="sr-only">Loading account.</p>
+      <div className="animate-pulse">
+        <div className="h-14 border-b border-ui-border bg-white" />
+        <div className="mx-auto max-w-lg px-6 pt-8 flex flex-col gap-4">
+          <div className="h-7 w-36 rounded-[8px] bg-ui-border" />
+          <div className="h-4 w-52 rounded-[6px] bg-ui-border" />
+          <div className="mt-2 h-28 rounded-[8px] bg-ui-border" />
+          <div className="h-16 rounded-[8px] bg-ui-border" />
+          <div className="h-16 rounded-[8px] bg-ui-border" />
+          <div className="flex gap-3">
+            <div className="h-20 flex-1 rounded-[8px] bg-ui-border" />
+            <div className="h-20 flex-1 rounded-[8px] bg-ui-border" />
           </div>
         </div>
       </div>
@@ -3772,28 +4761,106 @@ function LoadingCard() {
   )
 }
 
+type MutedVideoProps = {
+  src: string
+  className?: string
+  ariaLabel?: string
+  loop?: boolean
+  autoPlay?: boolean
+  controls?: boolean
+  preload?: 'none' | 'metadata' | 'auto'
+  showMuteToggle?: boolean
+}
+
+function MutedVideo({
+  src,
+  className,
+  ariaLabel,
+  loop = true,
+  autoPlay = true,
+  controls = false,
+  preload = 'metadata',
+  showMuteToggle,
+}: MutedVideoProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [isMuted, setIsMuted] = useState(true)
+  const shouldShowMuteToggle = showMuteToggle ?? controls
+  const playbackSrc = isVideoMediaUrl(src) ? videoPosterFrameUrl(src) : src
+
+  useEffect(() => {
+    const node = videoRef.current
+    if (!node) return
+    node.muted = isMuted
+  }, [isMuted])
+
+  useEffect(() => {
+    const node = videoRef.current
+    return () => {
+      if (!node) return
+      node.pause()
+      node.removeAttribute('src')
+      node.load()
+    }
+  }, [playbackSrc])
+
+  useEffect(() => {
+    function pauseWhenHidden() {
+      if (document.visibilityState === 'hidden') videoRef.current?.pause()
+    }
+
+    document.addEventListener('visibilitychange', pauseWhenHidden)
+    return () => document.removeEventListener('visibilitychange', pauseWhenHidden)
+  }, [])
+
+  return (
+    <div className="relative h-full w-full">
+      <video
+        ref={videoRef}
+        src={playbackSrc}
+        muted={isMuted}
+        loop={loop}
+        playsInline={true}
+        autoPlay={autoPlay}
+        controls={controls}
+        preload={preload}
+        className={className}
+        aria-label={ariaLabel}
+      />
+      {shouldShowMuteToggle ? (
+        <button
+          type="button"
+          onClick={() => setIsMuted((value) => !value)}
+          className="absolute bottom-3 right-3 z-10 rounded-full bg-black/58 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur transition hover:bg-black/72"
+          aria-label={isMuted ? 'Unmute video' : 'Mute video'}
+        >
+          {isMuted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 function PhotoTile({ src, label }: { src: string | null; label: string }) {
   const safeSrc = safeMediaUrl(src)
   if (!safeSrc) {
     return (
-      <div className="flex aspect-[4/3] items-center justify-center rounded-[1.15rem] bg-needle/10 text-sm font-semibold text-needle">
+      <div className="flex aspect-[4/3] items-center justify-center rounded-[8px] bg-needle/10 text-sm font-semibold text-needle">
         {label}
       </div>
     )
   }
   if (isVideoMediaUrl(safeSrc)) {
     return (
-      <video
+      <MutedVideo
         src={safeSrc}
-        controls
-        preload="metadata"
-        className="aspect-[4/3] w-full rounded-[1.15rem] bg-ink object-cover"
-        aria-label={label}
+        className="aspect-[4/3] w-full rounded-[8px] bg-ink object-cover"
+        ariaLabel={label}
+        showMuteToggle={false}
       />
     )
   }
   return (
-    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[1.15rem]">
+    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[8px]">
       <Image
         src={safeSrc}
         alt={label}
@@ -3806,6 +4873,210 @@ function PhotoTile({ src, label }: { src: string | null; label: string }) {
   )
 }
 
+
+type SortableMediaEntry = {
+  id: string
+  url: string
+  label: string
+}
+
+function moveMediaEntry(entries: SortableMediaEntry[], fromIndex: number, toIndex: number) {
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= entries.length ||
+    toIndex >= entries.length ||
+    fromIndex === toIndex
+  ) {
+    return entries
+  }
+  const next = [...entries]
+  const [item] = next.splice(fromIndex, 1)
+  if (!item) return entries
+  next.splice(toIndex, 0, item)
+  return next
+}
+
+function SortableMediaGrid({
+  entries,
+  onReorder,
+  onDelete,
+  onInspect,
+  renderActions,
+  busy,
+  imageClassName = 'object-cover',
+}: {
+  entries: SortableMediaEntry[]
+  onReorder: (nextEntries: SortableMediaEntry[]) => void
+  onDelete?: (index: number) => void
+  onInspect?: (index: number) => void
+  renderActions?: (entry: SortableMediaEntry, index: number) => ReactNode
+  busy?: boolean
+  imageClassName?: string
+}) {
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
+
+  if (entries.length === 0) return null
+
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {entries.map((entry, index) => {
+        const safeSrc = safeMediaUrl(entry.url)
+        const isCover = index === 0
+        return (
+          <article
+            key={`${entry.id}-${index}`}
+            draggable={!busy}
+            onDragStart={(event) => {
+              setDraggingIndex(index)
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', String(index))
+            }}
+            onDragOver={(event) => {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              const fromIndex = Number(event.dataTransfer.getData('text/plain'))
+              setDraggingIndex(null)
+              if (!Number.isFinite(fromIndex)) return
+              onReorder(moveMediaEntry(entries, fromIndex, index))
+            }}
+            onDragEnd={() => setDraggingIndex(null)}
+            className={`group relative overflow-hidden rounded-[8px] border bg-white shadow-sm transition ${
+              draggingIndex === index ? 'border-needle opacity-70' : 'border-ink/8 hover:border-needle/30'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => onInspect?.(index)}
+              className="relative block aspect-square w-full overflow-hidden bg-bone text-left"
+            >
+              {safeSrc && isVideoMediaUrl(safeSrc) ? (
+                <MutedVideo
+                  src={safeSrc}
+                  className="h-full w-full object-cover"
+                  ariaLabel={entry.label}
+                  showMuteToggle={false}
+                />
+              ) : safeSrc ? (
+                <Image
+                  src={safeSrc}
+                  alt={entry.label}
+                  fill
+                  sizes="(min-width: 1024px) 12vw, 30vw"
+                  className={imageClassName}
+                  unoptimized
+                />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center text-xs font-semibold text-needle">Media</span>
+              )}
+              {isCover ? (
+                <span className="absolute left-2 top-2 rounded-full bg-needle px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white">
+                  Cover
+                </span>
+              ) : null}
+              <span className="absolute bottom-2 left-2 rounded-full bg-ink/72 px-2 py-1 text-[0.65rem] font-semibold text-white">
+                {isVideoMediaUrl(safeSrc ?? '') ? 'Video' : 'Photo'} {index + 1}
+              </span>
+            </button>
+            <div className="flex flex-wrap items-center gap-2 p-2">
+              {renderActions?.(entry, index)}
+              {onDelete ? (
+                <button
+                  type="button"
+                  onClick={() => onDelete(index)}
+                  disabled={busy}
+                  className="rounded-full border border-rust/20 bg-white px-3 py-1 text-xs font-semibold text-rust disabled:text-ink/35"
+                >
+                  Delete
+                </button>
+              ) : null}
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+function MediaInspectionOverlay({
+  entries,
+  initialIndex,
+  onClose,
+}: {
+  entries: SortableMediaEntry[]
+  initialIndex: number
+  onClose: () => void
+}) {
+  const [activeIndex, setActiveIndex] = useState(initialIndex)
+  const activeEntry = entries[activeIndex] ?? entries[0] ?? null
+  const safeSrc = safeMediaUrl(activeEntry?.url)
+
+
+  if (!activeEntry || !safeSrc) return null
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/78 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <button type="button" className="absolute inset-0 cursor-default" onClick={onClose} aria-label="Close media preview" />
+      <div className="relative w-full max-w-4xl overflow-hidden rounded-[8px] border border-white/12 bg-ink shadow-2xl">
+        <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 text-white">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/52">Media preview</p>
+            <h3 className="mt-1 text-lg font-semibold">{activeEntry.label}</h3>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full bg-white/10 px-3 py-2 text-sm font-semibold text-white">Close</button>
+        </div>
+        <div className="relative aspect-[4/3] max-h-[72vh] bg-black">
+          {isVideoMediaUrl(safeSrc) ? (
+            <MutedVideo
+              src={safeSrc}
+              controls
+              autoPlay={false}
+              loop={false}
+              className="h-full w-full object-contain"
+              ariaLabel={activeEntry.label}
+              showMuteToggle
+            />
+          ) : (
+            <Image src={safeSrc} alt={activeEntry.label} fill sizes="90vw" className="object-contain" unoptimized />
+          )}
+          {entries.length > 1 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveIndex((current) => (current - 1 + entries.length) % entries.length)}
+                className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-white/88 px-3 py-2 text-sm font-semibold text-ink shadow"
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveIndex((current) => (current + 1) % entries.length)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-white/88 px-3 py-2 text-sm font-semibold text-ink shadow"
+              >
+                Next
+              </button>
+            </>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-center gap-1.5 px-4 py-3">
+          {entries.map((entry, index) => (
+            <button
+              key={`${entry.id}-${index}-dot`}
+              type="button"
+              onClick={() => setActiveIndex(index)}
+              className={`h-1.5 rounded-full transition ${index === activeIndex ? 'w-6 bg-white' : 'w-1.5 bg-white/35'}`}
+              aria-label={`Show media ${index + 1}`}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MediaSlideshow({ media, label }: { media: string[]; label: string }) {
   const safeMedia = media.map((src) => safeMediaUrl(src)).filter((src): src is string => !!src)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -3814,7 +5085,7 @@ function MediaSlideshow({ media, label }: { media: string[]; label: string }) {
 
   return (
     <div className="grid gap-3">
-      <div className="overflow-hidden rounded-[1.15rem] border border-ink/8 bg-white">
+      <div className="overflow-hidden rounded-[8px] border border-ink/8 bg-white">
         <PhotoTile src={activeSrc} label={label} />
       </div>
       {safeMedia.length > 1 ? (
@@ -3826,8 +5097,8 @@ function MediaSlideshow({ media, label }: { media: string[]; label: string }) {
               onClick={() => setActiveIndex(index)}
               className={
                 activeIndex === index
-                  ? 'h-14 w-14 overflow-hidden rounded-[0.8rem] border-2 border-needle bg-white'
-                  : 'h-14 w-14 overflow-hidden rounded-[0.8rem] border border-ink/10 bg-white opacity-75 transition hover:opacity-100'
+                  ? 'h-14 w-14 overflow-hidden rounded-lg border-2 border-needle bg-white'
+                  : 'h-14 w-14 overflow-hidden rounded-lg border border-ink/10 bg-white opacity-75 transition hover:opacity-100'
               }
               aria-label={`Show ${label} ${index + 1}`}
             >
@@ -3849,18 +5120,114 @@ function MediaSlideshow({ media, label }: { media: string[]; label: string }) {
   )
 }
 
-function SummaryLine({ label, value }: { label: string; value: string | null | undefined }) {
+function SummaryLine({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="rounded-[1rem] border border-ink/6 bg-white/72 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/72">{label}</p>
-      <p className="mt-2 text-sm font-semibold text-ink">{value || 'Not set'}</p>
+    <div className="rounded-[8px] border border-ui-border bg-white p-4">
+      <p className="text-xs font-semibold uppercase text-needle/72">{label}</p>
+      <div className="mt-2 text-sm font-semibold text-ink">{value ?? 'Not set'}</div>
     </div>
+  )
+}
+
+function dossierDisplayValue(value: string | null | undefined, fallback = 'Not set') {
+  const safe = safeUserText(value, fallback)
+  return /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/u.test(safe) ? formatDatabaseEnumLabel(safe, fallback) : safe
+}
+
+function BriefDossierRowView({ row }: { row: BriefDossierRow }) {
+  const label = <p className="text-[0.68rem] font-semibold uppercase text-needle/72">{row.label}</p>
+
+  if (row.presentation === 'chips' && row.values?.length) {
+    return (
+      <div className="rounded-[8px] border border-ui-border bg-white p-4">
+        {label}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {row.values.map((value) => (
+            <span key={value} className="rounded-full bg-rust/8 px-3 py-1 text-xs font-semibold text-rust">
+              {formatDatabaseEnumLabel(value, value)}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (row.presentation === 'links' && row.hrefs?.length) {
+    return (
+      <div className="rounded-[8px] border border-ui-border bg-white p-4">
+        {label}
+        <div className="mt-3 grid gap-2">
+          {row.hrefs.map((href) => (
+            <a key={href} href={href} target="_blank" rel="noreferrer" className="break-all text-sm font-semibold text-needle underline-offset-4 hover:underline">
+              {safeUserText(href, href)}
+            </a>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (row.presentation === 'media' && row.mediaUrls?.length) {
+    return (
+      <div className="rounded-[8px] border border-ui-border bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          {label}
+          <p className="text-xs font-semibold text-ink/46">{row.value}</p>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {row.mediaUrls.slice(0, 6).map((src, index) => {
+            const safeSrc = safeMediaUrl(src)
+            if (!safeSrc) return null
+            const mediaLabel = `${row.label} ${index + 1}`
+            return (
+              <MediaViewerDialog key={`${safeSrc}-${index}`} src={safeSrc} kind={isVideoMediaUrl(safeSrc) ? 'video' : 'image'} title={mediaLabel}>
+                <button type="button" className="cursor-zoom-in rounded-[8px] text-left transition-opacity hover:opacity-90">
+                  <PhotoTile src={safeSrc} label={mediaLabel} />
+                </button>
+              </MediaViewerDialog>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  if (row.presentation === 'stacked') {
+    return (
+      <div className="rounded-[8px] border border-ui-border bg-white p-4">
+        {label}
+        <p className="mt-2 whitespace-pre-line break-words text-sm font-semibold leading-6 text-ink">
+          {dossierDisplayValue(row.value)}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-2 rounded-[8px] border border-ui-border bg-white p-4 sm:grid-cols-[minmax(9rem,0.4fr)_minmax(0,1fr)] sm:items-start">
+      <p className="text-[0.68rem] font-semibold uppercase text-needle/72">{row.label}</p>
+      <p className="break-words text-sm font-semibold leading-6 text-ink sm:text-right">{dossierDisplayValue(row.value)}</p>
+    </div>
+  )
+}
+
+function BriefDossierSectionCard({ section }: { section: BriefDossierSection }) {
+  return (
+    <section className="rounded-[8px] border border-ui-border bg-ui-muted/45 p-4">
+      <div>
+        <h3 className="text-xl text-ink">{section.title}</h3>
+        {section.summary ? <p className="mt-1 text-sm leading-6 text-ink/58">{section.summary}</p> : null}
+      </div>
+      <div className="mt-4 grid gap-3">
+        {section.rows.map((row) => <BriefDossierRowView key={row.id} row={row} />)}
+      </div>
+    </section>
   )
 }
 
 function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
   return (
-    <div className="rounded-[1.4rem] border border-ink/8 bg-white/76 p-6 shadow-sm">
+    <div className="rounded-[8px] border border-ui-border bg-white p-6 shadow-sm">
       <h2 className="text-2xl text-ink">{title}</h2>
       <p className="mt-3 max-w-2xl text-sm leading-7 text-ink/66">{body}</p>
       {action ? <div className="mt-5">{action}</div> : null}
@@ -3871,7 +5238,7 @@ function EmptyState({ title, body, action }: { title: string; body: string; acti
 function ActionNotice({ error, success }: { error: string | null; success: string | null }) {
   if (!error && !success) return null
   return (
-    <p className={`rounded-[1rem] px-4 py-3 text-sm leading-6 ${error ? 'border border-rust/20 bg-rust/8 text-ink' : 'border border-needle/14 bg-needle/8 text-needle'}`}>
+    <p className={`rounded-[8px] px-4 py-3 text-sm leading-6 ${error ? 'border border-rust/20 bg-rust/8 text-ink' : 'border border-needle/14 bg-needle/8 text-needle'}`}>
       {error || success}
     </p>
   )
@@ -3889,7 +5256,7 @@ function DisclosurePanel({
   defaultOpen?: boolean
 }) {
   return (
-    <details open={defaultOpen} className="group rounded-[1rem] border border-ink/8 bg-white/84 shadow-sm">
+    <details open={defaultOpen} className="group rounded-[8px] border border-ink/8 bg-white/84 shadow-sm">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 marker:hidden">
         <span>
           <span className="block text-sm font-semibold text-ink">{title}</span>
@@ -4017,14 +5384,14 @@ function StripeCardAuthorization({
   }
 
   return (
-    <div className="grid gap-3 rounded-[1.1rem] border border-ink/8 bg-white p-4">
+    <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/72">Stripe card</p>
         <h3 className="mt-1 text-xl font-semibold text-ink">{label}</h3>
       </div>
       <div ref={mountRef} className="min-h-12 rounded-full border border-ink/10 bg-bone px-4 py-3" />
       <ActionNotice error={error} success={success} />
-      <button type="button" onClick={confirmCard} disabled={busy || !ready} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+      <button type="button" onClick={confirmCard} disabled={busy || !ready} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
         {busy ? 'Confirming...' : ready ? submitLabel : 'Loading Stripe...'}
       </button>
       <p className="text-xs leading-5 text-ink/52">Card details are handled by Stripe. Drapeon never sees or stores the card number.</p>
@@ -4120,7 +5487,7 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
 
   if (!isPayableOrder(order)) {
     return (
-      <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+      <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
         This order is not awaiting a customer payment right now.
       </p>
     )
@@ -4133,7 +5500,7 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
         type="button"
         onClick={handleCheckout}
         disabled={busy}
-        className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+        className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
       >
         {busy ? 'Preparing checkout...' : checkoutActionLabel(order)}
       </button>
@@ -4142,7 +5509,7 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
           type="button"
           onClick={() => { void declineQuote() }}
           disabled={declining || busy}
-          className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+          className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
         >
           {declining ? 'Declining...' : declineArmed ? 'Confirm decline' : 'Decline quote'}
         </button>
@@ -4518,20 +5885,15 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
     setError(null)
     setSuccess(null)
     if (!receiptFile) {
-      setError('Add a proof photo before confirming receipt.')
-      return
-    }
-    const photoError = validateMessagePhoto(receiptFile)
-    if (photoError) {
-      setError(photoError)
+      setError('Add proof media before confirming receipt.')
       return
     }
 
     setBusyAction('confirm-receipt')
     try {
-      setUploadStatus('Preparing proof photo...')
-      const preparedPhoto = await reencodeImageFile(receiptFile)
-      setUploadStatus('Uploading proof photo...')
+      setUploadStatus('Preparing proof media...')
+      const preparedPhoto = await prepareOrderEvidenceFile(receiptFile)
+      setUploadStatus('Uploading proof media...')
       const receiptPhotoUrl = await uploadPublicFile('order-photos', `receipts/${order.id}`, preparedPhoto)
       await invokeAccountFunction('customer-order-action', {
         action: 'confirm-receipt',
@@ -4542,7 +5904,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
       setSuccess('Receipt confirmed. You can review the order once the record refreshes.')
       onRefresh()
     } catch (receiptError) {
-      setError(friendlyActionError(receiptError, 'Receipt could not be confirmed. Try a smaller proof photo or refresh the order.'))
+      setError(friendlyActionError(receiptError, 'Receipt could not be confirmed. Try a smaller proof photo or MP4/MOV video up to 60 seconds.'))
       setSuccess(null)
     } finally {
       setBusyAction(null)
@@ -4617,11 +5979,11 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
   }
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
+    <Surface className="overflow-hidden">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Customer actions</p>
-          <h2 className="mt-2 text-3xl text-ink">Manage this order.</h2>
+          <h2 className="mt-2 text-2xl font-semibold text-ink">Manage this order.</h2>
         </div>
         <p className="max-w-md text-sm leading-6 text-ink/58">
           Actions shown here match the order stage and stay attached to the order record.
@@ -4644,7 +6006,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 type="button"
                 onClick={() => { void confirmMeasurements() }}
                 disabled={busyAction === 'confirm-measurements'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'confirm-measurements' ? 'Confirming...' : 'Confirm measurements'}
               </button>
@@ -4663,14 +6025,14 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={styleChangeNote}
                 onChange={(event) => setStyleChangeNote(event.target.value)}
                 placeholder="Optional change note if this needs clarification."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <div className="grid gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => { void decideStyleAlignment('approve-style-alignment') }}
                   disabled={busyAction === 'approve-style-alignment'}
-                  className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                  className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                 >
                   {busyAction === 'approve-style-alignment' ? 'Approving...' : 'Approve style'}
                 </button>
@@ -4678,7 +6040,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                   type="button"
                   onClick={() => { void decideStyleAlignment('request-style-alignment-change') }}
                   disabled={busyAction === 'request-style-alignment-change'}
-                  className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
+                  className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
                 >
                   {busyAction === 'request-style-alignment-change' ? 'Sending...' : 'Request clarification'}
                 </button>
@@ -4698,14 +6060,14 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={fabricChangeNote}
                 onChange={(event) => setFabricChangeNote(event.target.value)}
                 placeholder="Optional change note if the fabric is not right."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <div className="grid gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => { void decideSourcedFabric('approve-sourced-fabric') }}
                   disabled={busyAction === 'approve-sourced-fabric'}
-                  className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                  className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                 >
                   {busyAction === 'approve-sourced-fabric' ? 'Approving...' : 'Approve fabric'}
                 </button>
@@ -4713,7 +6075,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                   type="button"
                   onClick={() => { void decideSourcedFabric('request-sourced-fabric-change') }}
                   disabled={busyAction === 'request-sourced-fabric-change'}
-                  className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
+                  className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
                 >
                   {busyAction === 'request-sourced-fabric-change' ? 'Sending...' : 'Request fabric change'}
                 </button>
@@ -4735,7 +6097,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={materialIssueResponse}
                 onChange={(event) => setMaterialIssueResponse(event.target.value as typeof materialIssueResponse)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {MATERIAL_ISSUE_RESPONSE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4745,13 +6107,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={materialIssueNote}
                 onChange={(event) => setMaterialIssueNote(event.target.value)}
                 placeholder="Optional note for the tailor."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void respondMaterialIssue() }}
                 disabled={busyAction === 'respond-material-issue'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'respond-material-issue' ? 'Sending...' : 'Send material response'}
               </button>
@@ -4768,7 +6130,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={customerScopeChangeType}
                 onChange={(event) => setCustomerScopeChangeType(event.target.value as typeof customerScopeChangeType)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {SCOPE_CHANGE_TYPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4790,13 +6152,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={customerScopeChangeSummary}
                 onChange={(event) => setCustomerScopeChangeSummary(event.target.value)}
                 placeholder="What needs to change?"
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void requestCustomerScopeChange() }}
                 disabled={busyAction === 'request-scope-change'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'request-scope-change' ? 'Sending...' : 'Send change request'}
               </button>
@@ -4816,7 +6178,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                   <select
                     value={scopeChangeDecision}
                     onChange={(event) => setScopeChangeDecision(event.target.value as typeof scopeChangeDecision)}
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
                   >
                     <option value="ACCEPTED">Accept change</option>
                     <option value="DECLINED">Decline change</option>
@@ -4825,13 +6187,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                     value={scopeChangeResponseNote}
                     onChange={(event) => setScopeChangeResponseNote(event.target.value)}
                     placeholder="Optional response note."
-                    className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                    className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
                   />
                   <button
                     type="button"
                     onClick={() => { void respondScopeChange() }}
                     disabled={busyAction === 'respond-scope-change'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busyAction === 'respond-scope-change' ? 'Saving...' : 'Send change response'}
                   </button>
@@ -4842,7 +6204,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                   type="button"
                   onClick={() => { void respondScopeChange('CANCELLED') }}
                   disabled={busyAction === 'respond-scope-change'}
-                  className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
+                  className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
                 >
                   {busyAction === 'respond-scope-change' ? 'Cancelling...' : 'Cancel request'}
                 </button>
@@ -4858,13 +6220,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={fabricTracking}
                 onChange={(event) => setFabricTracking(event.target.value)}
                 placeholder="Carrier tracking number"
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void saveFabricTracking() }}
                 disabled={busyAction === 'save-fabric-tracking' || fabricTracking.trim() === (order.fabric_tracking ?? '')}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'save-fabric-tracking' ? 'Saving...' : 'Save tracking'}
               </button>
@@ -4878,7 +6240,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               type="button"
               onClick={() => { void cancelOrder() }}
               disabled={busyAction === 'cancel-order'}
-              className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+              className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
             >
               {busyAction === 'cancel-order' ? 'Cancelling...' : cancelArmed ? 'Confirm cancellation' : 'Cancel order'}
             </button>
@@ -4891,7 +6253,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={cancellationReason}
                 onChange={(event) => setCancellationReason(event.target.value as typeof cancellationReason)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {CUSTOMER_CANCELLATION_REASON_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4901,13 +6263,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={cancellationNote}
                 onChange={(event) => setCancellationNote(event.target.value)}
                 placeholder="Add context for the review."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void requestCancellationReview() }}
                 disabled={busyAction === 'request-cancellation-review'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'request-cancellation-review' ? 'Opening review...' : 'Open cancellation review'}
               </button>
@@ -4921,7 +6283,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={deliveryReason}
                 onChange={(event) => setDeliveryReason(event.target.value as typeof deliveryReason)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {CUSTOMER_DELIVERY_REASON_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4931,13 +6293,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={deliveryNote}
                 onChange={(event) => setDeliveryNote(event.target.value)}
                 placeholder="What happened with dispatch or delivery?"
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void requestDeliveryReview() }}
                 disabled={busyAction === 'request-delivery-review'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'request-delivery-review' ? 'Opening review...' : 'Open delivery review'}
               </button>
@@ -4954,15 +6316,15 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
             <div className="grid gap-3">
               <input
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
+                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
                 onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm file:mr-4 file:rounded-[6px] file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
               />
               <button
                 type="button"
                 onClick={() => { void confirmReceipt() }}
                 disabled={busyAction === 'confirm-receipt'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'confirm-receipt' ? 'Confirming...' : 'Confirm receipt'}
               </button>
@@ -4976,7 +6338,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               type="button"
               onClick={() => { void completeOrder() }}
               disabled={busyAction === 'complete-order'}
-              className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+              className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
             >
               {busyAction === 'complete-order' ? 'Completing...' : 'Mark complete'}
             </button>
@@ -4989,7 +6351,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={aftercareType}
                 onChange={(event) => setAftercareType(event.target.value as typeof aftercareType)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {CUSTOMER_AFTERCARE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4999,13 +6361,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={aftercareNote}
                 onChange={(event) => setAftercareNote(event.target.value)}
                 placeholder="Describe the fit, finish, or defect."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void requestAftercare() }}
                 disabled={busyAction === 'request-aftercare-support'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busyAction === 'request-aftercare-support' ? 'Sending...' : 'Send aftercare request'}
               </button>
@@ -5019,7 +6381,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
               <select
                 value={disputeReason}
                 onChange={(event) => setDisputeReason(event.target.value as typeof disputeReason)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
                 {CUSTOMER_DISPUTE_REASON_OPTIONS.map((reason) => (
                   <option key={reason} value={reason}>{reason}</option>
@@ -5029,13 +6391,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={disputeDescription}
                 onChange={(event) => setDisputeDescription(event.target.value)}
                 placeholder="Describe what happened."
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void openDispute() }}
                 disabled={busyAction === 'open-dispute'}
-                className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
               >
                 {busyAction === 'open-dispute' ? 'Opening concern...' : 'Raise concern'}
               </button>
@@ -5050,13 +6412,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 value={emergencyNote}
                 onChange={(event) => setEmergencyNote(event.target.value)}
                 placeholder="What is wrong, and when is the event or wear date?"
-                className="min-h-24 rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
+                className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
                 type="button"
                 onClick={() => { void requestEmergencySupport() }}
                 disabled={busyAction === 'request-emergency-support'}
-                className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
               >
                 {busyAction === 'request-emergency-support' ? 'Sending...' : 'Request emergency help'}
               </button>
@@ -5064,7 +6426,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
           </DisclosurePanel>
         ) : null}
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -5094,32 +6456,136 @@ function useMessageMediaUrl(raw: string | null | undefined): string | null {
   return signed?.path === storagePath ? signed.url : null
 }
 
-function MessageContent({ message, compact = false }: { message: AccountMessage; compact?: boolean }) {
-  const photoUrl = useMessageMediaUrl(message.photo_url)
-  const voiceUrl = useMessageMediaUrl(message.voice_url)
-  const text = safeUserText(
-    message.body,
-    photoUrl ? 'Photo message' : voiceUrl ? 'Voice note' : 'Message activity recorded.',
-  )
+function voicePlaybackMimeType(raw: string | null | undefined, fallback?: string | null) {
+  const source = (raw ?? '').split('?')[0]?.toLowerCase() ?? ''
+  if (/\.(m4a|mp4)$/u.test(source)) return 'audio/mp4'
+  if (/\.aac$/u.test(source)) return 'audio/aac'
+  if (/\.webm$/u.test(source)) return 'audio/webm; codecs="opus"'
+  if (/\.ogg$/u.test(source)) return 'audio/ogg; codecs="opus"'
+  if (/\.wav$/u.test(source)) return 'audio/wav'
+
+  const normalizedFallback = fallback?.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (normalizedFallback === 'audio/m4a' || normalizedFallback === 'audio/x-m4a') return 'audio/mp4'
+  return normalizedFallback || 'audio/mp4'
+}
+
+function useMessageVoicePlayback(raw: string | null | undefined) {
+  const signedUrl = useMessageMediaUrl(raw)
+  const [playback, setPlayback] = useState<{
+    source: string
+    url: string
+    mimeType: string
+  } | null>(null)
+
+  useEffect(() => {
+    if (!signedUrl) return undefined
+
+    const controller = new AbortController()
+    let objectUrl: string | null = null
+    void fetch(signedUrl, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Voice note could not load.')
+        const sourceBlob = await response.blob()
+        const mimeType = voicePlaybackMimeType(raw, sourceBlob.type)
+        const playbackBlob = sourceBlob.type === mimeType
+          ? sourceBlob
+          : new Blob([sourceBlob], { type: mimeType })
+        objectUrl = URL.createObjectURL(playbackBlob)
+        setPlayback({ source: signedUrl, url: objectUrl, mimeType })
+      })
+      .catch((playbackError) => {
+        if (playbackError instanceof DOMException && playbackError.name === 'AbortError') return
+        setPlayback({ source: signedUrl, url: signedUrl, mimeType: voicePlaybackMimeType(raw) })
+      })
+
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [raw, signedUrl])
+
+  if (!signedUrl) return { url: null, fallbackUrl: null, mimeType: voicePlaybackMimeType(raw), loading: true }
+  if (playback?.source !== signedUrl) {
+    return { url: null, fallbackUrl: signedUrl, mimeType: voicePlaybackMimeType(raw), loading: true }
+  }
+  return { ...playback, fallbackUrl: signedUrl, loading: false }
+}
+
+function VoiceMessagePlayer({ raw }: { raw: string | null | undefined }) {
+  const playback = useMessageVoicePlayback(raw)
+  const [failedSource, setFailedSource] = useState<string | null>(null)
+
+  if (playback.loading || !playback.url) {
+    return <div className="h-10 w-full animate-pulse rounded-[8px] bg-ink/8" aria-label="Loading voice note" />
+  }
+  const failed = failedSource === playback.url
 
   return (
-    <div className="mt-2 grid gap-3">
-      <p className={`${compact ? 'line-clamp-3' : ''} text-sm leading-6 text-ink/66`}>
-        {text}
-      </p>
-      {photoUrl ? (
-        <a
-          href={photoUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="block overflow-hidden rounded-[1rem] border border-ink/8 bg-white"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photoUrl} alt="Order message attachment" className="max-h-64 w-full object-cover" />
-          <span className="block px-3 py-2 text-xs font-semibold text-needle">Open full-size photo</span>
-        </a>
+    <div className="grid w-full min-w-0 gap-1.5">
+      <audio
+        src={playback.url}
+        controls
+        preload="metadata"
+        className="h-10 w-full min-w-0"
+        onCanPlay={() => setFailedSource(null)}
+        onError={() => setFailedSource(playback.url)}
+      />
+      {failed ? (
+        <p className="text-xs leading-5 text-rust">
+          This browser could not decode the voice note.{' '}
+          {playback.fallbackUrl ? (
+            <a href={playback.fallbackUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
+              Open the original audio
+            </a>
+          ) : null}
+        </p>
       ) : null}
-      {voiceUrl ? <audio controls src={voiceUrl} className="mt-1 w-full max-w-xs" /> : null}
+    </div>
+  )
+}
+
+function MessageContent({ message, compact = false }: { message: AccountMessage; compact?: boolean }) {
+  const photoUrl = useMessageMediaUrl(message.photo_url)
+  const hasVoiceAttachment = Boolean(message.voice_url)
+  const rawText = safeUserText(message.body, '')
+  const text = hasVoiceAttachment && /^\d+(?:\.\d+)?$/u.test(rawText) ? '' : rawText
+  const hasVideoAttachment = isVideoMediaUrl(photoUrl)
+
+  return (
+    <div className="grid min-w-0 gap-2.5">
+      {text ? (
+        <p className={`${compact ? 'line-clamp-3' : ''} whitespace-pre-wrap break-words text-sm leading-6 text-ink/72`}>
+          {text}
+        </p>
+      ) : null}
+      {photoUrl && hasVideoAttachment ? (
+        <MediaViewerDialog src={photoUrl} kind="video" title="Video attachment">
+          <button type="button" className="group/media relative block w-full cursor-pointer overflow-hidden rounded-[8px] border border-ink/10 bg-ink text-left">
+            <MutedVideo
+              src={photoUrl}
+              autoPlay={false}
+              loop={false}
+              controls={false}
+              className="aspect-video max-h-72 w-full object-cover"
+              ariaLabel="Open video attachment"
+              showMuteToggle={false}
+            />
+            <span className="absolute inset-0 grid place-items-center bg-black/12 transition-colors group-hover/media:bg-black/22">
+              <span className="grid size-11 place-items-center rounded-full bg-white/92 text-ink shadow-md">
+                <Video className="size-5" />
+              </span>
+            </span>
+          </button>
+        </MediaViewerDialog>
+      ) : photoUrl ? (
+        <MediaViewerDialog src={photoUrl} kind="image" title="Photo attachment">
+          <button type="button" className="group/media block w-full cursor-zoom-in overflow-hidden rounded-[8px] border border-ink/10 bg-white text-left">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photoUrl} alt="Order message attachment" className="max-h-72 w-full object-cover transition-opacity group-hover/media:opacity-90" />
+          </button>
+        </MediaViewerDialog>
+      ) : null}
+      {hasVoiceAttachment ? <VoiceMessagePlayer raw={message.voice_url} /> : null}
     </div>
   )
 }
@@ -5211,7 +6677,128 @@ function MessageReactionBar({
   )
 }
 
-function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh: () => void }) {
+type WebCallLifecycleEvent = {
+  kind: 'consultation' | 'ready-made'
+  scheduledStartAt?: string | null
+  timezone?: string | null
+  reason?: string | null
+  status?: string | null
+  paymentRequired?: boolean
+  paymentPaid?: boolean
+  actionLoading?: boolean
+  onJoinVideo?: () => void
+  onReschedule?: () => void
+  rescheduleLabel?: string
+  rescheduleHref?: Route
+  paymentActionLabel?: string | null
+  paymentHref?: Route
+}
+
+function CallLifecycleEventCard({ event }: { event: WebCallLifecycleEvent }) {
+  const [now, setNow] = useState(0)
+
+  useEffect(() => {
+    const updateNow = () => setNow(Date.now())
+    const bootTimer = window.setTimeout(updateNow, 0)
+    const timer = window.setInterval(updateNow, 30_000)
+    return () => {
+      window.clearTimeout(bootTimer)
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const lifecycle = getCallLifecycleState(event.scheduledStartAt, now)
+  if (lifecycle.status === 'unscheduled') return null
+
+  const reason = event.kind === 'consultation'
+    ? 'Consultation'
+    : callSchedulingReasonFor(event.reason).label
+  const title = event.kind === 'consultation' ? 'Consultation call' : 'Ready-made coordination call'
+  const scheduledLabel = formatDateTime(event.scheduledStartAt ?? null, event.timezone) ?? 'Time not set'
+  const isPaymentBlocked = event.paymentRequired === true && event.paymentPaid !== true
+  const isExpired =
+    event.status === 'EXPIRED' ||
+    event.status === 'DECLINED' ||
+    event.status === 'COMPLETED' ||
+    lifecycle.status === 'expired'
+
+  return (
+    <div className={`mb-3 grid gap-3 rounded-[8px] border p-3 shadow-sm ${isExpired ? 'border-ink/8 bg-bone/65' : 'border-needle/14 bg-white'}`}>
+      <div className="flex items-start gap-3">
+        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${isExpired ? 'bg-ink/8 text-ink/44' : 'bg-needle/10 text-needle'}`}>
+          <Video className="size-5" aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-needle">Order lifecycle event</p>
+          <p className="text-sm font-semibold text-ink">{title}</p>
+          <p className="text-xs leading-5 text-ink/54">{scheduledLabel}</p>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 border-t border-ink/8 pt-2 text-xs">
+        <span className="font-semibold uppercase tracking-[0.14em] text-ink/42">Reason</span>
+        <span className="text-right font-semibold text-ink">{reason}</span>
+      </div>
+
+      {isPaymentBlocked ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-rust/16 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
+          <span className="font-semibold">Consultation fee required before the room can open</span>
+          {event.paymentHref && event.paymentActionLabel ? (
+            <Link href={event.paymentHref} className="font-semibold text-needle">
+              {event.paymentActionLabel}
+            </Link>
+          ) : null}
+        </div>
+      ) : isExpired ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[8px] bg-ink/6 px-3 py-2 text-xs leading-5 text-ink/54">
+          <span className="font-semibold">Call Missed / Window Expired</span>
+          {event.rescheduleHref ? (
+            <Link href={event.rescheduleHref} className="font-semibold text-needle">
+              {event.rescheduleLabel ?? 'Reschedule'}
+            </Link>
+          ) : event.onReschedule ? (
+            <button
+              type="button"
+              onClick={event.onReschedule}
+              className="font-semibold text-needle"
+            >
+              {event.rescheduleLabel ?? 'Reschedule'}
+            </button>
+          ) : null}
+        </div>
+      ) : lifecycle.status === 'active' ? (
+        <Button
+          onClick={event.onJoinVideo}
+          disabled={event.actionLoading || !event.onJoinVideo}
+        >
+          {event.actionLoading ? 'Opening...' : 'Join Video Call Now'}
+        </Button>
+      ) : (
+        <Button disabled variant="secondary">
+          {formatCallCountdown(lifecycle.msUntilOpen)}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function MessageComposer({
+  order,
+  onRefresh,
+  channelRef,
+  replyingTo,
+  onClearReply,
+  editingMessage,
+  onClearEdit,
+}: {
+  order: AccountOrder
+  onRefresh: () => void
+  channelRef?: React.RefObject<RealtimeChannel | null>
+  replyingTo?: AccountMessage | null
+  onClearReply?: () => void
+  editingMessage?: AccountMessage | null
+  onClearEdit?: () => void
+}) {
   const account = useAccountContext()
   const [body, setBody] = useState('')
   const [photoFile, setPhotoFile] = useState<File | null>(null)
@@ -5225,26 +6812,138 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
+  const readyMadeCallTimeInputRef = useRef<HTMLInputElement | null>(null)
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [webRecording, setWebRecording] = useState(false)
+  const [webRecordingSeconds, setWebRecordingSeconds] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const webRecordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const webStreamRef = useRef<MediaStream | null>(null)
+  const webRecordingStartingRef = useRef(false)
+  const webRecordingStoppingRef = useRef(false)
+  const webRecordingFinalizingRef = useRef(false)
+  const webRecordingCancelledRef = useRef(false)
+  const webRecordingSecondsRef = useRef(0)
   const canMessage = !isTerminalOrder(order)
   const isReadyMade = order.order_kind === 'READY_MADE'
+
+  // Pre-populate body when entering edit mode
+  const prevEditingIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (editingMessage && editingMessage.id !== prevEditingIdRef.current) {
+      setBody(editingMessage.body ?? '')
+    }
+    prevEditingIdRef.current = editingMessage?.id ?? null
+  }, [editingMessage])
+
+  useEffect(() => () => {
+    if (webRecordTimerRef.current) clearInterval(webRecordTimerRef.current)
+    const recorder = mediaRecorderRef.current
+    if (recorder) {
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      recorder.onerror = null
+      if (recorder.state !== 'inactive') {
+        try {
+          recorder.stop()
+        } catch {
+          // The browser already released this recorder.
+        }
+      }
+    }
+    webStreamRef.current?.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  function broadcastTyping(isTyping: boolean) {
+    const channel = channelRef?.current ?? null
+    if (!channel || !account.userId) return
+    void channel.send({ type: 'broadcast', event: 'typing', payload: { userId: account.userId, isTyping } })
+  }
   const isCustomOrder = order.order_kind === 'CUSTOM' || !order.order_kind
   const supportMeta = useMemo(() => parseOrderSupportMeta(order.special_note), [order.special_note])
   const consultationMeta = supportMeta.consultation ?? null
   const orderCallMeta = supportMeta.orderCall ?? null
   const viewerIsCustomer = order.customer_id === account.userId
+  const consultationPaymentRequired =
+    order.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS'
+  const consultationPaymentPaid = consultationPaymentRequired && !!consultationMeta?.paidAt
+  const consultationPaymentBlocked = consultationPaymentRequired && !consultationPaymentPaid
   const canRequestConsultation = isCustomOrder && viewerIsCustomer && order.stage === 'PENDING_QUOTE'
   const canScheduleReadyMadeCall = isReadyMade && ORDER_CALL_STAGES.has(order.stage ?? '')
   const canShowCallButtons = canStartOrderCall(order)
   const consultationLabel = formatDateTime(consultationMeta?.scheduledStartAt ?? consultationMeta?.proposedStartAt, consultationMeta?.timezone)
   const readyMadeCallLabel = formatDateTime(orderCallMeta?.scheduledStartAt, orderCallMeta?.timezone)
+  const callLifecycleEvent: WebCallLifecycleEvent | null =
+    order.stage === 'CONSULTATION' &&
+    consultationMeta?.status === 'SCHEDULED' &&
+    consultationMeta.scheduledStartAt
+      ? {
+          kind: 'consultation',
+          scheduledStartAt: consultationMeta.scheduledStartAt,
+          timezone: consultationMeta.timezone,
+          status: consultationMeta.status,
+          paymentRequired: consultationPaymentRequired,
+          paymentPaid: consultationPaymentPaid,
+          actionLoading: !!callBusy,
+          onJoinVideo: () => { void startCall('video') },
+          rescheduleHref: accountRoute(`/account/orders/${order.id}`),
+          rescheduleLabel: 'View order',
+          paymentHref: viewerIsCustomer ? accountRoute(`/account/checkout/${order.id}`) : accountRoute(`/account/orders/${order.id}`),
+          paymentActionLabel: viewerIsCustomer ? 'Pay now' : 'View order',
+        }
+      : isReadyMade &&
+          orderCallMeta?.status === 'SCHEDULED' &&
+          orderCallMeta.scheduledStartAt
+        ? {
+            kind: 'ready-made',
+            scheduledStartAt: orderCallMeta.scheduledStartAt,
+            timezone: orderCallMeta.timezone,
+            status: orderCallMeta.status,
+            reason: orderCallMeta.reason,
+            actionLoading: !!callBusy,
+            onJoinVideo: () => { void startCall('video') },
+            onReschedule: () => {
+              setError('Choose a new time below and tap Schedule.')
+              readyMadeCallTimeInputRef.current?.focus()
+              const picker = readyMadeCallTimeInputRef.current as (HTMLInputElement & { showPicker?: () => void }) | null
+              picker?.showPicker?.()
+            },
+            rescheduleLabel: 'Reschedule',
+          }
+        : null
 
   async function sendMessage() {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+    broadcastTyping(false)
     const trimmed = body.trim()
     setError(null)
     setSuccess(null)
     setUploadStatus(null)
+
+    // Edit mode: update existing message body
+    if (editingMessage) {
+      if (!trimmed) { setError('Message cannot be empty.'); return }
+      const leak = assertNoContactLeak(trimmed)
+      if (leak) { setError(leak); return }
+      setBusy(true)
+      try {
+        await invokeAccountFunction('message-action', { action: 'edit', messageId: editingMessage.id, body: trimmed })
+        setBody('')
+        onClearEdit?.()
+        onRefresh()
+      } catch (editError) {
+        setError(friendlyActionError(editError, 'Could not edit this message. Please try again.'))
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     if (!trimmed && !photoFile) {
-      setError('Write a message or attach a photo before sending.')
+      setError('Write a message or attach media before sending.')
       return
     }
     if (trimmed) {
@@ -5254,18 +6953,11 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
         return
       }
     }
-    if (photoFile) {
-      const photoError = validateMessagePhoto(photoFile)
-      if (photoError) {
-        setError(photoError)
-        return
-      }
-    }
     setBusy(true)
     try {
       if (photoFile) {
-        setUploadStatus('Preparing photo...')
-        const preparedPhoto = await reencodeImageFile(photoFile)
+        setUploadStatus('Preparing media...')
+        const preparedPhoto = await prepareMessageMediaFile(photoFile)
         setUploadStatus('Uploading...')
         const storagePath = await uploadPrivateFile('message-media', `messages/${order.id}`, preparedPhoto)
         await invokeAccountFunction('message-action', {
@@ -5273,6 +6965,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
           orderId: order.id,
           type: 'PHOTO',
           photoUrl: storagePath,
+          ...(replyingTo ? { replyToId: replyingTo.id } : {}),
         })
       }
       if (trimmed) {
@@ -5281,15 +6974,17 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
           orderId: order.id,
           type: 'TEXT',
           body: trimmed,
+          ...(replyingTo ? { replyToId: replyingTo.id } : {}),
         })
       }
       setBody('')
       setPhotoFile(null)
       if (photoInputRef.current) photoInputRef.current.value = ''
-      setSuccess(photoFile && trimmed ? 'Photo and message sent inside the protected order thread.' : photoFile ? 'Photo sent inside the protected order thread.' : 'Message sent inside the protected order thread.')
+      onClearReply?.()
+      setSuccess(photoFile && trimmed ? 'Media and message sent inside the protected order thread.' : photoFile ? 'Media sent inside the protected order thread.' : 'Message sent inside the protected order thread.')
       onRefresh()
     } catch (messageError) {
-      setError(friendlyActionError(messageError, 'Message could not send. Please try again with a smaller image or text only.'))
+      setError(friendlyActionError(messageError, 'Message could not send. Please try again with smaller media or text only.'))
     } finally {
       setBusy(false)
       setUploadStatus(null)
@@ -5306,6 +7001,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
     }
     if (!scheduledStartAt) {
       setError('Choose a valid call time.')
+      return
+    }
+    if (!isCallSchedulingStartValid(scheduledStartAt)) {
+      setError(`Choose a call time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
       return
     }
     setCallBusy('schedule')
@@ -5334,6 +7033,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
     setSuccess(null)
     if (!scheduledStartAt) {
       setError('Choose a valid consultation time.')
+      return
+    }
+    if (!isCallSchedulingStartValid(scheduledStartAt)) {
+      setError(`Choose a consultation time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
       return
     }
     if (leak) {
@@ -5373,6 +7076,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
       setError('Schedule this ready-made call first so both sides know when to join.')
       return
     }
+    if (consultationPaymentBlocked) {
+      setError('Consultation fee required before the room can open')
+      return
+    }
     setCallBusy(callType)
     try {
       const functionName = order.stage === 'CONSULTATION' ? 'create-consultation-room' : 'create-order-call-room'
@@ -5386,7 +7093,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
         setSuccess(order.stage === 'CONSULTATION' ? `Consultation ${callType} opened in a new tab.` : `Drape ${callType} call opened in a new tab.`)
         return
       }
-      setSuccess(result.message ?? 'Calling is unavailable right now. Continue in Messages so the order record stays protected.')
+      setError(result.message ?? 'Calling is unavailable right now. Continue in Messages so the order record stays protected.')
     } catch (callError) {
       setError(friendlyActionError(callError, 'Call could not start right now. Keep the conversation in Messages.'))
     } finally {
@@ -5394,9 +7101,198 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
     }
   }
 
+  function stopWebRecordingTimer() {
+    if (webRecordTimerRef.current) {
+      clearInterval(webRecordTimerRef.current)
+      webRecordTimerRef.current = null
+    }
+  }
+
+  function cancelWebRecording() {
+    webRecordingCancelledRef.current = true
+    stopWebRecordingTimer()
+    const recorder = mediaRecorderRef.current
+    if (recorder && recorder.state !== 'inactive' && !webRecordingStoppingRef.current) {
+      webRecordingStoppingRef.current = true
+      recorder.stop()
+      return
+    }
+
+    audioChunksRef.current = []
+    webStreamRef.current?.getTracks().forEach((track) => track.stop())
+    webStreamRef.current = null
+    mediaRecorderRef.current = null
+    webRecordingStoppingRef.current = false
+    webRecordingCancelledRef.current = false
+    webRecordingSecondsRef.current = 0
+    setWebRecording(false)
+    setWebRecordingSeconds(0)
+  }
+
+  async function startWebRecording() {
+    if (
+      busy ||
+      webRecordingStartingRef.current ||
+      webRecordingStoppingRef.current ||
+      webRecordingFinalizingRef.current ||
+      mediaRecorderRef.current
+    ) return
+
+    setError(null)
+    if (
+      !window.isSecureContext ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === 'undefined'
+    ) {
+      setError('Voice recording requires a secure browser connection with microphone support.')
+      return
+    }
+
+    webRecordingStartingRef.current = true
+    webRecordingCancelledRef.current = false
+    webRecordingSecondsRef.current = 0
+    let stream: MediaStream | null = null
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      webStreamRef.current = stream
+      audioChunksRef.current = []
+      const mimeType = [
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+      ].find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? null
+      if (!mimeType) throw new Error('CROSS_PLATFORM_VOICE_UNSUPPORTED')
+
+      const recorder = new MediaRecorder(stream, { mimeType })
+      mediaRecorderRef.current = recorder
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
+      recorder.onerror = () => {
+        webRecordingCancelledRef.current = true
+        setError('Voice recording stopped unexpectedly. Please try again.')
+      }
+      recorder.onstop = () => {
+        const wasCancelled = webRecordingCancelledRef.current
+        const durationSeconds = webRecordingSecondsRef.current
+        stopWebRecordingTimer()
+        webStreamRef.current?.getTracks().forEach((track) => track.stop())
+        webStreamRef.current = null
+        if (mediaRecorderRef.current === recorder) mediaRecorderRef.current = null
+        setWebRecording(false)
+        setWebRecordingSeconds(0)
+
+        if (wasCancelled) {
+          audioChunksRef.current = []
+          webRecordingStoppingRef.current = false
+          webRecordingCancelledRef.current = false
+          webRecordingSecondsRef.current = 0
+          return
+        }
+
+        void finaliseWebRecording(recorder.mimeType, durationSeconds)
+      }
+      recorder.start()
+      setWebRecording(true)
+      setWebRecordingSeconds(0)
+      webRecordTimerRef.current = setInterval(() => {
+        webRecordingSecondsRef.current += 1
+        setWebRecordingSeconds(webRecordingSecondsRef.current)
+        if (webRecordingSecondsRef.current >= 60) {
+          stopWebRecording()
+        }
+      }, 1000)
+    } catch (recordingError) {
+      stopWebRecordingTimer()
+      stream?.getTracks().forEach((track) => track.stop())
+      webStreamRef.current = null
+      mediaRecorderRef.current = null
+      audioChunksRef.current = []
+      setWebRecording(false)
+      setWebRecordingSeconds(0)
+
+      if (recordingError instanceof DOMException && ['NotAllowedError', 'SecurityError'].includes(recordingError.name)) {
+        setError('Microphone access is blocked. Allow microphone access in your browser settings and try again.')
+      } else if (recordingError instanceof DOMException && recordingError.name === 'NotFoundError') {
+        setError('No microphone was found on this device.')
+      } else if (recordingError instanceof DOMException && recordingError.name === 'NotReadableError') {
+        setError('Your microphone is busy in another app or browser tab.')
+      } else if (recordingError instanceof Error && recordingError.message === 'CROSS_PLATFORM_VOICE_UNSUPPORTED') {
+        setError('This browser cannot create a cross-platform voice note. Update Chrome or Safari and try again.')
+      } else {
+        setError('Voice recording could not start. Please try again.')
+      }
+    } finally {
+      webRecordingStartingRef.current = false
+    }
+  }
+
+  async function finaliseWebRecording(mimeType: string, recordedSeconds: number) {
+    if (webRecordingFinalizingRef.current) return
+    webRecordingFinalizingRef.current = true
+    try {
+      const chunks = audioChunksRef.current
+      audioChunksRef.current = []
+      if (chunks.length === 0) return
+
+      const storageContentType = voicePlaybackMimeType(null, mimeType)
+      const blob = new Blob(chunks, { type: storageContentType })
+      if (blob.size > MEDIA_LIMITS_BYTES.voiceNote) {
+        setError('Voice note too large. Keep recordings under 25 MB.')
+        return
+      }
+
+      const ext = storageContentType === 'audio/mp4' ? 'm4a' : 'aac'
+      const filename = `messages/${order.id}/${Date.now()}.${ext}`
+      setBusy(true)
+      setUploadStatus('Uploading voice note...')
+      try {
+        const supabase = createClient()
+        const { error: uploadError } = await supabase.storage
+          .from('message-media')
+          .upload(filename, blob, { contentType: storageContentType, upsert: false })
+        if (uploadError) throw uploadError
+        await invokeAccountFunction('message-action', {
+          action: 'send-message',
+          orderId: order.id,
+          type: 'VOICE',
+          voiceUrl: filename,
+          voiceDuration: Math.max(1, recordedSeconds),
+        })
+        setSuccess('Voice note sent inside the protected order thread.')
+        onRefresh()
+      } catch (voiceError) {
+        setError(friendlyActionError(voiceError, 'Voice note could not send. Please try again.'))
+      } finally {
+        setBusy(false)
+        setUploadStatus(null)
+      }
+    } finally {
+      webRecordingFinalizingRef.current = false
+      webRecordingStoppingRef.current = false
+      webRecordingCancelledRef.current = false
+      webRecordingSecondsRef.current = 0
+    }
+  }
+
+  function stopWebRecording() {
+    const recorder = mediaRecorderRef.current
+    if (!recorder || recorder.state === 'inactive' || webRecordingStoppingRef.current) return
+    webRecordingStoppingRef.current = true
+    try {
+      recorder.stop()
+    } catch {
+      webRecordingStoppingRef.current = false
+      setError('Voice recording could not stop cleanly. Please try again.')
+    }
+  }
+
+  function formatWebDuration(seconds: number) {
+    const m = Math.floor(seconds / 60)
+    const s = seconds % 60
+    return `${m}:${s.toString().padStart(2, '0')}`
+  }
+
   if (!canMessage) {
     return (
-      <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+      <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
         This order is closed, so the web thread is read-only.
       </p>
     )
@@ -5405,53 +7301,92 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
   return (
     <div className="grid min-w-0 gap-0 overflow-hidden">
       <ActionNotice error={error} success={success} />
+      {callLifecycleEvent ? <CallLifecycleEventCard event={callLifecycleEvent} /> : null}
 
       {/* Toolbar — always visible */}
-      <div className="flex items-center gap-1 px-1 pb-2">
+      <div className="flex min-h-11 flex-wrap items-center gap-1.5 pb-2">
         {/* Hidden file input */}
         <input
           ref={photoInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
           className="hidden"
           onChange={(event) => {
             const nextFile = event.target.files?.[0] ?? null
-            const photoError = nextFile ? validateMessagePhoto(nextFile) : null
-            setError(photoError)
-            setPhotoFile(photoError ? null : nextFile)
-            if (photoError && photoInputRef.current) photoInputRef.current.value = ''
+            setError(null)
+            setPhotoFile(nextFile)
           }}
           disabled={busy}
         />
-        <button
-          type="button"
-          title="Attach photo"
+        <IconButton
+          title="Attach media"
+          label="Attach media"
           onClick={() => photoInputRef.current?.click()}
-          disabled={busy}
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-base transition ${photoFile ? 'bg-needle/14 text-needle' : 'text-ink/44 hover:bg-ink/6 hover:text-ink'}`}
+          disabled={busy || webRecording}
+          variant={photoFile ? 'secondary' : 'ghost'}
+          size="icon-sm"
         >
-          &#128206;
-        </button>
+          <Paperclip className="size-4.5" />
+        </IconButton>
+        {/* Voice note */}
+        {webRecording ? (
+          <>
+            <span className="ml-1 min-w-[2.5rem] text-xs font-semibold tabular-nums text-needle">
+              {formatWebDuration(webRecordingSeconds)}
+            </span>
+            <IconButton
+              title="Send voice note"
+              label="Send voice note"
+              onClick={() => { void stopWebRecording() }}
+              variant="secondary"
+              size="icon-sm"
+            >
+              <Square className="size-4 fill-current" />
+            </IconButton>
+            <IconButton
+              title="Cancel recording"
+              label="Cancel recording"
+              onClick={cancelWebRecording}
+              variant="destructive"
+              size="icon-sm"
+            >
+              <X className="size-4" />
+            </IconButton>
+          </>
+        ) : (
+          <IconButton
+            title="Record voice note"
+            label="Record voice note"
+            onClick={() => { void startWebRecording() }}
+            disabled={busy}
+            variant="ghost"
+            size="icon-sm"
+          >
+            <Mic className="size-4.5" />
+          </IconButton>
+        )}
         {canShowCallButtons ? (
           <>
-            <button
-              type="button"
+            <IconButton
               title="Audio call"
+              label="Start audio call"
               onClick={() => { void startCall('audio') }}
-              disabled={!!callBusy}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
+              disabled={!!callBusy || consultationPaymentBlocked}
+              variant="ghost"
+              size="icon-sm"
             >
-              {callBusy === 'audio' ? '⏳' : '📞'}
-            </button>
-            <button
-              type="button"
+              {callBusy === 'audio' ? <LoaderCircle className="size-4 animate-spin" /> : <Phone className="size-4.5" />}
+            </IconButton>
+            <IconButton
               title="Video call"
+              label="Start video call"
               onClick={() => { void startCall('video') }}
-              disabled={!!callBusy}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
+              disabled={!!callBusy || consultationPaymentBlocked}
+              variant="ghost"
+              size="icon-sm"
             >
-              {callBusy === 'video' ? '⏳' : '📹'}
-            </button>
+              {callBusy === 'video' ? <LoaderCircle className="size-4 animate-spin" /> : <Video className="size-4.5" />}
+            </IconButton>
           </>
         ) : null}
         {uploadStatus ? (
@@ -5464,30 +7399,49 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
         ) : null}
       </div>
 
+      {consultationPaymentBlocked && !callLifecycleEvent ? (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-rust/16 bg-rust/8 px-3 py-2 text-xs leading-5 text-rust">
+          <span className="font-semibold">Consultation fee required before the room can open</span>
+          <Link
+            href={viewerIsCustomer ? accountRoute(`/account/checkout/${order.id}`) : accountRoute(`/account/orders/${order.id}`)}
+            className="font-semibold text-needle"
+          >
+            {viewerIsCustomer ? 'Pay now' : 'View order'}
+          </Link>
+        </div>
+      ) : null}
+
       {/* Photo preview */}
       {photoFile ? (
-        <div className="mb-2 flex items-center justify-between rounded-[0.75rem] bg-needle/8 px-3 py-2 text-xs text-needle">
-          <span className="font-semibold">{photoFile.name}</span>
-          <button
+        <div className="mb-2 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-needle/15 bg-needle/6 px-3 py-2 text-xs text-needle">
+          <span className="truncate font-semibold">{photoFile.name}</span>
+          <Button
             type="button"
             onClick={() => { setPhotoFile(null); if (photoInputRef.current) photoInputRef.current.value = '' }}
-            className="font-semibold text-rust"
+            variant="ghost"
+            size="sm"
+            className="shrink-0 text-rust hover:text-rust"
           >
             Remove
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {/* Textarea + send */}
-      <div className="flex items-end gap-2">
+      <div className="flex items-end gap-2 rounded-lg border border-ui-border bg-white p-2 shadow-sm focus-within:border-needle/45 focus-within:ring-2 focus-within:ring-needle/10">
         <label className="min-w-0 flex-1">
           <span className="sr-only">Reply</span>
-          <textarea
+          <Textarea
             value={body}
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => {
+              setBody(event.target.value)
+              broadcastTyping(true)
+              if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+              typingTimerRef.current = setTimeout(() => broadcastTyping(false), 2000)
+            }}
             rows={2}
             maxLength={2000}
-            className="w-full resize-none rounded-[0.85rem] border border-ink/10 bg-bone/40 px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
+            className="max-h-36 min-h-11 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0"
             placeholder="Message..."
             onKeyDown={(event) => {
               if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -5497,14 +7451,16 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
             }}
           />
         </label>
-        <button
+        <Button
           type="button"
           onClick={() => { void sendMessage() }}
-          disabled={busy}
-          className="mb-0.5 inline-flex shrink-0 items-center justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+          disabled={busy || webRecording}
+          size="icon"
+          className="mb-0.5 shrink-0 rounded-lg"
+          aria-label={busy ? 'Sending message' : 'Send message'}
         >
-          {busy ? '...' : 'Send'}
-        </button>
+          {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4.5" />}
+        </Button>
       </div>
 
       {canRequestConsultation ? (
@@ -5527,7 +7483,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
                 type="button"
                 onClick={() => { void requestConsultation() }}
                 disabled={!!callBusy}
-                className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {callBusy === 'consultation' ? 'Sending...' : 'Request'}
               </button>
@@ -5538,7 +7494,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
               rows={2}
               maxLength={300}
               placeholder="Optional note about fit, fabric, event timing, or questions."
-              className="resize-none rounded-[0.85rem] border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
+              className="resize-none rounded-[8px] border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
             />
             <p className="text-xs leading-5 text-ink/48">
               Consultation requests are for custom orders before quote. The tailor must approve or reschedule before the call opens.
@@ -5546,7 +7502,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
           </div>
         </DisclosurePanel>
       ) : consultationMeta ? (
-        <div className="mt-3 rounded-[0.85rem] border border-needle/12 bg-needle/6 px-3 py-2 text-xs leading-5 text-needle">
+        <div className="mt-3 rounded-[8px] border border-needle/12 bg-needle/6 px-3 py-2 text-xs leading-5 text-needle">
           {consultationMeta.status === 'REQUESTED'
             ? `Consultation requested${consultationLabel ? ` for ${consultationLabel}` : ''}. The tailor needs to approve it before the call opens.`
             : consultationMeta.status === 'SCHEDULED'
@@ -5565,6 +7521,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
             <label className="grid gap-1.5">
               <span className="text-xs font-semibold text-ink">Date &amp; time</span>
               <input
+                ref={readyMadeCallTimeInputRef}
                 type="datetime-local"
                 value={callTime}
                 onChange={(event) => setCallTime(event.target.value)}
@@ -5578,25 +7535,23 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
                 onChange={(event) => setCallReason(event.target.value)}
                 className="w-full rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/50"
               >
-                <option value="SIZE_OR_FIT">Size or fit</option>
-                <option value="ITEM_CONDITION">Item condition</option>
-                <option value="PICKUP_OR_DELIVERY">Pickup or delivery</option>
-                <option value="TIMELINE">Timing</option>
-                <option value="OTHER">Order clarity</option>
+                {CALL_SCHEDULING_POLICY.reasons.map((reason) => (
+                  <option key={reason.value} value={reason.value}>{reason.label}</option>
+                ))}
               </select>
             </label>
             <button
               type="button"
               onClick={() => { void scheduleReadyMadeCall() }}
               disabled={!!callBusy}
-              className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20 md:col-auto"
+              className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20 md:col-auto"
             >
               {callBusy === 'schedule' ? 'Scheduling...' : 'Schedule'}
             </button>
           </div>
         </DisclosurePanel>
       ) : isReadyMade ? (
-        <p className="mt-3 rounded-[0.85rem] border border-ink/8 bg-bone/55 px-3 py-2 text-xs leading-5 text-ink/54">
+        <p className="mt-3 rounded-[8px] border border-ink/8 bg-bone/55 px-3 py-2 text-xs leading-5 text-ink/54">
           Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.
         </p>
       ) : null}
@@ -5606,6 +7561,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
 
 function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRenderData; onRefresh: () => void }) {
   const account = useAccountContext()
+  const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [label, setLabel] = useState('Me')
   const [relationship, setRelationship] = useState('SELF')
@@ -5644,6 +7600,7 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
 
   function startEdit(profile: MeasurementProfile) {
     const nextMeasurements = measurementsForProfile(profile, data.customerProfile)
+    const specialistBackedKeys = specialistMeasurementProfileValueKeys(nextMeasurements)
     setEditingId(profile.id)
     setLabel(profile.label ?? 'Me')
     setRelationship(profile.relationship ?? 'SELF')
@@ -5653,7 +7610,7 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
       return [field.key, typeof value === 'number' || typeof value === 'string' ? String(value) : '']
     })))
     setCustomMeasurements(Object.entries(nextMeasurements)
-      .filter(([key, value]) => isEditableCustomMeasurementKey(key, value))
+      .filter(([key, value]) => !specialistBackedKeys.has(key) && isEditableCustomMeasurementKey(key, value))
       .map(([name, value]) => ({
         id: customMeasurementId(),
         name,
@@ -5661,6 +7618,24 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
       })))
     setError(null)
     setSuccess(null)
+    setEditorOpen(true)
+  }
+
+  function requestEdit(profile: MeasurementProfile) {
+    startEdit(profile)
+  }
+
+  function startNewProfile() {
+    resetForm()
+    setError(null)
+    setSuccess(null)
+    setEditorOpen(true)
+  }
+
+  function closeEditor() {
+    resetForm()
+    setError(null)
+    setEditorOpen(false)
   }
 
   function resetForm() {
@@ -5730,7 +7705,10 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
     const supabase = createClient()
     const now = new Date().toISOString()
     const trimmedLabel = label.trim() || 'Me'
+    const editingProfile = data.measurementProfiles.find((profile) => profile.id === editingId)
+    const existingMeasurements = editingProfile ? measurementsForProfile(editingProfile, data.customerProfile) : null
     const measurements = buildMeasurementProfileStoragePayload({
+      ...preservedMeasurementMeta(existingMeasurements),
       ...numericMeasurements,
       ...customMeasurementPayload,
       unit,
@@ -5747,7 +7725,6 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
       last_measured_at: now,
       updated_at: now,
     }
-    const editingProfile = data.measurementProfiles.find((profile) => profile.id === editingId)
     const shouldMirrorToCustomerProfile = editingId ? editingProfile?.is_default === true : data.measurementProfiles.length === 0
     const result = editingId
       ? await supabase.from('customer_measurement_profiles').update(payload).eq('id', editingId)
@@ -5781,24 +7758,48 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
     setBusy(false)
     setSuccess(editingId ? 'Measurement profile updated.' : 'Measurement profile saved.')
     resetForm()
+    setEditorOpen(false)
     onRefresh()
   }
 
+  if (!editorOpen) {
+    return (
+      <Surface className="grid gap-4 p-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Measurements</p>
+          <h3 className="mt-1 text-xl font-semibold text-ink">Review saved profiles</h3>
+          <p className="mt-2 text-sm leading-6 text-ink/62">
+            Values stay read-only here until you choose to add or edit a profile.
+          </p>
+        </div>
+        <ActionNotice error={error} success={success} />
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button onClick={startNewProfile}>
+            Add measurements
+          </Button>
+          {data.measurementProfiles.map((profile) => (
+            <Button key={profile.id} variant="secondary" onClick={() => requestEdit(profile)}>
+              Edit {safeUserText(profile.label, 'profile')}
+            </Button>
+          ))}
+        </div>
+      </Surface>
+    )
+  }
+
   return (
-    <div className="grid gap-4 rounded-[1.4rem] border border-needle/12 bg-needle/8 p-5">
+    <Surface className="grid gap-4 p-5">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Manual profile</p>
-        <h3 className="mt-2 text-2xl text-ink">{editingId ? 'Update wearer measurements' : 'Add wearer measurements'}</h3>
+        <h3 className="mt-1 text-xl font-semibold text-ink">{editingId ? 'Update wearer measurements' : 'Add wearer measurements'}</h3>
       </div>
       <ActionNotice error={error} success={success} />
       <div className="grid gap-3 md:grid-cols-3">
-        <label className="grid gap-2">
-          <span className="text-sm font-semibold text-ink">Profile name</span>
-          <input value={label} onChange={(event) => setLabel(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-        </label>
-        <label className="grid gap-2">
-          <span className="text-sm font-semibold text-ink">Wearer</span>
-          <select value={relationship} onChange={(event) => setRelationship(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+        <Field label="Profile name">
+          <Input value={label} onChange={(event) => setLabel(event.target.value)} />
+        </Field>
+        <Field label="Wearer">
+          <NativeSelect value={relationship} onChange={(event) => setRelationship(event.target.value)}>
             <option value="SELF">Me</option>
             <option value="SPOUSE">Spouse</option>
             <option value="PARENT">Parent</option>
@@ -5806,27 +7807,24 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
             <option value="FRIEND">Friend</option>
             <option value="GROUP_MEMBER">Group member</option>
             <option value="OTHER">Someone else</option>
-          </select>
-        </label>
-        <label className="grid gap-2">
-          <span className="text-sm font-semibold text-ink">Unit</span>
-          <select value={unit} onChange={(event) => setUnit(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          </NativeSelect>
+        </Field>
+        <Field label="Unit">
+          <NativeSelect value={unit} onChange={(event) => setUnit(event.target.value)}>
             <option value="in">Inches</option>
             <option value="cm">Centimetres</option>
-          </select>
-        </label>
+          </NativeSelect>
+        </Field>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {coreFieldNames.map((field) => (
-          <label key={field.key} className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">{field.label}</span>
-            <input
+          <Field key={field.key} label={field.label}>
+            <Input
               inputMode="decimal"
               value={fields[field.key] ?? ''}
               onChange={(event) => setFields((current) => ({ ...current, [field.key]: event.target.value }))}
-              className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
             />
-          </label>
+          </Field>
         ))}
       </div>
       <DisclosurePanel
@@ -5836,47 +7834,43 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
         <div className="grid gap-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {additionalFieldNames.map((field) => (
-              <label key={field.key} className="grid gap-2">
-                <span className="text-sm font-semibold text-ink">{field.label}</span>
-                <input
+              <Field key={field.key} label={field.label}>
+                <Input
                   inputMode="decimal"
                   value={fields[field.key] ?? ''}
                   onChange={(event) => setFields((current) => ({ ...current, [field.key]: event.target.value }))}
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                 />
-              </label>
+              </Field>
             ))}
           </div>
-          <div className="grid gap-3 rounded-[1rem] border border-ink/6 bg-bone/35 p-4">
+          <div className="grid gap-3 rounded-[8px] border border-ink/6 bg-bone/35 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-ink">Custom tape points</p>
                 <p className="mt-1 text-xs leading-5 text-ink/56">Use these for garment-specific points that are not listed above.</p>
               </div>
-              <button type="button" onClick={() => addCustomMeasurement()} className="inline-flex w-fit justify-center rounded-full border border-needle/20 bg-white px-4 py-2 text-xs font-semibold text-needle">
+              <Button variant="secondary" size="sm" onClick={() => addCustomMeasurement()} className="w-fit">
                 Add custom point
-              </button>
+              </Button>
             </div>
             {customMeasurements.length > 0 ? (
               <div className="grid gap-2">
                 {customMeasurements.map((measurement) => (
                   <div key={measurement.id} className="grid gap-2 sm:grid-cols-[1fr_9rem_auto] sm:items-center">
-                    <input
+                    <Input
                       value={measurement.name}
                       onChange={(event) => updateCustomMeasurement(measurement.id, 'name', event.target.value)}
                       placeholder="e.g. Ankle"
-                      className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                     />
-                    <input
+                    <Input
                       inputMode="decimal"
                       value={measurement.value}
                       onChange={(event) => updateCustomMeasurement(measurement.id, 'value', event.target.value)}
                       placeholder={`0 ${unit}`}
-                      className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                     />
-                    <button type="button" onClick={() => removeCustomMeasurement(measurement.id)} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink/64">
+                    <Button variant="secondary" onClick={() => removeCustomMeasurement(measurement.id)}>
                       Remove
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -5885,25 +7879,14 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
         </div>
       </DisclosurePanel>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <button type="button" onClick={saveProfile} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+        <Button onClick={saveProfile} disabled={busy}>
           {busy ? 'Saving...' : editingId ? 'Update profile' : 'Save profile'}
-        </button>
-        {editingId ? (
-          <button type="button" onClick={resetForm} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink">
-            Cancel edit
-          </button>
-        ) : null}
+        </Button>
+        <Button variant="secondary" onClick={closeEditor}>
+          Cancel edit
+        </Button>
       </div>
-      {data.measurementProfiles.length > 0 ? (
-        <div className="grid gap-2 border-t border-needle/12 pt-4">
-          {data.measurementProfiles.map((profile) => (
-            <button key={profile.id} type="button" onClick={() => startEdit(profile)} className="rounded-[1rem] border border-ink/6 bg-white px-4 py-3 text-left text-sm font-semibold text-ink">
-              Edit {safeUserText(profile.label, 'measurement profile')}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    </Surface>
   )
 }
 
@@ -5921,18 +7904,27 @@ function SellerItemManager({
   const [currency, setCurrency] = useState(data.tailorProfile?.currency ?? 'USD')
   const [sizes, setSizes] = useState('M')
   const [inventory, setInventory] = useState('1')
-  const [fitGuide, setFitGuide] = useState('')
+  const [fitGuideUnit, setFitGuideUnit] = useState<ReadyMadeFitUnit>('in')
+  const [fitGuideFields, setFitGuideFields] = useState<ReadyMadeFitFieldKey[]>(FALLBACK_READY_MADE_FIT_FIELDS)
+  const [fitGuideDraft, setFitGuideDraft] = useState<ReadyMadeSizeGuideDraft>({})
+  const [activeFitGuideSize, setActiveFitGuideSize] = useState<string | null>(null)
+  const [fitNotes, setFitNotes] = useState('')
+  const [stretchNotes, setStretchNotes] = useState('')
+  const [sizeAdvice, setSizeAdvice] = useState<ReadyMadeFitAdvice>('ASK_SELLER')
   const [fulfillment, setFulfillment] = useState({ pickup: true, delivery: false, shipping: false })
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [publish, setPublish] = useState(false)
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [existingPhotoUrls, setExistingPhotoUrls] = useState<string[]>([])
+  const [readyMadeInspectIndex, setReadyMadeInspectIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const readiness = deriveWebTailorReadiness(data.tailorProfile)
+  const sellerType = data.tailorProfile?.seller_type
+  const isOnboardingProofMode = !readiness.publicDiscoveryReady && (sellerType === 'BOUTIQUE' || sellerType === 'TAILOR_SHOP')
   const canPublishLive = data.tailorProfile?.supports_ready_made === true && readiness.canPublishPaidItems
   const hasPickupAddress = hasNonEmptyText(data.pickupDetails?.pickup_address)
   const publishBlockedReason = !data.tailorProfile?.supports_ready_made
@@ -5942,11 +7934,33 @@ function SellerItemManager({
       : fulfillment.pickup && !hasPickupAddress
         ? 'Add the exact private pickup address in Profile before publishing a pickup item.'
         : null
-  const publishBlocked = publish && !!publishBlockedReason
+  const publishBlocked = !isOnboardingProofMode && publish && !!publishBlockedReason
+  const draftSizes = splitList(sizes)
+  const selectedFitGuideSize = activeFitGuideSize && draftSizes.includes(activeFitGuideSize)
+    ? activeFitGuideSize
+    : draftSizes[0] ?? null
+  const currentSizeAdvice = READY_MADE_SIZE_GUIDE_ADVICE_OPTIONS.find((option) => option.value === sizeAdvice)
+  const currentFitGuide = draftToWebReadyMadeSizeGuide({
+    sizes: draftSizes,
+    unit: fitGuideUnit,
+    fields: fitGuideFields,
+    draft: fitGuideDraft,
+    fitNotes,
+    stretchNotes,
+    sizeAdvice,
+  })
+  const currentFitGuideReady = hasReadyMadeSizeGuide(currentFitGuide, draftSizes)
+  const portfolioVideoUrls = stringList(data.tailorProfile?.portfolio_video_urls)
+  const readyMadeMediaEntries: SortableMediaEntry[] = existingPhotoUrls.map((url, index) => ({
+    id: `ready-made-${index}-${url}`,
+    url,
+    label: `Product media ${index + 1}`,
+  }))
 
   function resetForm() {
     setEditingItemId(null)
     setExistingPhotoUrls([])
+    setReadyMadeInspectIndex(null)
     setTitle('')
     setCategory('')
     setDescription('')
@@ -5954,11 +7968,47 @@ function SellerItemManager({
     setCurrency(data.tailorProfile?.currency ?? 'USD')
     setSizes('M')
     setInventory('1')
-    setFitGuide('')
+    setFitGuideUnit('in')
+    setFitGuideFields(FALLBACK_READY_MADE_FIT_FIELDS)
+    setFitGuideDraft({})
+    setActiveFitGuideSize(null)
+    setFitNotes('')
+    setStretchNotes('')
+    setSizeAdvice('ASK_SELLER')
     setFulfillment({ pickup: true, delivery: false, shipping: false })
     setPhotoFile(null)
     setPublish(false)
     if (photoInputRef.current) photoInputRef.current.value = ''
+  }
+
+  function toggleFitGuideField(field: ReadyMadeFitFieldKey) {
+    setFitGuideFields((current) =>
+      current.includes(field)
+        ? current.filter((entry) => entry !== field)
+        : [...current, field],
+    )
+  }
+
+  function setFitGuideRange(size: string, field: ReadyMadeFitFieldKey, edge: 'min' | 'max', value: string) {
+    const nextValue = fitGuideInputValue(value)
+    setFitGuideDraft((current) => {
+      const currentSize = current[size] ?? {}
+      const currentRange = currentSize[field] ?? { min: '', max: '' }
+      return {
+        ...current,
+        [size]: {
+          ...currentSize,
+          [field]: {
+            ...currentRange,
+            [edge]: nextValue,
+          },
+        },
+      }
+    })
+  }
+
+  function applyRecommendedFitGuideFields() {
+    setFitGuideFields(recommendedReadyMadeFitFieldsForCategory(category))
   }
 
   function startEditItem(item: SellerItem) {
@@ -5975,9 +8025,24 @@ function SellerItemManager({
     setDescription(item.description ?? '')
     setPrice(minorUnitsInput(item.price_amount))
     setCurrency(item.currency ?? data.tailorProfile?.currency ?? 'USD')
-    setSizes(stringList(item.sizes).join(', ') || 'M')
+    const itemSizes = stringList(item.sizes)
+    setSizes(itemSizes.join(', ') || 'M')
     setInventory(String(item.inventory_quantity ?? 1))
-    setFitGuide(sizeGuideNotes(item))
+    const normalizedGuide = normalizeWebReadyMadeSizeGuide(item.size_guide, itemSizes)
+    const nextFitGuideFields = normalizedGuide.fields.length > 0
+      ? normalizedGuide.fields
+      : recommendedReadyMadeFitFieldsForCategory(item.category)
+    setFitGuideUnit(normalizedGuide.unit)
+    setFitGuideFields(nextFitGuideFields)
+    setFitGuideDraft(guideDraftFromWebReadyMadeSizeGuide({
+      sizes: itemSizes,
+      fields: nextFitGuideFields,
+      guide: normalizedGuide,
+    }))
+    setActiveFitGuideSize(itemSizes[0] ?? null)
+    setFitNotes(normalizedGuide.fitNotes ?? '')
+    setStretchNotes(normalizedGuide.stretchNotes ?? '')
+    setSizeAdvice(normalizedGuide.sizeAdvice ?? 'ASK_SELLER')
     setFulfillment({
       pickup: item.pickup_available ?? true,
       delivery: item.delivery_available ?? false,
@@ -5988,11 +8053,46 @@ function SellerItemManager({
     if (photoInputRef.current) photoInputRef.current.value = ''
   }
 
+  async function chooseReadyMadeMedia(file: File | null) {
+    setError(null)
+    if (!file) {
+      setPhotoFile(null)
+      return
+    }
+    if (existingPhotoUrls.length >= MAX_READY_MADE_MEDIA) {
+      setPhotoFile(null)
+      if (photoInputRef.current) photoInputRef.current.value = ''
+      setError(`Remove one media item first. Ready-made items can have up to ${MAX_READY_MADE_MEDIA} media files.`)
+      return
+    }
+
+    try {
+      await prepareReadyMadeMediaFile(file)
+      setPhotoFile(file)
+    } catch (mediaError) {
+      setPhotoFile(null)
+      if (photoInputRef.current) photoInputRef.current.value = ''
+      setError(friendlyActionError(mediaError, 'This media file could not be used.'))
+    }
+  }
+
+  function attachPortfolioVideo(videoUrl: string) {
+    setError(null)
+    setExistingPhotoUrls((current) => {
+      if (current.includes(videoUrl)) return current
+      if (current.length >= MAX_READY_MADE_MEDIA) {
+        setError(`Remove one media item first. Ready-made items can have up to ${MAX_READY_MADE_MEDIA} media files.`)
+        return current
+      }
+      return [...current, videoUrl]
+    })
+  }
+
   async function saveItem() {
     setError(null)
     setSuccess(null)
     if (!data.userId || !data.tailorProfile?.id) return
-    const textToCheck = [title, category, description, fitGuide].filter(Boolean).join('\n')
+    const textToCheck = [title, category, description, fitNotes, stretchNotes].filter(Boolean).join('\n')
     const leak = assertNoContactLeak(textToCheck, "Ready-made listings can't include contact details.")
     if (leak) {
       setError(leak)
@@ -6000,28 +8100,70 @@ function SellerItemManager({
     }
     const priceAmount = parseMinorUnits(price)
     const nextSizes = splitList(sizes)
-    if (!title.trim() || !category.trim() || !description.trim() || !priceAmount || nextSizes.length === 0) {
-      setError('Add title, category, description, price, and at least one size.')
-      return
-    }
-    if (publishBlocked) {
-      setError(publishBlockedReason ?? 'Finish go-live checks before publishing this item.')
-      return
-    }
-    if (photoFile) {
-      const photoError = validateMessagePhoto(photoFile)
-      if (photoError) {
-        setError(photoError)
+    const sizeInventory = parseInventoryFromSizes(nextSizes, inventory)
+    const inventoryQuantity = Object.values(sizeInventory).reduce((sum, value) => sum + value, 0)
+    const nextSizeGuide = draftToWebReadyMadeSizeGuide({
+      sizes: nextSizes,
+      unit: fitGuideUnit,
+      fields: fitGuideFields,
+      draft: fitGuideDraft,
+      fitNotes,
+      stretchNotes,
+      sizeAdvice,
+    })
+    const mediaCount = existingPhotoUrls.length + (photoFile ? 1 : 0)
+    if (isOnboardingProofMode) {
+      const proofIssues = getOnboardingProofItemIssues({
+        title,
+        category,
+        description,
+        mediaCount,
+        sizes: nextSizes,
+        inventoryQuantity,
+      })
+      if (proofIssues.length > 0) {
+        setError(proofIssues[0]?.message ?? 'Finish the required setup item details.')
         return
+      }
+    } else {
+      if (!title.trim() || !category.trim() || !description.trim() || !priceAmount || nextSizes.length === 0) {
+        setError('Add title, category, description, price, and at least one size.')
+        return
+      }
+      if (publishBlocked) {
+        setError(publishBlockedReason ?? 'Finish go-live checks before publishing this item.')
+        return
+      }
+      if (publish) {
+        const liveIssues = readyMadeLiveListingIssues({
+          category,
+          description,
+          sizes: nextSizes,
+          photoCount: mediaCount,
+          inventoryQuantity,
+          hasSizeGuide: hasStructuredReadyMadeSizeGuide(nextSizeGuide, nextSizes),
+          requiresPickupAddress: fulfillment.pickup && !hasPickupAddress,
+        })
+        if (liveIssues.length > 0) {
+          setError(liveIssues[0] ?? 'Finish go-live checks before publishing this item.')
+          return
+        }
       }
     }
     setBusy(true)
     try {
-      const photoUrls = photoFile
-        ? [await uploadPublicFile('seller-item-media', data.userId, photoFile)]
+      const preparedMedia = photoFile ? await prepareReadyMadeMediaFile(photoFile) : null
+      const uploadedMediaUrl = preparedMedia
+        ? await uploadPublicFile(
+            'seller-item-media',
+            `shop/${data.userId}/${readyMadeMediaContentType(preparedMedia)?.startsWith('video/') ? 'videos' : 'photos'}`,
+            preparedMedia,
+          )
+        : null
+      const photoUrls = uploadedMediaUrl
+        ? [...new Set([...existingPhotoUrls, uploadedMediaUrl])].slice(0, MAX_READY_MADE_MEDIA)
         : existingPhotoUrls
-      const sizeInventory = parseInventoryFromSizes(nextSizes, inventory)
-      await invokeAccountFunction('seller-item-action', {
+      const result = await invokeAccountFunction<{ isLive?: boolean }>('seller-item-action', {
         action: editingItemId ? 'update-item' : 'create-item',
         itemId: editingItemId ?? undefined,
         title: title.trim(),
@@ -6029,21 +8171,23 @@ function SellerItemManager({
         description: description.trim(),
         sizes: nextSizes,
         sizeInventory,
-        priceAmount,
+        priceAmount: isOnboardingProofMode ? null : priceAmount,
         currency,
         photoUrls,
-        inventoryQuantity: Object.values(sizeInventory).reduce((sum, value) => sum + value, 0),
-        sizeGuide: fitGuide.trim()
-          ? { unit: 'in', notes: fitGuide.trim(), sizes: nextSizes }
-          : null,
-        pickupAvailable: fulfillment.pickup,
-        deliveryAvailable: fulfillment.delivery,
-        shippingAvailable: fulfillment.shipping,
-        isLive: publish,
+        inventoryQuantity,
+        sizeGuide: isOnboardingProofMode ? null : nextSizeGuide,
+        pickupAvailable: isOnboardingProofMode ? false : fulfillment.pickup,
+        deliveryAvailable: isOnboardingProofMode ? false : fulfillment.delivery,
+        shippingAvailable: isOnboardingProofMode ? false : fulfillment.shipping,
+        isLive: isOnboardingProofMode ? false : publish,
+        onboarding: isOnboardingProofMode,
       })
-      setSuccess(editingItemId
-        ? publish ? 'Ready-made item updated and published.' : 'Ready-made draft updated.'
-        : publish ? 'Ready-made item saved and publish checks passed.' : 'Ready-made draft saved.')
+      const savedLive = result.isLive === true
+      setSuccess(isOnboardingProofMode
+        ? 'Ready-made proof item saved for setup review.'
+        : editingItemId
+          ? savedLive ? 'Ready-made item updated and published.' : 'Ready-made draft updated.'
+          : savedLive ? 'Ready-made item saved and publish checks passed.' : 'Ready-made draft saved.')
       resetForm()
       onRefresh()
     } catch (itemError) {
@@ -6060,6 +8204,28 @@ function SellerItemManager({
     if (action === 'delete-item') {
       const confirmed = window.confirm('Delete this hidden draft permanently? Items with order history cannot be deleted.')
       if (!confirmed) return
+    }
+    if (action === 'publish-item') {
+      if (!canPublishLive) {
+        setError(data.tailorProfile?.supports_ready_made === false
+          ? 'Enable ready-made shop in Selling setup before publishing live items.'
+          : readiness.body)
+        return
+      }
+      const itemSizes = stringList(item.sizes)
+      const liveIssues = readyMadeLiveListingIssues({
+        category: item.category,
+        description: item.description ?? '',
+        sizes: itemSizes,
+        photoCount: stringList(item.photo_urls).length,
+        inventoryQuantity: readyMadeInventoryCount(item),
+        hasSizeGuide: hasStructuredReadyMadeSizeGuide(item.size_guide, itemSizes),
+        requiresPickupAddress: (item.pickup_available ?? false) && !hasPickupAddress,
+      })
+      if (liveIssues.length > 0) {
+        setError(liveIssues[0] ?? 'Finish go-live checks before publishing this item.')
+        return
+      }
     }
     const busyKey = `${action}:${item.id}`
     setActionBusy(busyKey)
@@ -6087,18 +8253,23 @@ function SellerItemManager({
   if (!data.tailorProfile) return null
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Catalogue</p>
-          <h2 className="mt-2 text-3xl text-ink">{editingItemId ? 'Edit listing' : 'Add a listing'}</h2>
-        </div>
-        <p className="text-sm leading-6 text-ink/62">Publishing checks photos, sizes, stock, fit guide, fulfillment, and payout readiness. Unpublish items before editing.</p>
-      </div>
-      <div className="mt-5 grid gap-4">
+    <Surface className="overflow-hidden">
+      {readyMadeInspectIndex != null ? (
+        <MediaInspectionOverlay
+          entries={readyMadeMediaEntries}
+          initialIndex={readyMadeInspectIndex}
+          onClose={() => setReadyMadeInspectIndex(null)}
+        />
+      ) : null}
+      <SurfaceHeader
+        eyebrow={isOnboardingProofMode ? 'Setup proof' : 'Catalogue'}
+        title={isOnboardingProofMode ? 'Add ready-made proof item' : editingItemId ? 'Edit listing' : 'Add a listing'}
+        description={isOnboardingProofMode ? 'Add one inspectable ready-made item for setup review. It stays hidden from buyers; pricing and go-live setup happen later in Catalogue.' : 'Publishing checks photos, sizes, stock, fit guide, fulfillment, and payout readiness. Unpublish items before editing.'}
+      />
+      <div className="grid gap-4 p-5">
         <ActionNotice error={error} success={success} />
-        {!canPublishLive || (fulfillment.pickup && !hasPickupAddress) ? (
-          <div className={`rounded-[1.1rem] border p-4 ${
+        {!isOnboardingProofMode && (!canPublishLive || (fulfillment.pickup && !hasPickupAddress)) ? (
+          <div className={`rounded-[8px] border p-4 ${
             canPublishLive && fulfillment.pickup && !hasPickupAddress
               ? 'border-amber-300/35 bg-amber-400/8'
               : 'border-rust/18 bg-rust/8'
@@ -6127,53 +8298,218 @@ function SellerItemManager({
           </div>
         ) : null}
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Title</span>
-            <input value={title} onChange={(event) => setTitle(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Category</span>
-            <input value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
+          <Field label="Title">
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </Field>
+          <Field label="Category">
+            <Input value={category} onChange={(event) => setCategory(event.target.value)} />
+          </Field>
         </div>
-        <label className="grid gap-2">
-          <span className="text-sm font-semibold text-ink">Description</span>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-        </label>
+        <Field label="Description">
+          <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
+        </Field>
         <div className="grid gap-3 md:grid-cols-4">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Price</span>
-            <input inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Currency</span>
-            <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          {!isOnboardingProofMode ? (
+          <Field label="Price">
+            <Input inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} />
+          </Field>
+          ) : null}
+          {!isOnboardingProofMode ? (
+          <Field label="Currency">
+            <NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}>
               {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
-            </select>
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Sizes</span>
-            <input value={sizes} onChange={(event) => setSizes(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Stock</span>
-            <input inputMode="numeric" value={inventory} onChange={(event) => setInventory(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
+            </NativeSelect>
+          </Field>
+          ) : null}
+          <Field label="Sizes">
+            <Input value={sizes} onChange={(event) => setSizes(event.target.value)} />
+          </Field>
+          <Field label="Stock">
+            <Input inputMode="numeric" value={inventory} onChange={(event) => setInventory(event.target.value)} />
+          </Field>
         </div>
-        <label className="grid gap-2">
-          <span className="text-sm font-semibold text-ink">Fit guide</span>
-          <input value={fitGuide} onChange={(event) => setFitGuide(event.target.value)} placeholder="Example: relaxed fit, best for 38-40 inch chest" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-        </label>
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
+        {!isOnboardingProofMode ? (
+        <div className="grid gap-4 rounded-[8px] border border-ink/8 bg-bone/35 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-ink">Fit guide</p>
+              <p className="mt-1 text-xs leading-5 text-ink/56">Add the buyer measurement ranges that should fit each size.</p>
+            </div>
+            <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
+              currentFitGuideReady ? 'bg-needle/10 text-needle' : 'bg-amber-400/12 text-amber-800'
+            }`}>
+              {currentFitGuideReady ? 'Fit guide ready' : 'Required before live'}
+            </span>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Unit">
+              <NativeSelect
+                value={fitGuideUnit}
+                onChange={(event) => setFitGuideUnit(event.target.value === 'cm' ? 'cm' : 'in')}
+              >
+                <option value="in">Inches</option>
+                <option value="cm">Centimetres</option>
+              </NativeSelect>
+            </Field>
+            <Field label="Buyer guidance" hint={currentSizeAdvice?.hint ?? 'Tell buyers how to choose when they sit between sizes.'}>
+              <NativeSelect
+                value={sizeAdvice}
+                onChange={(event) => setSizeAdvice(event.target.value as ReadyMadeFitAdvice)}
+              >
+                {READY_MADE_SIZE_GUIDE_ADVICE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </NativeSelect>
+            </Field>
+          </div>
+          <div className="grid gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Measurements</span>
+                <p className="mt-1 text-xs leading-5 text-ink/52">{fitGuideFieldsSummary(fitGuideFields)}</p>
+              </div>
+              <Button
+                onClick={applyRecommendedFitGuideFields}
+                variant="secondary"
+                size="sm"
+                className="w-fit"
+              >
+                Use category defaults
+              </Button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {READY_MADE_FIT_FIELDS.map((field) => (
+                <div key={field.key} className="flex items-center justify-between gap-2 rounded-[8px] border border-ui-border bg-white px-3 py-2 text-xs font-semibold text-ink">
+                  <span>{field.label}</span>
+                  <Switch checked={fitGuideFields.includes(field.key)} onCheckedChange={() => toggleFitGuideField(field.key)} aria-label={`${field.label} fit field`} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {draftSizes.length === 0 ? (
+            <p className="rounded-[8px] border border-amber-300/35 bg-white px-4 py-3 text-sm leading-6 text-ink/62">Add at least one size first, then enter size ranges here.</p>
+          ) : fitGuideFields.length === 0 ? (
+            <p className="rounded-[8px] border border-amber-300/35 bg-white px-4 py-3 text-sm leading-6 text-ink/62">Choose at least one measurement field. Chest, waist, and hips are a good start for most pieces.</p>
+          ) : selectedFitGuideSize ? (
+            <div className="grid gap-3">
+              <div className="flex flex-wrap gap-2">
+                {draftSizes.map((size) => {
+                  const selected = selectedFitGuideSize === size
+                  return (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => setActiveFitGuideSize(size)}
+                      className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                        selected
+                          ? 'border-needle bg-needle text-white'
+                          : 'border-ink/10 bg-white text-ink'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
+                <div>
+                  <p className="text-sm font-semibold text-ink">Size {selectedFitGuideSize}</p>
+                  <p className="mt-1 text-xs leading-5 text-ink/52">Enter the buyer range that should fit this size.</p>
+                </div>
+                <div className="grid gap-3">
+                  {fitGuideFields.map((field) => (
+                    <div key={`${selectedFitGuideSize}-${field}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_9rem] sm:items-center">
+                      <span className="text-sm font-semibold text-ink">{readyMadeFitFieldLabel(field)}</span>
+                      <Input
+                        inputMode="decimal"
+                        value={fitGuideDraft[selectedFitGuideSize]?.[field]?.min ?? ''}
+                        onChange={(event) => setFitGuideRange(selectedFitGuideSize, field, 'min', event.target.value)}
+                        placeholder={`Min ${fitGuideUnit}`}
+                      />
+                      <Input
+                        inputMode="decimal"
+                        value={fitGuideDraft[selectedFitGuideSize]?.[field]?.max ?? ''}
+                        onChange={(event) => setFitGuideRange(selectedFitGuideSize, field, 'max', event.target.value)}
+                        placeholder={`Max ${fitGuideUnit}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Fit notes">
+              <Textarea
+                value={fitNotes}
+                onChange={(event) => setFitNotes(event.target.value)}
+                rows={3}
+                placeholder="Example: relaxed through the chest, structured shoulders."
+              />
+            </Field>
+            <Field label="Stretch notes">
+              <Textarea
+                value={stretchNotes}
+                onChange={(event) => setStretchNotes(event.target.value)}
+                rows={3}
+                placeholder="Example: no stretch, choose the larger size if unsure."
+              />
+            </Field>
+          </div>
+        </div>
+        ) : null}
+        <div className={isOnboardingProofMode ? 'grid gap-3' : 'grid gap-3 md:grid-cols-[1fr_1fr]'}>
           <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Product photo</span>
-            <input ref={photoInputRef} type="file" accept="image/*" capture="environment" onChange={(event) => setPhotoFile(event.target.files?.[0] ?? null)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink" />
+            <span className="text-sm font-semibold text-ink">Product media</span>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+              onChange={(event) => { void chooseReadyMadeMedia(event.target.files?.[0] ?? null) }}
+              className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink"
+            />
             <span className="text-xs leading-5 text-ink/52">
               {editingItemId && !photoFile && existingPhotoUrls.length > 0
-                ? `${existingPhotoUrls.length} existing photo${existingPhotoUrls.length === 1 ? '' : 's'} will be kept unless you choose a replacement.`
-                : 'On iPad or mobile, take a fresh garment photo or choose one from your library.'}
+                ? `${existingPhotoUrls.length} existing media item${existingPhotoUrls.length === 1 ? '' : 's'} will be kept.`
+                : 'Choose a garment photo or a video up to 30 seconds.'}
             </span>
+            {photoFile ? (
+              <span className="text-xs font-semibold text-needle">{photoFile.name} selected</span>
+            ) : null}
+            {readyMadeMediaEntries.length > 0 ? (
+              <div className="grid gap-2 rounded-[8px] border border-ink/8 bg-bone/35 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Media order</span>
+                  <span className="text-xs text-ink/48">First tile is cover</span>
+                </div>
+                <SortableMediaGrid
+                  entries={readyMadeMediaEntries}
+                  busy={busy}
+                  onInspect={setReadyMadeInspectIndex}
+                  onReorder={(nextEntries) => setExistingPhotoUrls(nextEntries.map((entry) => entry.url))}
+                  onDelete={(index) => setExistingPhotoUrls((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                />
+              </div>
+            ) : null}
+            {portfolioVideoUrls.length > 0 ? (
+              <div className="grid gap-2 rounded-[8px] border border-needle/14 bg-needle/5 p-3">
+                <span className="text-xs font-semibold text-needle">Choose from Portfolio Videos</span>
+                {portfolioVideoUrls.map((videoUrl, index) => (
+                  <button
+                    key={videoUrl}
+                    type="button"
+                    onClick={() => attachPortfolioVideo(videoUrl)}
+                    disabled={existingPhotoUrls.includes(videoUrl)}
+                    className="flex items-center justify-between gap-3 rounded-full border border-needle/14 bg-white px-4 py-2 text-left text-xs font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/36"
+                  >
+                    <span>Portfolio video {index + 1}</span>
+                    <span className="text-needle">{existingPhotoUrls.includes(videoUrl) ? 'Attached' : 'Attach'}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </label>
+          {!isOnboardingProofMode ? (
           <div className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Fulfillment</span>
             <div className="grid gap-2 sm:grid-cols-3">
@@ -6182,36 +8518,38 @@ function SellerItemManager({
                 { key: 'delivery', label: 'Delivery' },
                 { key: 'shipping', label: 'Shipping' },
               ] as const).map(({ key, label }) => (
-                <label key={key} className="flex items-center justify-center gap-2 rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink">
-                  <input
-                    type="checkbox"
-                    checked={fulfillment[key]}
-                    onChange={(event) => setFulfillment((current) => ({ ...current, [key]: event.target.checked }))}
-                  />
-                  {label}
-                </label>
+                <div key={key} className="flex items-center justify-between gap-2 rounded-[8px] border border-ui-border bg-white px-3 py-2.5 text-sm font-semibold text-ink">
+                  <span>{label}</span>
+                  <Switch checked={fulfillment[key]} onCheckedChange={(checked) => setFulfillment((current) => ({ ...current, [key]: checked }))} aria-label={`${label} fulfillment`} />
+                </div>
               ))}
             </div>
           </div>
+          ) : null}
         </div>
-        <label className="flex items-center gap-3 text-sm font-semibold text-ink">
-          <input type="checkbox" checked={publish} onChange={(event) => setPublish(event.target.checked)} />
-          Publish after preflight
-        </label>
+        {!isOnboardingProofMode ? (
+        <div className="flex max-w-md items-center justify-between gap-3 rounded-[8px] border border-ui-border bg-ui-muted/40 px-4 py-3 text-sm font-semibold text-ink">
+          <span>Publish after preflight</span>
+          <Switch checked={publish} onCheckedChange={setPublish} aria-label="Publish after preflight" />
+        </div>
+        ) : null}
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button type="button" onClick={saveItem} disabled={busy || publishBlocked} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20 sm:w-auto">
-            {busy ? 'Saving...' : editingItemId ? publish ? 'Update and publish' : 'Update draft' : publish ? 'Save and publish' : 'Save draft'}
-          </button>
+          <Button onClick={saveItem} disabled={busy || publishBlocked} className="w-full sm:w-auto">
+            {busy ? 'Saving...' : isOnboardingProofMode ? 'Add item to setup' : editingItemId ? publish ? 'Update and publish' : 'Update draft' : publish ? 'Save and publish' : 'Save draft'}
+          </Button>
           {editingItemId ? (
-            <button type="button" onClick={resetForm} disabled={busy} className="inline-flex w-full justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:text-ink/40 sm:w-auto">
+            <Button variant="secondary" onClick={resetForm} disabled={busy} className="w-full sm:w-auto">
               Cancel edit
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
       {data.sellerItems.length > 0 ? (
         <div className="mt-6 border-t border-needle/12 pt-5">
-          <h3 className="text-xl font-semibold text-ink">Manage existing listings</h3>
+          <div className="flex items-baseline justify-between gap-4">
+            <h3 className="text-xl font-semibold text-ink">{isOnboardingProofMode ? 'Saved proof items' : 'Manage existing listings'}</h3>
+            <Button variant="ghost" size="sm" onClick={resetForm}>{isOnboardingProofMode ? 'New proof item' : 'New listing'}</Button>
+          </div>
           <div className="mt-4 grid gap-3">
             {data.sellerItems.map((item) => {
               const busyForItem = actionBusy?.endsWith(`:${item.id}`) ?? false
@@ -6219,61 +8557,63 @@ function SellerItemManager({
               const isHiddenDraft = !item.is_live && item.stock_status === 'HIDDEN'
               const itemPublishBlocked = !canPublishLive || (item.pickup_available === true && !hasPickupAddress)
               return (
-                <div key={item.id} className="rounded-[1rem] border border-ink/8 bg-white p-4">
+                <div key={item.id} className="rounded-[8px] border border-ink/8 bg-white p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">
-                        {safeUserText(item.category, 'Ready-made')} · {item.is_live ? 'Published' : cleanLabel(item.stock_status, 'Draft')}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">{safeUserText(item.category, 'Ready-made')}</p>
+                        <StatusChip status={isOnboardingProofMode ? 'HIDDEN_SETUP_PROOF' : item.is_live ? 'PUBLISHED' : item.stock_status} fallback="Draft" />
+                      </div>
                       <h4 className="mt-1 font-semibold text-ink">{safeUserText(item.title, 'Ready-made item')}</h4>
-                      <p className="mt-1 text-sm text-ink/58">
-                        {formatMoney(item.price_amount, item.currency)} · {cleanLabel(item.stock_status, 'In stock')}
-                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-ink/58">
+                        <span>{formatMoney(item.price_amount, item.currency)}</span>
+                        <StatusChip status={item.stock_status} fallback="In stock" />
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
+                      <Button
                         onClick={() => startEditItem(item)}
                         disabled={!canEdit || busy || !!actionBusy}
-                        className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/36"
+                        variant="secondary"
+                        size="sm"
                       >
                         Edit
-                      </button>
-                      {item.is_live ? (
-                        <button
-                          type="button"
+                      </Button>
+                      {!isOnboardingProofMode && item.is_live ? (
+                        <Button
                           onClick={() => runSellerItemAction('hide-item', item)}
                           disabled={busy || !!actionBusy}
-                          className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/36"
+                          variant="secondary"
+                          size="sm"
                         >
                           {busyForItem ? 'Hiding...' : 'Hide'}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
+                        </Button>
+                      ) : !isOnboardingProofMode ? (
+                        <Button
                           onClick={() => runSellerItemAction('publish-item', item)}
                           disabled={busy || !!actionBusy || itemPublishBlocked}
-                          className="rounded-full border border-needle/16 bg-needle/8 px-4 py-2 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/36"
+                          size="sm"
                         >
                           {busyForItem ? 'Publishing...' : itemPublishBlocked ? 'Publishing locked' : 'Publish'}
-                        </button>
-                      )}
+                        </Button>
+                      ) : null}
                       {isHiddenDraft ? (
-                        <button
-                          type="button"
+                        <Button
                           onClick={() => runSellerItemAction('delete-item', item)}
                           disabled={busy || !!actionBusy}
-                          className="rounded-full border border-rust/20 bg-white px-4 py-2 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/36"
+                          variant="outline"
+                          size="sm"
+                          className="border-rust/20 text-rust hover:bg-rust/5"
                         >
                           {busyForItem ? 'Deleting...' : 'Delete'}
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                   </div>
-                  {!canEdit ? (
+                  {!isOnboardingProofMode && !canEdit ? (
                     <p className="mt-3 text-xs leading-5 text-ink/50">Unpublish this item before editing details, photos, price, sizes, or stock.</p>
                   ) : null}
-                  {itemPublishBlocked && !item.is_live ? (
+                  {!isOnboardingProofMode && itemPublishBlocked && !item.is_live ? (
                     <p className="mt-3 text-xs leading-5 text-rust">{item.pickup_available === true && !hasPickupAddress ? 'Add private pickup details before publishing this pickup item.' : readiness.body}</p>
                   ) : null}
                 </div>
@@ -6282,7 +8622,7 @@ function SellerItemManager({
           </div>
         </div>
       ) : null}
-    </section>
+    </Surface>
   )
 }
 
@@ -6336,6 +8676,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   const stageOptions = nextStageOptions(order)
   const selectedTargetStage = stageOptions.find((stage) => stage === targetStage) ?? stageOptions[0] ?? ''
   const selectedTargetNeedsDispatchMeta = selectedTargetStage === 'READY_FOR_DRAPE_DISPATCH'
+  const lockedQuoteCurrency = normalizeAccountCurrency(order.currency ?? order.quoted_currency) ?? quoteCurrency
   const consultationRequestedByCustomer = order.stage === 'CONSULTATION' &&
     consultationMeta?.requestedBy === 'CUSTOMER' &&
     consultationMeta.status === 'REQUESTED'
@@ -6389,18 +8730,19 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
 
   if (!isTailor || isTerminalOrder(order)) return null
 
-  function addStageMedia(files: FileList | null) {
+  async function addStageMedia(files: FileList | null) {
     if (!files?.length) return
     const nextFiles = Array.from(files)
-    const photoError = nextFiles.map(validateMessagePhoto).find(Boolean)
-    if (photoError) {
-      setError(photoError)
+    try {
+      await Promise.all(nextFiles.map(prepareOrderEvidenceFile))
+    } catch (mediaError) {
+      setError(friendlyActionError(mediaError, 'Choose photos or MP4/MOV videos up to 60 seconds.'))
       return
     }
     setStageMediaFiles((current) => {
       const combined = [...current, ...nextFiles]
       if (combined.length > 6) {
-        setError('Attach up to 6 proof photos for a stage update.')
+        setError('Attach up to 6 proof items for a stage update.')
       }
       return combined.slice(0, 6)
     })
@@ -6408,7 +8750,8 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
 
   async function sendQuote() {
     const amount = parseMinorUnits(quoteAmount)
-    const dateIso = completionDate ? new Date(completionDate).toISOString() : null
+    const completionDateValue = completionDate ? new Date(`${completionDate}T12:00:00.000Z`) : null
+    const dateIso = completionDateValue && !Number.isNaN(completionDateValue.getTime()) ? completionDateValue.toISOString() : null
     const leak = assertNoContactLeak(quoteNote, "Quote notes can't include contact details.")
     setError(null)
     setSuccess(null)
@@ -6420,13 +8763,18 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
       setError(leak)
       return
     }
+    const customerDeadline = order.deadline ? new Date(order.deadline) : null
+    if (customerDeadline && completionDateValue && completionDateValue.getTime() > customerDeadline.getTime()) {
+      setError(`This quote date goes past the customer deadline of ${customerDeadline.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}. Choose an earlier date.`)
+      return
+    }
     setBusy('quote')
     try {
       await invokeAccountFunction('tailor-order-action', {
         action: 'send-quote',
         orderId: order.id,
         amount,
-        currency: quoteCurrency,
+        currency: lockedQuoteCurrency,
         completionDate: dateIso,
         note: quoteNote.trim() || undefined,
       })
@@ -6599,20 +8947,22 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
       return
     }
     if (order.order_kind === 'CUSTOM' && !fabricReceiptFile) {
-      setError('Add a fabric receipt photo before confirming customer fabric.')
+      setError('Add fabric receipt proof before confirming customer fabric.')
       return
     }
+    let preparedFabricReceipt: File | null = null
     if (fabricReceiptFile) {
-      const photoError = validateMessagePhoto(fabricReceiptFile)
-      if (photoError) {
-        setError(photoError)
+      try {
+        preparedFabricReceipt = await prepareOrderEvidenceFile(fabricReceiptFile)
+      } catch (mediaError) {
+        setError(friendlyActionError(mediaError, 'Choose fabric receipt proof as a photo or MP4/MOV video up to 60 seconds.'))
         return
       }
     }
     setBusy('confirm-fabric-received')
     try {
-      const photoUrl = fabricReceiptFile
-        ? await uploadPublicFile('order-photos', `fabric-receipts/${order.id}`, await reencodeImageFile(fabricReceiptFile))
+      const photoUrl = preparedFabricReceipt
+        ? await uploadPublicFile('order-photos', `fabric-receipts/${order.id}`, preparedFabricReceipt)
         : undefined
       await invokeAccountFunction('tailor-order-action', {
         action: 'confirm-fabric-received',
@@ -6799,11 +9149,17 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
       setError(leak)
       return
     }
+    if (stageMediaFiles.length === 0) {
+      setError(selectedTargetNeedsDispatchMeta
+        ? 'Add fresh packed-order proof before marking this order ready for Drape dispatch.'
+        : 'Attach fresh proof media before updating this stage.')
+      return
+    }
     setBusy('stage')
     try {
       const selectedFiles = stageMediaFiles.slice(0, 6)
       const photoUrls = await Promise.all(
-        selectedFiles.map((file) => uploadPublicFile('order-photos', `progress/${order.id}`, file)),
+        selectedFiles.map(async (file) => uploadPublicFile('order-photos', `progress/${order.id}`, await prepareOrderEvidenceFile(file))),
       )
       const mediaFingerprints = selectedFiles.map(mediaFingerprint)
       await invokeAccountFunction('tailor-order-action', {
@@ -6837,13 +9193,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   }
 
   return (
-    <section id="tailor-actions" className="scroll-mt-28 rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
+    <section id="tailor-actions" className="scroll-mt-28 rounded-[8px] border border-needle/12 bg-needle/8 p-6 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailor actions</p>
-      <h2 className="mt-2 text-3xl text-ink">Work this order from web</h2>
+      <h2 className="mt-2 text-2xl font-semibold text-ink">Work this order from web</h2>
       <div className="mt-5 grid gap-4">
         <ActionNotice error={error} success={success} />
         {tailorCanScheduleConsultation ? (
-          <div className="grid gap-3 rounded-[1.2rem] border border-ink/8 bg-white p-4">
+          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
             <div>
               <h3 className="text-xl font-semibold text-ink">
                 {consultationRequestedByCustomer ? 'Approve consultation request' : 'Schedule consultation'}
@@ -6864,16 +9220,16 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 type="datetime-local"
                 value={consultationStart}
                 onChange={(event) => setConsultationStart(event.target.value)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
               />
               <input
                 inputMode="decimal"
                 value={consultationFee}
                 onChange={(event) => setConsultationFee(event.target.value)}
                 placeholder="Optional fee"
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
               />
-              <select value={quoteCurrency} onChange={(event) => setQuoteCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={quoteCurrency} onChange={(event) => setQuoteCurrency(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
               </select>
             </div>
@@ -6882,14 +9238,14 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               onChange={(event) => setConsultationNote(event.target.value)}
               rows={2}
               placeholder="Optional consultation note"
-              className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+              className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
             />
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => { void saveConsultation(consultationRequestedByCustomer ? 'approve-consultation' : 'request-consultation') }}
                 disabled={busy === 'consultation-approve' || busy === 'consultation-schedule'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busy === 'consultation-approve' || busy === 'consultation-schedule'
                   ? 'Saving...'
@@ -6902,7 +9258,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   type="button"
                   onClick={() => { void declineConsultation() }}
                   disabled={busy === 'consultation-decline'}
-                  className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:bg-ink/5 disabled:text-ink/38"
+                  className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:bg-ink/5 disabled:text-ink/38"
                 >
                   {busy === 'consultation-decline' ? 'Declining...' : 'Decline'}
                 </button>
@@ -6911,17 +9267,15 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
           </div>
         ) : null}
         {['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage ?? '') ? (
-          <div className="grid gap-3 rounded-[1.2rem] border border-ink/8 bg-white p-4">
+          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
             <h3 className="text-xl font-semibold text-ink">Send quote</h3>
             <div className="grid gap-3 md:grid-cols-3">
-              <input inputMode="decimal" value={quoteAmount} onChange={(event) => setQuoteAmount(event.target.value)} placeholder="Amount" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <select value={quoteCurrency} onChange={(event) => setQuoteCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-                {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
-              </select>
-              <input type="date" value={completionDate} onChange={(event) => setCompletionDate(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <input inputMode="decimal" value={quoteAmount} onChange={(event) => setQuoteAmount(event.target.value)} placeholder="Amount" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              <input value={lockedQuoteCurrency} disabled aria-label="Quote currency locked to order currency" className="rounded-full border border-ink/10 bg-bone/50 px-4 py-3 text-sm font-semibold text-ink/62 outline-none" />
+              <input type="date" value={completionDate} onChange={(event) => setCompletionDate(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </div>
-            <textarea value={quoteNote} onChange={(event) => setQuoteNote(event.target.value)} rows={2} placeholder="Optional quote note" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <button type="button" onClick={sendQuote} disabled={busy === 'quote'} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            <textarea value={quoteNote} onChange={(event) => setQuoteNote(event.target.value)} rows={2} placeholder="Optional quote note" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <button type="button" onClick={sendQuote} disabled={busy === 'quote'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
               {busy === 'quote' ? 'Sending...' : 'Send quote'}
             </button>
           </div>
@@ -6936,20 +9290,20 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     value={measurementFields}
                     onChange={(event) => setMeasurementFields(event.target.value)}
                     placeholder="Optional fields, comma separated"
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <textarea
                     value={measurementNote}
                     onChange={(event) => setMeasurementNote(event.target.value)}
                     rows={2}
                     placeholder="What should the customer confirm?"
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void requestMeasurementConfirmation() }}
                     disabled={busy === 'request-measurement-confirmation'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busy === 'request-measurement-confirmation' ? 'Sending...' : 'Request confirmation'}
                   </button>
@@ -6964,13 +9318,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setFitReadinessNote(event.target.value)}
                     rows={2}
                     placeholder="What did you verify?"
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void confirmFitReadiness() }}
                     disabled={busy === 'confirm-fit-readiness'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busy === 'confirm-fit-readiness' ? 'Confirming...' : 'Confirm fit readiness'}
                   </button>
@@ -6985,13 +9339,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setStyleAlignmentNote(event.target.value)}
                     rows={3}
                     placeholder="Explain what can be matched from the references before cutting."
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void requestStyleAlignment() }}
                     disabled={busy === 'request-style-alignment'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busy === 'request-style-alignment' ? 'Sending...' : 'Send style alignment'}
                   </button>
@@ -7003,22 +9357,22 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   <h3 className="font-semibold text-ink">Confirm customer fabric</h3>
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp"
+                    accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
                     onChange={(event) => setFabricReceiptFile(event.target.files?.[0] ?? null)}
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm file:mr-4 file:rounded-[6px] file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
                   />
                   <textarea
                     value={fabricReceiptNote}
                     onChange={(event) => setFabricReceiptNote(event.target.value)}
                     rows={2}
                     placeholder="Optional fabric receipt note"
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void confirmFabricReceived() }}
                     disabled={busy === 'confirm-fabric-received'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busy === 'confirm-fabric-received' ? 'Confirming...' : 'Confirm fabric received'}
                   </button>
@@ -7031,7 +9385,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   <select
                     value={materialIssueReason}
                     onChange={(event) => setMaterialIssueReason(event.target.value as typeof materialIssueReason)}
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50"
                   >
                     {MATERIAL_ISSUE_REASON_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -7042,13 +9396,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setMaterialIssueNote(event.target.value)}
                     rows={2}
                     placeholder="Describe the fabric issue."
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void openMaterialIssue() }}
                     disabled={busy === 'open-material-issue'}
-                    className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                    className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
                   >
                     {busy === 'open-material-issue' ? 'Opening...' : 'Open material issue'}
                   </button>
@@ -7064,7 +9418,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               <select
                 value={scopeChangeType}
                 onChange={(event) => setScopeChangeType(event.target.value as typeof scopeChangeType)}
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50"
               >
                 {SCOPE_CHANGE_TYPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -7087,7 +9441,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 onChange={(event) => setScopeChangeSummary(event.target.value)}
                 rows={3}
                 placeholder="What changed?"
-                className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
               />
               <div className="grid gap-3 md:grid-cols-2">
                 <input
@@ -7095,20 +9449,20 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   value={scopePriceImpact}
                   onChange={(event) => setScopePriceImpact(event.target.value)}
                   placeholder={`Added price (${quoteCurrency})`}
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <input
                   value={scopeDeadlineImpact}
                   onChange={(event) => setScopeDeadlineImpact(event.target.value)}
                   placeholder="Deadline impact"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => { void requestScopeChange() }}
                 disabled={busy === 'request-scope-change'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busy === 'request-scope-change' ? 'Sending...' : 'Send change request'}
               </button>
@@ -7141,7 +9495,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 onChange={(event) => setTailorScopeChangeResponseNote(event.target.value)}
                 rows={2}
                 placeholder="Optional response note"
-                className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
               />
               {canRespondScopeChange ? (
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -7149,7 +9503,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     type="button"
                     onClick={() => { void respondTailorScopeChange('ACCEPTED') }}
                     disabled={busy === 'respond-scope-change'}
-                    className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                    className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
                   >
                     {busy === 'respond-scope-change' ? 'Saving...' : 'Accept change'}
                   </button>
@@ -7157,7 +9511,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     type="button"
                     onClick={() => { void respondTailorScopeChange('DECLINED') }}
                     disabled={busy === 'respond-scope-change'}
-                    className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
+                    className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
                   >
                     {busy === 'respond-scope-change' ? 'Saving...' : 'Decline change'}
                   </button>
@@ -7168,7 +9522,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   type="button"
                   onClick={() => { void respondTailorScopeChange('CANCELLED') }}
                   disabled={busy === 'respond-scope-change'}
-                  className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
+                  className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/30"
                 >
                   {busy === 'respond-scope-change' ? 'Cancelling...' : 'Cancel proposal'}
                 </button>
@@ -7178,10 +9532,10 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
         ) : null}
 
         {stageOptions.length > 0 ? (
-          <div className="grid gap-3 rounded-[1.2rem] border border-ink/8 bg-white p-4">
+          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
             <h3 className="text-xl font-semibold text-ink">Update production stage</h3>
             <div className="grid gap-3 md:grid-cols-[0.8fr_1.2fr]">
-              <select value={selectedTargetStage} onChange={(event) => setTargetStage(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={selectedTargetStage} onChange={(event) => setTargetStage(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {stageOptions.map((stage) => <option key={stage} value={stage}>{cleanLabel(stage)}</option>)}
               </select>
               <div className="grid gap-2">
@@ -7190,25 +9544,25 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     Take fresh proof
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
                       capture="environment"
-                      onChange={(event) => addStageMedia(event.target.files)}
+                      onChange={(event) => { void addStageMedia(event.target.files) }}
                       className="sr-only"
                     />
                   </label>
-                  <label className="inline-flex cursor-pointer justify-center rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink">
+                  <label className="inline-flex cursor-pointer justify-center rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink">
                     Attach media
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
                       multiple
-                      onChange={(event) => addStageMedia(event.target.files)}
+                      onChange={(event) => { void addStageMedia(event.target.files) }}
                       className="sr-only"
                     />
                   </label>
                 </div>
                 <p className="text-xs leading-5 text-ink/52">
-                  Use fresh clothing proof. iPad and mobile browsers can open the camera here; desktop can attach photos.
+                  Use fresh clothing proof. Photos and MP4/MOV videos up to 60 seconds are supported.
                 </p>
                 {stageMediaFiles.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-2">
@@ -7223,41 +9577,41 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               </div>
             </div>
             {selectedTargetNeedsDispatchMeta ? (
-              <div className="grid gap-3 rounded-[1rem] border border-needle/12 bg-needle/6 p-3 md:grid-cols-2">
+              <div className="grid gap-3 rounded-[8px] border border-needle/12 bg-needle/6 p-3 md:grid-cols-2">
                 <input
                   value={stageFulfillmentProvider}
                   onChange={(event) => setStageFulfillmentProvider(event.target.value)}
                   placeholder="Fulfillment provider"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <input
                   value={stageFulfillmentReference}
                   onChange={(event) => setStageFulfillmentReference(event.target.value)}
                   placeholder="Fulfillment reference"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <input
                   value={stageTrackingNumber}
                   onChange={(event) => setStageTrackingNumber(event.target.value)}
                   placeholder="Tracking number"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <input
                   value={stageFulfillmentContactName}
                   onChange={(event) => setStageFulfillmentContactName(event.target.value)}
                   placeholder="Dispatch contact name"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <input
                   value={stageFulfillmentContactPhone}
                   onChange={(event) => setStageFulfillmentContactPhone(event.target.value)}
                   placeholder="Dispatch contact phone"
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2"
                 />
               </div>
             ) : null}
-            <textarea value={stageNote} onChange={(event) => setStageNote(event.target.value)} rows={2} placeholder="Tell the customer what changed" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <button type="button" onClick={advanceStage} disabled={busy === 'stage'} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            <textarea value={stageNote} onChange={(event) => setStageNote(event.target.value)} rows={2} placeholder="Tell the customer what changed" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <button type="button" onClick={advanceStage} disabled={busy === 'stage'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
               {busy === 'stage' ? 'Updating...' : 'Update stage'}
             </button>
           </div>
@@ -7271,13 +9625,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 onChange={(event) => setPickupCode(event.target.value.replace(/\D/g, '').slice(0, 4))}
                 inputMode="numeric"
                 placeholder="4-digit pickup code"
-                className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
               />
               <button
                 type="button"
                 onClick={() => { void confirmCollection() }}
                 disabled={busy === 'confirm-collection'}
-                className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+                className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
                 {busy === 'confirm-collection' ? 'Confirming...' : 'Confirm collection'}
               </button>
@@ -7296,13 +9650,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setDeclineNote(event.target.value)}
                     rows={2}
                     placeholder="Optional note"
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void declineOrder() }}
                     disabled={busy === 'decline-order'}
-                    className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                    className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
                   >
                     {busy === 'decline-order' ? 'Declining...' : declineArmed ? 'Confirm decline' : 'Decline order'}
                   </button>
@@ -7315,7 +9669,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   <select
                     value={tailorCancellationReason}
                     onChange={(event) => setTailorCancellationReason(event.target.value as typeof tailorCancellationReason)}
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50"
                   >
                     {TAILOR_CANCELLATION_REASON_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -7326,13 +9680,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setTailorCancellationNote(event.target.value)}
                     rows={2}
                     placeholder="Add context for Drapeon."
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void requestTailorCancellationReview() }}
                     disabled={busy === 'request-cancellation-review'}
-                    className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                    className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
                   >
                     {busy === 'request-cancellation-review' ? 'Opening...' : 'Open cancellation review'}
                   </button>
@@ -7345,7 +9699,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   <select
                     value={tailorDeliveryReason}
                     onChange={(event) => setTailorDeliveryReason(event.target.value as typeof tailorDeliveryReason)}
-                    className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+                    className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50"
                   >
                     {TAILOR_DELIVERY_REASON_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -7356,13 +9710,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     onChange={(event) => setTailorDeliveryNote(event.target.value)}
                     rows={2}
                     placeholder="What went wrong with dispatch or delivery?"
-                    className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
                   />
                   <button
                     type="button"
                     onClick={() => { void requestTailorDeliveryReview() }}
                     disabled={busy === 'request-delivery-review'}
-                    className="inline-flex justify-center rounded-full border border-rust/18 bg-white px-5 py-3 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+                    className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
                   >
                     {busy === 'request-delivery-review' ? 'Opening...' : 'Open delivery review'}
                   </button>
@@ -7516,12 +9870,12 @@ function MaterialAdvancePanel({
       return
     }
     if (!receiptFile) {
-      setError('Choose a receipt or supplier proof image first.')
+      setError('Choose receipt or supplier proof first.')
       return
     }
     setBusy(`receipt:${advance.id}`)
     try {
-      const receiptUrl = await uploadPublicFile('order-photos', `progress/${order.id}`, receiptFile)
+      const receiptUrl = await uploadPublicFile('order-photos', `progress/${order.id}`, await prepareOrderEvidenceFile(receiptFile))
       await invokeAccountFunction('material-advance-action', {
         action: 'upload-receipt',
         advanceId: advance.id,
@@ -7533,7 +9887,7 @@ function MaterialAdvancePanel({
       setSuccess('Receipt proof saved for this material advance.')
       onRefresh()
     } catch (receiptError) {
-      setError(friendlyActionError(receiptError, 'Receipt proof could not upload. Try again with a clear clothing or supplier image.'))
+      setError(friendlyActionError(receiptError, 'Receipt proof could not upload. Try again with a clear photo or MP4/MOV video up to 60 seconds.'))
     } finally {
       setBusy(null)
     }
@@ -7542,26 +9896,30 @@ function MaterialAdvancePanel({
   if (!isTailor && !isCustomer && advances.length === 0) return null
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
+    <Surface className="overflow-hidden">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Material advance</p>
-          <h2 className="mt-2 text-3xl text-ink">Protected material costs</h2>
+          <h2 className="mt-2 text-2xl font-semibold text-ink">Protected material costs</h2>
         </div>
         <p className="max-w-md text-sm leading-6 text-ink/62">Main escrow never releases early. The customer approves and pays the material amount separately before ops reviews release.</p>
       </div>
       <div className="mt-5 grid gap-4">
         <ActionNotice error={error} success={success} />
         {advances.length === 0 ? (
-          <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No material advance is open on this order.</p>
+          <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No material advance is open on this order.</p>
         ) : (
           advances.map((advance) => (
-            <article key={advance.id} className="rounded-[1.2rem] border border-ink/8 bg-bone/60 p-4">
+            <article key={advance.id} className="rounded-[8px] border border-ink/8 bg-bone/60 p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                   <h3 className="text-xl font-semibold text-ink">{safeUserText(advance.title, 'Material advance')}</h3>
                   <p className="mt-2 text-sm leading-6 text-ink/62">{safeUserText(advance.description, 'Material cost requested.')}</p>
-                  <p className="mt-3 text-sm font-semibold text-ink">{formatMoney(advance.amount, advance.currency)} · {cleanLabel(advance.status, 'Requested')} · {cleanLabel(advance.release_status, 'Release pending')}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-sm font-semibold text-ink">
+                    <span>{formatMoney(advance.amount, advance.currency)}</span>
+                    <StatusChip status={advance.status} fallback="Requested" />
+                    <StatusChip status={advance.release_status} fallback="Release pending" />
+                  </div>
                 </div>
                 {advance.receipt_url ? (
                   <a href={advance.receipt_url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-needle">View receipt</a>
@@ -7569,9 +9927,9 @@ function MaterialAdvancePanel({
               </div>
               {isCustomer && advance.status === 'REQUESTED' ? (
                 <div className="mt-4 grid gap-3 border-t border-ink/6 pt-4">
-                  <textarea value={responseNote} onChange={(event) => setResponseNote(event.target.value)} rows={2} placeholder="Optional note for the tailor" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  <textarea value={responseNote} onChange={(event) => setResponseNote(event.target.value)} rows={2} placeholder="Optional note for the tailor" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <button type="button" onClick={() => respondAdvance(advance, 'APPROVE')} disabled={!!busy} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                    <button type="button" onClick={() => respondAdvance(advance, 'APPROVE')} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
                       {busy === `APPROVE:${advance.id}` ? 'Approving...' : 'Approve'}
                     </button>
                     <button type="button" onClick={() => respondAdvance(advance, 'DECLINE')} disabled={!!busy} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/38">
@@ -7582,7 +9940,7 @@ function MaterialAdvancePanel({
               ) : null}
               {isCustomer && ['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(advance.status ?? '') ? (
                 <div className="mt-4 grid gap-3">
-                  <button type="button" onClick={() => payAdvance(advance)} disabled={!!busy} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                  <button type="button" onClick={() => payAdvance(advance)} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
                     {busy === `pay:${advance.id}` ? 'Preparing...' : advance.status === 'PAYMENT_FAILED' ? 'Retry material payment' : 'Pay material advance'}
                   </button>
                   {stripeAdvancePayment?.advanceId === advance.id ? (
@@ -7607,9 +9965,9 @@ function MaterialAdvancePanel({
               ) : null}
               {isTailor && ['PAID', 'OPS_REVIEW', 'RELEASED', 'BLOCKED'].includes(advance.status ?? '') && !advance.receipt_url ? (
                 <div className="mt-4 grid gap-3 border-t border-ink/6 pt-4">
-                  <input type="file" accept="image/*" capture="environment" onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink" />
-                  <textarea value={receiptNote} onChange={(event) => setReceiptNote(event.target.value)} rows={2} placeholder="Optional receipt note" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-                  <button type="button" onClick={() => uploadReceipt(advance)} disabled={!!busy} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                  <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" capture="environment" onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink" />
+                  <textarea value={receiptNote} onChange={(event) => setReceiptNote(event.target.value)} rows={2} placeholder="Optional receipt note" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  <button type="button" onClick={() => uploadReceipt(advance)} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
                     {busy === `receipt:${advance.id}` ? 'Uploading...' : 'Upload receipt proof'}
                   </button>
                 </div>
@@ -7618,23 +9976,23 @@ function MaterialAdvancePanel({
           ))
         )}
         {isTailor && (order.order_kind ?? 'CUSTOM') === 'CUSTOM' && !hasActiveAdvance ? (
-          <div className="grid gap-3 rounded-[1.2rem] border border-needle/12 bg-needle/8 p-4">
+          <div className="grid gap-3 rounded-[8px] border border-needle/12 bg-needle/8 p-4">
             <h3 className="text-xl font-semibold text-ink">Request a material advance</h3>
             <div className="grid gap-3 md:grid-cols-[1fr_0.55fr_0.4fr]">
-              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Aso-oke embroidery deposit" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Aso-oke embroidery deposit" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              <input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
               </select>
             </div>
-            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Explain the material cost and why it is needed before production continues." className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <button type="button" onClick={requestAdvance} disabled={busy === 'request'} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Explain the material cost and why it is needed before production continues." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <button type="button" onClick={requestAdvance} disabled={busy === 'request'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
               {busy === 'request' ? 'Requesting...' : 'Request advance'}
             </button>
           </div>
         ) : null}
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -7692,43 +10050,37 @@ function GeneralSupportForm({ data, onRefresh }: { data: SupportSurfaceData; onR
   }
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>
-      <h2 className="mt-2 text-3xl text-ink">Ask Drapeon for help</h2>
-      <p className="mt-3 text-sm leading-7 text-ink/66">
-        Open a protected support request from web. Attach an order when the issue is about payment, fit, delivery, payout, or production.
-      </p>
-      <div className="mt-5 grid gap-3">
+    <Surface className="overflow-hidden">
+      <SurfaceHeader eyebrow="Support" title="Ask Drapeon for help" description="Open a protected support request from web. Attach an order when the issue is about payment, fit, delivery, payout, or production." />
+      <div className="grid gap-3 p-5">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-2">
-          <select value={category} onChange={(event) => setCategory(event.target.value as (typeof SUPPORT_CATEGORIES)[number][0])} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          <NativeSelect value={category} onChange={(event) => setCategory(event.target.value as (typeof SUPPORT_CATEGORIES)[number][0])}>
             {SUPPORT_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-          <select value={orderId} onChange={(event) => setOrderId(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          </NativeSelect>
+          <NativeSelect value={orderId} onChange={(event) => setOrderId(event.target.value)}>
             <option value="">No order attached</option>
             {orderOptions.map((order) => <option key={order.id} value={order.id}>{order.reference ?? orderTitle(order)} · {cleanLabel(order.stage)}</option>)}
-          </select>
+          </NativeSelect>
         </div>
-        <input
+        <Input
           value={subject}
           onChange={(event) => setSubject(event.target.value)}
           maxLength={120}
-          className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
           placeholder="Short subject"
         />
-        <textarea
+        <Textarea
           value={description}
           onChange={(event) => setDescription(event.target.value)}
           rows={4}
           maxLength={1500}
-          className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
           placeholder="Tell us what happened inside Drapeon. Keep phone numbers, emails, and social handles out of the request."
         />
-        <button type="button" onClick={submitSupport} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+        <Button onClick={submitSupport} disabled={busy}>
           {busy ? 'Opening support...' : 'Open support request'}
-        </button>
+        </Button>
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -7776,31 +10128,29 @@ function SupportIssueForm({ data, onRefresh }: { data: SupportSurfaceData; onRef
   if (activeOrders.length === 0) return null
 
   return (
-    <section className="rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Protected support</p>
-      <h2 className="mt-2 text-3xl text-ink">Open handoff help</h2>
-      <p className="mt-3 text-sm leading-7 text-ink/66">This creates a real order handoff issue when pickup or delivery is active. Use the support request above for payment, fit, account, and payout questions.</p>
-      <div className="mt-5 grid gap-3">
+    <Surface className="overflow-hidden">
+      <SurfaceHeader eyebrow="Protected support" title="Open handoff help" description="This creates a real order handoff issue when pickup or delivery is active. Use the support request above for payment, fit, account, and payout questions." />
+      <div className="grid gap-3 p-5">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-2">
-          <select value={orderId} onChange={(event) => setOrderId(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          <NativeSelect value={orderId} onChange={(event) => setOrderId(event.target.value)}>
             {activeOrders.map((order) => <option key={order.id} value={order.id}>{order.reference ?? orderTitle(order)} · {cleanLabel(order.stage)}</option>)}
-          </select>
-          <select value={issueType} onChange={(event) => setIssueType(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          </NativeSelect>
+          <NativeSelect value={issueType} onChange={(event) => setIssueType(event.target.value)}>
             <option value="AT_PICKUP">At pickup</option>
             <option value="CANT_FIND_LOCATION">Cannot find location</option>
             <option value="COUNTERPART_NOT_RESPONDING">Other party not responding</option>
             <option value="ORDER_NOT_READY">Order not ready</option>
             <option value="COURIER_OR_DELIVERY_ISSUE">Courier or delivery issue</option>
             <option value="NEED_DRAPE_HELP">Need Drapeon help</option>
-          </select>
+          </NativeSelect>
         </div>
-        <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" placeholder="Describe what happened inside Drapeon. Do not include phone numbers or handles." />
-        <button type="button" onClick={reportIssue} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+        <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Describe what happened inside Drapeon. Do not include phone numbers or handles." />
+        <Button onClick={reportIssue} disabled={busy}>
           {busy ? 'Opening help...' : 'Open handoff help'}
-        </button>
+        </Button>
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -7808,7 +10158,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const sizes = stringList(item.sizes)
   const [size, setSize] = useState(sizes[0] ?? '')
   const [quantity, setQuantity] = useState('1')
-  const [fulfillment, setFulfillment] = useState(item.delivery_available ? 'DELIVERY' : item.shipping_available ? 'SHIPPING' : item.pickup_available ? 'PICKUP' : 'SHIPPING')
+  const [fulfillment, setFulfillment] = useState(item.pickup_available ? 'PICKUP' : item.delivery_available ? 'DELIVERY' : item.shipping_available ? 'SHIPPING' : 'SHIPPING')
   const [pickupBlocked, setPickupBlocked] = useState(false)
   const [address, setAddress] = useState('')
   const [city, setCity] = useState('')
@@ -7824,6 +10174,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [pricingKey, setPricingKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const selectedSizeInventory = readyMadeQuantityForSize(item, size || null)
+  const maxCheckoutQuantity = sizes.length > 0 && size ? Math.min(3, selectedSizeInventory) : Math.min(3, readyMadeInventoryCount(item))
+  const parsedQty = Number.parseInt(quantity, 10)
+  const quantityInvalid = quantity.trim() !== '' && (!Number.isInteger(parsedQty) || parsedQty < 1 || parsedQty > maxCheckoutQuantity)
   const hasFulfillmentOption = Boolean((item.pickup_available && !pickupBlocked) || item.delivery_available || item.shipping_available)
   const needsAddress = fulfillment !== 'PICKUP'
   const fallbackFulfillment = fulfillment === 'PICKUP'
@@ -7863,8 +10217,35 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
       setError('Choose a quantity between 1 and 3.')
       return null
     }
-    if (needsAddress && (!address.trim() || !recipientName.trim() || !recipientPhone.trim())) {
-      setError('Delivery and shipping need recipient details before checkout.')
+    if (sizes.length > 0 && !size.trim()) {
+      setError('Choose a size before checkout.')
+      return null
+    }
+    if (sizes.length > 0 && selectedSizeInventory <= 0) {
+      setError(`Size ${size} is sold out right now. Choose another size before continuing.`)
+      return null
+    }
+    const maxQuantity = Math.min(3, selectedSizeInventory)
+    if (maxQuantity < 1) {
+      setError('This item just sold out. Please choose another piece.')
+      return null
+    }
+    if (parsedQuantity > maxQuantity) {
+      setError(`For now, you can check out up to ${maxQuantity} unit${maxQuantity === 1 ? '' : 's'} for this item.`)
+      return null
+    }
+    if (needsAddress && (!address.trim() || !city.trim() || !region.trim() || !countryCode.trim())) {
+      setError('Add the full delivery address before continuing. Street, city, region, and country are required.')
+      return null
+    }
+    if (needsAddress && !recipientName.trim()) {
+      setError('Enter the recipient name before continuing.')
+      return null
+    }
+    const normalizedRecipientPhone = normalizePhoneForStorage(recipientPhone)
+    const recipientPhoneError = needsAddress ? validatePhoneForProfile(normalizedRecipientPhone) : null
+    if (needsAddress && recipientPhoneError) {
+      setError(recipientPhoneError)
       return null
     }
     return parsedQuantity
@@ -7945,9 +10326,9 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
         city: needsAddress ? city.trim() : undefined,
         region: needsAddress ? region.trim() : undefined,
         postalCode: needsAddress ? postalCode.trim() : undefined,
-        countryCode: needsAddress ? countryCode.trim() : undefined,
+        countryCode: needsAddress ? countryCode.trim().toUpperCase() : undefined,
         recipientName: needsAddress ? recipientName.trim() : undefined,
-        recipientPhone: needsAddress ? recipientPhone.trim() : undefined,
+        recipientPhone: needsAddress ? normalizePhoneForStorage(recipientPhone) : undefined,
         cancellationPolicyAcknowledged: true,
       })
       onRefresh()
@@ -7968,50 +10349,54 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   }
 
   return (
-    <section id="ready-made-checkout" className="scroll-mt-28 rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Checkout</p>
-      <h2 className="mt-2 text-3xl text-ink">Start ready-made checkout</h2>
-      <div className="mt-5 grid gap-4">
+    <Surface id="ready-made-checkout" className="scroll-mt-28 overflow-hidden">
+      <SurfaceHeader eyebrow="Checkout" title="Start ready-made checkout" description="Confirm size, fulfillment, recipient details, tax, and total before payment starts." />
+      <div className="grid gap-4 p-5">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-3">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Size</span>
-            <select value={size} onChange={(event) => setSize(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-              {sizes.length === 0 ? <option value="">One size</option> : sizes.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-            </select>
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Quantity</span>
-            <input inputMode="numeric" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Fulfillment</span>
-            <select value={fulfillment} onChange={(event) => setFulfillment(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          <Field label="Size" hint={sizes.length > 0 && size ? `${selectedSizeInventory} left in ${size}` : `${readyMadeInventoryCount(item)} ready now`}>
+            <NativeSelect value={size} onChange={(event) => setSize(event.target.value)}>
+              {sizes.length === 0 ? <option value="">One size</option> : sizes.map((entry) => {
+                const remaining = readyMadeQuantityForSize(item, entry)
+                return <option key={entry} value={entry} disabled={remaining <= 0}>{remaining <= 0 ? `${entry} · sold out` : entry}</option>
+              })}
+            </NativeSelect>
+          </Field>
+          <Field label="Quantity" error={quantityInvalid ? `Enter 1–${maxCheckoutQuantity}` : undefined} hint={!quantityInvalid ? `Max ${maxCheckoutQuantity}` : undefined}>
+            <Input
+              inputMode="numeric"
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              className={quantityInvalid ? 'border-rust/60 focus:border-rust focus:ring-rust/10' : undefined}
+            />
+          </Field>
+          <Field label="Fulfillment">
+            <NativeSelect value={fulfillment} onChange={(event) => setFulfillment(event.target.value)}>
               {item.pickup_available ? <option value="PICKUP" disabled={pickupBlocked}>{pickupBlocked ? 'Pickup not ready' : 'Pickup'}</option> : null}
               {item.delivery_available ? <option value="DELIVERY">Delivery</option> : null}
               {item.shipping_available ? <option value="SHIPPING">Shipping</option> : null}
-            </select>
-          </label>
+            </NativeSelect>
+          </Field>
         </div>
         {fulfillment === 'PICKUP' ? (
           <p className="text-sm leading-6 text-ink/58">Exact pickup details are shared only after the seller marks the order ready for collection.</p>
         ) : null}
         {needsAddress ? (
           <div className="grid gap-3 md:grid-cols-2">
-            <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="Recipient name" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} placeholder="Recipient phone for courier only" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Address" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2" />
-            <input value={city} onChange={(event) => setCity(event.target.value)} placeholder="City" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Region/state" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <input value={postalCode} onChange={(event) => setPostalCode(event.target.value)} placeholder="Postal code" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <input value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} placeholder="Country code" maxLength={2} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <Input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="Recipient name" />
+            <Input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} placeholder="Recipient phone for courier only" />
+            <Input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Address" className="md:col-span-2" />
+            <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="City" />
+            <Input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Region/state" />
+            <Input value={postalCode} onChange={(event) => setPostalCode(event.target.value)} placeholder="Postal code" />
+            <Input value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} placeholder="Country code" maxLength={2} />
           </div>
         ) : null}
-        <label className="flex items-start gap-3 text-sm leading-6 text-ink/70">
-          <input type="checkbox" checked={ack} onChange={(event) => setAck(event.target.checked)} className="mt-1" />
-          I understand cancellation and handoff reviews stay inside Drapeon.
-        </label>
-        <div className="rounded-[1.25rem] border border-ink/8 bg-white p-4">
+        <div className="flex items-start justify-between gap-4 rounded-[8px] border border-ui-border bg-ui-muted/45 px-4 py-3 text-sm leading-6 text-ink/70">
+          <span>I understand cancellation and handoff reviews stay inside Drapeon.</span>
+          <Switch checked={ack} onCheckedChange={setAck} aria-label="Acknowledge cancellation policy" />
+        </div>
+        <div className="rounded-[8px] border border-ink/8 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Tax and total</p>
           {pricingPreview ? (
             <div className="mt-3 grid gap-2 text-sm">
@@ -8045,15 +10430,15 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
           )}
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <button type="button" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId || !hasFulfillmentOption} className="inline-flex justify-center rounded-full border border-needle/18 bg-white px-5 py-3 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/30">
+          <Button variant="secondary" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId || !hasFulfillmentOption}>
             {pricingBusy ? 'Calculating...' : 'Preview tax and total'}
-          </button>
-          <button type="button" onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !hasFulfillmentOption || !previewIsFresh} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          </Button>
+          <Button onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !hasFulfillmentOption || !previewIsFresh}>
             {busy ? 'Starting checkout...' : 'Create checkout'}
-          </button>
+          </Button>
         </div>
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -8070,13 +10455,9 @@ function ProfileSettingsEditor({ data, session, onRefresh }: { data: SettingsRen
   async function saveDisplayName() {
     setError(null)
     setSuccess(null)
-    const leak = assertNoContactLeak(displayName, "Display names can't include contact details.")
-    if (leak) {
-      setError(leak)
-      return
-    }
-    if (!displayName.trim()) {
-      setError('Add a display name before saving.')
+    const displayNameError = validateDisplayName(displayName)
+    if (displayNameError) {
+      setError(displayNameError)
       return
     }
     setBusy('name')
@@ -8115,36 +10496,33 @@ function ProfileSettingsEditor({ data, session, onRefresh }: { data: SettingsRen
   }
 
   return (
-    <section className="rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Editable on web</p>
-      <h2 className="mt-2 text-3xl text-ink">Profile basics</h2>
-      <div className="mt-5 grid gap-4">
+    <Surface className="overflow-hidden">
+      <SurfaceHeader eyebrow="Editable on web" title="Profile basics" description="Update how your account is identified and which currency drives visible prices." />
+      <div className="grid gap-4 p-5">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Display name</span>
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Your public display name" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <button type="button" onClick={saveDisplayName} disabled={busy === 'name'} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <Field label="Display name">
+            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Your public display name" />
+          </Field>
+          <Button onClick={saveDisplayName} disabled={busy === 'name'}>
             {busy === 'name' ? 'Saving...' : 'Save name'}
-          </button>
+          </Button>
         </div>
         <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Currency</span>
-            <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          <Field label="Currency">
+            <NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}>
               {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={saveCurrency} disabled={busy === 'currency'} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            </NativeSelect>
+          </Field>
+          <Button onClick={saveCurrency} disabled={busy === 'currency'}>
             {busy === 'currency' ? 'Saving...' : 'Save currency'}
-          </button>
+          </Button>
         </div>
         <p className="text-sm leading-6 text-ink/60">
           Phone changes, OTP, payout setup, and account deletion stay behind the stronger guarded flows.
         </p>
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -8156,9 +10534,17 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const avatarReviewKey = `${data.tailorProfile?.avatar_url ?? ""}:${data.tailorProfile?.id_verification_rejected_at ?? ""}:${data.tailorProfile?.id_verification_status ?? ""}`
+  const [localRejectedAvatarState, setLocalRejectedAvatarState] = useState<{ key: string; cleared: boolean } | null>(null)
+  const avatarPreviewKey = `${data.userId ?? ''}:${role}`
+  const [savedAvatarPreview, setSavedAvatarPreview] = useState<{ key: string; url: string } | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const previewUrlRef = useRef<string | null>(null)
-  const displayAvatar = previewUrl ?? currentAvatar
+  const savedAvatarUrl = savedAvatarPreview?.key === avatarPreviewKey ? savedAvatarPreview.url : null
+  const displayAvatar = previewUrl ?? savedAvatarUrl ?? currentAvatar
+  const profileImageRejectedFromData = data.tailorProfile ? isInvalidProfileImageRejected(data.tailorProfile) : false
+  const localRejectedAvatarCleared = localRejectedAvatarState?.key === avatarReviewKey ? localRejectedAvatarState.cleared : false
+  const profileImageRejected = profileImageRejectedFromData && !localRejectedAvatarCleared
 
   useEffect(() => {
     return () => {
@@ -8168,6 +10554,7 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
       }
     }
   }, [])
+
 
   function setSelectedAvatarFile(nextFile: File | null) {
     if (previewUrlRef.current) {
@@ -8179,6 +10566,7 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
       setPreviewUrl(null)
       return
     }
+    if (profileImageRejectedFromData) setLocalRejectedAvatarState({ key: avatarReviewKey, cleared: true })
     const nextPreviewUrl = URL.createObjectURL(nextFile)
     previewUrlRef.current = nextPreviewUrl
     setPreviewUrl(nextPreviewUrl)
@@ -8205,9 +10593,14 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
         role,
         avatarUrl,
       })
+      setSavedAvatarPreview({
+        key: avatarPreviewKey,
+        url: safeMediaUrl(avatarUrl, 'avatars') ?? avatarUrl,
+      })
       setSelectedAvatarFile(null)
       if (fileRef.current) fileRef.current.value = ''
-      setSuccess('Profile photo updated.')
+      setSuccess(profileImageRejectedFromData ? 'Profile photo replacement submitted for review.' : 'Profile photo updated.')
+      setLocalRejectedAvatarState({ key: avatarReviewKey, cleared: true })
       onRefresh()
     } catch (avatarError) {
       setError(friendlyActionError(avatarError, 'Profile photo could not update.'))
@@ -8217,14 +10610,18 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
   }
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
+    <Surface id="profile-photo" className={profileImageRejected ? 'border-rust/24 bg-rust/8 p-5' : 'p-5'}>
       <div className="grid gap-5 md:grid-cols-[120px_1fr] md:items-center">
-        <div className="relative h-28 w-28 overflow-hidden rounded-[1.25rem] border border-ink/8 bg-bone">
+        <div className={profileImageRejected ? 'relative h-28 w-28 overflow-hidden rounded-[8px] border-2 border-rust bg-bone ring-4 ring-rust/12' : 'relative h-28 w-28 overflow-hidden rounded-[8px] border border-ink/8 bg-bone'}>
           {displayAvatar ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={displayAvatar} alt={previewUrl ? 'Selected profile preview' : 'Current profile'} className="h-full w-full object-cover" />
           ) : null}
-          {previewUrl ? (
+          {profileImageRejected ? (
+            <span className="absolute inset-x-2 bottom-2 rounded-full bg-rust px-2 py-1 text-center text-[0.68rem] font-semibold text-white">
+              Rejected / Invalid
+            </span>
+          ) : previewUrl ? (
             <span className="absolute bottom-2 left-2 rounded-full bg-ink/72 px-2 py-1 text-[0.68rem] font-semibold text-white">
               Preview
             </span>
@@ -8232,7 +10629,12 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
         </div>
         <div className="grid gap-3">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Profile photo</p>
-          <h2 className="text-3xl text-ink">Update avatar</h2>
+          <h2 className="text-xl font-semibold text-ink">{profileImageRejected ? 'Replace rejected avatar' : 'Update avatar'}</h2>
+          {profileImageRejected ? (
+            <div className="rounded-[8px] border border-rust/20 bg-white p-4 text-sm leading-6 text-rust">
+              {PROFILE_IMAGE_REJECTION_MESSAGE}
+            </div>
+          ) : null}
           <ActionNotice error={error} success={success} />
           <input
             ref={fileRef}
@@ -8243,28 +10645,47 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
               setSuccess(null)
               setSelectedAvatarFile(event.target.files?.[0] ?? null)
             }}
-            className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+            className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-[6px] file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
           />
-          <button type="button" onClick={saveAvatar} disabled={busy || !file} className="inline-flex w-fit justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <Button onClick={saveAvatar} disabled={busy || !file} className="w-fit">
             {busy ? 'Uploading...' : 'Save profile photo'}
-          </button>
+          </Button>
         </div>
       </div>
-    </section>
+    </Surface>
   )
 }
 
 function PortfolioManager({ data, onRefresh }: { data: Pick<ProfileRenderData, 'userId' | 'tailorProfile' | 'portfolioItems'>; onRefresh: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const editingItem = data.portfolioItems.find((item) => item.id === editingId) ?? null
+  const profileVideoUrls = stringList(data.tailorProfile?.portfolio_video_urls)
+  const portfolioItemEntries: SortableMediaEntry[] = data.portfolioItems.flatMap((item, index) => (
+    item.image_url
+      ? [{
+          id: item.id,
+          url: item.image_url,
+          label: safeUserText(item.title, `Portfolio ${index + 1}`),
+        }]
+      : []
+  ))
+  const profileVideoEntries: SortableMediaEntry[] = profileVideoUrls.map((url, index) => ({
+    id: `portfolio-video-${index}-${url}`,
+    url,
+    label: `Portfolio video ${index + 1}`,
+  }))
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('')
   const [description, setDescription] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [portfolioInspectIndex, setPortfolioInspectIndex] = useState<number | null>(null)
+  const [portfolioVideoInspectIndex, setPortfolioVideoInspectIndex] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const videoFileRef = useRef<HTMLInputElement | null>(null)
 
   if (!data.tailorProfile) return null
 
@@ -8284,6 +10705,114 @@ function PortfolioManager({ data, onRefresh }: { data: Pick<ProfileRenderData, '
     setDescription('')
     setFile(null)
     if (fileRef.current) fileRef.current.value = ''
+  }
+
+  async function handlePortfolioVideoSelection(nextFile: File | null) {
+    setError(null)
+    setSuccess(null)
+    if (!nextFile) {
+      setVideoFile(null)
+      return
+    }
+
+    try {
+      await preparePortfolioVideoFile(nextFile)
+      setVideoFile(nextFile)
+    } catch (videoError) {
+      setVideoFile(null)
+      if (videoFileRef.current) videoFileRef.current.value = ''
+      setError(friendlyActionError(videoError, 'Choose an MP4 or MOV video under the portfolio limits.'))
+    }
+  }
+
+  async function savePortfolioVideo() {
+    setError(null)
+    setSuccess(null)
+    if (!data.userId) return
+    if (!videoFile) {
+      setError('Choose a portfolio video.')
+      return
+    }
+    if (profileVideoUrls.length >= 4) {
+      setError('You can include up to 4 portfolio videos.')
+      return
+    }
+
+    setBusy('save-video')
+    try {
+      const preparedVideo = await preparePortfolioVideoFile(videoFile)
+      const videoUrl = await uploadPublicFile('portfolio-photos', `portfolio/${data.userId}/videos`, preparedVideo)
+      const videoUrls = uniqueValues([...profileVideoUrls, videoUrl]).slice(0, 4)
+      await invokeAccountFunction('tailor-profile-action', {
+        action: 'update-portfolio-videos',
+        videoUrls,
+      })
+      setVideoFile(null)
+      if (videoFileRef.current) videoFileRef.current.value = ''
+      setSuccess('Portfolio video added.')
+      onRefresh()
+    } catch (videoError) {
+      setError(friendlyActionError(videoError, 'Portfolio video could not save.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function deletePortfolioVideo(videoUrl: string) {
+    setError(null)
+    setSuccess(null)
+    setBusy(`delete-video:${videoUrl}`)
+    try {
+      await invokeAccountFunction('tailor-profile-action', {
+        action: 'update-portfolio-videos',
+        videoUrls: profileVideoUrls.filter((url) => url !== videoUrl),
+      })
+      setSuccess('Portfolio video removed.')
+      onRefresh()
+    } catch (videoError) {
+      setError(friendlyActionError(videoError, 'Portfolio video could not be removed.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+
+  async function reorderPortfolioVideos(nextEntries: SortableMediaEntry[]) {
+    const videoUrls = nextEntries.map((entry) => entry.url)
+    setError(null)
+    setSuccess(null)
+    setBusy('reorder-videos')
+    try {
+      await invokeAccountFunction('tailor-profile-action', {
+        action: 'update-portfolio-videos',
+        videoUrls,
+      })
+      setSuccess('Portfolio video order updated.')
+      onRefresh()
+    } catch (videoError) {
+      setError(friendlyActionError(videoError, 'Portfolio video order could not save.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function reorderPortfolioItems(nextEntries: SortableMediaEntry[]) {
+    const itemIds = nextEntries.map((entry) => entry.id)
+    setError(null)
+    setSuccess(null)
+    setBusy('reorder-items')
+    try {
+      await invokeAccountFunction('portfolio-item-action', {
+        action: 'reorder-items',
+        itemIds,
+      })
+      setSuccess('Portfolio order updated.')
+      onRefresh()
+    } catch (portfolioError) {
+      setError(friendlyActionError(portfolioError, 'Portfolio order could not save.'))
+    } finally {
+      setBusy(null)
+    }
   }
 
   async function savePortfolioItem() {
@@ -8363,48 +10892,116 @@ function PortfolioManager({ data, onRefresh }: { data: Pick<ProfileRenderData, '
   }
 
   return (
-    <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Portfolio</p>
-          <h2 className="mt-2 text-3xl text-ink">Manage public work</h2>
-        </div>
-        {editingId ? (
-          <button type="button" onClick={resetForm} className="text-sm font-semibold text-rust">Cancel edit</button>
-        ) : null}
-      </div>
-      <div className="mt-5 grid gap-4">
+    <Surface className="overflow-hidden">
+      {portfolioInspectIndex != null ? (
+        <MediaInspectionOverlay
+          entries={portfolioItemEntries}
+          initialIndex={portfolioInspectIndex}
+          onClose={() => setPortfolioInspectIndex(null)}
+        />
+      ) : null}
+      {portfolioVideoInspectIndex != null ? (
+        <MediaInspectionOverlay
+          entries={profileVideoEntries}
+          initialIndex={portfolioVideoInspectIndex}
+          onClose={() => setPortfolioVideoInspectIndex(null)}
+        />
+      ) : null}
+      <SurfaceHeader
+        eyebrow="Portfolio"
+        title="Manage public work"
+        description="Add, inspect, and arrange the work customers use to evaluate your craft."
+        action={editingId ? <Button variant="ghost" size="sm" onClick={resetForm} className="text-rust hover:text-rust">Cancel edit</Button> : null}
+      />
+      <div className="grid gap-4 p-5">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-2">
-          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          <input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Category" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink md:col-span-2" />
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Short description" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2" />
+          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" />
+          <Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Category" />
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-[6px] file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink md:col-span-2" />
+          <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Short description" className="md:col-span-2" />
         </div>
-        <button type="button" onClick={savePortfolioItem} disabled={busy === 'save'} className="inline-flex w-fit justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+        <Button onClick={savePortfolioItem} disabled={busy === 'save'} className="w-fit">
           {busy === 'save' ? 'Saving...' : editingId ? 'Update portfolio item' : 'Add portfolio item'}
-        </button>
-      </div>
+        </Button>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {data.portfolioItems.length === 0 ? (
-          <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62 md:col-span-2 xl:col-span-3">
+        <div className="rounded-[8px] border border-ui-border bg-ui-muted/45 p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-ink">Portfolio videos</h3>
+            <p className="mt-1 text-sm leading-6 text-ink/62">
+              Add MP4 or MOV clips up to {PORTFOLIO_VIDEO_MAX_SECONDS} seconds and {Math.round(PORTFOLIO_VIDEO_MAX_BYTES / (1024 * 1024))} MB.
+            </p>
+          </div>
+          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">
+            {profileVideoUrls.length}/4
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+          <input
+            ref={videoFileRef}
+            type="file"
+            accept="video/mp4,video/quicktime"
+            onChange={(event) => {
+              void handlePortfolioVideoSelection(event.target.files?.[0] ?? null)
+            }}
+            disabled={profileVideoUrls.length >= 4}
+            className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink file:mr-4 file:rounded-[6px] file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <Button
+            onClick={savePortfolioVideo}
+            disabled={busy === 'save-video' || !videoFile || profileVideoUrls.length >= 4}
+          >
+            {busy === 'save-video' ? 'Uploading...' : 'Add video'}
+          </Button>
+        </div>
+        {profileVideoEntries.length > 0 ? (
+          <div className="mt-4 grid gap-3">
+            <SortableMediaGrid
+              entries={profileVideoEntries}
+              busy={!!busy}
+              onInspect={setPortfolioVideoInspectIndex}
+              onReorder={(nextEntries) => { void reorderPortfolioVideos(nextEntries) }}
+              onDelete={(index) => {
+                const videoUrl = profileVideoEntries[index]?.url
+                if (videoUrl) void deletePortfolioVideo(videoUrl)
+              }}
+            />
+          </div>
+        ) : null}
+        </div>
+
+        <div className="grid gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold text-ink">Portfolio gallery order</h3>
+          <span className="text-xs text-ink/48">First tile is cover</span>
+        </div>
+        {portfolioItemEntries.length === 0 ? (
+          <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
             No editable portfolio rows yet. Add one to make your public profile stronger.
           </p>
-        ) : data.portfolioItems.map((item, index) => (
-          <article key={item.id} className="rounded-[1.2rem] border border-ink/8 bg-bone/45 p-4">
-            <PhotoTile src={item.image_url} label="Portfolio item" />
-            <h3 className="mt-3 text-xl font-semibold text-ink">{safeUserText(item.title, `Portfolio ${index + 1}`)}</h3>
-            <p className="mt-2 text-sm leading-6 text-ink/62">{safeUserText(item.description, safeUserText(item.category, 'Portfolio work'))}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" onClick={() => startEdit(item)} className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink">Edit</button>
-              <button type="button" onClick={() => runPortfolioAction('set-cover', item.id)} disabled={!!busy} className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink disabled:text-ink/40">Set cover</button>
-              <button type="button" onClick={() => runPortfolioAction('delete-item', item.id)} disabled={!!busy} className="rounded-full border border-rust/20 bg-white px-4 py-2 text-sm font-semibold text-rust disabled:text-ink/40">Delete</button>
-            </div>
-          </article>
-        ))}
+        ) : (
+          <SortableMediaGrid
+            entries={portfolioItemEntries}
+            busy={!!busy}
+            imageClassName="object-cover object-top"
+            onInspect={setPortfolioInspectIndex}
+            onReorder={(nextEntries) => { void reorderPortfolioItems(nextEntries) }}
+            onDelete={(index) => {
+              const entry = portfolioItemEntries[index]
+              if (entry) void runPortfolioAction('delete-item', entry.id)
+            }}
+            renderActions={(entry) => {
+              const item = data.portfolioItems.find((candidate) => candidate.id === entry.id)
+              return item ? (
+                <Button type="button" onClick={() => startEdit(item)} variant="secondary" size="sm">Edit</Button>
+              ) : null
+            }}
+          />
+        )}
+        </div>
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -8498,8 +11095,8 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
           {([['rating', 'Top rated'], ['popular', 'Most orders'], ['price', 'Lowest price']] as const).map(([value, label]) => (
             <button key={value} type="button" onClick={() => setSort(value)}
               className={sort === value
-                ? 'rounded-[0.65rem] bg-needle px-3 py-2 text-left text-sm font-semibold text-white'
-                : 'rounded-[0.65rem] px-3 py-2 text-left text-sm font-semibold text-ink/62 hover:bg-ink/5 hover:text-ink'}>
+                ? 'rounded-lg bg-needle px-3 py-2 text-left text-sm font-semibold text-white'
+                : 'rounded-lg px-3 py-2 text-left text-sm font-semibold text-ink/62 hover:bg-ink/5 hover:text-ink'}>
               {label}
             </button>
           ))}
@@ -8508,21 +11105,21 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
       <hr className="border-ink/6" />
       <div>
         <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Specialty</p>
-        <select value={specialty} onChange={(e) => setSpecialty(e.target.value)} className="w-full rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
+        <select value={specialty} onChange={(e) => setSpecialty(e.target.value)} className="w-full rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
           <option value="all">All specialties</option>
           {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
       <div>
         <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Location</p>
-        <select value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
+        <select value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
           <option value="all">All locations</option>
           {locations.map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
       </div>
       <div>
         <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Availability</p>
-        <select value={availability} onChange={(e) => setAvailability(e.target.value)} className="w-full rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
+        <select value={availability} onChange={(e) => setAvailability(e.target.value)} className="w-full rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-needle/40">
           <option value="all">Any availability</option>
           {availabilityOptions.map((a) => <option key={a} value={a}>{cleanLabel(a)}</option>)}
         </select>
@@ -8530,17 +11127,17 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
       <div>
         <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Price <span className="normal-case font-normal text-ink/38">({priceCurrencyLabel})</span></p>
         <div className="flex items-center gap-2">
-          <input value={minPrice} onChange={(e) => setMinPrice(e.target.value)} inputMode="decimal" placeholder="Min" className="w-full rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
+          <input value={minPrice} onChange={(e) => setMinPrice(e.target.value)} inputMode="decimal" placeholder="Min" className="w-full rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
           <span className="text-xs text-ink/36">–</span>
-          <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} inputMode="decimal" placeholder="Max" className="w-full rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
+          <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} inputMode="decimal" placeholder="Max" className="w-full rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
         </div>
       </div>
-      <label className="flex cursor-pointer items-center gap-3 rounded-[0.75rem] border border-ink/8 bg-white/72 px-3 py-2.5">
+      <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-ink/8 bg-white/72 px-3 py-2.5">
         <input type="checkbox" checked={customOnly} onChange={(e) => setCustomOnly(e.target.checked)} className="h-4 w-4 rounded accent-needle" />
         <span className="text-sm font-semibold text-ink">Custom orders only</span>
       </label>
       {activeFilterCount > 0 ? (
-        <button type="button" onClick={clearFilters} className="rounded-[0.75rem] border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink/66 hover:text-ink">
+        <button type="button" onClick={clearFilters} className="rounded-lg border border-ink/10 bg-white px-3 py-2.5 text-sm font-semibold text-ink/66 hover:text-ink">
           Clear {activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''}
         </button>
       ) : null}
@@ -8551,39 +11148,45 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
     <div className="grid gap-4">
       {/* Search + mobile filters toggle */}
       <div className="flex gap-2">
-        <input
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ui-subtle" />
+          <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by tailor, style, or location..."
-          className="min-w-0 flex-1 rounded-full border border-ink/10 bg-white px-5 py-3 text-sm text-ink shadow-sm outline-none focus:border-needle/40"
-        />
-        <button
+          className="pl-9"
+          />
+        </div>
+        <Button
           type="button"
           onClick={() => setMobileFiltersOpen((o) => !o)}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-4 py-3 text-sm font-semibold lg:hidden ${activeFilterCount > 0 ? 'border-needle/30 bg-needle text-white' : 'border-ink/10 bg-white text-ink'}`}
+          variant={activeFilterCount > 0 ? 'primary' : 'secondary'}
+          className="shrink-0 lg:hidden"
         >
-          Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
-        </button>
+          <SlidersHorizontal /> Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+        </Button>
       </div>
 
       {/* Mobile filter panel */}
       {mobileFiltersOpen ? (
-        <div className="rounded-[1.25rem] border border-ink/8 bg-white/88 p-5 shadow-sm lg:hidden">
+        <Surface className="p-5 lg:hidden">
           {filterSidebar}
-        </div>
+        </Surface>
       ) : null}
 
       {/* Specialty quick chips */}
       <div className="-mx-0.5 flex gap-2 overflow-x-auto px-0.5 pb-1 [scrollbar-width:none]">
         {(['all', ...specialties.slice(0, 10)] as string[]).map((tag) => (
-          <button
+          <Button
             key={tag}
             type="button"
             onClick={() => setSpecialty(tag)}
-            className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${specialty === tag ? 'bg-needle text-white' : 'border border-ink/10 bg-white text-ink/66 hover:bg-ink/5 hover:text-ink'}`}
+            variant={specialty === tag ? 'primary' : 'secondary'}
+            size="sm"
+            className="whitespace-nowrap"
           >
             {tag === 'all' ? 'All tailors' : tag}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -8591,7 +11194,7 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
       <div className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-start">
         {/* Desktop sidebar */}
         <aside className="hidden lg:block">
-          <div className="sticky top-4 rounded-[1.25rem] border border-ink/8 bg-white/88 p-5 shadow-sm">
+          <div className="sticky top-4 rounded-[8px] border border-ui-border bg-white p-5 shadow-sm">
             {filterSidebar}
           </div>
         </aside>
@@ -8622,7 +11225,7 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
                   : null
                 const priceFrom = tailor.price_range_min ? `from ${formatMoney(tailor.price_range_min, tailor.currency)}` : null
                 return (
-                  <article key={tailor.id} className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_12px_36px_rgba(22,28,24,0.10)]">
+                  <article key={tailor.id} className="overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm transition hover:border-needle/30 hover:shadow-md">
                     {/* Edge-to-edge photo with overlaid badges */}
                     <div className="relative aspect-[4/3] w-full overflow-hidden bg-needle/10">
                       {safeSrc ? (
@@ -8635,9 +11238,7 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
                       {/* Overlaid badges */}
                       <div className="absolute inset-x-3 top-3 flex items-start justify-between">
                         {tailor.is_verified ? (
-                          <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-semibold text-needle shadow-sm backdrop-blur-sm">
-                            Verified
-                          </span>
+                          <StatusChip status="VERIFIED" className="bg-white/90 shadow-sm backdrop-blur-sm" />
                         ) : <span />}
                         {ratingText ? (
                           <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-semibold text-ink shadow-sm backdrop-blur-sm">
@@ -8667,13 +11268,9 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
                         </div>
                       ) : null}
                       <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        <Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
-                          View profile
-                        </Link>
+                        <Button asChild variant="secondary"><Link href={accountRoute(`/account/tailors/${tailor.id}`)}>View profile</Link></Button>
                         {canRequestBrief ? (
-                          <Link href={accountRoute(`/account/brief/${tailor.id}`)} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white">
-                            Request brief
-                          </Link>
+                          <Button asChild><Link href={accountRoute(`/account/brief/${tailor.id}`)}>Request brief</Link></Button>
                         ) : (
                           <button type="button" disabled className="inline-flex cursor-not-allowed justify-center rounded-full bg-ink/10 px-4 py-2.5 text-sm font-semibold text-ink/48">
                             {customBriefUnavailableLabel(tailor, data.userId)}
@@ -8769,6 +11366,15 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   const [fabricSource, setFabricSource] = useState<'TAILOR_SOURCES' | 'CUSTOMER_SUPPLIES'>('TAILOR_SOURCES')
   const [fabricDescription, setFabricDescription] = useState('')
   const [fabricBudget, setFabricBudget] = useState('')
+  const [fabricBudgetCurrency, setFabricBudgetCurrency] = useState(normalizeAccountCurrency(data.accountCurrency ?? tailor?.currency ?? 'USD') ?? 'USD')
+  const [fabricReferenceFiles, setFabricReferenceFiles] = useState<File[]>([])
+  const [fabricReferenceLinksInput, setFabricReferenceLinksInput] = useState('')
+  const [fabricSubstitutionPreference, setFabricSubstitutionPreference] = useState('')
+  const [bulkFabricMode, setBulkFabricMode] = useState('')
+  const [fabricVendorName, setFabricVendorName] = useState('')
+  const [fabricVendorLocation, setFabricVendorLocation] = useState('')
+  const [fabricVendorLink, setFabricVendorLink] = useState('')
+  const [fabricVendorNotes, setFabricVendorNotes] = useState('')
   const [fabricSourcingDeadlineDays, setFabricSourcingDeadlineDays] = useState(CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS)
   const [deliveryMethod, setDeliveryMethod] = useState<'LOCAL_COLLECTION' | 'LOCAL_DELIVERY' | 'SHIPPING'>(defaultDeliveryMethodForTailor(tailor))
   const [shippingPreference, setShippingPreference] = useState<'STANDARD' | 'EXPRESS'>('STANDARD')
@@ -8786,6 +11392,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   const [success, setSuccess] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
+  const fabricMediaInputRef = useRef<HTMLInputElement | null>(null)
 
   if (!tailor || !tailorId) {
     return (
@@ -8820,20 +11427,28 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   const selectedTailor = tailor
   const baseMeasurementSnapshot = measurementChoice === 'fallback' ? null : measurementSnapshotForChoice(data, measurementChoice)
   const styleReferenceLinks = linesToUrls(styleLinks)
+  const fabricReferenceLinks = linesToUrls(fabricReferenceLinksInput)
   const needsDeliveryDetails = deliveryMethod !== 'LOCAL_COLLECTION'
   const fabricBudgetAmount = parseMinorUnits(fabricBudget)
-  const orderCurrency = data.accountCurrency ?? selectedTailor.currency ?? 'USD'
+  const selectedFabricSubstitution = FABRIC_SUBSTITUTION_OPTIONS.find((option) => option.value === fabricSubstitutionPreference)
+  const selectedBulkFabricMode = BULK_FABRIC_MODE_OPTIONS.find((option) => option.value === bulkFabricMode)
 
   async function submitBrief() {
     setError(null)
     setSuccess(null)
     setCreatedOrderId(null)
+    const deadlineIso = dateInputToIso(deadline)
+    const deadlineDate = deadlineIso ? new Date(deadlineIso) : null
+    const normalizedRecipientPhone = needsDeliveryDetails ? normalizePhoneForStorage(recipientPhone) : ''
 
     const textToCheck = [
       description,
       styleNotes,
       fitNote,
       fabricDescription,
+      fabricVendorName,
+      fabricVendorLocation,
+      fabricVendorNotes,
       wearerName,
       bulkLabel,
       bulkMemberNames,
@@ -8843,15 +11458,18 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       deliveryCity,
       deliveryRegion,
       recipientName,
-      recipientPhone,
     ].join('\n')
     const leak = assertNoContactLeak(textToCheck, "Briefs can't include phone numbers, emails, links, social handles, or off-platform contact instructions.")
     if (leak) {
       setError(leak)
       return
     }
-    if (!description.trim() || description.trim().length < 80) {
+    if (!isCustomOrderBriefLongEnough(description)) {
       setError('Write one clear paragraph, or at least 3 short lines, describing the garment.')
+      return
+    }
+    if (!deadlineDate || Number.isNaN(deadlineDate.getTime()) || deadlineDate.getTime() < customOrderMinimumDeliveryDate().getTime()) {
+      setError('Target delivery date must be at least 2 weeks from today.')
       return
     }
     if (garmentType === 'Other' && !garmentTypeOther.trim()) {
@@ -8866,6 +11484,36 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       setError('Add at least one Instagram, Pinterest, or TikTok reference link, or attach a reference photo.')
       return
     }
+    const unsupportedStyleLink = styleReferenceLinks.find((link) => !isAllowedCustomStyleReference(link))
+    if (unsupportedStyleLink) {
+      setError('Style links must be from Instagram, Pinterest, or TikTok.')
+      return
+    }
+    if (fabricReferenceLinks.length > CUSTOM_ORDER_MAX_STYLE_LINKS) {
+      setError('Add no more than ' + CUSTOM_ORDER_MAX_STYLE_LINKS + ' fabric links. Remove extra links before submitting.')
+      return
+    }
+    const unsupportedFabricLink = fabricReferenceLinks.find((link) => !isAllowedCustomStyleReference(link))
+    if (unsupportedFabricLink) {
+      setError('Fabric links must be from Instagram, Pinterest, or TikTok.')
+      return
+    }
+    if (fabricReferenceFiles.length > MAX_WEB_FABRIC_REFERENCE_MEDIA) {
+      setError('Add no more than ' + MAX_WEB_FABRIC_REFERENCE_MEDIA + ' fabric media files.')
+      return
+    }
+    let normalizedFabricVendorLink: string | null = null
+    if (fabricVendorLink.trim()) {
+      try {
+        const trimmedVendorLink = fabricVendorLink.trim()
+        const url = new URL(trimmedVendorLink.startsWith('http://') || trimmedVendorLink.startsWith('https://') ? trimmedVendorLink : 'https://' + trimmedVendorLink)
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported vendor link')
+        normalizedFabricVendorLink = url.toString()
+      } catch {
+        setError('Enter a valid vendor website or social link.')
+        return
+      }
+    }
     if (wearerMode === 'OTHER' && wearerName.trim().length < 2) {
       setError('Add the wearer name for this brief.')
       return
@@ -8875,12 +11523,34 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       setError('Add at least 2 wearers for a group order.')
       return
     }
-    if (!baseMeasurementSnapshot && fitNote.trim().length < 24) {
-      setError('Add saved measurements, or write a fit note telling the tailor to follow up before quoting.')
+    if (!baseMeasurementSnapshot) {
+      setError('Add saved measurements before submitting. This gives your tailor the fit context they need for an accurate quote.')
       return
     }
-    if (fabricSource === 'TAILOR_SOURCES' && fabricDescription.trim().length < 8) {
-      setError('Describe the fabric the tailor should source.')
+    if (fitNote.trim().length < 20) {
+      setError('Add a fit note with at least 20 characters before submitting.')
+      return
+    }
+    const fabricIssues = getCustomOrderFabricIssues({
+      fabricSource,
+      fabricDescription,
+      fabricBudgetAmount,
+      fabricBudgetCurrency,
+      fabricReferenceMediaCount: fabricReferenceFiles.length,
+      fabricReferenceLinkCount: fabricReferenceLinks.length,
+      fabricSubstitutionPreference,
+      fabricHandoffMode: fabricSource === 'CUSTOMER_SUPPLIES' ? 'CUSTOMER_TO_TAILOR' : null,
+      isBulkOrder: wearerMode === 'GROUP',
+      bulkRecipientCount: Number.isFinite(bulkCount) ? bulkCount : null,
+      bulkFabricMode,
+      suggestedVendorName: fabricVendorName,
+      suggestedVendorLocation: fabricVendorLocation,
+      suggestedVendorLink: normalizedFabricVendorLink,
+      suggestedVendorNotes: fabricVendorNotes,
+    })
+    const firstFabricIssue = fabricIssues[0]
+    if (firstFabricIssue) {
+      setError(firstFabricIssue.message)
       return
     }
     for (const photo of referencePhotos) {
@@ -8890,8 +11560,13 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
         return
       }
     }
-    if (needsDeliveryDetails && (!recipientName.trim() || !recipientPhone.trim() || !deliveryAddress.trim())) {
-      setError('Add recipient name, phone, and address for delivery or shipping.')
+    if (needsDeliveryDetails && (!recipientName.trim() || !deliveryAddress.trim() || !deliveryCity.trim() || !deliveryRegion.trim() || !deliveryCountryCode.trim())) {
+      setError('Add the full delivery address before submitting. Street, city, region, and country are required.')
+      return
+    }
+    const recipientPhoneError = needsDeliveryDetails ? validatePhoneForProfile(normalizedRecipientPhone) : null
+    if (recipientPhoneError) {
+      setError(recipientPhoneError)
       return
     }
     if (!acknowledged) {
@@ -8975,6 +11650,8 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
           measurementPrivacy: 'TAILOR_ONLY',
           statusPolicy: 'OPS_MANAGED_LINKED_CHILDREN',
           dyeLotConsistencyRequired: true,
+          fabricMode: bulkFabricMode || null,
+          fabricModeLabel: selectedBulkFabricMode?.label ?? null,
           notes: bulkNotes.trim() || null,
         }
       : null
@@ -8990,6 +11667,19 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       wearerContext,
       bulkOrder,
       fabricPolicy,
+      fabricReference: {
+        sourceMode: fabricSource,
+        mediaCount: fabricReferenceFiles.length,
+        linkCount: fabricReferenceLinks.length,
+        links: fabricReferenceLinks,
+      },
+      customerFabricProof: fabricSource === 'CUSTOMER_SUPPLIES'
+        ? {
+            requiredBeforeQuote: true,
+            mediaCount: fabricReferenceFiles.length,
+            referenceLinks: fabricReferenceLinks,
+          }
+        : null,
       measurementAge,
       styleAlignment,
       measurementFallback: !measurementSnapshot
@@ -9001,8 +11691,22 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
         ? {
             description: fabricDescription.trim() || null,
             budgetAmount: fabricBudgetAmount,
-            budgetCurrency: fabricBudgetAmount ? orderCurrency : null,
+            budgetCurrency: fabricBudgetAmount ? fabricBudgetCurrency : null,
             deadlineBusinessDays: fabricSourcingDeadlineDays,
+            referenceLinks: fabricReferenceLinks,
+            referenceMediaCount: fabricReferenceFiles.length,
+            substitutionPreference: fabricSubstitutionPreference || null,
+            substitutionLabel: selectedFabricSubstitution?.label ?? null,
+            suggestedVendor: fabricVendorName.trim() || fabricVendorLocation.trim() || normalizedFabricVendorLink || fabricVendorNotes.trim()
+              ? {
+                  name: fabricVendorName.trim() || null,
+                  location: fabricVendorLocation.trim() || null,
+                  link: normalizedFabricVendorLink,
+                  notes: fabricVendorNotes.trim() || null,
+                }
+              : null,
+            bulkFabricMode: bulkFabricMode || null,
+            bulkFabricModeLabel: selectedBulkFabricMode?.label ?? null,
           }
         : null,
       webBrief: {
@@ -9013,40 +11717,77 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       },
     }
 
-    const buildPayload = (action: 'preflight-create-order' | 'create-order', uploadedReferencePhotoUrls: string[]) => ({
-      action,
-      tailorProfileId: selectedTailor.id,
-      garmentType,
-      garmentTypeOther: garmentType === 'Other' ? garmentTypeOther.trim() : null,
-      genderPresentation,
-      description: description.trim(),
-      occasion: occasion === 'Other' ? occasionOther.trim() || 'Other' : occasion || null,
-      deadline: dateInputToIso(deadline),
-      referencePhotos: uploadedReferencePhotoUrls,
-      referencePhotoCount: action === 'preflight-create-order' ? referencePhotos.length : uploadedReferencePhotoUrls.length,
-      styleReferenceLinks,
-      styleNotes: styleNotes.trim() || null,
-      customerMeasurementsSnapshot: measurementSnapshot,
-      fitNote: fitNote.trim() || null,
-      bodyNote: fitNote.trim() || null,
-      fabricSource,
-      fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
-      fabricBudgetAmount,
-      fabricBudgetCurrency: fabricBudgetAmount ? orderCurrency : null,
-      fabricSourcingDeadlineDays: fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
-      supportMeta,
-      deliveryMethod,
-      shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
-      deliveryInstructions: deliveryInstructions.trim() || null,
-      deliveryAddress: needsDeliveryDetails ? deliveryAddress.trim() : null,
-      deliveryCity: needsDeliveryDetails ? deliveryCity.trim() : null,
-      deliveryRegion: needsDeliveryDetails ? deliveryRegion.trim() : null,
-      deliveryPostalCode: needsDeliveryDetails ? deliveryPostalCode.trim() : null,
-      deliveryCountryCode: needsDeliveryDetails ? deliveryCountryCode.trim().toUpperCase() : null,
-      recipientName: needsDeliveryDetails ? recipientName.trim() : null,
-      recipientPhone: needsDeliveryDetails ? recipientPhone.trim() : null,
-      cancellationPolicyAcknowledged: acknowledged,
-    })
+    const buildPayload = (
+      action: 'preflight-create-order' | 'create-order',
+      uploadedReferencePhotoUrls: string[],
+      uploadedFabricReferenceUrls: string[] = [],
+    ) => {
+      const supportMetaRecord = supportMeta as Record<string, unknown>
+      const payloadSupportMeta = {
+        ...supportMetaRecord,
+        fabricReference: {
+          ...(supportMetaRecord.fabricReference as Record<string, unknown>),
+          mediaUrls: uploadedFabricReferenceUrls,
+        },
+        ...(fabricSource === 'TAILOR_SOURCES'
+          ? {
+              fabricSourcing: {
+                ...(supportMetaRecord.fabricSourcing as Record<string, unknown>),
+                referenceMediaUrls: uploadedFabricReferenceUrls,
+              },
+            }
+          : {
+              customerFabricProof: {
+                ...(supportMetaRecord.customerFabricProof as Record<string, unknown>),
+                mediaUrls: uploadedFabricReferenceUrls,
+              },
+            }),
+      }
+
+      return {
+        action,
+        tailorProfileId: selectedTailor.id,
+        garmentType,
+        garmentTypeOther: garmentType === 'Other' ? garmentTypeOther.trim() : null,
+        genderPresentation,
+        description: description.trim(),
+        occasion: occasion === 'Other' ? occasionOther.trim() || 'Other' : occasion || null,
+        deadline: deadlineIso,
+        referencePhotos: uploadedReferencePhotoUrls,
+        referencePhotoCount: action === 'preflight-create-order' ? referencePhotos.length : uploadedReferencePhotoUrls.length,
+        styleReferenceLinks,
+        styleNotes: styleNotes.trim() || null,
+        customerMeasurementsSnapshot: measurementSnapshot,
+        fitNote: fitNote.trim() || null,
+        bodyNote: fitNote.trim() || null,
+        fabricSource,
+        fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
+        fabricBudgetAmount: fabricSource === 'TAILOR_SOURCES' ? fabricBudgetAmount : null,
+        fabricBudgetCurrency: fabricSource === 'TAILOR_SOURCES' ? fabricBudgetCurrency : null,
+        fabricSourcingDeadlineDays: fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
+        fabricReferenceMedia: uploadedFabricReferenceUrls,
+        fabricReferenceMediaCount: fabricReferenceFiles.length,
+        fabricReferenceLinks,
+        fabricSubstitutionPreference: fabricSource === 'TAILOR_SOURCES' ? fabricSubstitutionPreference || null : null,
+        bulkFabricMode: wearerMode === 'GROUP' ? bulkFabricMode || null : null,
+        fabricVendorName: fabricSource === 'TAILOR_SOURCES' ? fabricVendorName.trim() || null : null,
+        fabricVendorLocation: fabricSource === 'TAILOR_SOURCES' ? fabricVendorLocation.trim() || null : null,
+        fabricVendorLink: fabricSource === 'TAILOR_SOURCES' ? normalizedFabricVendorLink : null,
+        fabricVendorNotes: fabricSource === 'TAILOR_SOURCES' ? fabricVendorNotes.trim() || null : null,
+        supportMeta: payloadSupportMeta,
+        deliveryMethod,
+        shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
+        deliveryInstructions: deliveryInstructions.trim() || null,
+        deliveryAddress: needsDeliveryDetails ? deliveryAddress.trim() : null,
+        deliveryCity: needsDeliveryDetails ? deliveryCity.trim() : null,
+        deliveryRegion: needsDeliveryDetails ? deliveryRegion.trim() : null,
+        deliveryPostalCode: needsDeliveryDetails ? deliveryPostalCode.trim() : null,
+        deliveryCountryCode: needsDeliveryDetails ? deliveryCountryCode.trim().toUpperCase() : null,
+        recipientName: needsDeliveryDetails ? recipientName.trim() : null,
+        recipientPhone: needsDeliveryDetails ? normalizedRecipientPhone : null,
+        cancellationPolicyAcknowledged: acknowledged,
+      }
+    }
 
     setBusy(true)
     try {
@@ -9056,7 +11797,12 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
         const preparedPhoto = await reencodeImageFile(photo)
         uploadedReferencePhotos.push(await uploadPublicFile('order-photos', `brief/${data.userId}`, preparedPhoto))
       }
-      const result = await invokeAccountFunction<{ orderId?: string }>('custom-order-action', buildPayload('create-order', uploadedReferencePhotos))
+      const uploadedFabricReferenceUrls: string[] = []
+      for (const file of fabricReferenceFiles) {
+        const preparedFabricMedia = await prepareOrderEvidenceFile(file)
+        uploadedFabricReferenceUrls.push(await uploadPublicFile('order-photos', 'brief/' + data.userId + '/fabric', preparedFabricMedia))
+      }
+      const result = await invokeAccountFunction<{ orderId?: string }>('custom-order-action', buildPayload('create-order', uploadedReferencePhotos, uploadedFabricReferenceUrls))
       setCreatedOrderId(result.orderId ?? null)
       setSuccess('Custom brief sent. Opening the new order so you can track the quote.')
       setDescription('')
@@ -9071,7 +11817,16 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       setBulkNotes('')
       setDeliveryInstructions('')
       setReferencePhotos([])
+      setFabricReferenceFiles([])
+      setFabricReferenceLinksInput('')
+      setFabricSubstitutionPreference('')
+      setBulkFabricMode('')
+      setFabricVendorName('')
+      setFabricVendorLocation('')
+      setFabricVendorLink('')
+      setFabricVendorNotes('')
       if (photoInputRef.current) photoInputRef.current.value = ''
+      if (fabricMediaInputRef.current) fabricMediaInputRef.current.value = ''
       onRefresh()
       if (result.orderId) {
         router.push(accountRoute(`/account/orders/${result.orderId}`))
@@ -9093,7 +11848,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   return (
     <div className="grid gap-4">
       <section className="grid gap-4 lg:grid-cols-[minmax(0,0.62fr)_minmax(0,1fr)] lg:items-start">
-        <div className="rounded-[1.1rem] border border-ink/8 bg-white/84 p-4 shadow-sm">
+        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm">
           <div className="grid gap-4 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start lg:block">
             <PhotoTile src={tailorPhoto(selectedTailor)} label="Tailor profile" />
             <div>
@@ -9107,20 +11862,20 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
             </div>
           </div>
         </div>
-        <div className="self-start rounded-[1.1rem] border border-needle/12 bg-needle/8 p-4 shadow-sm sm:p-5">
+        <div className="self-start rounded-[8px] border border-needle/12 bg-needle/8 p-4 shadow-sm sm:p-5">
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-needle/80">Before quote</p>
           <h2 className="mt-1 text-xl font-semibold leading-tight text-ink sm:text-2xl">The tailor reviews this before pricing.</h2>
           <p className="mt-2 text-sm leading-6 text-ink/66">
-            This sends a pending-quote order. If measurements are missing, the brief tells the tailor to follow up before quoting.
+            This sends a pending-quote order. Add saved measurements first so the tailor can price with fit context.
           </p>
         </div>
       </section>
 
-      <section className="rounded-[1.1rem] border border-ink/8 bg-white/84 p-4 shadow-sm sm:p-5">
+      <section className="rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm sm:p-5">
         <div className="grid gap-5">
           <ActionNotice error={error} success={success} />
           {createdOrderId ? (
-            <Link href={accountRoute(`/account/orders/${createdOrderId}`)} className="inline-flex w-fit rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
+            <Link href={accountRoute(`/account/orders/${createdOrderId}`)} className="inline-flex w-fit rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white">
               Open submitted order
             </Link>
           ) : null}
@@ -9128,13 +11883,13 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Garment</span>
-              <select value={garmentType} onChange={(event) => setGarmentType(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={garmentType} onChange={(event) => setGarmentType(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {WEB_GARMENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
             </label>
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Fit category</span>
-              <select value={genderPresentation} onChange={(event) => setGenderPresentation(event.target.value as typeof genderPresentation)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={genderPresentation} onChange={(event) => setGenderPresentation(event.target.value as typeof genderPresentation)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 <option value="Unisex">Unisex</option>
                 <option value="Menswear">Menswear</option>
                 <option value="Womenswear">Womenswear</option>
@@ -9142,19 +11897,19 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
             </label>
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Target date</span>
-              <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <input type="date" value={deadline} min={minimumDeadlineInput()} onChange={(event) => setDeadline(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </label>
           </div>
           {garmentType === 'Other' ? (
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Garment type details</span>
-              <input value={garmentTypeOther} onChange={(event) => setGarmentTypeOther(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <input value={garmentTypeOther} onChange={(event) => setGarmentTypeOther(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </label>
           ) : null}
-          <div className="grid gap-4 rounded-[1rem] border border-ink/6 bg-bone/35 p-4 md:grid-cols-3">
+          <div className="grid gap-4 rounded-[8px] border border-ink/6 bg-bone/35 p-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Wearer</span>
-              <select value={wearerMode} onChange={(event) => setWearerMode(event.target.value as typeof wearerMode)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={wearerMode} onChange={(event) => setWearerMode(event.target.value as typeof wearerMode)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 <option value="SELF">Me</option>
                 <option value="OTHER">Someone else</option>
                 <option value="GROUP">Group order</option>
@@ -9163,18 +11918,18 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
             {wearerMode === 'OTHER' ? (
               <label className="grid gap-2 md:col-span-2">
                 <span className="text-sm font-semibold text-ink">Wearer name</span>
-                <input value={wearerName} onChange={(event) => setWearerName(event.target.value)} placeholder="Name used for this measurement profile" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={wearerName} onChange={(event) => setWearerName(event.target.value)} placeholder="Name used for this measurement profile" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
             ) : null}
             {wearerMode === 'GROUP' ? (
               <>
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-ink">Group name</span>
-                  <input value={bulkLabel} onChange={(event) => setBulkLabel(event.target.value)} placeholder="Wedding party, choir..." className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  <input value={bulkLabel} onChange={(event) => setBulkLabel(event.target.value)} placeholder="Wedding party, choir..." className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
                 </label>
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-ink">Wearers</span>
-                  <input value={bulkRecipientCount} onChange={(event) => setBulkRecipientCount(event.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="2+" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  <input value={bulkRecipientCount} onChange={(event) => setBulkRecipientCount(event.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="2+" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
                 </label>
                 <label className="grid gap-2 md:col-span-3">
                   <span className="text-sm font-semibold text-ink">Members and notes</span>
@@ -9182,19 +11937,19 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
                     const [members = '', ...notes] = event.target.value.split(/\n\n/u)
                     setBulkMemberNames(members)
                     setBulkNotes(notes.join('\n\n'))
-                  }} rows={3} placeholder="Names separated by commas or lines, then optional notes." className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  }} rows={3} placeholder="Names separated by commas or lines, then optional notes." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
                 </label>
               </>
             ) : null}
           </div>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Brief</span>
-            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={5} maxLength={1200} placeholder="Describe the outfit, silhouette, occasion, fabric expectations, and anything the tailor must know." className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={5} maxLength={1200} placeholder="Describe the outfit, silhouette, occasion, fabric expectations, and anything the tailor must know." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
           </label>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Occasion</span>
-              <select value={occasion} onChange={(event) => setOccasion(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={occasion} onChange={(event) => setOccasion(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {WEB_OCCASION_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             </label>
@@ -9215,7 +11970,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
                   setReferencePhotos(files)
                   setError(null)
                 }}
-                className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+                className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-[6px] file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
               />
               <span className="text-xs leading-5 text-ink/52">{referencePhotos.length}/{CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} photos selected.</span>
             </label>
@@ -9223,80 +11978,185 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
           {occasion === 'Other' ? (
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Occasion details</span>
-              <input value={occasionOther} onChange={(event) => setOccasionOther(event.target.value)} placeholder="Naming ceremony, corporate gala, festival..." className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <input value={occasionOther} onChange={(event) => setOccasionOther(event.target.value)} placeholder="Naming ceremony, corporate gala, festival..." className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </label>
           ) : null}
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Style links</span>
-            <input value={styleLinks} onChange={(event) => setStyleLinks(event.target.value)} placeholder="Instagram, Pinterest, or TikTok links" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <input value={styleLinks} onChange={(event) => setStyleLinks(event.target.value)} placeholder="Instagram, Pinterest, or TikTok links" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             <span className="text-xs leading-5 text-ink/52">
               Add up to {CUSTOM_ORDER_MAX_STYLE_LINKS} supported links. Extra links must be removed before submitting.
             </span>
           </label>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Style notes</span>
-            <textarea value={styleNotes} onChange={(event) => setStyleNotes(event.target.value)} rows={3} maxLength={1200} className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <textarea value={styleNotes} onChange={(event) => setStyleNotes(event.target.value)} rows={3} maxLength={1200} className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
           </label>
 
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Measurements</span>
-              <select value={measurementChoice} onChange={(event) => setMeasurementChoice(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={measurementChoice} onChange={(event) => setMeasurementChoice(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {data.measurementProfiles.map((profile) => <option key={profile.id} value={profile.id}>{safeUserText(profile.label, 'Saved profile')}</option>)}
                 {data.customerProfile?.measurements ? <option value="legacy">Customer profile</option> : null}
-                <option value="fallback">No measurements yet</option>
+                <option value="fallback" disabled>No measurements yet</option>
               </select>
+              {(() => {
+                const profile = data.measurementProfiles.find((p) => p.id === measurementChoice)
+                const age = profile ? measurementAgeFromSnapshot({ measurementProfileUpdatedAt: profile.last_measured_at ?? profile.updated_at }) : null
+                if (!age?.stale) return null
+                return (
+                  <span className="text-xs leading-5 text-amber-700">
+                    These measurements are {age.ageMonths} months old. Update them in Profile if your fit or body shape changed before submitting this brief.
+                  </span>
+                )
+              })()}
             </label>
             <label className="grid gap-2">
-              <span className="text-sm font-semibold text-ink">Fit note</span>
-              <input value={fitNote} onChange={(event) => setFitNote(event.target.value)} placeholder="Fit preference or tailor follow-up note" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <span className="text-sm font-semibold text-ink">Fit note <span className="font-normal text-ink/52">(min 20 chars)</span></span>
+              <textarea value={fitNote} onChange={(event) => setFitNote(event.target.value)} rows={3} maxLength={500} placeholder="e.g. I prefer extra room in the shoulders, shorter torso, or trousers sitting high on the waist." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
               <span className="text-xs leading-5 text-ink/52">
-                If you choose no measurements, tell the tailor what to ask before quoting. The tailor should confirm measurements before production starts.
+                No contact details. Describe fit, coverage, posture, or comfort preferences.
               </span>
             </label>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-ink">Fabric</span>
-              <select value={fabricSource} onChange={(event) => setFabricSource(event.target.value as typeof fabricSource)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-                <option value="TAILOR_SOURCES">Tailor sources fabric</option>
-                <option value="CUSTOMER_SUPPLIES">Customer supplies fabric</option>
-              </select>
-            </label>
-            <label className="grid gap-2 md:col-span-2">
-              <span className="text-sm font-semibold text-ink">Fabric details</span>
-              <input value={fabricDescription} onChange={(event) => setFabricDescription(event.target.value)} placeholder={fabricSource === 'TAILOR_SOURCES' ? 'Fabric type, color, weight, budget notes' : 'What you already have and how it will be handed off'} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            </label>
-            {fabricSource === 'TAILOR_SOURCES' ? (
+          <section className="grid gap-4 rounded-[8px] border border-ink/6 bg-bone/35 p-4">
+            <div className="grid gap-4 md:grid-cols-3">
               <label className="grid gap-2">
-                <span className="text-sm font-semibold text-ink">Fabric budget</span>
-                <input value={fabricBudget} onChange={(event) => setFabricBudget(event.target.value)} inputMode="decimal" placeholder={`Optional ${orderCurrency}`} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              </label>
-            ) : null}
-            {fabricSource === 'TAILOR_SOURCES' ? (
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-ink">Sourcing update</span>
-                <select value={fabricSourcingDeadlineDays} onChange={(event) => setFabricSourcingDeadlineDays(Number.parseInt(event.target.value, 10))} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-                  {[3, CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS, 7, 10].map((days) => (
-                    <option key={days} value={days}>{days} business days</option>
-                  ))}
+                <span className="text-sm font-semibold text-ink">Fabric</span>
+                <select value={fabricSource} onChange={(event) => setFabricSource(event.target.value as typeof fabricSource)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                  <option value="TAILOR_SOURCES">Tailor sources fabric</option>
+                  <option value="CUSTOMER_SUPPLIES">Customer supplies fabric</option>
                 </select>
               </label>
+              <label className="grid gap-2 md:col-span-2">
+                <span className="text-sm font-semibold text-ink">Fabric details</span>
+                <input value={fabricDescription} onChange={(event) => setFabricDescription(event.target.value)} placeholder={fabricSource === 'TAILOR_SOURCES' ? 'Fabric type, color, weight, and what the tailor should source' : 'Fabric type, color, yardage, and how it will be handed off'} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-ink">Fabric photos or videos</span>
+                <input
+                  ref={fabricMediaInputRef}
+                  type="file"
+                  accept="image/*,video/mp4,video/quicktime"
+                  multiple
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? [])
+                    if (files.length > MAX_WEB_FABRIC_REFERENCE_MEDIA) {
+                      setFabricReferenceFiles(files.slice(0, MAX_WEB_FABRIC_REFERENCE_MEDIA))
+                      setError('Only the first ' + MAX_WEB_FABRIC_REFERENCE_MEDIA + ' fabric media files were selected.')
+                      return
+                    }
+                    setFabricReferenceFiles(files)
+                    setError(null)
+                  }}
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink file:mr-4 file:rounded-[6px] file:border-0 file:bg-bone file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+                />
+                <span className="text-xs leading-5 text-ink/52">
+                  {fabricReferenceFiles.length}/{MAX_WEB_FABRIC_REFERENCE_MEDIA} media files selected. Use photos or short MP4/MOV clips.
+                </span>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-ink">Fabric reference links</span>
+                <textarea value={fabricReferenceLinksInput} onChange={(event) => setFabricReferenceLinksInput(event.target.value)} rows={3} placeholder="Instagram, Pinterest, or TikTok links for fabric references" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                <span className="text-xs leading-5 text-ink/52">
+                  Add links only for fabric references. Keep vendor contact details out of the brief.
+                </span>
+              </label>
+            </div>
+
+            {wearerMode === 'GROUP' ? (
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-ink">Group fabric plan</span>
+                <select value={bulkFabricMode} onChange={(event) => setBulkFabricMode(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                  <option value="">Choose fabric plan</option>
+                  {BULK_FABRIC_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <span className="text-xs leading-5 text-ink/52">
+                  Bulk orders need a clear sourcing plan so the tailor can protect dye lot, matching, and recipient differences.
+                </span>
+              </label>
             ) : null}
-          </div>
+
+            {fabricSource === 'TAILOR_SOURCES' ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <label className="grid gap-2">
+                    <span className="text-sm font-semibold text-ink">Fabric budget</span>
+                    <input value={fabricBudget} onChange={(event) => setFabricBudget(event.target.value)} inputMode="decimal" placeholder="Required budget" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-semibold text-ink">Budget currency</span>
+                    <select value={fabricBudgetCurrency} onChange={(event) => setFabricBudgetCurrency(normalizeAccountCurrency(event.target.value) ?? fabricBudgetCurrency)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                      {SUPPORTED_ACCOUNT_CURRENCIES.map((currency) => (
+                        <option key={currency} value={currency}>{currency}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-semibold text-ink">Sourcing update</span>
+                    <select value={fabricSourcingDeadlineDays} onChange={(event) => setFabricSourcingDeadlineDays(Number.parseInt(event.target.value, 10))} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                      {[3, CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS, 7, 10].map((days) => (
+                        <option key={days} value={days}>{days} business days</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-ink">If the exact fabric is unavailable</span>
+                  <select value={fabricSubstitutionPreference} onChange={(event) => setFabricSubstitutionPreference(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                    <option value="">Choose substitution rule</option>
+                    {FABRIC_SUBSTITUTION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs leading-5 text-ink/52">
+                    {selectedFabricSubstitution?.hint ?? 'This tells the tailor whether to ask before using a close alternative.'}
+                  </span>
+                </label>
+                <div className="grid gap-4 rounded-[8px] border border-ink/6 bg-white/70 p-4 md:grid-cols-2">
+                  <label className="grid gap-2">
+                    <span className="text-sm font-semibold text-ink">Suggested vendor</span>
+                    <input value={fabricVendorName} onChange={(event) => setFabricVendorName(event.target.value)} placeholder="Optional vendor or shop name" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-semibold text-ink">Vendor location</span>
+                    <input value={fabricVendorLocation} onChange={(event) => setFabricVendorLocation(event.target.value)} placeholder="Market, city, or area" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                  </label>
+                  <label className="grid gap-2 md:col-span-2">
+                    <span className="text-sm font-semibold text-ink">Vendor website or social link</span>
+                    <input value={fabricVendorLink} onChange={(event) => setFabricVendorLink(event.target.value)} placeholder="Optional link only, no phone or direct payment details" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                  </label>
+                  <label className="grid gap-2 md:col-span-2">
+                    <span className="text-sm font-semibold text-ink">Vendor notes</span>
+                    <textarea value={fabricVendorNotes} onChange={(event) => setFabricVendorNotes(event.target.value)} rows={3} maxLength={500} placeholder="Optional sourcing context, no contact details." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <p className="rounded-[8px] border border-needle/10 bg-white/70 px-4 py-3 text-sm leading-6 text-ink/66">
+                Add at least one clear fabric photo or video. The tailor will confirm fabric suitability and handoff inside the order before quoting or cutting.
+              </p>
+            )}
+          </section>
 
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Fulfillment</span>
-              <select value={deliveryMethod} onChange={(event) => setDeliveryMethod(event.target.value as typeof deliveryMethod)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={deliveryMethod} onChange={(event) => setDeliveryMethod(event.target.value as typeof deliveryMethod)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {deliveryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             {deliveryMethod === 'SHIPPING' ? (
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-ink">Shipping speed</span>
-                <select value={shippingPreference} onChange={(event) => setShippingPreference(event.target.value as typeof shippingPreference)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                <select value={shippingPreference} onChange={(event) => setShippingPreference(event.target.value as typeof shippingPreference)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                   <option value="STANDARD">Standard</option>
                   <option value="EXPRESS">Express</option>
                 </select>
@@ -9304,29 +12164,50 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
             ) : null}
             <label className="grid gap-2 md:col-span-2">
               <span className="text-sm font-semibold text-ink">Instructions</span>
-              <input value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)} placeholder="Gate, handoff, or shipping notes without contact details" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+              <input value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)} placeholder="Gate, handoff, or shipping notes without contact details" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </label>
           </div>
 
           {needsDeliveryDetails ? (
-            <div className="grid gap-4 rounded-[1.25rem] border border-ink/6 bg-bone/45 p-4 md:grid-cols-2">
-              <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="Recipient name" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} placeholder="Recipient phone" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} placeholder="Address" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2" />
-              <input value={deliveryCity} onChange={(event) => setDeliveryCity(event.target.value)} placeholder="City" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input value={deliveryRegion} onChange={(event) => setDeliveryRegion(event.target.value)} placeholder="State / region" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input value={deliveryPostalCode} onChange={(event) => setDeliveryPostalCode(event.target.value)} placeholder="Postal code" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-              <input value={deliveryCountryCode} onChange={(event) => setDeliveryCountryCode(event.target.value.toUpperCase().slice(0, 2))} placeholder="Country code" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <div className="grid gap-4 rounded-[8px] border border-ink/6 bg-bone/45 p-4 md:grid-cols-2">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">Recipient name</span>
+                <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">Recipient phone</span>
+                <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5 md:col-span-2">
+                <span className="text-xs font-semibold text-ink">Street address</span>
+                <input value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">City</span>
+                <input value={deliveryCity} onChange={(event) => setDeliveryCity(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">State / region</span>
+                <input value={deliveryRegion} onChange={(event) => setDeliveryRegion(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">Postal code</span>
+                <input value={deliveryPostalCode} onChange={(event) => setDeliveryPostalCode(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-ink">Country code <span className="font-normal text-ink/52">(2 letters, e.g. US, GB, NG)</span></span>
+                <input value={deliveryCountryCode} onChange={(event) => setDeliveryCountryCode(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              </label>
             </div>
           ) : null}
 
-          <label className="flex items-start gap-3 rounded-[1rem] border border-ink/8 bg-bone/55 p-4 text-sm leading-6 text-ink/66">
+          <label className="flex items-start gap-3 rounded-[8px] border border-ink/8 bg-bone/55 p-4 text-sm leading-6 text-ink/66">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} className="mt-1" />
             <span>
               This sends a brief for quote review, not an automatic charge. Pricing, payment, cancellation, and handoff terms stay inside Drapeon once the tailor responds.
             </span>
           </label>
-          <button type="button" onClick={submitBrief} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <button type="button" onClick={submitBrief} disabled={busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
             {busy ? 'Submitting brief...' : 'Submit custom brief'}
           </button>
         </div>
@@ -9343,7 +12224,7 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
   return (
     <Link
       href={`/account/orders/${order.id}`}
-      className="block overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_14px_40px_rgba(22,28,24,0.10)]"
+      className="block overflow-hidden rounded-[8px] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_14px_40px_rgba(22,28,24,0.10)]"
     >
       <div className="p-5">
         <div className="flex items-start gap-4">
@@ -9362,12 +12243,12 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
           </div>
           <div className="shrink-0 text-right">
             <p className="text-xl font-semibold text-ink">{orderAmount(order)}</p>
-            <p className="mt-0.5 text-xs text-ink/48">{cleanLabel(payment?.status, 'Payment pending')}</p>
+            <div className="mt-1 flex justify-end"><StatusChip status={payment?.status} fallback="Payment pending" /></div>
             <p className="mt-0.5 text-xs text-ink/36">{formatRelative(order.updated_at ?? order.created_at)}</p>
           </div>
         </div>
         {message ? (
-          <p className="mt-3 line-clamp-1 rounded-[0.7rem] bg-ink/4 px-3 py-2 text-sm text-ink/52">
+          <p className="mt-3 line-clamp-1 rounded-lg bg-ink/4 px-3 py-2 text-sm text-ink/52">
             {safeUserText(message.body, message.photo_url || message.voice_url ? 'Media attached.' : 'Message recorded.')}
           </p>
         ) : null}
@@ -9377,6 +12258,13 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
       </div>
     </Link>
   )
+}
+
+type ReviewMediaDraft = {
+  id: string
+  file: File
+  previewUrl: string
+  type: 'image' | 'video'
 }
 
 function OrderReviewPanel({
@@ -9392,23 +12280,78 @@ function OrderReviewPanel({
   const [rating, setRating] = useState(5)
   const [body, setBody] = useState('')
   const [tags, setTags] = useState('Fit matched, Clear communication')
+  const [reviewMediaDrafts, setReviewMediaDrafts] = useState<ReviewMediaDraft[]>([])
+  const reviewMediaDraftsRef = useRef<ReviewMediaDraft[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const readyForReview = isCustomerOrder(order, data) && ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage ?? '')
 
+  useEffect(() => {
+    reviewMediaDraftsRef.current = reviewMediaDrafts
+  }, [reviewMediaDrafts])
+
+  useEffect(() => () => {
+    for (const draft of reviewMediaDraftsRef.current) URL.revokeObjectURL(draft.previewUrl)
+  }, [])
+
   if (!readyForReview) return null
 
   if (existingReview) {
     return (
-      <section className="rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
+      <section className="rounded-[8px] border border-needle/12 bg-needle/8 p-6 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Review submitted</p>
-        <h2 className="mt-2 text-3xl text-ink">Thanks for rating this order.</h2>
+        <h2 className="mt-2 text-2xl font-semibold text-ink">Thanks for rating this order.</h2>
         <p className="mt-3 text-sm leading-7 text-ink/66">
           Your review helps future customers understand the tailor’s fit, communication, and delivery reliability.
         </p>
       </section>
     )
+  }
+
+  async function handleReviewMediaFiles(event: ChangeEvent<HTMLInputElement>) {
+    setError(null)
+    const files = Array.from(event.currentTarget.files ?? [])
+    event.currentTarget.value = ''
+    if (files.length === 0) return
+
+    const remainingSlots = MAX_REVIEW_MEDIA - reviewMediaDraftsRef.current.length
+    if (remainingSlots <= 0) {
+      setError('You can add up to ' + MAX_REVIEW_MEDIA + ' photos or videos to a review.')
+      return
+    }
+
+    const accepted: ReviewMediaDraft[] = []
+    const rejected: string[] = []
+    for (const file of files.slice(0, remainingSlots)) {
+      try {
+        const prepared = await prepareReviewMediaFile(file)
+        const normalizedType = prepared.type.split(';')[0]?.trim().toLowerCase()
+        accepted.push({
+          id: [prepared.name, prepared.size, Date.now(), accepted.length].join(':'),
+          file: prepared,
+          previewUrl: URL.createObjectURL(prepared),
+          type: isVideoContentType(normalizedType) ? 'video' : 'image',
+        })
+      } catch (mediaError) {
+        rejected.push(mediaError instanceof Error ? mediaError.message : 'That media file could not be prepared.')
+      }
+    }
+
+    if (accepted.length > 0) {
+      setReviewMediaDrafts((current) => [...current, ...accepted].slice(0, MAX_REVIEW_MEDIA))
+    }
+    if (rejected.length > 0) {
+      setError(Array.from(new Set(rejected)).join(' '))
+    }
+  }
+
+  function removeReviewMediaDraft(id: string) {
+    setReviewMediaDrafts((current) => {
+      const removed = current.find((draft) => draft.id === id)
+      if (removed) URL.revokeObjectURL(removed.previewUrl)
+      return current.filter((draft) => draft.id !== id)
+    })
   }
 
   async function submitReview() {
@@ -9425,6 +12368,13 @@ function OrderReviewPanel({
       'Drapeon customer'
     setBusy(true)
     try {
+      if (reviewMediaDraftsRef.current.length > 0 && !data.userId) {
+        throw new Error('Sign in again before attaching review media.')
+      }
+      const mediaUrls: string[] = []
+      for (const draft of reviewMediaDraftsRef.current) {
+        mediaUrls.push(await uploadPublicFile('review-media', 'reviews/' + order.id + '/' + data.userId, draft.file))
+      }
       await invokeAccountFunction('review-action', {
         action: 'submit-tailor-review',
         orderId: order.id,
@@ -9432,9 +12382,14 @@ function OrderReviewPanel({
         rating,
         body: body.trim() || undefined,
         tags: splitList(tags),
+        mediaUrls,
       })
       setSuccess('Review submitted. It may be held briefly if moderation needs to check the text.')
       setBody('')
+      setReviewMediaDrafts((current) => {
+        for (const draft of current) URL.revokeObjectURL(draft.previewUrl)
+        return []
+      })
       onRefresh()
     } catch (reviewError) {
       setError(friendlyActionError(reviewError, 'Review could not be submitted.'))
@@ -9445,7 +12400,7 @@ function OrderReviewPanel({
 
   const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent']
   return (
-    <section className="overflow-hidden rounded-[1.6rem] border border-ink/8 bg-white shadow-sm">
+    <section className="overflow-hidden rounded-[8px] border border-ink/8 bg-white shadow-sm">
       <div className="bg-needle/6 px-6 py-5">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Leave a review</p>
         <h2 className="mt-1 text-2xl font-semibold text-ink">Rate this tailor</h2>
@@ -9474,13 +12429,53 @@ function OrderReviewPanel({
           </div>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Tags <span className="font-normal text-ink/40">(comma-separated)</span></span>
-            <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Fit matched, Clear communication" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Fit matched, Clear communication" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
           </label>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Review <span className="font-normal text-ink/40">(optional)</span></span>
-            <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} maxLength={1000} placeholder="Share your experience..." className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} maxLength={1000} placeholder="Share your experience..." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
           </label>
-          <button type="button" onClick={submitReview} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-bone/35 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-ink">Photos or video</p>
+                <p className="mt-0.5 text-xs text-ink/48">Add up to {MAX_REVIEW_MEDIA}. Videos must be 30 seconds or less.</p>
+              </div>
+              <label className={`inline-flex cursor-pointer items-center rounded-full border border-needle/20 px-4 py-2 text-sm font-semibold text-needle transition hover:bg-needle/8 ${reviewMediaDrafts.length >= MAX_REVIEW_MEDIA || busy ? 'pointer-events-none opacity-45' : ''}`}>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+                  multiple
+                  className="sr-only"
+                  disabled={reviewMediaDrafts.length >= MAX_REVIEW_MEDIA || busy}
+                  onChange={(event) => { void handleReviewMediaFiles(event) }}
+                />
+                {reviewMediaDrafts.length > 0 ? 'Add more' : 'Add media'}
+              </label>
+            </div>
+            {reviewMediaDrafts.length > 0 ? (
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {reviewMediaDrafts.map((draft) => (
+                  <div key={draft.id} className="relative h-24 w-24 shrink-0 overflow-hidden rounded-[8px] bg-ink/8">
+                    {draft.type === 'video' ? (
+                      <MutedVideo src={draft.previewUrl} className="h-full w-full object-cover" autoPlay={false} loop={false} showMuteToggle={false} />
+                    ) : (
+                      <img src={draft.previewUrl} alt="Review attachment preview" className="h-full w-full object-cover" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeReviewMediaDraft(draft.id)}
+                      className="absolute right-1 top-1 rounded-full bg-white/90 px-2 py-0.5 text-xs font-bold text-ink shadow-sm"
+                      aria-label="Remove review media"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <button type="button" onClick={submitReview} disabled={busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
             {busy ? 'Submitting...' : 'Submit review'}
           </button>
         </div>
@@ -9516,6 +12511,60 @@ function RenderOrders({ data }: { data: OrdersRenderData }) {
     ['completed', 'Completed', pastOrders.length],
     ['all', 'All', orderRows.length],
   ]
+  const columns = useMemo<ColumnDef<AccountOrder>[]>(() => [
+    {
+      id: 'order',
+      accessorFn: (order) => orderTitle(order),
+      header: 'Order',
+      cell: ({ row }) => (
+        <div className="min-w-52">
+          <Link href={`/account/orders/${row.original.id}`} className="font-semibold text-ink hover:text-needle hover:underline">
+            {orderTitle(row.original)}
+          </Link>
+          <p className="mt-1 text-xs text-ui-subtle">{partyName(row.original, data.userId)}</p>
+        </div>
+      ),
+    },
+    {
+      id: 'stage',
+      accessorFn: (order) => order.stage ?? '',
+      header: 'Status',
+      cell: ({ row }) => <StagePill stage={row.original.stage} />,
+    },
+    {
+      id: 'fulfillment',
+      accessorFn: (order) => cleanLabel(order.delivery_method, 'Fulfillment'),
+      header: 'Fulfillment',
+      cell: ({ row }) => <span className="text-ui-subtle">{cleanLabel(row.original.delivery_method, 'Fulfillment')}</span>,
+    },
+    {
+      id: 'payment',
+      accessorFn: (order) => latestPayment(order.id, data.payments)?.status ?? '',
+      header: 'Payment',
+      cell: ({ row }) => <StatusChip status={latestPayment(row.original.id, data.payments)?.status} fallback="Payment pending" />,
+    },
+    {
+      id: 'amount',
+      accessorFn: (order) => order.quoted_amount ?? order.total_amount ?? 0,
+      header: 'Amount',
+      cell: ({ row }) => <span className="whitespace-nowrap font-semibold">{orderAmount(row.original)}</span>,
+    },
+    {
+      id: 'updated',
+      accessorFn: (order) => timestampMs(order.updated_at ?? order.created_at),
+      header: 'Updated',
+      cell: ({ row }) => <span className="whitespace-nowrap text-ui-subtle">{formatRelative(row.original.updated_at ?? row.original.created_at)}</span>,
+    },
+    {
+      id: 'action',
+      enableSorting: false,
+      header: '',
+      cell: ({ row }) => {
+        const action = orderActionCopy(row.original, data)
+        return action ? <Badge tone="warning">{action}</Badge> : null
+      },
+    },
+  ], [data])
   return (
     <div className="grid gap-4">
       {/* Stats strip */}
@@ -9525,7 +12574,7 @@ function RenderOrders({ data }: { data: OrdersRenderData }) {
           ['Needs action', actionOrders.length],
           ['Completed', pastOrders.length],
         ].map(([label, count]) => (
-          <div key={String(label)} className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
+          <div key={String(label)} className="rounded-[8px] border border-ui-border bg-white px-4 py-3">
             <p className="text-2xl font-semibold text-ink">{String(count)}</p>
             <p className="text-xs text-ink/52">{String(label)}</p>
           </div>
@@ -9533,34 +12582,31 @@ function RenderOrders({ data }: { data: OrdersRenderData }) {
       </div>
 
       {/* Search */}
-      <input
+      <Input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search orders by title, party, or stage..."
-        className="rounded-full border border-ink/10 bg-white px-5 py-3 text-sm text-ink shadow-sm outline-none focus:border-needle/40"
+        placeholder="Search orders by title, party, or status"
+        className="h-11"
       />
 
       {/* Filter tabs */}
-      <div className="flex gap-1.5 overflow-x-auto rounded-[1.25rem] border border-ink/6 bg-white/72 p-1.5 [scrollbar-width:none]">
+      <div className="flex gap-1.5 overflow-x-auto rounded-[8px] border border-ui-border bg-white p-1.5 [scrollbar-width:none]">
         {tabs.map(([key, label, count]) => (
-          <button
+          <Button
             key={key}
-            type="button"
             onClick={() => setFilter(key)}
-            className={
-              filter === key
-                ? 'whitespace-nowrap rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white'
-                : 'whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold text-ink/58 transition hover:bg-ink/5 hover:text-ink'
-            }
+            variant={filter === key ? 'primary' : 'ghost'}
+            size="sm"
+            className="whitespace-nowrap"
           >
             {label}
             {count > 0 ? <span className={`ml-1.5 ${filter === key ? 'opacity-70' : 'text-ink/40'}`}>{count}</span> : null}
-          </button>
+          </Button>
         ))}
       </div>
 
       {/* Order list */}
-      <div className="grid gap-3">
+      <div className="grid gap-3 md:hidden">
         {visibleOrders.length === 0 ? (
           <EmptyState
             title={search.trim() ? 'No orders match that search.' : filter === 'action' ? 'No orders need action.' : filter === 'completed' ? 'No completed orders yet.' : 'No orders here.'}
@@ -9574,6 +12620,11 @@ function RenderOrders({ data }: { data: OrdersRenderData }) {
           visibleOrders.map((order) => <OrderCard key={order.id} order={order} data={data} />)
         )}
       </div>
+      {visibleOrders.length > 0 ? (
+        <div className="hidden md:block">
+          <DataTable columns={columns} data={visibleOrders} emptyMessage="No orders match this view." />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -9594,6 +12645,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
   })
   const payments = data.payments.filter((payment) => payment.order_id === order.id)
   const messages = data.messages.filter((message) => message.order_id === order.id)
+  const supportMeta = parseOrderSupportMeta(order.special_note)
   const proofEvidence = productionEvidenceFor(order.id, data.productionEvidence)
   const proofMediaUrls = Array.from(new Set(
     proofEvidence
@@ -9601,6 +12653,59 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       .map((src) => safeMediaUrl(src))
       .filter((src): src is string => !!src),
   ))
+  const customDetail = data.customOrderDetail
+    ? {
+        garmentTypeOther: data.customOrderDetail.garment_type_other ?? null,
+        genderPresentation: data.customOrderDetail.gender_presentation ?? null,
+        socialReferenceLinks: stringList(data.customOrderDetail.social_reference_links),
+        styleNotes: data.customOrderDetail.style_notes ?? null,
+        bodyNote: data.customOrderDetail.body_note ?? null,
+        fabricDescription: data.customOrderDetail.fabric_description ?? null,
+        fabricBudgetAmount: data.customOrderDetail.fabric_budget_amount ?? null,
+        fabricBudgetCurrency: data.customOrderDetail.fabric_budget_currency ?? null,
+        fabricSourcingDeadlineDays: data.customOrderDetail.fabric_sourcing_deadline_days ?? null,
+        fabricSourcingDeadlineAt: data.customOrderDetail.fabric_sourcing_deadline_at ?? null,
+        fabricApprovalStatus: data.customOrderDetail.fabric_approval_status ?? null,
+        shippingPreference: data.customOrderDetail.shipping_preference ?? null,
+        deliveryInstructions: data.customOrderDetail.delivery_instructions ?? null,
+        targetDeliveryDate: data.customOrderDetail.target_delivery_date ?? null,
+      }
+    : null
+  const briefDossier = buildBriefDossier(
+    {
+      orderKind: order.order_kind,
+      garmentType: order.garment_type,
+      garmentDescription: order.garment_description,
+      itemTitle: order.item_title,
+      itemSize: order.item_size,
+      occasion: order.occasion,
+      stage: order.stage,
+      quotedAmount: order.quoted_amount,
+      quotedCurrency: order.quoted_currency ?? order.currency,
+      quotedCompletionDate: order.quoted_completion_date,
+      deadline: order.deadline,
+      fabricSource: order.fabric_source,
+      deliveryMethod: order.delivery_method,
+      deliveryAddress: order.delivery_address ?? null,
+      recipientName: order.recipient_name ?? null,
+      recipientPhone: order.recipient_phone ?? null,
+      fabricTracking: order.fabric_tracking,
+      trackingNumber: order.tracking_number ?? null,
+      carrier: order.carrier ?? null,
+      fulfillmentProvider: order.fulfillment_provider ?? null,
+      fulfillmentReference: order.fulfillment_reference ?? null,
+      fulfillmentContactName: order.fulfillment_contact_name ?? null,
+      fulfillmentContactPhone: order.fulfillment_contact_phone ?? null,
+      collectionCode: order.collection_code,
+      referencePhotos: stringList(order.reference_photos),
+      proofMediaUrls,
+      messageCount: messages.length,
+      supportMeta: supportMeta as Record<string, unknown>,
+      customDetail,
+      measurementSnapshot: order.customer_measurements_snapshot ?? null,
+    },
+    { label: cleanLabel, date: formatDate, money: formatMoney },
+  )
   const viewerIsCustomer = isCustomerOrder(order, data)
   const viewerIsTailor = isTailorOrder(order, data)
   const customerCanCheckout = viewerIsCustomer && isPayableOrder(order)
@@ -9626,20 +12731,20 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       ? 'Quotes, production stages, proof media, messages, and support context stay attached to this order.'
       : 'Payment, messages, consultation requests, stage updates, and proof media stay attached to this order. Drapeon Vision capture is available in the app when body scanning is needed.'
   const nextActionPrimary = customerCanCheckout ? (
-      <Link href={`/account/checkout/${order.id}`} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
+      <Link href={`/account/checkout/${order.id}`} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white">
         Pay now
       </Link>
   ) : viewerIsTailor && (tailorCanQuote || tailorCanAdvance) ? (
-    <a href="#tailor-actions" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
+    <a href="#tailor-actions" className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white">
       Work this order
     </a>
   ) : (
     <OpenAppButton label="Open order in app" />
   )
   const nextActionSecondary = customerCanCheckout ? (
-    <OpenAppButton label="Open order in app" className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink" />
+    <OpenAppButton label="Open order in app" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink" />
   ) : (
-    <Link href="/account/support" className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink">
+    <Link href="/account/support" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink">
       Open support
     </Link>
   )
@@ -9647,14 +12752,14 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
   return (
     <div className="grid gap-6">
       <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
+        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{cleanLabel(order.order_kind, 'Order')}</p>
-          <h2 className="mt-3 text-4xl text-ink">{orderTitle(order)}</h2>
+          <h2 className="mt-3 text-2xl font-semibold text-ink sm:text-3xl">{orderTitle(order)}</h2>
           <p className="mt-3 text-sm leading-7 text-ink/66">
             {safeUserText(order.garment_description || order.special_note, 'The app brief carries full order details and proof media.')}
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <SummaryLine label="Status" value={cleanLabel(order.stage, 'In progress')} />
+            <SummaryLine label="Status" value={<StagePill stage={order.stage} />} />
             <SummaryLine label="Amount" value={orderAmount(order)} />
             <SummaryLine label="Fulfillment" value={cleanLabel(order.delivery_method, 'Fulfillment')} />
             <SummaryLine label="Due date" value={formatDate(order.quoted_completion_date ?? order.deadline) ?? 'Pending'} />
@@ -9663,9 +12768,9 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
             <StageTimeline order={order} />
           </div>
         </div>
-        <div className="rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
+        <div className="rounded-[8px] border border-needle/12 bg-needle/8 p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Next best action</p>
-          <h3 className="mt-3 text-3xl text-ink">{nextActionTitle}</h3>
+          <h3 className="mt-3 text-2xl font-semibold text-ink">{nextActionTitle}</h3>
           <p className="mt-3 text-sm leading-7 text-ink/66">
             {nextActionBody}
           </p>
@@ -9680,25 +12785,25 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       <CustomerOrderActions order={order} data={data} onRefresh={onRefresh} />
 
       {(paymentFailed || shouldShowHandoffState || autoRelease) ? (
-        <section className="grid gap-4 rounded-[1.6rem] border border-rust/14 bg-white/86 p-6 shadow-sm">
+        <section className="grid gap-4 rounded-[8px] border border-rust/14 bg-white/86 p-6 shadow-sm">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rust">Order safeguards</p>
-            <h2 className="mt-2 text-3xl text-ink">Important order state.</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Important order state.</h2>
           </div>
           <div className="grid gap-3 lg:grid-cols-3">
             {paymentFailed ? (
-              <div className="rounded-[1.1rem] border border-rust/18 bg-rust/8 p-4">
+              <div className="rounded-[8px] border border-rust/18 bg-rust/8 p-4">
                 <h3 className="font-semibold text-ink">Payment needs attention</h3>
                 <p className="mt-2 text-sm leading-6 text-ink/62">
                   The latest payment attempt did not complete. Retry checkout before production continues.
                 </p>
-                <Link href={accountRoute(`/account/checkout/${order.id}`)} className="mt-4 inline-flex rounded-full bg-rust px-4 py-2.5 text-sm font-semibold text-white">
+                <Link href={accountRoute(`/account/checkout/${order.id}`)} className="mt-4 inline-flex rounded-lg bg-rust px-4 py-2.5 text-sm font-semibold text-white">
                   Retry payment
                 </Link>
               </div>
             ) : null}
             {shouldShowHandoffState ? (
-              <div className="rounded-[1.1rem] border border-needle/14 bg-needle/8 p-4">
+              <div className="rounded-[8px] border border-needle/14 bg-needle/8 p-4">
                 <h3 className="font-semibold text-ink">Handoff and pickup</h3>
                 <p className="mt-2 text-sm leading-6 text-ink/62">
                   {order.delivery_method === 'LOCAL_COLLECTION'
@@ -9708,7 +12813,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
                     : 'Track delivery here and raise a concern before auto-release if something is wrong.'}
                 </p>
                 {collectionCode ? (
-                  <p className="mt-4 rounded-[0.9rem] bg-white px-4 py-3 text-center text-2xl font-semibold tracking-[0.2em] text-needle">
+                  <p className="mt-4 rounded-[8px] bg-white px-4 py-3 text-center text-2xl font-semibold tracking-[0.2em] text-needle">
                     {collectionCode}
                   </p>
                 ) : null}
@@ -9718,12 +12823,12 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
               </div>
             ) : null}
             {autoRelease ? (
-              <div className="rounded-[1.1rem] border border-ink/8 bg-bone/60 p-4">
+              <div className="rounded-[8px] border border-ink/8 bg-bone/60 p-4">
                 <h3 className="font-semibold text-ink">Auto-release timing</h3>
                 <p className="mt-2 text-sm leading-6 text-ink/62">
                   Unless a concern is raised, this order can auto-confirm {autoRelease}.
                 </p>
-                <Link href={accountRoute(`/account/support?orderId=${order.id}`)} className="mt-4 inline-flex rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
+                <Link href={accountRoute(`/account/support?orderId=${order.id}`)} className="mt-4 inline-flex rounded-lg border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
                   Raise a concern
                 </Link>
               </div>
@@ -9733,8 +12838,8 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       ) : null}
 
       {order.customer_id === data.userId && isPayableOrder(order) ? (
-        <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Checkout</h2>
+        <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+          <h2 className="text-2xl font-semibold text-ink">Checkout</h2>
           <p className="mt-3 text-sm leading-7 text-ink/66">
             Start the real provider checkout from web. If this is an extra delivery or shipping fee, Drapeon uses the existing fulfillment payment request.
           </p>
@@ -9747,87 +12852,89 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       <TailorOrderActions order={order} data={data} onRefresh={onRefresh} />
       <MaterialAdvancePanel order={order} data={data} onRefresh={onRefresh} />
 
-      <section className="grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Brief</h2>
-          <div className="mt-5 grid gap-3">
-            <SummaryLine label="Party" value={partyName(order, data.userId)} />
-            <SummaryLine label="Garment" value={safeUserText(order.garment_type || order.item_title, 'Garment')} />
-            <SummaryLine label="Fabric" value={cleanLabel(order.fabric_source, 'Fabric source')} />
-            <SummaryLine label="Tracking" value={order.fabric_tracking ? 'Tracking added in app' : 'No tracking added'} />
+      <Surface className="p-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Order brief</p>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">{briefDossier.title}</h2>
           </div>
+          <p className="text-sm font-semibold text-ink/48">{briefDossier.sections.length} sections</p>
         </div>
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Timeline</h2>
-          <div className="mt-5 grid gap-3">
-            {updates.length === 0 ? (
-              <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
-                No production updates yet. Stage photos and videos appear here after the tailor posts them from web or the app.
-              </p>
-            ) : (
-              updates.map((update) => (
-                <div key={update.id} className="rounded-[1rem] border border-ink/6 bg-white p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="mt-1 h-3 w-3 rounded-full bg-needle" />
-                    <div>
-                      <h3 className="font-semibold text-ink">{cleanLabel(update.stage, 'Stage update')}</h3>
-                      <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(update.note, 'Stage updated.')}</p>
-                      <p className="mt-2 text-xs text-ink/46">{formatRelative(update.created_at)}</p>
-                    </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {briefDossier.sections.map((section) => <BriefDossierSectionCard key={section.id} section={section} />)}
+        </div>
+      </Surface>
+
+      <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+        <h2 className="text-2xl font-semibold text-ink">Timeline</h2>
+        <div className="mt-5 grid gap-3">
+          {updates.length === 0 ? (
+            <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+              No production updates yet. Stage photos and videos appear here after the tailor posts them from web or the app.
+            </p>
+          ) : (
+            updates.map((update) => (
+              <div key={update.id} className="rounded-[8px] border border-ink/6 bg-white p-4">
+                <div className="flex items-start gap-3">
+                  <span className="mt-1 h-3 w-3 rounded-full bg-needle" />
+                  <div>
+                    <StatusChip status={update.stage} fallback="Stage update" />
+                    <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(update.note, 'Stage updated.')}</p>
+                    <p className="mt-2 text-xs text-ink/46">{formatRelative(update.created_at)}</p>
                   </div>
-                  {update.photo_url ? <div className="mt-3 max-w-64"><PhotoTile src={update.photo_url} label="Stage media" /></div> : null}
                 </div>
-              ))
-            )}
-          </div>
-          {proofMediaUrls.length > 0 ? (
-            <div className="mt-5 border-t border-ink/6 pt-5">
-              <div className="flex items-center justify-between gap-4">
-                <h3 className="font-semibold text-ink">Proof media</h3>
-                <p className="text-xs font-semibold text-ink/48">{proofMediaUrls.length} item{proofMediaUrls.length === 1 ? '' : 's'}</p>
+                {update.photo_url ? <div className="mt-3 max-w-64"><PhotoTile src={update.photo_url} label="Stage media" /></div> : null}
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                {proofMediaUrls.slice(0, 6).map((src, index) => (
-                  <PhotoTile key={`${src}-${index}`} src={src} label={`Production proof ${index + 1}`} />
-                ))}
-              </div>
-            </div>
-          ) : null}
+            ))
+          )}
         </div>
+        {proofMediaUrls.length > 0 ? (
+          <div className="mt-5 border-t border-ink/6 pt-5">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="font-semibold text-ink">Proof media</h3>
+              <p className="text-xs font-semibold text-ink/48">{proofMediaUrls.length} item{proofMediaUrls.length === 1 ? '' : 's'}</p>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {proofMediaUrls.slice(0, 6).map((src, index) => (
+                <PhotoTile key={src + '-' + index} src={src} label={'Production proof ' + (index + 1)} />
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="grid gap-5 lg:grid-cols-2">
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Payments</h2>
+        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+          <h2 className="text-2xl font-semibold text-ink">Payments</h2>
           <div className="mt-5 grid gap-3">
             {payments.length === 0 ? (
-              <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No payment record loaded for this order yet.</p>
+              <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No payment record loaded for this order yet.</p>
             ) : (
               payments.map((payment) => (
                 <SummaryLine
                   key={payment.id}
                   label={cleanLabel(payment.phase, 'Payment')}
-                  value={`${formatMoney(payment.amount, payment.currency)} · ${cleanLabel(payment.status, 'Pending')}`}
+                  value={<span className="flex flex-wrap items-center gap-2">{formatMoney(payment.amount, payment.currency)} <StatusChip status={payment.status} fallback="Pending" /></span>}
                 />
               ))
             )}
           </div>
         </div>
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Messages</h2>
+        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+          <h2 className="text-2xl font-semibold text-ink">Messages</h2>
           <div className="mt-5 grid gap-3">
             {messages.length === 0 ? (
-              <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No messages on this order yet.</p>
+              <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No messages on this order yet.</p>
             ) : (
               messages.slice(0, 4).map((message) => (
-                <div key={message.id} className="rounded-[1rem] border border-ink/6 bg-white p-4">
+                <div key={message.id} className="rounded-[8px] border border-ink/6 bg-white p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">
                     {message.sender_id === data.userId ? 'You' : 'Other party'} · {formatMessageRelative(message.created_at)}
                   </p>
                   <MessageContent message={message} />
                   {message.sender_id === data.userId ? (
                     <p className="mt-3 text-xs font-semibold text-ink/42">
-                      {message.read_at ? `Read ${formatMessageRelative(message.read_at)}` : 'Sent'}
+                      {message.read_at ? `✓✓ Read ${formatMessageRelative(message.read_at)}` : '✓ Sent'}
                     </p>
                   ) : null}
                 </div>
@@ -9991,16 +13098,13 @@ function AccountDesktopAlertsPrompt({
   if (permission !== 'default') return null
 
   return (
-    <div className="mb-4 flex flex-col gap-3 rounded-[1rem] border border-needle/12 bg-white/82 px-4 py-3 text-sm text-ink/66 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+    <Surface className="mb-4 flex flex-col gap-3 px-4 py-3 text-sm text-ink/66 sm:flex-row sm:items-center sm:justify-between">
       <span>Enable desktop alerts for order messages, stage changes, and payment updates while web is open.</span>
-      <button
-        type="button"
-        onClick={onEnable}
-        className="inline-flex shrink-0 items-center justify-center rounded-full bg-needle px-4 py-2 text-xs font-semibold text-white transition hover:bg-needle-600"
-      >
+      <Button onClick={onEnable} size="sm" className="shrink-0">
+        <BellRing />
         Enable alerts
-      </button>
-    </div>
+      </Button>
+    </Surface>
   )
 }
 
@@ -10028,14 +13132,22 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   const [search, setSearch] = useState('')
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(() => requestedOrderId)
   const [openReactionMessageId, setOpenReactionMessageId] = useState<string | null>(null)
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null)
+  const [replyingTo, setReplyingTo] = useState<AccountMessage | null>(null)
+  const [editingMessage, setEditingMessage] = useState<AccountMessage | null>(null)
   const [archiveRevision, setArchiveRevision] = useState(0)
   const [markingAllRead, setMarkingAllRead] = useState(false)
   const [localReadIds, setLocalReadIds] = useState<Set<string>>(new Set())
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => currentNotificationPermission())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set())
+  const [counterpartyIsTyping, setCounterpartyIsTyping] = useState(false)
+  const [counterpartyPresence, setCounterpartyPresence] = useState<{ online: boolean; lastSeen: Date | null }>({ online: false, lastSeen: null })
   const notificationPermissionRef = useRef<NotificationPermission | 'unsupported'>('unsupported')
   const markedReadRef = useRef<Set<string>>(new Set())
+  const orderChannelRef = useRef<RealtimeChannel | null>(null)
+  const typingClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const messageListRef = useRef<HTMLDivElement | null>(null)
   const orderIds = useMemo(() => data.orders.map((order) => order.id), [data.orders])
   const ordersById = useMemo(() => new Map(data.orders.map((order) => [order.id, order])), [data.orders])
   const archiveStorageKey = data.userId ? `drapeon:web:archived-message-orders:${data.userId}` : null
@@ -10140,6 +13252,63 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     }
   }, [data.userId, orderIds, ordersById])
 
+  // Per-order channel for presence + typing (torn down when thread changes)
+  useEffect(() => {
+    if (!selectedOrderId || !data.userId) {
+      const resetTimer = window.setTimeout(() => {
+        setCounterpartyIsTyping(false)
+        setCounterpartyPresence({ online: false, lastSeen: null })
+      }, 0)
+      return () => window.clearTimeout(resetTimer)
+    }
+
+    const supabaseClient = createClient()
+    const ch = supabaseClient
+      .channel(`messages:${selectedOrderId}`)
+      .on('broadcast', { event: 'typing' }, ({ payload }: { payload: { userId: string; isTyping: boolean } }) => {
+        if (payload.userId === data.userId) return
+        setCounterpartyIsTyping(!!payload.isTyping)
+        if (typingClearTimerRef.current) clearTimeout(typingClearTimerRef.current)
+        if (payload.isTyping) {
+          typingClearTimerRef.current = setTimeout(() => setCounterpartyIsTyping(false), 4000)
+        }
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = ch.presenceState<{ userId: string }>()
+        const others = Object.values(state).flat().filter((p) => p.userId !== data.userId)
+        const isOnline = others.length > 0
+        setCounterpartyPresence((prev) => ({
+          online: isOnline,
+          lastSeen: isOnline ? null : (prev.online ? new Date() : prev.lastSeen),
+        }))
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await ch.track({ userId: data.userId })
+        }
+      })
+
+    orderChannelRef.current = ch
+
+    function handleVisibility() {
+      if (document.hidden) {
+        void ch.untrack()
+      } else {
+        void ch.track({ userId: data.userId! })
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      if (typingClearTimerRef.current) clearTimeout(typingClearTimerRef.current)
+      void supabaseClient.removeChannel(ch)
+      orderChannelRef.current = null
+      setCounterpartyIsTyping(false)
+      setCounterpartyPresence({ online: false, lastSeen: null })
+    }
+  }, [selectedOrderId, data.userId])
+
   function persistArchived(next: Set<string>) {
     if (archiveStorageKey && typeof window !== 'undefined') {
       window.localStorage.setItem(archiveStorageKey, JSON.stringify([...next]))
@@ -10235,6 +13404,26 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   const selectedMessages = selectedThread
     ? [...selectedThread.messages].sort((a, b) => timestampMs(a.created_at) - timestampMs(b.created_at))
     : []
+  const messageVirtualizer = useVirtualizer({
+    count: selectedMessages.length,
+    getScrollElement: () => messageListRef.current,
+    estimateSize: (index) => {
+      const message = selectedMessages[index]
+      if (message?.voice_url) return 112
+      if (message?.photo_url) return 300
+      return 86
+    },
+    getItemKey: (index) => selectedMessages[index]?.id ?? index,
+    overscan: 8,
+  })
+
+  useEffect(() => {
+    if (!selectedOrderId || selectedMessages.length === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      messageVirtualizer.scrollToIndex(selectedMessages.length - 1, { align: 'end' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [messageVirtualizer, selectedMessages.length, selectedOrderId])
   const selectedUnreadIds = selectedMessages
     .filter((message) => data.userId && message.sender_id !== data.userId && !message.read_at && !localReadIds.has(message.id))
     .map((message) => message.id)
@@ -10382,6 +13571,106 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     })
   }
 
+  async function handleUnsend(message: AccountMessage) {
+    try {
+      await invokeAccountFunction('message-action', { action: 'unsend', messageId: message.id })
+    } catch (err) {
+      const msg = friendlyActionError(err, 'Could not unsend this message. Please try again.')
+      if (/15 minutes/i.test(msg)) {
+        alert('Messages can only be unsent within 15 minutes of sending.')
+      } else {
+        alert(msg)
+      }
+    }
+  }
+
+  function renderMessageBubble(message: AccountMessage) {
+    const mine = message.sender_id === data.userId
+    const isDeleted = Boolean(message.is_deleted)
+    const replyTarget = message.reply_to_id
+      ? selectedMessages.find((candidate) => candidate.id === message.reply_to_id) ?? null
+      : null
+    const isHovered = hoveredMessageId === message.id
+    const canUnsend = mine && !isDeleted && (() => {
+      const sentAt = parseDateValue(message.created_at)
+      return sentAt ? Date.now() - sentAt.getTime() < 15 * 60 * 1000 : false
+    })()
+    const canEdit = mine && !isDeleted && message.type === 'TEXT'
+    const isVoiceMessage = !isDeleted && (message.type === 'VOICE' || Boolean(message.voice_url))
+    const hasMedia = Boolean(message.photo_url)
+
+    return (
+      <div
+        className={`group relative flex w-full px-3 py-1.5 sm:px-5 ${mine ? 'justify-end' : 'justify-start'}`}
+        onMouseEnter={() => setHoveredMessageId(message.id)}
+        onMouseLeave={() => setHoveredMessageId(null)}
+      >
+        {isHovered && !isDeleted ? (
+          <div className={`absolute top-2 z-10 flex items-center gap-1 rounded-[8px] border border-ui-border bg-white p-1 shadow-md ${mine ? 'right-[calc(min(76%,42rem)+1.75rem)]' : 'left-[calc(min(76%,42rem)+1.75rem)]'}`}>
+            <IconButton size="icon-sm" variant="ghost" label="Reply" onClick={() => setReplyingTo(message)}>
+              <Reply />
+            </IconButton>
+            {canEdit ? (
+              <IconButton size="icon-sm" variant="ghost" label="Edit message" onClick={() => setEditingMessage(message)}>
+                <Pencil />
+              </IconButton>
+            ) : null}
+            {canUnsend ? (
+              <IconButton size="icon-sm" variant="ghost" label="Unsend message" className="text-rust hover:text-rust" onClick={() => { void handleUnsend(message) }}>
+                <Trash2 />
+              </IconButton>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div
+          className={`${isVoiceMessage ? 'w-[22rem] max-w-[84%]' : hasMedia ? 'w-[28rem] max-w-[84%]' : 'w-fit max-w-[76%]'} min-w-0 ${mine ? 'rounded-[8px] rounded-br-[3px] bg-needle px-3.5 py-2.5' : 'rounded-[8px] rounded-bl-[3px] border border-ui-border bg-white px-3.5 py-2.5 shadow-sm'} ${isDeleted ? 'opacity-60' : ''}`}
+        >
+          {replyTarget ? (
+            <div className={`mb-2 rounded-[6px] border-l-2 px-2 py-1.5 ${mine ? 'border-white/35 bg-white/10' : 'border-needle/45 bg-ui-muted'}`}>
+              <p className={`text-[0.68rem] font-semibold ${mine ? 'text-white/78' : 'text-ink/62'}`}>
+                {replyTarget.sender_name ?? 'Unknown'}
+              </p>
+              <p className={`line-clamp-2 text-xs leading-4 ${mine ? 'text-white/62' : 'text-ui-subtle'}`}>
+                {replyTarget.is_deleted
+                  ? 'This message was unsent.'
+                  : replyTarget.type === 'PHOTO'
+                    ? 'Photo attachment'
+                    : replyTarget.type === 'VOICE'
+                      ? 'Voice note'
+                      : safeUserText(replyTarget.body, '')}
+              </p>
+            </div>
+          ) : null}
+
+          {isDeleted ? (
+            <p className={`text-sm italic leading-6 ${mine ? 'text-white/64' : 'text-ui-subtle'}`}>This message was unsent.</p>
+          ) : (
+            <div className={mine ? '[&_p]:text-white/92 [&_a]:text-white [&_audio]:opacity-90' : ''}>
+              <MessageContent message={message} />
+            </div>
+          )}
+
+          <div className={`mt-1.5 flex items-center justify-end gap-1 text-[0.68rem] ${mine ? 'text-white/58' : 'text-ink/38'}`} title={parseDateValue(message.created_at)?.toISOString()}>
+            {message.edited_at && !isDeleted ? <span className="italic">edited</span> : null}
+            <span>{formatMessageRelative(message.created_at)}</span>
+            {mine ? <CheckCheck className={`size-3.5 ${message.read_at ? 'opacity-100' : 'opacity-55'}`} aria-label={message.read_at ? 'Read' : 'Sent'} /> : null}
+          </div>
+          {!isDeleted ? (
+            <MessageReactionBar
+              reactions={reactionsByMessageId.get(message.id) ?? []}
+              userId={data.userId}
+              mine={mine}
+              open={openReactionMessageId === message.id}
+              onOpenChange={(open) => setOpenReactionMessageId(open ? message.id : null)}
+              onToggle={(emoji) => { void toggleMessageReaction(message, emoji) }}
+            />
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
   if (threads.length === 0) {
     return (
       <EmptyState
@@ -10393,7 +13682,7 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   }
 
   return (
-    <section className="overflow-hidden rounded-[1.2rem] border border-ink/8 bg-white/86 shadow-sm lg:flex lg:h-[calc(100vh-2rem)]">
+    <section className="overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm lg:flex lg:h-[calc(100vh-2rem)]">
 
       {/* ── Sidebar ── */}
       {!sidebarCollapsed ? (
@@ -10401,12 +13690,12 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
           {/* Search + filters */}
           <div className="border-b border-ink/8 p-3">
             <label className="sr-only" htmlFor="message-search">Search conversations</label>
-            <input
+            <Input
               id="message-search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="w-full rounded-[0.7rem] border border-ink/8 bg-white/80 px-3 py-2 text-sm text-ink outline-none placeholder:text-ink/36 focus:border-needle/40"
-              placeholder="Search..."
+              className="bg-ui-canvas"
+              placeholder="Search conversations"
             />
             <div className="mt-2 flex gap-1">
               {(['active', 'completed', 'archived'] as const).map((key) => {
@@ -10417,11 +13706,12 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
                 }
                 const labels = { active: 'Active', completed: 'Done', archived: 'Archived' }
                 return (
-                  <button
+                  <Button
                     key={key}
-                    type="button"
                     onClick={() => { setFilter(key); setSelectedOrderId(null) }}
-                    className={`relative flex-1 rounded-[0.6rem] py-1.5 text-xs font-semibold transition ${filter === key ? 'bg-needle text-white' : 'text-ink/52 hover:bg-ink/5 hover:text-ink'}`}
+                    variant={filter === key ? 'primary' : 'ghost'}
+                    size="sm"
+                    className="relative flex-1 text-xs"
                   >
                     {labels[key]}
                     {unreadCounts[key] > 0 ? (
@@ -10429,13 +13719,13 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
                         {unreadCounts[key] > 9 ? '9+' : unreadCounts[key]}
                       </span>
                     ) : null}
-                  </button>
+                  </Button>
                 )
               })}
             </div>
             {notificationPermission === 'default' ? (
               <div className="mt-2">
-                <button type="button" onClick={() => { void requestNotifications() }} className="text-xs font-semibold text-needle">Enable alerts</button>
+                <Button variant="link" size="sm" onClick={() => { void requestNotifications() }}><BellRing /> Enable alerts</Button>
               </div>
             ) : null}
           </div>
@@ -10494,7 +13784,7 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
                       </p>
                     </div>
                     {group.threads.length > 1 ? (
-                      <span className="shrink-0 text-[0.65rem] text-ink/36">{isExpanded ? '▲' : '▼'}</span>
+                      isExpanded ? <ChevronUp className="size-4 shrink-0 text-ui-subtle" /> : <ChevronDown className="size-4 shrink-0 text-ui-subtle" />
                     ) : null}
                   </button>
 
@@ -10510,7 +13800,7 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
                       >
                         <div className="min-w-0 flex-1">
                           <p className={`truncate text-xs font-semibold ${subActive ? 'text-needle' : 'text-ink/70'}`}>{orderTitle(thread.order)}</p>
-                          <p className="mt-0.5 truncate text-[0.65rem] text-ink/44">{cleanLabel(thread.order.stage, 'Order')}</p>
+                          <StatusChip status={thread.order.stage} fallback="Order" className="mt-1 py-0 text-[0.6rem]" />
                         </div>
                         {thread.unread > 0 ? (
                           <span className="shrink-0 rounded-full bg-rust px-1.5 py-0.5 text-[0.6rem] font-bold text-white">{thread.unread}</span>
@@ -10523,9 +13813,10 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             })}
             {totalUnread > 0 ? (
               <div className="border-t border-ink/6 p-3">
-                <button type="button" onClick={() => { void markAllRead() }} disabled={markingAllRead} className="text-xs font-semibold text-needle disabled:text-ink/36">
+                <Button variant="link" size="sm" onClick={() => { void markAllRead() }} disabled={markingAllRead}>
+                  <CheckCheck />
                   {markingAllRead ? 'Marking...' : 'Mark all read'}
-                </button>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -10536,8 +13827,8 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
       {!selectedThread ? (
         <div className="flex flex-1 items-center justify-center p-8 text-center">
           <div>
-            <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-needle/10">
-              <span className="text-2xl">💬</span>
+            <div className="mx-auto mb-4 grid size-14 place-items-center rounded-full bg-needle/10 text-needle">
+              <MessageSquareText className="size-6" />
             </div>
             <p className="text-sm font-semibold text-ink">Pick a conversation</p>
             <p className="mt-1 text-xs text-ink/44">Select a thread from the list to open it.</p>
@@ -10548,14 +13839,15 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
           {/* Chat header */}
           <div className="flex items-center gap-3 border-b border-ink/8 bg-white/70 px-3 py-2.5">
             {/* Collapse toggle */}
-            <button
-              type="button"
-              title={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
+            <IconButton
+              label={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
               onClick={() => setSidebarCollapsed((v) => !v)}
-              className="hidden shrink-0 rounded-[0.5rem] px-2 py-1.5 text-xs font-semibold text-ink/44 transition hover:bg-ink/6 hover:text-ink lg:inline-flex"
+              variant="ghost"
+              size="icon-sm"
+              className="hidden shrink-0 lg:inline-flex"
             >
-              {sidebarCollapsed ? '☰' : '←'}
-            </button>
+              {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </IconButton>
             {/* Avatar + name */}
             {(() => {
               const name = partyName(selectedThread.order, data.userId)
@@ -10570,7 +13862,16 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-ink">{name}</p>
-                    <p className="truncate text-xs text-ink/44">{orderTitle(selectedThread.order)}</p>
+                    {counterpartyPresence.online ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-needle" />
+                        <p className="text-xs font-semibold text-needle">Active now</p>
+                      </div>
+                    ) : counterpartyPresence.lastSeen ? (
+                      <p className="truncate text-xs text-ink/44">Last viewed {formatMessageRelative(counterpartyPresence.lastSeen.toISOString())}</p>
+                    ) : (
+                      <p className="truncate text-xs text-ink/44">{orderTitle(selectedThread.order)}</p>
+                    )}
                   </div>
                 </>
               )
@@ -10578,62 +13879,103 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             {/* Actions */}
             <div className="flex shrink-0 items-center gap-1">
               {selectedThread.order.video_call_url ? (
-                <a
-                  href={selectedThread.order.video_call_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-full bg-needle/14 px-2.5 py-1.5 text-xs font-semibold text-needle"
-                >
-                  Join call
-                </a>
+                <Button asChild variant="outline" size="sm">
+                  <a href={selectedThread.order.video_call_url} target="_blank" rel="noreferrer"><Video /> Join call</a>
+                </Button>
               ) : null}
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setThreadArchived(selectedThread.order.id, !selectedThread.archived)}
-                className="px-2 py-1.5 text-xs font-semibold text-ink/44 transition hover:text-rust"
+                className="text-ui-subtle"
               >
-                {selectedThread.archived ? 'Unarchive' : 'Archive'}
-              </button>
-              <Link href={`/account/orders/${selectedThread.order.id}`} className="rounded-full bg-needle px-3 py-1.5 text-xs font-semibold text-white">
-                Order
-              </Link>
+                {selectedThread.archived ? <ArchiveRestore /> : <Archive />}
+                <span className="hidden xl:inline">{selectedThread.archived ? 'Unarchive' : 'Archive'}</span>
+              </Button>
+              <Button asChild size="sm"><Link href={`/account/orders/${selectedThread.order.id}`}><ClipboardList /> Order</Link></Button>
             </div>
           </div>
 
           {/* Messages area */}
-          <div className="flex flex-1 flex-col gap-2 overflow-y-auto bg-white/50 p-4">
+          <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto bg-ui-canvas/70 py-3">
             {selectedMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center">
-                <p className="rounded-[1rem] bg-bone/60 px-5 py-4 text-sm leading-6 text-ink/52">No messages yet.</p>
+                <p className="rounded-[8px] border border-ui-border bg-white px-5 py-4 text-sm leading-6 text-ui-subtle">No messages yet.</p>
               </div>
-            ) : selectedMessages.map((message) => {
-              const mine = message.sender_id === data.userId
-              return (
-                <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[78%] ${mine ? 'rounded-[1.1rem] rounded-br-[0.25rem] bg-needle px-4 py-2.5' : 'rounded-[1.1rem] rounded-bl-[0.25rem] border border-ink/8 bg-white px-4 py-2.5'}`}>
-                    <div className={mine ? '[&_p]:text-white/90 [&_a]:text-white [&_audio]:opacity-80' : ''}>
-                      <MessageContent message={message} />
+            ) : (
+              <div className="relative w-full" style={{ height: messageVirtualizer.getTotalSize() }}>
+                {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const message = selectedMessages[virtualRow.index]
+                  if (!message) return null
+                  return (
+                    <div
+                      key={message.id}
+                      ref={messageVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      className="absolute left-0 top-0 w-full"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      {renderMessageBubble(message)}
                     </div>
-                    <p title={parseDateValue(message.created_at)?.toISOString()} className={`mt-1.5 text-[0.65rem] ${mine ? 'text-white/52' : 'text-ink/36'}`}>
-                      {formatMessageRelative(message.created_at)}{mine && message.read_at ? ' · Read' : ''}
-                    </p>
-                    <MessageReactionBar
-                      reactions={reactionsByMessageId.get(message.id) ?? []}
-                      userId={data.userId}
-                      mine={mine}
-                      open={openReactionMessageId === message.id}
-                      onOpenChange={(open) => setOpenReactionMessageId(open ? message.id : null)}
-                      onToggle={(emoji) => { void toggleMessageReaction(message, emoji) }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
+                  )
+                })}
+              </div>
+            )}
           </div>
+
+          {/* Typing indicator */}
+          {counterpartyIsTyping ? (
+            <div className="border-t border-ink/8 px-4 py-1.5">
+              <p className="text-xs italic text-ink/44">{partyName(selectedThread.order, data.userId)} is typing…</p>
+            </div>
+          ) : null}
+
+          {/* Reply preview bar */}
+          {replyingTo ? (
+            <div className="flex items-center gap-2 border-t border-needle/20 bg-needle/6 px-4 py-2">
+              <div className="flex-1 overflow-hidden">
+                <p className="text-[0.65rem] font-semibold text-needle">{replyingTo.sender_name ?? 'Unknown'}</p>
+                <p className="truncate text-[0.65rem] text-ink/52">
+                  {replyingTo.is_deleted ? 'This message was unsent.' : replyingTo.type === 'PHOTO' ? 'Photo' : replyingTo.type === 'VOICE' ? 'Voice note' : safeUserText(replyingTo.body, '')}
+                </p>
+              </div>
+              <IconButton
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setReplyingTo(null)}
+                label="Cancel reply"
+              >
+                <X />
+              </IconButton>
+            </div>
+          ) : null}
+
+          {/* Edit mode bar */}
+          {editingMessage ? (
+            <div className="flex items-center justify-between border-t border-ink/10 bg-bone px-4 py-2">
+              <p className="text-xs font-semibold text-ink/52">Editing message</p>
+              <IconButton
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setEditingMessage(null)}
+                label="Cancel edit"
+              >
+                <X />
+              </IconButton>
+            </div>
+          ) : null}
 
           {/* Composer */}
           <div className="border-t border-ink/8 bg-white/90 px-3 pb-3 pt-2">
-            <MessageComposer order={selectedThread.order} onRefresh={onRefresh} />
+            <MessageComposer
+              order={selectedThread.order}
+              onRefresh={onRefresh}
+              channelRef={orderChannelRef}
+              replyingTo={replyingTo}
+              onClearReply={() => setReplyingTo(null)}
+              editingMessage={editingMessage}
+              onClearEdit={() => setEditingMessage(null)}
+            />
           </div>
         </div>
       )}
@@ -10645,24 +13987,24 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
   const legacyMeasurementCount = hasMeasurements(data.customerProfile) ? 1 : 0
   return (
     <div className="grid gap-6">
-      <section className="grid gap-4 lg:grid-cols-3">
-        <SummaryLine label="Named profiles" value={`${data.measurementProfiles.length}`} />
-        <SummaryLine label="Drapeon Vision scans" value={`${data.measurementScans.length}`} />
-        <SummaryLine label="Profile units" value={data.customerProfile?.unit_preference || data.measurementProfiles[0]?.unit_preference || 'Not set'} />
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <MetricCard label="Named profiles" value={data.measurementProfiles.length} hint="Reusable wearer profiles" icon={<Users />} />
+        <MetricCard label="Drapeon Vision scans" value={data.measurementScans.length} hint="Saved guided captures" icon={<ScanLine />} />
+        <MetricCard label="Profile units" value={data.customerProfile?.unit_preference || data.measurementProfiles[0]?.unit_preference || 'Not set'} hint="Applied across measurements" icon={<Ruler />} />
       </section>
       <ManualMeasurementEditor data={data} onRefresh={onRefresh} />
       <section className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Wearer profiles</h2>
-          <div className="mt-5 grid gap-3">
+        <Surface>
+          <SurfaceHeader title="Wearer profiles" description="Review saved measurements before starting a custom brief." />
+          <div className="grid gap-3 p-5">
             {data.measurementProfiles.length === 0 && legacyMeasurementCount === 0 ? (
-              <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+              <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
                 No measurement profiles yet. Add manual measurements or use Drapeon Vision in the app before starting a custom order.
               </p>
             ) : (
               <>
                 {data.measurementProfiles.map((profile) => (
-                  <div key={profile.id} className="rounded-[1.1rem] border border-ink/6 bg-white p-4">
+                  <div key={profile.id} className="rounded-[8px] border border-ui-border bg-white p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <h3 className="font-semibold text-ink">{safeUserText(profile.label, 'Measurement profile')}</h3>
@@ -10675,12 +14017,13 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
                     {(() => {
                       const profileMeasurements = measurementsForProfile(profile, data.customerProfile)
                       const completeness = measurementCompleteness(profileMeasurements)
+                      const statusCopy = measurementProfileStatusCopy(completeness)
                       const values = coreMeasurementSummary(profileMeasurements)
                       return (
                         <>
-                          <div className="mt-3 rounded-[0.9rem] bg-bone/60 px-3 py-2 text-xs leading-5 text-ink/58">
-                            <span className="font-semibold text-ink">{completeness.present.length}/{CORE_MEASUREMENT_FIELDS.length} core fields saved.</span>
-                            {completeness.missing.length > 0 ? ` Missing: ${completeness.missing.map((field) => field.label).join(', ')}.` : ' Ready for briefs.'}
+                          <div className="mt-3 rounded-[8px] bg-ui-muted px-3 py-2 text-xs leading-5 text-ink/58">
+                            <span className="font-semibold text-ink">{statusCopy.lead}</span>
+                            {` ${statusCopy.detail}`}
                           </div>
                           {values.length > 0 ? (
                             <div className="mt-3 flex flex-wrap gap-2">
@@ -10691,6 +14034,7 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
                               ))}
                             </div>
                           ) : null}
+                          <SpecialistMeasurementSections measurements={profileMeasurements} />
                         </>
                       )
                     })()}
@@ -10700,17 +14044,18 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
                   </div>
                 ))}
                 {legacyMeasurementCount > 0 ? (
-                  <div className="rounded-[1.1rem] border border-ink/6 bg-white p-4">
+                  <div className="rounded-[8px] border border-ui-border bg-white p-4">
                     <h3 className="font-semibold text-ink">Main customer measurements</h3>
                     <p className="mt-1 text-sm text-ink/60">Legacy profile · {fitPreferenceFromProfile(data.customerProfile)}</p>
                     {(() => {
                       const completeness = measurementCompleteness(data.customerProfile?.measurements)
+                      const statusCopy = measurementProfileStatusCopy(completeness)
                       const values = coreMeasurementSummary(data.customerProfile?.measurements)
                       return (
                         <>
-                          <div className="mt-3 rounded-[0.9rem] bg-bone/60 px-3 py-2 text-xs leading-5 text-ink/58">
-                            <span className="font-semibold text-ink">{completeness.present.length}/{CORE_MEASUREMENT_FIELDS.length} core fields saved.</span>
-                            {completeness.missing.length > 0 ? ` Missing: ${completeness.missing.map((field) => field.label).join(', ')}.` : ' Ready for briefs.'}
+                          <div className="mt-3 rounded-[8px] bg-ui-muted px-3 py-2 text-xs leading-5 text-ink/58">
+                            <span className="font-semibold text-ink">{statusCopy.lead}</span>
+                            {` ${statusCopy.detail}`}
                           </div>
                           {values.length > 0 ? (
                             <div className="mt-3 flex flex-wrap gap-2">
@@ -10721,6 +14066,7 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
                               ))}
                             </div>
                           ) : null}
+                          <SpecialistMeasurementSections measurements={data.customerProfile?.measurements} />
                         </>
                       )
                     })()}
@@ -10729,29 +14075,27 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
               </>
             )}
           </div>
-        </div>
-        <div className="rounded-[1.6rem] border border-needle/12 bg-needle/8 p-6 shadow-sm">
-          <h2 className="text-3xl text-ink">Drapeon Vision</h2>
-          <p className="mt-3 text-sm leading-7 text-ink/66">
-            Drapeon Vision capture needs camera guidance, privacy prompts, retake paths, and proof review.
-          </p>
-          <div className="mt-5 grid gap-3">
+        </Surface>
+        <Surface>
+          <SurfaceHeader
+            title="Drapeon Vision"
+            description="Guided scans stay linked to the wearer profile and can be reviewed before an order is placed."
+            action={<OpenAppButton label="Open Drapeon Vision" />}
+          />
+          <div className="grid gap-3 p-5">
             {data.measurementScans.length === 0 ? (
-              <p className="rounded-[1rem] bg-white/70 p-4 text-sm leading-6 text-ink/62">No scan records yet.</p>
+              <p className="rounded-[8px] bg-white/70 p-4 text-sm leading-6 text-ink/62">No scan records yet.</p>
             ) : (
               data.measurementScans.map((scan) => (
                 <SummaryLine
                   key={scan.id}
                   label={cleanLabel(scan.capture_method, 'Scan')}
-                  value={`${cleanLabel(scan.status, 'Captured')} · ${scanConfidenceLabel(scan.confidence_overall)}`}
+                  value={<span className="flex flex-wrap items-center gap-2"><StatusChip status={scan.status} fallback="Captured" /><span>{scanConfidenceLabel(scan.confidence_overall)}</span></span>}
                 />
               ))
             )}
           </div>
-          <div className="mt-5">
-            <OpenAppButton label="Open Drapeon Vision" />
-          </div>
-        </div>
+        </Surface>
       </section>
     </div>
   )
@@ -10784,17 +14128,10 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
   if (isTailor) {
     return (
       <div className="grid gap-6">
-        <section className="grid grid-cols-3 gap-3">
-          {[
-            ['Total items', data.sellerItems.length],
-            ['Published', data.sellerItems.filter((item) => item.is_live).length],
-            ['Payout', data.tailorProfile?.payout_account_verified ? 'Ready' : 'Setup needed'],
-          ].map(([label, value]) => (
-            <div key={String(label)} className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-              <p className="text-2xl font-semibold text-ink">{String(value)}</p>
-              <p className="text-xs text-ink/52">{String(label)}</p>
-            </div>
-          ))}
+        <section className="grid gap-3 sm:grid-cols-3">
+          <MetricCard label="Total items" value={data.sellerItems.length} hint="All catalogue records" icon={<ShoppingBag />} />
+          <MetricCard label="Published" value={data.sellerItems.filter((item) => item.is_live).length} hint="Visible to customers" icon={<CheckCheck />} />
+          <MetricCard label="Payout" value={isPayoutReady(data.tailorProfile) ? 'Ready' : 'Setup needed'} hint="Controls checkout availability" icon={<WalletCards />} />
         </section>
         <SellerItemManager data={data} onRefresh={onRefresh} />
       </div>
@@ -10805,14 +14142,17 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
   return (
     <div className="grid gap-4">
       {/* Search + sort bar */}
-      <div className="flex gap-2">
-        <input
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ui-subtle" />
+          <Input
           value={shopSearch}
           onChange={(e) => setShopSearch(e.target.value)}
           placeholder="Search pieces, categories, or tailors..."
-          className="min-w-0 flex-1 rounded-full border border-ink/10 bg-white px-5 py-3 text-sm text-ink shadow-sm outline-none focus:border-needle/40"
-        />
-        <select value={shopSort} onChange={(e) => setShopSort(e.target.value)} className="hidden rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/40 sm:block">
+          className="pl-9"
+          />
+        </div>
+        <select value={shopSort} onChange={(e) => setShopSort(e.target.value)} className="h-10 rounded-[8px] border border-ui-border bg-white px-3 text-sm font-semibold text-ink outline-none focus:border-needle/40">
           <option value="newest">Newest</option>
           <option value="price-asc">Price: low to high</option>
           <option value="price-desc">Price: high to low</option>
@@ -10823,14 +14163,16 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
       {categories.length > 0 ? (
         <div className="-mx-0.5 flex gap-2 overflow-x-auto px-0.5 pb-1 [scrollbar-width:none]">
           {(['all', ...categories] as string[]).map((cat) => (
-            <button
+            <Button
               key={cat}
               type="button"
               onClick={() => setShopCategory(cat)}
-              className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${shopCategory === cat ? 'bg-needle text-white' : 'border border-ink/10 bg-white text-ink/66 hover:bg-ink/5 hover:text-ink'}`}
+              variant={shopCategory === cat ? 'primary' : 'secondary'}
+              size="sm"
+              className="whitespace-nowrap"
             >
               {cat === 'all' ? 'All pieces' : cat}
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}
@@ -10859,7 +14201,7 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
             const safeSrc = safeMediaUrl(photo)
             const tailorAvatarSrc = safeMediaUrl(tailor?.avatar_url, 'avatars')
             return (
-              <article key={item.id} className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_12px_36px_rgba(22,28,24,0.10)]">
+              <article key={item.id} className="overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm transition hover:border-needle/30 hover:shadow-md">
                 <div className="relative aspect-[4/3] w-full overflow-hidden bg-needle/8">
                   {safeSrc ? (
                     <Image src={safeSrc} alt={safeUserText(item.title, 'Item')} fill sizes="(min-width:1280px) 25vw,(min-width:768px) 40vw,90vw" className="object-cover" unoptimized />
@@ -10868,7 +14210,7 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
                   )}
                   {item.category ? (
                     <div className="absolute left-3 top-3">
-                      <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-semibold text-ink shadow-sm backdrop-blur-sm">{item.category}</span>
+                      <Badge tone="neutral" className="bg-white/90 shadow-sm backdrop-blur-sm">{item.category}</Badge>
                     </div>
                   ) : null}
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/75 to-transparent px-4 pb-3 pt-10">
@@ -10889,13 +14231,9 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
                   ) : null}
                   <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/58">{fulfillmentSummary(item)}</p>
                   <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    <Link href={accountRoute(`/account/items/${item.id}`)} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
-                      View item
-                    </Link>
+                    <Button asChild variant="secondary"><Link href={accountRoute(`/account/items/${item.id}`)}>View item</Link></Button>
                     {tailor?.id ? (
-                      <Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white">
-                        View tailor
-                      </Link>
+                      <Button asChild><Link href={accountRoute(`/account/tailors/${tailor.id}`)}>View tailor</Link></Button>
                     ) : null}
                   </div>
                 </div>
@@ -10934,8 +14272,8 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
   const availLabel = availability === 'OPEN' ? 'Open for orders' : availability === 'LIMITED' ? 'Limited availability' : 'Fully booked'
   const availHint = availability === 'OPEN' ? 'Customers can find and book you.' : availability === 'LIMITED' ? 'Visible with a slower-reply notice.' : 'New bookings paused; active orders unaffected.'
   const availDotColor = availability === 'OPEN' ? 'bg-emerald-500' : availability === 'LIMITED' ? 'bg-amber-400' : 'bg-rust'
-  const payoutVerified = Boolean(data.tailorProfile.payout_account_verified) && !data.tailorProfile.payout_reverification_required
-  const payoutLabel = payoutVerified ? 'Payout ready' : data.tailorProfile.payout_reverification_required ? 'Reverification needed' : 'Not set up'
+  const payoutVerified = isPayoutReady(data.tailorProfile)
+  const payoutLabel = payoutVerified ? 'Payout ready' : data.tailorProfile.payout_reverification_required ? 'Reverification needed' : data.tailorProfile.is_live ? 'Checkout paused' : 'Payout pending'
   const payoutHint = payoutVerified
     ? (data.tailorProfile.payout_bank_name ?? data.tailorProfile.payout_provider ?? 'Account verified')
     : data.tailorProfile.payout_reverification_required
@@ -11020,7 +14358,7 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
     return (
       <Link
         href={`/account/orders/${order.id}`}
-        className="block rounded-[1.1rem] border border-ink/8 bg-white/86 p-3.5 shadow-sm transition hover:bg-white hover:shadow-[0_6px_20px_rgba(22,28,24,0.08)]"
+        className="block rounded-[8px] border border-ui-border bg-white p-3.5 shadow-sm transition hover:border-needle/30 hover:shadow-md"
       >
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-needle/70">
@@ -11045,39 +14383,23 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
   return (
     <div className="grid gap-6">
 
-      {/* ── Cockpit card ── */}
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
+      <Surface>
+        <SurfaceHeader
+          eyebrow="Tailor cockpit"
+          title={safeEntityName(data.tailorProfile.business_name || data.tailorProfile.display_name, 'Dashboard')}
+          description="Live order health, selling readiness, and the next task that needs attention."
+          action={<StatusChip status={data.tailorProfile.is_live ? 'LIVE' : 'HIDDEN'} />}
+        />
+        <div className="grid gap-4 p-5">
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailor cockpit</p>
-            <h2 className="mt-2 text-3xl text-ink">{safeEntityName(data.tailorProfile.business_name || data.tailorProfile.display_name, 'Dashboard')}</h2>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetricCard label="Active" value={activeOrders.length} hint="Orders in progress" icon={<Briefcase />} className="shadow-none" />
+            <MetricCard label="Needs reply" value={pendingReplyOrders.length} hint="Quotes or consultations" icon={<MessageCircle />} className="shadow-none" />
+            <MetricCard label="Completed" value={data.tailorProfile.total_orders ?? 0} hint="Lifetime finished orders" icon={<CheckCheck />} className="shadow-none" />
           </div>
-          <span className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold ${data.tailorProfile.is_live ? 'bg-needle/10 text-needle' : 'bg-ink/8 text-ink/52'}`}>
-            {data.tailorProfile.is_live ? '● Live' : 'Hidden'}
-          </span>
-        </div>
 
-        {/* Metrics row */}
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <div className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-            <p className="text-2xl font-semibold text-ink">{activeOrders.length}</p>
-            <p className="mt-0.5 text-xs text-ink/52">Active</p>
-          </div>
-          <div className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-            <p className={`text-2xl font-semibold ${pendingReplyOrders.length > 0 ? 'text-amber-600' : 'text-ink'}`}>{pendingReplyOrders.length}</p>
-            <p className="mt-0.5 text-xs text-ink/52">Needs reply</p>
-          </div>
-          <div className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-            <p className="text-2xl font-semibold text-ink">{data.tailorProfile.total_orders ?? 0}</p>
-            <p className="mt-0.5 text-xs text-ink/52">Completed</p>
-          </div>
-        </div>
-
-        {/* Status tiles */}
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
-          <Link href="/account/profile" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
+          <div className="grid gap-3 md:grid-cols-3">
+          <Link href="/account/profile" className="rounded-[8px] border border-ui-border bg-ui-muted/55 p-3 transition hover:border-needle/25 hover:bg-white">
             <div className="flex items-center gap-1.5">
               <span className={`h-2 w-2 shrink-0 rounded-full ${availDotColor}`} />
               <span className="text-xs font-semibold uppercase tracking-[0.12em] text-needle/70">Availability</span>
@@ -11085,24 +14407,23 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
             <p className="mt-1.5 text-sm font-semibold text-ink">{availLabel}</p>
             <p className="mt-0.5 text-xs leading-4 text-ink/52">{availHint}</p>
           </Link>
-          <Link href="/account/profile" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
+          <Link href="/account/profile" className="rounded-[8px] border border-ui-border bg-ui-muted/55 p-3 transition hover:border-needle/25 hover:bg-white">
             <div className="flex items-center gap-1.5">
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${identityBadgeStyle}`}>{identityLabel}</span>
+              <StatusChip status={identityLabel} className={identityBadgeStyle} />
             </div>
             <p className="mt-1.5 text-sm font-semibold text-ink">Identity</p>
             <p className="mt-0.5 text-xs leading-4 text-ink/52">{readiness.profileCompleted ? 'Profile setup complete.' : 'Finish profile setup before paid work.'}</p>
           </Link>
-          <Link href="/account/payout" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
+          <Link href="/account/payout" className="rounded-[8px] border border-ui-border bg-ui-muted/55 p-3 transition hover:border-needle/25 hover:bg-white">
             <div className="flex items-center gap-1.5">
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${payoutBadgeStyle}`}>{payoutLabel}</span>
+              <StatusChip status={payoutLabel} className={payoutBadgeStyle} />
             </div>
             <p className="mt-1.5 text-sm font-semibold text-ink">Payout</p>
             <p className="mt-0.5 text-xs leading-4 text-ink/52">{payoutHint}</p>
           </Link>
         </div>
 
-        {/* Today focus card */}
-        <div className={`mt-3 rounded-[1.1rem] border p-4 ${
+          <div className={`rounded-[8px] border p-4 ${
           todayFocus.tone === 'warning'
             ? 'border-amber-300/40 bg-amber-400/8'
             : todayFocus.tone === 'success'
@@ -11112,11 +14433,10 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle/70">{todayFocus.eyebrow}</p>
           <p className="mt-1.5 text-base font-semibold text-ink">{todayFocus.title}</p>
           <p className="mt-1 text-xs leading-5 text-ink/56">{todayFocus.body}</p>
-          <Link href={todayFocus.actionHref} className="mt-3 inline-flex rounded-full bg-needle px-4 py-2 text-xs font-semibold text-white">
-            {todayFocus.action}
-          </Link>
+          <Button asChild size="sm" className="mt-3"><Link href={todayFocus.actionHref}>{todayFocus.action}</Link></Button>
+          </div>
         </div>
-      </section>
+      </Surface>
 
       {/* ── Active order queue (mobile) ── */}
       <section className="lg:hidden">
@@ -11145,7 +14465,7 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
           const isOpen = colsOpen[i] ?? true
           const count = column.orders.length
           return (
-            <div key={column.key} className="overflow-hidden rounded-[1.4rem] border border-ink/8 bg-white/64">
+            <div key={column.key} className="overflow-hidden rounded-[8px] border border-ui-border bg-white">
               <button
                 type="button"
                 onClick={() => setColsOpen((prev) => prev.map((v, idx) => idx === i ? !v : v))}
@@ -11160,12 +14480,12 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
                   </div>
                   <p className="mt-0.5 text-xs leading-4 text-ink/44">{column.body}</p>
                 </div>
-                <span className={`mt-0.5 shrink-0 text-[10px] text-ink/30 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+                <ChevronDown className={`mt-0.5 size-4 shrink-0 text-ink/30 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
               </button>
               {isOpen && (
                 <div className="grid gap-2.5 border-t border-ink/6 p-3">
                   {count === 0 ? (
-                    <p className="rounded-[0.9rem] bg-bone/60 px-3 py-2.5 text-xs text-ink/42">Nothing here.</p>
+                    <p className="rounded-[8px] bg-bone/60 px-3 py-2.5 text-xs text-ink/42">Nothing here.</p>
                   ) : (
                     column.orders.map((order) => <WorkOrderCard key={`${column.key}-${order.id}`} order={order} />)
                   )}
@@ -11201,11 +14521,11 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
+      <Surface className="p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
           {confirmed ? 'Payment confirmed' : checkoutAvailable ? 'Payment needed' : 'Payment unavailable'}
         </p>
-        <h2 className="mt-3 text-4xl text-ink">{orderTitle(order)}</h2>
+        <h2 className="mt-3 text-2xl font-semibold text-ink sm:text-3xl">{orderTitle(order)}</h2>
         <p className="mt-3 text-sm leading-7 text-ink/66">
           {confirmed
             ? 'This payment is recorded. Continue tracking production, handoff, and support from the order.'
@@ -11219,29 +14539,27 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
           <SummaryLine label="Order total" value={orderAmount(order)} />
           <SummaryLine label="Provider" value={cleanLabel(order.payment_provider, 'Provider selected at payment')} />
           <SummaryLine label="Fulfillment" value={cleanLabel(order.delivery_method, 'Fulfillment')} />
-          <SummaryLine label="Status" value={cleanLabel(order.stage, 'In progress')} />
+          <SummaryLine label="Status" value={<StagePill stage={order.stage} />} />
         </div>
         <div className="mt-6">
           {viewerIsCustomer ? (
             <CheckoutAction order={order} onRefresh={onRefresh} />
           ) : (
-            <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+            <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
               You are viewing this as the tailor, so payment collection stays locked to the customer account.
             </p>
           )}
         </div>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
           <OpenAppButton label="Open in app" />
-          <Link href={`/account/orders/${order.id}`} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink">
-            Back to order
-          </Link>
+          <Button asChild variant="secondary"><Link href={`/account/orders/${order.id}`}>Back to order</Link></Button>
         </div>
-      </section>
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-        <h2 className="text-3xl text-ink">Payment ledger</h2>
+      </Surface>
+      <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+        <h2 className="text-2xl font-semibold text-ink">Payment ledger</h2>
         <div className="mt-5 grid gap-3">
           {payments.length === 0 ? (
-            <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+            <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
               No provider payment has been recorded yet. If you already paid, do not pay again; open Support or the order thread.
             </p>
           ) : (
@@ -11249,7 +14567,7 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
               <SummaryLine
                 key={payment.id}
                 label={cleanLabel(payment.phase, 'Payment')}
-                value={`${formatMoney(payment.amount, payment.currency)} · ${cleanLabel(payment.status, 'Pending')}`}
+                value={<span className="flex flex-wrap items-center gap-2">{formatMoney(payment.amount, payment.currency)} <StatusChip status={payment.status} fallback="Pending" /></span>}
               />
             ))
           )}
@@ -11276,9 +14594,9 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
   return (
     <div className="grid gap-6">
       <section className="grid gap-4 lg:grid-cols-3">
-        <SummaryLine label="Collections" value={`${data.wishlistCollections.length}`} />
-        <SummaryLine label="Saved tailors" value={`${data.savedTailors.length}`} />
-        <SummaryLine label="Saved pieces" value={`${data.savedItems.length}`} />
+        <MetricCard label="Collections" value={data.wishlistCollections.length} hint="Organized wishlists" icon={<Archive />} />
+        <MetricCard label="Saved tailors" value={data.savedTailors.length} hint="People and studios" icon={<Users />} />
+        <MetricCard label="Saved pieces" value={data.savedItems.length} hint="Ready-made items" icon={<ShoppingBag />} />
       </section>
 
       {data.wishlistCollections.length === 0 && data.savedTailors.length === 0 && data.savedItems.length === 0 ? (
@@ -11313,7 +14631,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
               null
 
             return (
-              <article key={collection.id} className="rounded-[1.55rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
+              <article key={collection.id} className="rounded-[8px] border border-ui-border bg-white p-5 shadow-sm">
                 <button
                   type="button"
                   onClick={() => toggleCollection(collection.id)}
@@ -11338,7 +14656,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
                 {isExpanded ? (
                   <div className="mt-4 grid gap-2">
                     {visibleItems.length === 0 ? (
-                      <p className="rounded-[0.9rem] bg-bone/70 px-4 py-3 text-sm leading-6 text-ink/62">
+                      <p className="rounded-[8px] bg-bone/70 px-4 py-3 text-sm leading-6 text-ink/62">
                         Save a tailor from Explore or a ready-made piece from Marketplace to add it here.
                       </p>
                     ) : (
@@ -11354,7 +14672,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
                           <Link
                             key={entry.id}
                             href={href}
-                            className="rounded-[1rem] border border-ink/6 bg-white px-4 py-3 text-sm font-semibold text-ink transition hover:border-needle/24"
+                            className="rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm font-semibold text-ink transition hover:border-needle/30"
                           >
                             {tailor
                               ? safeEntityName(tailor.business_name || tailor.display_name, 'Saved tailor')
@@ -11382,7 +14700,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
               const safeSrc = safeMediaUrl(photo)
               const specialtyTags = stringList(tailor.specialty_tags).slice(0, 3)
               return (
-                <Link key={tailor.id} href={accountRoute(`/account/tailors/${tailor.id}`)} className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_12px_36px_rgba(22,28,24,0.10)]">
+                <Link key={tailor.id} href={accountRoute(`/account/tailors/${tailor.id}`)} className="overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm transition hover:border-needle/30 hover:shadow-md">
                   <div className="relative aspect-[4/3] overflow-hidden bg-needle/8">
                     {safeSrc ? (
                       <Image src={safeSrc} alt={safeEntityName(tailor.business_name || tailor.display_name, 'Tailor')} fill sizes="(min-width:1280px) 25vw,(min-width:768px) 40vw,90vw" className="object-cover" unoptimized />
@@ -11391,7 +14709,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
                     )}
                     {tailor.is_verified ? (
                       <div className="absolute left-3 top-3">
-                        <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-semibold text-needle shadow-sm backdrop-blur-sm">Verified</span>
+                        <StatusChip status="VERIFIED" className="bg-white/90 shadow-sm backdrop-blur-sm" />
                       </div>
                     ) : null}
                     {tailor.avg_rating ? (
@@ -11426,7 +14744,7 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
               const photo = itemPhoto(item)
               const safeSrc = safeMediaUrl(photo)
               return (
-                <Link key={item.id} href={accountRoute(`/account/items/${item.id}`)} className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_12px_36px_rgba(22,28,24,0.10)]">
+                <Link key={item.id} href={accountRoute(`/account/items/${item.id}`)} className="overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm transition hover:border-needle/30 hover:shadow-md">
                   <div className="relative aspect-[4/3] overflow-hidden bg-needle/8">
                     {safeSrc ? (
                       <Image src={safeSrc} alt={safeUserText(item.title, 'Item')} fill sizes="(min-width:1280px) 25vw,(min-width:768px) 40vw,90vw" className="object-cover" unoptimized />
@@ -11458,16 +14776,134 @@ function RenderSaved({ data }: { data: SavedSurfaceData }) {
 
 function payoutStatusLabel(profile: TailorProfile | null) {
   if (!profile) return 'No tailor profile'
+  if (profile.payout_reverification_required) return 'Reverification needed'
+  if (isPayoutReady(profile)) return 'Ready'
   if (profile.manual_bank_entry) return `Manual bank ${cleanLabel(profile.manual_bank_verification_status, 'pending ops review')}`
-  if (profile.payout_account_verified && !profile.payout_reverification_required) return 'Ready'
   if (profile.payout_account_type === 'STRIPE_CONNECT' && profile.stripe_connect_account_id) return 'Stripe review needed'
   if (profile.payout_account_type === 'PAYSTACK' && profile.paystack_recipient_code) return 'Paystack review needed'
-  return 'Needs setup'
+  return profile.is_live ? 'Checkout paused' : 'Payout pending'
+}
+
+type TxStatus = 'PENDING' | 'AVAILABLE' | 'RELEASED' | 'PAID_OUT' | 'BLOCKED' | 'FAILED'
+type TxRecord = {
+  orderId: string
+  reference: string
+  customer: string
+  title: string
+  orderAmount: number
+  currency: string
+  platformFee: number
+  taxAmount: number
+  netAmount: number
+  status: TxStatus
+  reason: string | null
+  date: string
+}
+
+const NOT_PAID_ORDER_STAGES = new Set(['DRAFT', 'QUOTED', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'CANCELED', 'EXPIRED'])
+
+function deriveTxStatus(order: AccountOrder, payouts: AccountPayout[]): { status: TxStatus; reason: string | null } {
+  const orderPayouts = payouts
+    .filter((p) => p.order_id === order.id)
+    .sort((a, b) => timestampMs(b.initiated_at) - timestampMs(a.initiated_at))
+  const latest = orderPayouts[0]
+  if (latest?.status === 'PAID') return { status: 'PAID_OUT', reason: null }
+  if (latest?.status === 'PROCESSING') return { status: 'RELEASED', reason: null }
+  if (latest?.status === 'FAILED' || latest?.status === 'REVERSED' || latest?.status === 'CANCELED') {
+    return { status: 'FAILED', reason: 'Payout transfer failed and needs ops review.' }
+  }
+  if (latest?.status === 'BLOCKED') {
+    return { status: 'BLOCKED', reason: payoutBlockedReasonCopy(latest.blocked_reason) ?? 'Payout is blocked and needs ops review.' }
+  }
+  const stage = (order.stage ?? '').toUpperCase()
+  if (stage === 'REFUNDED') return { status: 'FAILED', reason: 'Order was refunded.' }
+  if (stage === 'PARTIALLY_REFUNDED') return { status: 'BLOCKED', reason: 'Partial refund applied.' }
+  if (stage === 'PAYMENT_FAILED' || stage === 'CANCELED') return { status: 'FAILED', reason: null }
+  if (NOT_PAID_ORDER_STAGES.has(stage)) return { status: 'PENDING', reason: 'Awaiting customer payment.' }
+  if (order.escrow_released) return { status: 'RELEASED', reason: null }
+  return { status: 'AVAILABLE', reason: null }
+}
+
+function txPillClass(status: TxStatus): string {
+  switch (status) {
+    case 'PAID_OUT': return 'border-needle/20 bg-needle/10 text-needle'
+    case 'RELEASED': return 'border-needle/16 bg-needle/6 text-needle/80'
+    case 'AVAILABLE': return 'border-blue-200 bg-blue-50 text-blue-700'
+    case 'PENDING': return 'border-amber-200 bg-amber-50 text-amber-700'
+    case 'BLOCKED': return 'border-rust/20 bg-rust/8 text-rust'
+    case 'FAILED': return 'border-red-200 bg-red-50 text-red-700'
+  }
+}
+
+function txStatusLabel(status: TxStatus): string {
+  switch (status) {
+    case 'PAID_OUT': return 'Paid out'
+    case 'RELEASED': return 'Released'
+    case 'AVAILABLE': return 'Available'
+    case 'PENDING': return 'Pending'
+    case 'BLOCKED': return 'Blocked'
+    case 'FAILED': return 'Failed'
+  }
+}
+
+function buildTxCsv(rows: TxRecord[]): string {
+  const headers = ['Order ID', 'Reference', 'Customer', 'Garment', 'Customer Paid', 'Platform Fee', 'Tax', 'Net Earnings', 'Currency', 'Status', 'Date']
+  const dataRows = rows.map((t) => [
+    t.orderId, t.reference, t.customer, t.title,
+    String(t.orderAmount / 100), String(t.platformFee / 100), String(t.taxAmount / 100), String(t.netAmount / 100),
+    t.currency, t.status, t.date,
+  ])
+  return [headers, ...dataRows].map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
 }
 
 function RenderEarnings({ data }: { data: EarningsRenderData }) {
-  const [range, setRange] = useState<'30' | '90' | '365' | 'all'>('90')
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<TxStatus | 'ALL'>('ALL')
+  const [range, setRange] = useState<'30' | '90' | '365' | 'all'>('all')
   const [now] = useState(() => Date.now())
+
+  const allTransactions = useMemo<TxRecord[]>(() => {
+    if (!data.tailorProfile) return []
+    return data.orders.map((order) => {
+      const { status, reason } = deriveTxStatus(order, data.payouts)
+      const cp = order.customer_profiles
+      const cpSingle = Array.isArray(cp) ? cp[0] : cp
+      const customerFirst = (cpSingle?.display_name ?? 'Customer').split(/\s+/)[0] ?? 'Customer'
+      return {
+        orderId: order.id,
+        reference: order.reference ?? order.id.slice(0, 8),
+        customer: customerFirst,
+        title: orderTitle(order),
+        orderAmount: order.total_amount ?? 0,
+        currency: order.currency ?? 'USD',
+        platformFee: order.platform_fee_amount ?? 0,
+        taxAmount: order.tax_amount ?? 0,
+        netAmount: order.subtotal_amount ?? 0,
+        status,
+        reason,
+        date: order.updated_at ?? order.created_at ?? '',
+      }
+    })
+  }, [data.orders, data.payouts, data.tailorProfile])
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return allTransactions.filter((t) => {
+      if (statusFilter !== 'ALL' && t.status !== statusFilter) return false
+      if (range !== 'all') {
+        const cutoff = now - Number(range) * 24 * 60 * 60 * 1000
+        if (timestampMs(t.date) < cutoff) return false
+      }
+      if (!needle) return true
+      return [t.reference, t.customer, t.title, t.orderId].some((v) => v.toLowerCase().includes(needle))
+    })
+  }, [allTransactions, statusFilter, range, search, now])
+
+  const csvHref = useMemo(() => {
+    if (filtered.length === 0) return '#'
+    return `data:text/csv;charset=utf-8,${encodeURIComponent(buildTxCsv(filtered))}`
+  }, [filtered])
+
   if (!data.tailorProfile) {
     return (
       <EmptyState
@@ -11478,80 +14914,114 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
     )
   }
 
-  const filteredPayouts = data.payouts.filter((payout) => {
-    if (range === 'all') return true
-    const dateValue = payout.completed_at ?? payout.processed_at ?? payout.initiated_at
-    if (!dateValue) return true
-    const timestamp = new Date(dateValue).getTime()
-    if (Number.isNaN(timestamp)) return true
-    return now - timestamp <= Number(range) * 24 * 60 * 60 * 1000
-  })
-  const sum = (statuses: string[]) => filteredPayouts
-    .filter((payout) => statuses.includes((payout.status ?? '').toUpperCase()))
-    .reduce((total, payout) => total + (payout.amount ?? 0), 0)
-  const currency = filteredPayouts[0]?.currency ?? data.tailorProfile.payout_currency ?? data.tailorProfile.currency ?? 'USD'
-  const csvRows = [
-    ['id', 'order_id', 'status', 'provider', 'amount', 'currency', 'blocked_reason', 'completed_at', 'initiated_at'],
-    ...filteredPayouts.map((payout) => [
-      payout.id,
-      payout.order_id ?? '',
-      payout.status ?? '',
-      payout.provider ?? '',
-      String((payout.amount ?? 0) / 100),
-      payout.currency ?? '',
-      payout.blocked_reason ?? '',
-      payout.completed_at ?? '',
-      payout.initiated_at ?? '',
-    ]),
+  const summaryCurrency = data.tailorProfile.payout_currency ?? data.tailorProfile.currency ?? 'USD'
+  const totalEarnings = allTransactions.filter((t) => t.status !== 'FAILED').reduce((s, t) => s + t.netAmount, 0)
+  const availableAmount = allTransactions.filter((t) => t.status === 'AVAILABLE' || t.status === 'RELEASED').reduce((s, t) => s + t.netAmount, 0)
+  const pendingAmount = allTransactions.filter((t) => t.status === 'PENDING' || t.status === 'BLOCKED').reduce((s, t) => s + t.netAmount, 0)
+  const paidOutAmount = allTransactions.filter((t) => t.status === 'PAID_OUT').reduce((s, t) => s + t.netAmount, 0)
+  const payoutReady = isPayoutReady(data.tailorProfile)
+  const transactionColumns: ColumnDef<TxRecord>[] = [
+    {
+      accessorKey: 'reference',
+      header: 'Order',
+      cell: ({ row }) => (
+        <div className="min-w-[13rem]">
+          <Button asChild variant="link"><Link href={`/account/orders/${row.original.orderId}` as Route}>{row.original.title}</Link></Button>
+          <p className="mt-1 text-xs text-ui-subtle">#{row.original.reference} · {row.original.customer}</p>
+        </div>
+      ),
+    },
+    { accessorKey: 'date', header: 'Date', cell: ({ row }) => <span className="whitespace-nowrap text-ui-subtle">{formatDate(row.original.date) ?? 'Not recorded'}</span> },
+    { accessorKey: 'orderAmount', header: 'Customer paid', cell: ({ row }) => <span className="whitespace-nowrap font-semibold">{formatMoney(row.original.orderAmount, row.original.currency)}</span> },
+    { accessorKey: 'platformFee', header: 'Platform fee', cell: ({ row }) => <span className="whitespace-nowrap">{formatMoney(row.original.platformFee, row.original.currency)}</span> },
+    { accessorKey: 'taxAmount', header: 'Tax', cell: ({ row }) => <span className="whitespace-nowrap">{formatMoney(row.original.taxAmount, row.original.currency)}</span> },
+    { accessorKey: 'netAmount', header: 'Net earnings', cell: ({ row }) => <span className="whitespace-nowrap font-semibold text-drape-green">{formatMoney(row.original.netAmount, row.original.currency)}</span> },
+    { accessorKey: 'status', header: 'Status', cell: ({ row }) => <StatusChip status={txStatusLabel(row.original.status)} className={txPillClass(row.original.status)} /> },
   ]
-  const csvHref = `data:text/csv;charset=utf-8,${encodeURIComponent(csvRows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n'))}`
 
   return (
     <div className="grid gap-6">
+      {/* Summary stats */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          ['Pending', formatMoney(sum(['PENDING', 'PROCESSING', 'INITIATED']), currency)],
-          ['Blocked / failed', formatMoney(sum(['BLOCKED', 'FAILED']), currency)],
-          ['Paid out', formatMoney(sum(['PAID', 'COMPLETED', 'SUCCEEDED']), currency)],
-          ['Payout setup', payoutStatusLabel(data.tailorProfile)],
-        ].map(([label, value]) => (
-          <div key={String(label)} className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-            <p className="text-base font-semibold text-ink">{String(value)}</p>
-            <p className="mt-0.5 text-xs text-ink/52">{String(label)}</p>
-          </div>
+        {([
+          ['Total earnings', formatMoney(totalEarnings, summaryCurrency), 'Net across all settled orders'],
+          ['Available / released', formatMoney(availableAmount, summaryCurrency), 'Ready for payout or in transit'],
+          ['Pending release', formatMoney(pendingAmount, summaryCurrency), 'Awaiting delivery, review, or setup'],
+          ['Paid out', formatMoney(paidOutAmount, summaryCurrency), 'Completed provider transfers'],
+        ] as const).map(([label, value, hint]) => (
+          <MetricCard key={label} label={label} value={value} hint={hint} icon={<Banknote />} />
         ))}
       </section>
 
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Earnings</p>
-            <h2 className="mt-2 text-3xl text-ink">Payout history</h2>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {(['30', '90', '365', 'all'] as const).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setRange(key)}
-                className={range === key ? 'rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white' : 'rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink/62'}
-              >
-                {key === 'all' ? 'All' : `${key}D`}
-              </button>
-            ))}
-            <a href={csvHref} download="drapeon-payouts.csv" className="rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink">
-              Export CSV
-            </a>
-          </div>
+      {/* Payout account status */}
+      <Surface className="flex items-center gap-4 px-5 py-4">
+        <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${payoutReady ? 'bg-needle' : 'bg-amber-400'}`} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-ink">
+            {data.tailorProfile.payout_bank_name
+              ? `${data.tailorProfile.payout_bank_name}${data.tailorProfile.payout_account_masked ? ' · ' + data.tailorProfile.payout_account_masked : ''}`
+              : 'Payout account'}
+          </p>
+          <p className="mt-0.5 text-xs text-ink/48">{payoutStatusLabel(data.tailorProfile)}</p>
         </div>
-        <div className="mt-5 grid gap-3">
-          {filteredPayouts.length === 0 ? (
-            <p className="rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
-              No payout records in this range yet. Once orders pay out, records appear here with order and provider context.
+        {!payoutReady && (
+          <Button asChild size="sm"><Link href="/account/payout">Set up payout</Link></Button>
+        )}
+      </Surface>
+
+      {/* Transaction history */}
+      <Surface>
+        <SurfaceHeader
+          eyebrow="Earnings"
+          title="Transaction history"
+          description="Order amounts, platform fees, tax, and net earnings in one sortable ledger."
+          action={<Button asChild variant="secondary" size="sm" className={filtered.length === 0 ? 'pointer-events-none opacity-40' : ''}><a href={csvHref} download="drapeon-earnings.csv">Export CSV</a></Button>}
+        />
+        <div className="grid gap-3 p-5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ui-subtle" />
+            <Input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by order ID, reference, customer, or garment…"
+            className="pl-9"
+          />
+          </div>
+
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+            <div className="overflow-x-auto pb-1">
+              <SegmentedControl
+                value={statusFilter}
+                onChange={setStatusFilter}
+                ariaLabel="Transaction status"
+                options={(['ALL', 'PENDING', 'AVAILABLE', 'RELEASED', 'PAID_OUT', 'BLOCKED', 'FAILED'] as const).map((key) => ({ value: key, label: key === 'ALL' ? 'All' : txStatusLabel(key as TxStatus) }))}
+              />
+            </div>
+            <SegmentedControl
+              value={range}
+              onChange={setRange}
+              ariaLabel="Transaction date range"
+              options={([['30', '30 days'], ['90', '90 days'], ['365', '1 year'], ['all', 'All time']] as const).map(([value, label]) => ({ value, label }))}
+            />
+          </div>
+
+          <DataTable columns={transactionColumns} data={filtered} emptyMessage={allTransactions.length === 0 ? 'No transactions yet. Completed orders will appear here once they settle.' : 'No transactions match these filters.'} />
+          <p className="text-xs leading-5 text-ink/36">Amounts show net earnings in the order currency. Export includes platform fee, tax, and net for accountant reconciliation.</p>
+        </div>
+      </Surface>
+
+      {/* Payout history */}
+      <Surface>
+        <SurfaceHeader eyebrow="Transfers" title="Payout history" description="Provider transfers and any release blockers." />
+        <div className="grid gap-2 p-5">
+          {data.payouts.length === 0 ? (
+            <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/52">
+              No payouts yet. Once Drapeon releases a completed order, the provider reference and settlement status appear here.
             </p>
           ) : (
-            <div className="overflow-hidden rounded-[1.25rem] border border-ink/8 bg-white">
-              {filteredPayouts.map((payout, index) => {
+            <div className="overflow-hidden rounded-[8px] border border-ui-border bg-white">
+              {data.payouts.map((payout, index) => {
                 const order = payout.order_id ? data.orders.find((entry) => entry.id === payout.order_id) : null
                 return (
                   <div key={payout.id} className={`flex items-start gap-4 px-5 py-4 ${index > 0 ? 'border-t border-ink/6' : ''}`}>
@@ -11560,13 +15030,13 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
                         <StagePill stage={payout.status} label={cleanLabel(payout.status, 'Payout')} />
                         <span className="text-xs text-ink/38">{cleanLabel(payout.provider, 'Provider')}</span>
                       </div>
-                      <p className="mt-1.5 text-sm text-ink/56">
+                      <p className="mt-1.5 text-xs text-ink/52">
                         {order ? `${orderTitle(order)} · #${order.reference ?? order.id.slice(0, 8)}` : payout.order_id ?? 'Standalone payout'}
                       </p>
                       {payout.blocked_reason ? (
-                        <p className="mt-2 rounded-[0.65rem] bg-rust/8 px-3 py-1.5 text-xs text-rust">{cleanLabel(payout.blocked_reason, 'Blocked')}</p>
+                        <p className="mt-2 rounded-lg bg-rust/8 px-3 py-1.5 text-xs text-rust">{payoutBlockedReasonCopy(payout.blocked_reason) ?? cleanLabel(payout.blocked_reason, 'Blocked')}</p>
                       ) : null}
-                      <p className="mt-1.5 text-xs text-ink/38">
+                      <p className="mt-1 text-xs text-ink/36">
                         Completed {formatDate(payout.completed_at) ?? 'not yet'} · initiated {formatRelative(payout.initiated_at)}
                       </p>
                     </div>
@@ -11579,7 +15049,7 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
             </div>
           )}
         </div>
-      </section>
+      </Surface>
     </div>
   )
 }
@@ -11602,6 +15072,15 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
   const autoLoadedPaystackBanksRef = useRef<string | null>(null)
   const paystackCountryForCurrency = payoutCurrency === 'NGN' ? 'NG' : payoutCurrency === 'GHS' ? 'GH' : payoutCurrency === 'KES' ? 'KE' : countryCode
   const displayedCountryCode = paystackCurrency ? paystackCountryForCurrency : countryCode
+  const bankOptions = useMemo(() => {
+    const seenCodes = new Set<string>()
+    return banks.filter((bank) => {
+      const code = bank.code.trim()
+      if (!code || seenCodes.has(code)) return false
+      seenCodes.add(code)
+      return true
+    })
+  }, [banks])
 
   const loadBanks = useCallback(async (options?: { quiet?: boolean }) => {
     if (!paystackCurrency) return
@@ -11749,17 +15228,13 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
           ['Currency', profile.payout_currency ?? 'Not set'],
           ['Hold until', formatDate(profile.payout_destination_hold_until) ?? 'No hold'],
         ].map(([label, value]) => (
-          <div key={String(label)} className="rounded-[1.1rem] bg-bone/70 px-4 py-3">
-            <p className="text-base font-semibold text-ink">{String(value)}</p>
-            <p className="mt-0.5 text-xs text-ink/52">{String(label)}</p>
-          </div>
+          <MetricCard key={String(label)} label={String(label)} value={String(value)} icon={<WalletCards />} />
         ))}
       </section>
 
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Current destination</p>
-        <h2 className="mt-2 text-2xl text-ink">Where earnings are sent</h2>
-        <div className="mt-4 divide-y divide-ink/6">
+      <Surface>
+        <SurfaceHeader eyebrow="Current destination" title="Where earnings are sent" description="Your active verified provider destination." />
+        <div className="divide-y divide-ui-border px-5 pb-2">
           {[
             ['Bank', profile.payout_bank_name ?? profile.manual_bank_name ?? 'Not set'],
             ['Account', profile.payout_account_masked ?? 'Not set'],
@@ -11774,21 +15249,17 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
             </div>
           ))}
         </div>
-      </section>
+      </Surface>
 
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Provider setup</p>
-            <h2 className="mt-2 text-3xl text-ink">Use an automated payout route.</h2>
-            <p className="mt-3 text-sm leading-7 text-ink/66">
-              Stripe Connect handles USD, GBP, EUR, and CAD. Paystack handles NGN, GHS, and KES. Manual bank entry is intentionally unavailable on web until ops resolution exists.
-            </p>
-          </div>
+      <Surface>
+        <SurfaceHeader
+          eyebrow="Provider setup"
+          title="Use an automated payout route"
+          description="Stripe Connect handles USD, GBP, EUR, and CAD. Paystack handles NGN, GHS, and KES."
+        />
+        <div className="grid gap-5 p-5">
           <ActionNotice error={error} success={success} />
-        </div>
-
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-3">
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Payout currency</span>
             <select
@@ -11802,14 +15273,14 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
                 setBanks([])
                 setVerification(null)
               }}
-              className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+              className="h-10 rounded-[8px] border border-ui-border bg-white px-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
             >
               {['NGN', 'GHS', 'KES', 'USD', 'GBP', 'EUR', 'CAD'].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
             </select>
           </label>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Country code</span>
-            <input
+            <Input
               value={displayedCountryCode}
               onChange={(event) => {
                 setCountryCode(event.target.value.toUpperCase().slice(0, 2))
@@ -11818,89 +15289,94 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
                 setBanks([])
                 setVerification(null)
               }}
-              className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
               placeholder="US"
               readOnly={paystackCurrency}
             />
           </label>
           <div className="flex items-end">
             {stripeCurrency ? (
-              <button type="button" onClick={startStripe} disabled={!!busy} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+              <Button type="button" onClick={startStripe} disabled={!!busy} className="w-full">
                 {busy === 'stripe' ? 'Opening Stripe...' : 'Start Stripe Connect'}
-              </button>
+              </Button>
             ) : (
-              <button type="button" onClick={() => void loadBanks()} disabled={!!busy || !paystackCurrency} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-                {busy === 'banks' ? 'Loading banks...' : banks.length > 0 ? 'Refresh banks' : 'Retry banks'}
-              </button>
+              <Button type="button" onClick={() => void loadBanks()} disabled={!!busy || !paystackCurrency} className="w-full">
+                {busy === 'banks' ? 'Loading banks...' : bankOptions.length > 0 ? 'Refresh banks' : 'Retry banks'}
+              </Button>
             )}
           </div>
         </div>
 
         {profile.stripe_connect_account_id ? (
-          <button type="button" onClick={refreshStripe} disabled={!!busy} className="mt-4 inline-flex rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/40">
+          <Button type="button" onClick={refreshStripe} disabled={!!busy} variant="secondary">
             {busy === 'refresh-stripe' ? 'Refreshing...' : 'Refresh Stripe status'}
-          </button>
+          </Button>
         ) : null}
 
         {paystackCurrency ? (
-          <div className="mt-6 grid gap-4 rounded-[1.25rem] border border-ink/6 bg-bone/45 p-4">
+          <div className="grid gap-4 rounded-[8px] border border-ui-border bg-ui-muted/45 p-4">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-ink">Bank</span>
                 <select
                   value={bankCode}
                   onChange={(event) => {
-                    const next = banks.find((bank) => bank.code === event.target.value)
+                    const next = bankOptions.find((bank) => bank.code === event.target.value)
                     setBankCode(event.target.value)
                     setBankName(next?.name ?? '')
                     setVerification(null)
                   }}
-                  disabled={busy === 'banks' || banks.length === 0}
-                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+                  disabled={busy === 'banks' || bankOptions.length === 0}
+                  className="h-10 rounded-[8px] border border-ui-border bg-white px-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
                 >
-                  <option value="">{busy === 'banks' ? 'Loading banks...' : banks.length > 0 ? 'Select bank' : 'Banks unavailable'}</option>
-                  {banks.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}
+                  <option value="">{busy === 'banks' ? 'Loading banks...' : bankOptions.length > 0 ? 'Select bank' : 'Banks unavailable'}</option>
+                  {bankOptions.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}
                 </select>
               </label>
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-ink">Account number</span>
-                <input value={accountNumber} onChange={(event) => { setAccountNumber(event.target.value); setVerification(null) }} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                <Input value={accountNumber} onChange={(event) => { setAccountNumber(event.target.value); setVerification(null) }} />
               </label>
               <label className="grid gap-2 md:col-span-2">
                 <span className="text-sm font-semibold text-ink">Expected account name</span>
-                <input value={accountName} onChange={(event) => setAccountName(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                <Input value={accountName} onChange={(event) => setAccountName(event.target.value)} />
               </label>
             </div>
             {verification ? (
-              <p className="rounded-[1rem] border border-needle/14 bg-needle/8 p-4 text-sm leading-6 text-needle">
+              <p className="rounded-[8px] border border-needle/14 bg-needle/8 p-4 text-sm leading-6 text-needle">
                 Verified: {verification.resolvedAccountName} · {verification.maskedAccountNumber}
               </p>
             ) : null}
             <div className="flex flex-col gap-3 sm:flex-row">
-              <button type="button" onClick={verifyPaystack} disabled={!!busy || !bankCode || !accountNumber} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/40">
+              <Button type="button" onClick={verifyPaystack} disabled={!!busy || !bankCode || !accountNumber} variant="secondary">
                 {busy === 'verify' ? 'Verifying...' : 'Verify account'}
-              </button>
-              <button type="button" onClick={savePaystack} disabled={!!busy || !verification} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+              </Button>
+              <Button type="button" onClick={savePaystack} disabled={!!busy || !verification}>
                 {busy === 'save-paystack' ? 'Saving...' : 'Save verified Paystack account'}
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
-      </section>
+        </div>
+      </Surface>
 
-      <section className="rounded-[1.6rem] border border-rust/14 bg-rust/8 p-6 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rust">Manual bank entry</p>
-        <h2 className="mt-2 text-3xl text-ink">Manual bank setup is not exposed on web.</h2>
-        <p className="mt-3 text-sm leading-7 text-ink/66">
+      <Surface className="border-rust/20 bg-rust/5">
+        <SurfaceHeader eyebrow="Manual bank entry" title="Manual bank setup requires payout support" />
+        <div className="p-5">
+        <p className="text-sm leading-7 text-ink/66">
           Manual bank details require an ops review and manual payout recording workflow before they can be used safely. Use Stripe or Paystack for automated setup, or contact payouts if your bank is not supported.
         </p>
-        <a href={mailto(CONTACTS.payouts, 'Manual payout setup question')} className="mt-5 inline-flex rounded-full border border-rust/20 bg-white px-5 py-3 text-sm font-semibold text-rust">
-          Contact payouts
-        </a>
-      </section>
+        <Button asChild variant="secondary" className="mt-5 text-rust"><a href={mailto(CONTACTS.payouts, 'Manual payout setup question')}>Contact payouts</a></Button>
+        </div>
+      </Surface>
     </div>
   )
 }
+
+const SELLER_TYPE_WEB_OPTIONS = [
+  { value: 'TAILOR', label: 'Tailor', hint: 'Custom and bespoke work made to order.' },
+  { value: 'BOUTIQUE', label: 'Boutique', hint: 'Ready-made garments and stock collections.' },
+  { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'A full studio handling custom orders and ready-made collections together.' },
+] as const
 
 function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData; onRefresh: () => void }) {
   const profile = data.tailorProfile
@@ -11914,6 +15390,8 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
   const [sellerType, setSellerType] = useState(profile?.seller_type === 'BOUTIQUE' || profile?.seller_type === 'TAILOR_SHOP' ? profile.seller_type : 'TAILOR')
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(profile?.supports_custom_orders !== false)
   const [supportsReadyMade, setSupportsReadyMade] = useState(profile?.supports_ready_made === true)
+  const [acceptsCustomOrdersNow, setAcceptsCustomOrdersNow] = useState(profile?.accepts_custom_orders_now !== false)
+  const [shopPaused, setShopPaused] = useState(profile?.shop_paused === true)
   const [pickupAvailable, setPickupAvailable] = useState(profile?.pickup_available === true)
   const [deliveryAvailable, setDeliveryAvailable] = useState(profile?.delivery_available === true)
   const [shippingAvailable, setShippingAvailable] = useState(profile?.shipping_available === true)
@@ -11924,6 +15402,26 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
   const [success, setSuccess] = useState<string | null>(null)
 
   if (!profile) return null
+
+  function applySellerType(nextType: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP') {
+    setSellerType(nextType)
+    if (nextType === 'BOUTIQUE') {
+      setSupportsCustomOrders(false)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(false)
+      setShopPaused(false)
+    } else if (nextType === 'TAILOR_SHOP') {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(false)
+    } else {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(false)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(true)
+    }
+  }
 
   async function saveSellingSetup() {
     setError(null)
@@ -11946,28 +15444,29 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
       setError(leak)
       return
     }
-    if (displayName.trim().length < 2) {
-      setError('Add a public display name before saving.')
+    const displayNameError = validateDisplayName(displayName)
+    if (displayNameError) {
+      setError(displayNameError)
       return
     }
     if (location.trim().length < 2) {
-      setError('Add a city or location before saving.')
+      setError(TAILOR_SETUP_VALIDATION.LOCATION_REQUIRED_MESSAGE)
       return
     }
     if (parsedSpecialties.length === 0) {
-      setError('Add at least one specialty.')
+      setError(TAILOR_SETUP_VALIDATION.SPECIALTY_REQUIRED_MESSAGE)
       return
     }
     if (!supportsCustomOrders && !supportsReadyMade) {
-      setError('Choose at least one selling mode.')
+      setError(TAILOR_SETUP_VALIDATION.ORDER_MODE_REQUIRED_MESSAGE)
       return
     }
     if (!pickupAvailable && !deliveryAvailable && !shippingAvailable) {
-      setError('Choose at least one fulfillment option.')
+      setError(TAILOR_SETUP_VALIDATION.FULFILLMENT_REQUIRED_MESSAGE)
       return
     }
     if (pickupAvailable && pickupAddress.trim().length < 8) {
-      setError('Add a fuller private pickup address before offering pickup.')
+      setError(TAILOR_SETUP_VALIDATION.PICKUP_ADDRESS_REQUIRED_MESSAGE)
       return
     }
 
@@ -11986,6 +15485,8 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
           sellerType,
           supportsCustomOrders,
           supportsReadyMade,
+          acceptsCustomOrdersNow,
+          shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
           pickupInstructions: pickupInstructions.trim() || null,
@@ -12007,73 +15508,75 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 marker:hidden">
         <span>
           <span className="block text-sm font-semibold text-ink">Edit setup on web</span>
-          <span className="mt-1 block text-xs leading-5 text-ink/56">Update availability, offers, fulfillment, private pickup details, public bio, specialties, and languages.</span>
+          <span className="mt-1 block text-xs leading-5 text-ink/56">Update business type, order status, fulfillment, private pickup details, public bio, specialties, and languages.</span>
         </span>
-        <span className="shrink-0 rounded-full border border-ink/8 bg-white px-3 py-1 text-xs font-semibold text-needle group-open:hidden">Edit</span>
-        <span className="hidden shrink-0 rounded-full border border-ink/8 bg-white px-3 py-1 text-xs font-semibold text-ink/52 group-open:inline-flex">Close</span>
+        <ChevronDown className="size-5 shrink-0 text-ui-subtle transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       <div className="mt-4 grid gap-4">
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Public display name</span>
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Location</span>
-            <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City, country" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Availability</span>
-            <select value={availability} onChange={(event) => setAvailability(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+          <Field label="Public display name">
+            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </Field>
+          <Field label="Location">
+            <Input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City, country" />
+          </Field>
+          <Field label="Profile currency" hint="Customers see this currency. Payout setup follows it, so choose one you can accept payouts in.">
+            <NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}>
+              {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
+            </NativeSelect>
+          </Field>
+          <Field label="Availability" hint="Controls search visibility and whether customers see a slower-capacity notice.">
+            <NativeSelect value={availability} onChange={(event) => setAvailability(event.target.value)}>
               <option value="OPEN">Open for orders</option>
               <option value="LIMITED">Limited availability</option>
               <option value="FULLY_BOOKED">Fully booked</option>
-            </select>
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Profile currency</span>
-            <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-              {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
-            </select>
-          </label>
-          <label className="grid gap-2 md:col-span-2">
-            <span className="text-sm font-semibold text-ink">Bio</span>
-            <textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={4} className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Specialties</span>
-            <textarea value={specialties} onChange={(event) => setSpecialties(event.target.value)} rows={3} placeholder="Aso oke, Bridal, Agbada" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-ink">Languages</span>
-            <textarea value={languages} onChange={(event) => setLanguages(event.target.value)} rows={3} placeholder="English, Yoruba" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-          </label>
+            </NativeSelect>
+          </Field>
+          <Field label="Bio" className="md:col-span-2">
+            <Textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={4} />
+          </Field>
+          <Field label="Specialties">
+            <Textarea value={specialties} onChange={(event) => setSpecialties(event.target.value)} rows={3} placeholder="Aso oke, Bridal, Agbada" />
+          </Field>
+          <Field label="Languages">
+            <Textarea value={languages} onChange={(event) => setLanguages(event.target.value)} rows={3} placeholder="English, Yoruba" />
+          </Field>
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
-          {([
-            ['TAILOR', 'Tailor'],
-            ['BOUTIQUE', 'Boutique'],
-            ['TAILOR_SHOP', 'Tailor shop'],
-          ] as const).map(([value, label]) => (
-            <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-[0.9rem] border px-4 py-3 text-sm font-semibold ${sellerType === value ? 'border-needle/24 bg-needle/10 text-needle' : 'border-ink/8 bg-white text-ink/68'}`}>
-              <input type="radio" name="seller-type" checked={sellerType === value} onChange={() => setSellerType(value)} />
-              {label}
+          {SELLER_TYPE_WEB_OPTIONS.map(({ value, label, hint }) => (
+            <label key={value} className={`grid cursor-pointer gap-2 rounded-[8px] border px-4 py-3 text-sm font-semibold ${sellerType === value ? 'border-needle/24 bg-needle/10 text-needle' : 'border-ink/8 bg-white text-ink/68'}`}>
+              <span className="flex items-center gap-3">
+                <input type="radio" name="seller-type" checked={sellerType === value} onChange={() => applySellerType(value)} />
+                <span>{label}</span>
+              </span>
+              <span className="text-xs font-medium leading-5 text-ink/56">{hint}</span>
             </label>
           ))}
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          {([
-            ['custom', 'Custom orders', supportsCustomOrders, setSupportsCustomOrders],
-            ['ready-made', 'Ready-made shop', supportsReadyMade, setSupportsReadyMade],
-          ] as const).map(([key, label, checked, setter]) => (
-            <label key={key} className="flex cursor-pointer items-center gap-3 rounded-[0.9rem] border border-ink/8 bg-white px-4 py-3 text-sm font-semibold text-ink">
-              <input type="checkbox" checked={checked} onChange={() => setter(!checked)} />
-              {label}
-            </label>
-          ))}
+          {supportsCustomOrders ? (
+            <div className="grid gap-2 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm text-ink">
+              <span className="font-semibold">Custom order status</span>
+              <span className="text-xs leading-5 text-ink/56">Controls whether customers can send new custom briefs.</span>
+              <NativeSelect value={acceptsCustomOrdersNow ? 'OPEN' : 'PAUSED'} onChange={(event) => setAcceptsCustomOrdersNow(event.target.value === 'OPEN')}>
+                <option value="OPEN">Taking custom orders</option>
+                <option value="PAUSED">Custom orders paused</option>
+              </NativeSelect>
+            </div>
+          ) : null}
+          {supportsReadyMade ? (
+            <div className="grid gap-2 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm text-ink">
+              <span className="font-semibold">Ready-made shop status</span>
+              <span className="text-xs leading-5 text-ink/56">Controls checkout for live ready-made inventory.</span>
+              <NativeSelect value={shopPaused ? 'PAUSED' : 'OPEN'} onChange={(event) => setShopPaused(event.target.value === 'PAUSED')}>
+                <option value="OPEN">Shop checkout open</option>
+                <option value="PAUSED">Shop checkout paused</option>
+              </NativeSelect>
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
@@ -12082,35 +15585,337 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
             ['delivery', 'Delivery', deliveryAvailable, setDeliveryAvailable],
             ['shipping', 'Shipping', shippingAvailable, setShippingAvailable],
           ] as const).map(([key, label, checked, setter]) => (
-            <label key={key} className="flex cursor-pointer items-center gap-3 rounded-[0.9rem] border border-ink/8 bg-white px-4 py-3 text-sm font-semibold text-ink">
-              <input type="checkbox" checked={checked} onChange={() => setter(!checked)} />
-              {label}
-            </label>
+            <div key={key} className="flex items-center justify-between gap-3 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm font-semibold text-ink">
+              <span>{label}</span>
+              <Switch checked={checked} onCheckedChange={setter} aria-label={`${label} available`} />
+            </div>
           ))}
         </div>
 
         {pickupAvailable ? (
-          <div className="grid gap-3 rounded-[1rem] border border-needle/10 bg-needle/6 p-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-ink">Private pickup address</span>
-              <textarea value={pickupAddress} onChange={(event) => setPickupAddress(event.target.value)} rows={3} placeholder="Full address customers unlock after collection is ready" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-ink">Pickup instructions</span>
-              <input value={pickupInstructions} onChange={(event) => setPickupInstructions(event.target.value)} placeholder="e.g. Bring your collection code" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            </label>
+          <div className="grid gap-3 rounded-[8px] border border-needle/10 bg-needle/6 p-4">
+            <Field label="Private pickup address">
+              <Textarea value={pickupAddress} onChange={(event) => setPickupAddress(event.target.value)} rows={3} placeholder="Full address customers unlock after collection is ready" />
+            </Field>
+            <Field label="Pickup instructions">
+              <Input value={pickupInstructions} onChange={(event) => setPickupInstructions(event.target.value)} placeholder="e.g. Bring your collection code" />
+            </Field>
           </div>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={saveSellingSetup} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <Button onClick={saveSellingSetup} disabled={busy}>
             {busy ? 'Saving...' : 'Save selling setup'}
-          </button>
-          <Link href="/account/shop" className="text-sm font-semibold text-needle">Manage ready-made shop →</Link>
-          <Link href="/account/payout" className="text-sm font-semibold text-needle">Review payout →</Link>
+          </Button>
+          <Button asChild variant="ghost"><Link href="/account/shop">Manage ready-made shop <ChevronRight /></Link></Button>
+          <Button asChild variant="ghost"><Link href="/account/payout">Review payout <ChevronRight /></Link></Button>
         </div>
       </div>
     </details>
+  )
+}
+
+type IdentityHandoffRealtimeState = 'idle' | 'waiting' | 'opened' | 'submitted'
+
+function readStringField(record: Record<string, unknown> | null | undefined, keys: string[]) {
+  if (!record) return null
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return null
+}
+
+function readIdentityRejectionCode(profile: Pick<TailorProfile, 'id_verification_metadata'>) {
+  const metadata = profile.id_verification_metadata && typeof profile.id_verification_metadata === 'object'
+    ? profile.id_verification_metadata
+    : null
+  const nested = metadata?.identity_verification && typeof metadata.identity_verification === 'object'
+    ? metadata.identity_verification as Record<string, unknown>
+    : null
+  return (
+    readStringField(metadata, ['rejection_code', 'rejectionCode']) ??
+    readStringField(nested, ['rejection_code', 'rejectionCode']) ??
+    ''
+  ).toUpperCase()
+}
+
+function isInvalidProfileImageRejected(profile: Pick<TailorProfile, 'id_verification_status' | 'id_verification_metadata'> | null | undefined) {
+  return (
+    profile?.id_verification_status === 'REJECTED' &&
+    readIdentityRejectionCode(profile) === INVALID_PROFILE_IMAGE_REJECTION_CODE
+  )
+}
+
+function identityRejectionMessage(profile: Pick<TailorProfile, 'id_verification_rejection_reason' | 'id_verification_metadata'>) {
+  const rejectionCode = readIdentityRejectionCode(profile)
+  if (rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE) return PROFILE_IMAGE_REJECTION_MESSAGE
+
+  const direct = profile.id_verification_rejection_reason?.trim()
+  if (direct) return safeUserText(direct, 'Identity review needs a clearer retake.')
+
+  const metadata = profile.id_verification_metadata && typeof profile.id_verification_metadata === 'object'
+    ? profile.id_verification_metadata
+    : null
+  const nested = metadata?.identity_verification && typeof metadata.identity_verification === 'object'
+    ? metadata.identity_verification as Record<string, unknown>
+    : null
+  const reason =
+    readStringField(metadata, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
+    readStringField(nested, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note'])
+
+  return safeUserText(reason, 'Identity review needs a clearer retake. Capture a sharp live selfie with your face and physical ID fully visible.')
+}
+
+type IdentityHandoffSession = {
+  handoffId?: string
+  token?: string
+  path?: string
+  url?: string
+  expiresAt?: string
+}
+
+function IdentityHandoffCard({
+  userId,
+  profile,
+  onRefresh,
+}: {
+  userId: string | null
+  profile: TailorProfile
+  onRefresh: () => void
+}) {
+  const [session, setSession] = useState<IdentityHandoffSession | null>(null)
+  const [delivery, setDelivery] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [handoffState, setHandoffState] = useState<IdentityHandoffRealtimeState>('idle')
+  const status = profile.id_verification_status ?? 'NOT_SUBMITTED'
+  const handoffUrl = session?.url ?? ''
+  const pending = status === 'PENDING'
+  const verified = isVerifiedIdentityStatus(status)
+  const rejected = status === 'REJECTED'
+  const profileImageRejected = isInvalidProfileImageRejected(profile)
+  const rejectionMessage = rejected ? identityRejectionMessage(profile) : null
+  const handoffStatusText = handoffState === 'opened'
+    ? '📱 Phone connected. Capturing selfie on your device...'
+    : handoffState === 'submitted'
+      ? '🎉 Identity Submitted for Review! Our team completes audits within 24 hours.'
+      : '🔒 Waiting for secure mobile connection...'
+  const payoutReady = isPayoutReady(profile)
+
+  const checkLatestStatus = useCallback(async () => {
+    if (!userId) return
+    const supabase = createClient()
+    const { data } = await supabase
+      .from('tailor_profiles')
+      .select('id_verification_status')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (data?.id_verification_status === 'PENDING') {
+      setHandoffState('submitted')
+      setSuccess('Identity selfie submitted. Review is now pending.')
+      onRefresh()
+    }
+  }, [onRefresh, userId])
+
+  useEffect(() => {
+    if (!userId || !session || pending || verified) return undefined
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`tailor-idv-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tailor_profiles',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const nextStatus = String((payload.new as { id_verification_status?: string | null })?.id_verification_status ?? '')
+          if (nextStatus === 'PENDING') {
+            setHandoffState('submitted')
+            setSuccess('Identity selfie submitted. Review is now pending.')
+            onRefresh()
+          }
+        },
+      )
+      .subscribe()
+
+    const interval = window.setInterval(() => {
+      void checkLatestStatus()
+    }, 5000)
+
+    return () => {
+      window.clearInterval(interval)
+      void supabase.removeChannel(channel)
+    }
+  }, [checkLatestStatus, onRefresh, pending, session, userId, verified])
+
+  useEffect(() => {
+    if (!session?.handoffId || pending || verified) return undefined
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`identity-handoff-session-${session.handoffId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'identity_verification_handoffs',
+          filter: `id=eq.${session.handoffId}`,
+        },
+        (payload) => {
+          const nextStatus = String((payload.new as { status?: string | null })?.status ?? '')
+          if (nextStatus === 'OPENED' || nextStatus === 'CAPTURED') {
+            setHandoffState('opened')
+          }
+          if (nextStatus === 'SUBMITTED') {
+            setHandoffState('submitted')
+          }
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [pending, session?.handoffId, verified])
+
+  async function startSession() {
+    if (!userId) return
+    setBusy('create')
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await invokeAccountFunction<IdentityHandoffSession>('identity-handoff-action', {
+        action: 'create',
+      })
+      setSession(result)
+      setHandoffState('waiting')
+      setSuccess('Scan or send the secure phone link to complete live capture.')
+    } catch (handoffError) {
+      setError(friendlyActionError(handoffError, 'Identity handoff could not start.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function sendLink() {
+    if (!session?.token) return
+    setBusy('send')
+    setError(null)
+    setSuccess(null)
+    try {
+      const channel = delivery.includes('@') ? 'EMAIL' : 'SMS'
+      await invokeAccountFunction('identity-handoff-action', {
+        action: 'send-link',
+        token: session.token,
+        channel,
+        requestedDelivery: delivery,
+      })
+      setSuccess('Identity handoff link sent.')
+    } catch (handoffError) {
+      setError(friendlyActionError(handoffError, 'Identity handoff link could not send.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (profileImageRejected) {
+    return (
+      <section className="rounded-[8px] border border-rust/20 bg-rust/8 p-5 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust">Identity verification</p>
+        <h3 className="mt-2 text-xl font-semibold text-ink">Profile photo needs replacement</h3>
+        <p className="mt-2 text-sm leading-6 text-rust/90">{PROFILE_IMAGE_REJECTION_MESSAGE}</p>
+        <p className="mt-2 text-sm leading-6 text-ink/64">Your live ID selfie remains on file. Upload a clearer avatar below, then submit setup again so ops can re-review the public photo.</p>
+        <a href="#profile-photo" className="mt-4 inline-flex rounded-full bg-rust px-4 py-2 text-sm font-semibold text-white">Upload replacement photo</a>
+      </section>
+    )
+  }
+
+  if (verified || pending) {
+    return (
+      <section className={`rounded-[8px] border p-5 shadow-sm transition-all duration-500 ${verified ? 'border-needle/14 bg-needle/6' : 'border-emerald-400/25 bg-emerald-400/10'}`}>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Identity verification</p>
+        <h3 className="mt-2 text-xl font-semibold text-ink">{verified ? 'Identity verified' : '🎉 Identity Submitted for Review!'}</h3>
+        <p className="mt-2 text-sm leading-6 text-ink/64">
+          {verified ? 'Your live identity selfie has passed review.' : 'Our team completes audits within 24 hours. Keep your profile details accurate while Drapeon Trust reviews it.'}
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded-[8px] border border-needle/12 bg-white/84 p-5 shadow-sm">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="max-w-xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Verify identity via smartphone</p>
+          <h3 className="mt-2 text-2xl text-ink">Capture Identity Selfie for Review.</h3>
+          <p className="mt-2 text-sm leading-6 text-ink/64">
+            Use your phone camera to take one live selfie while holding your physical passport, licence, or national ID beside your face.
+          </p>
+          {!payoutReady ? (
+            <div className="mt-4 rounded-[8px] border border-amber-300/35 bg-amber-400/8 p-4">
+              <p className="text-sm font-semibold text-ink">Payout setup comes next</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/62">Identity review can be submitted now. Paid quotes, live shop publishing, and earnings release stay paused until payout is verified.</p>
+              <Link href="/account/payout" className="mt-3 inline-flex text-sm font-semibold text-needle">Review payout setup →</Link>
+            </div>
+          ) : null}
+          {rejected ? (
+            <div className="mt-4 rounded-[8px] border border-rust/20 bg-rust/8 p-4">
+              <p className="text-sm font-semibold text-rust">Identity retake needed</p>
+              <p className="mt-1.5 text-sm leading-6 text-rust/90">{rejectionMessage}</p>
+            </div>
+          ) : null}
+          <ActionNotice error={error} success={success} />
+        </div>
+
+        <div className="w-full max-w-sm rounded-[8px] border border-ink/8 bg-bone/70 p-4 transition-all duration-500">
+          {handoffState === 'submitted' ? (
+            <div className="mb-4 translate-y-0 rounded-[8px] border border-emerald-400/25 bg-emerald-400/10 p-4 opacity-100 transition-all duration-500">
+              <p className="text-sm font-semibold text-needle">🎉 Identity Submitted for Review!</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/64">Our team completes audits within 24 hours.</p>
+            </div>
+          ) : null}
+          {handoffUrl ? (
+            <div className={`grid justify-items-center gap-4 transition-all duration-500 ${handoffState === 'submitted' ? 'max-h-0 -translate-y-2 overflow-hidden opacity-0' : 'max-h-[560px] translate-y-0 opacity-100'}`}>
+              <div className="rounded-[8px] border border-ink/8 bg-white p-3 shadow-inner" aria-label="Identity handoff QR code">
+                <QRCodeSVG value={handoffUrl} size={180} includeMargin={true} />
+              </div>
+              <div className="flex items-center gap-2 rounded-full border border-ink/8 bg-white/80 px-3 py-2 text-xs font-semibold text-ink/68">
+                {handoffState === 'opened' ? (
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-needle/25 border-t-needle" aria-hidden="true" />
+                ) : (
+                  <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-needle opacity-60" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-needle" />
+                  </span>
+                )}
+                <span>{handoffStatusText}</span>
+              </div>
+              <a href={handoffUrl} className="break-all text-center text-xs font-semibold text-needle">{handoffUrl}</a>
+              <div className="grid w-full gap-2">
+                <input
+                  value={delivery}
+                  onChange={(event) => setDelivery(event.target.value)}
+                  placeholder="Email or phone"
+                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
+                />
+                <button type="button" onClick={() => { void sendLink() }} disabled={busy === 'send' || !delivery.trim()} className="rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:bg-ink/20">
+                  {busy === 'send' ? 'Sending...' : 'Send link to myself'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => { void startSession() }} disabled={busy === 'create'} className="flex w-full justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:bg-ink/20">
+              {busy === 'create' ? 'Starting...' : 'Start smartphone verification'}
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -12139,11 +15944,6 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
     : profile.availability === 'LIMITED'
       ? 'bg-amber-400/15 text-amber-700'
       : 'bg-rust/10 text-rust'
-  const availDotStyle = profile.availability === 'OPEN'
-    ? 'bg-emerald-500'
-    : profile.availability === 'LIMITED'
-      ? 'bg-amber-400'
-      : 'bg-rust'
   const availText = profile.availability === 'OPEN'
     ? 'Available'
     : profile.availability === 'LIMITED'
@@ -12159,27 +15959,51 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
         ? 'Needs resubmission'
         : 'Not submitted'
 
+  const normalizedSellerType = profile.seller_type === 'BOUTIQUE' || profile.seller_type === 'TAILOR_SHOP'
+    ? profile.seller_type
+    : 'TAILOR'
+  const businessTypeLabel = normalizedSellerType === 'BOUTIQUE'
+    ? 'Boutique'
+    : normalizedSellerType === 'TAILOR_SHOP'
+      ? 'Tailor shop'
+      : 'Tailor'
+  const priceGuideLabel = profile.price_range_min && profile.price_range_max
+    ? `${formatMoney(profile.price_range_min, profile.currency)}–${formatMoney(profile.price_range_max, profile.currency)}`
+    : 'Price needed'
+  const portfolioProofCount = data.portfolioItems.filter((item) => Boolean(item.image_url)).length + stringList(profile.portfolio_video_urls).length
+  const readyMadeProofCount = data.sellerItems.length
+  const proofChecklistLabel = normalizedSellerType === 'BOUTIQUE'
+    ? 'Ready-made listing'
+    : normalizedSellerType === 'TAILOR_SHOP'
+      ? 'Portfolio + ready-made item'
+      : 'Portfolio sample'
+  const proofChecklistValue = normalizedSellerType === 'BOUTIQUE'
+    ? readyMadeProofCount > 0
+      ? `${readyMadeProofCount} ready-made item${readyMadeProofCount === 1 ? '' : 's'}`
+      : 'Needed'
+    : normalizedSellerType === 'TAILOR_SHOP'
+      ? portfolioProofCount > 0 && readyMadeProofCount > 0
+        ? [`${portfolioProofCount} portfolio`, `${readyMadeProofCount} ready-made`].join(' · ')
+        : portfolioProofCount > 0
+          ? 'Need ready-made item'
+          : readyMadeProofCount > 0
+            ? 'Need portfolio sample'
+            : 'Needed'
+      : portfolioProofCount > 0
+        ? `${portfolioProofCount} portfolio item${portfolioProofCount === 1 ? '' : 's'}`
+        : 'Needed'
   const sellingSetupRows = [
-    { label: 'Profile', value: readiness.profileCompleted ? 'Complete' : 'Setup in progress' },
-    { label: 'Identity', value: identityLabel },
-    {
-      label: 'Offers',
-      value: [profile.supports_custom_orders && 'Custom orders', profile.supports_ready_made && 'Ready-made'].filter(Boolean).join(' + ') || 'No offers enabled',
-    },
-    {
-      label: 'Fulfillment',
-      value: [profile.pickup_available && 'Pickup', profile.delivery_available && 'Delivery', profile.shipping_available && 'Shipping'].filter(Boolean).join(' · ') || 'Not configured',
-    },
-    { label: 'Specialties', value: safeList(profile.specialty_tags, 'Not set') },
-    { label: 'Languages', value: safeList(profile.languages, 'Not set') },
-    { label: 'Payout', value: payoutStatusLabel(profile) },
+    { label: 'Contact + public profile', value: readiness.profileCompleted ? 'Complete' : 'Setup in progress' },
+    { label: 'Business type + pricing', value: `${businessTypeLabel} · ${priceGuideLabel}` },
+    { label: proofChecklistLabel, value: proofChecklistValue },
+    { label: 'Identity & payout readiness', value: `${identityLabel} · ${payoutStatusLabel(profile)}` },
   ]
 
   return (
     <div className="grid gap-6">
 
       {/* ── Hero card ── */}
-      <section className="overflow-hidden rounded-[1.6rem] border border-ink/8 bg-white/84 shadow-sm">
+      <Surface className="overflow-hidden">
         <div className="flex items-start gap-5 p-6 pb-4">
           {/* Avatar with live dot */}
           <div className="relative shrink-0">
@@ -12209,21 +16033,13 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
             </h2>
             {profile.location ? (
               <p className="mt-1 flex items-center gap-1.5 text-xs text-ink/52">
-                <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7Z" />
-                  <circle cx="12" cy="9" r="2.5" />
-                </svg>
+                <MapPin className="size-3.5 shrink-0" />
                 {profile.location}
               </p>
             ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${availPillStyle}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${availDotStyle}`} />
-                {availText}
-              </span>
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${profile.is_live ? 'bg-needle/10 text-needle' : 'bg-ink/8 text-ink/50'}`}>
-                {profile.is_live ? '● Live' : 'Not live'}
-              </span>
+              <StatusChip status={availText} className={availPillStyle} />
+              <StatusChip status={profile.is_live ? 'LIVE' : 'NOT_LIVE'} />
             </div>
           </div>
         </div>
@@ -12234,7 +16050,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
             <p className="text-xl font-semibold text-ink">
               {(profile.avg_rating ?? 0) > 0 ? (profile.avg_rating ?? 0).toFixed(1) : '—'}
             </p>
-            <p className="mt-0.5 text-xs text-ink/48">★ Rating</p>
+            <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-ink/48"><Star className="size-3 fill-current" /> Rating</p>
           </div>
           <div className="bg-white/84 px-4 py-3 text-center">
             <p className="text-xl font-semibold text-ink">{profile.total_reviews ?? 0}</p>
@@ -12245,10 +16061,10 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
             <p className="mt-0.5 text-xs text-ink/48">Orders</p>
           </div>
         </div>
-      </section>
+      </Surface>
 
       {/* ── Readiness ── */}
-      <section className={`rounded-[1.6rem] border p-5 shadow-sm ${
+      <Surface className={`p-5 ${
         readiness.tone === 'success'
           ? 'border-needle/14 bg-needle/6'
           : readiness.tone === 'warning'
@@ -12257,42 +16073,41 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
       }`}>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Seller readiness</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Go-live status</p>
             <h3 className="mt-2 text-xl font-semibold text-ink">{readiness.title}</h3>
             <p className="mt-2 text-sm leading-6 text-ink/64">{readiness.body}</p>
           </div>
           {readiness.actionHref ? (
-            <Link href={readiness.actionHref} className="inline-flex shrink-0 justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
-              {readiness.actionLabel ?? 'Review'}
-            </Link>
+            <Button asChild className="shrink-0"><Link href={readiness.actionHref}>{readiness.actionLabel ?? 'Review'}</Link></Button>
           ) : readiness.actionLabel ? (
-            <OpenAppButton label={readiness.actionLabel} className="inline-flex shrink-0 justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
+            <OpenAppButton label={readiness.actionLabel} className="inline-flex shrink-0 justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white" />
           ) : null}
         </div>
-      </section>
+      </Surface>
+
+      {!readiness.identityVerified ? (
+        <IdentityHandoffCard userId={data.userId} profile={profile} onRefresh={onRefresh} />
+      ) : null}
 
       {/* ── Selling setup ── */}
-      <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xl text-ink">Selling setup</h3>
-          {readiness.identityVerified ? null : <OpenAppButton label="Open app for ID" className="text-xs font-semibold text-needle" />}
-        </div>
-        <div className="mt-4 divide-y divide-ink/6">
+      <Surface>
+        <SurfaceHeader title="Go-live checklist" description="The profile, proof, identity, and payout gates that control customer access." />
+        <div className="divide-y divide-ui-border px-5">
           {sellingSetupRows.map((row) => (
-            <div key={row.label} className="flex items-start gap-3 py-3">
-              <span className="mt-0.5 w-24 shrink-0 text-xs font-semibold text-ink/42">{row.label}</span>
-              <span className="flex-1 text-right text-xs font-semibold text-ink">{row.value}</span>
+            <div key={row.label} className="grid gap-1 py-3 sm:grid-cols-[minmax(12rem,0.65fr)_minmax(0,1fr)] sm:items-start">
+              <span className="text-xs font-semibold text-ui-subtle">{row.label}</span>
+              <span className="break-words text-sm font-semibold text-ink sm:text-right">{row.value}</span>
             </div>
           ))}
         </div>
-        <TailorSellingSetupEditor data={data} onRefresh={onRefresh} />
-      </section>
+        <div className="px-5 pb-5"><TailorSellingSetupEditor data={data} onRefresh={onRefresh} /></div>
+      </Surface>
 
       {/* ── Portfolio ── */}
       <PortfolioManager data={data} onRefresh={onRefresh} />
 
       {/* ── Action list ── */}
-      <section className="overflow-hidden rounded-[1.6rem] border border-ink/8 bg-white/84 shadow-sm">
+      <Surface className="overflow-hidden">
         {profile.is_live ? (
           <button
             type="button"
@@ -12300,7 +16115,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
             className="flex min-h-[52px] w-full items-center justify-between gap-3 border-b border-ink/6 px-5 py-3.5 text-left text-sm font-semibold text-ink transition hover:bg-bone/60"
           >
             {copied ? 'Link copied!' : 'Share my live profile'}
-            <span className="text-ink/30">→</span>
+            <Share2 className="size-4 text-ui-subtle" />
           </button>
         ) : null}
         <Link
@@ -12308,27 +16123,27 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
           className="flex min-h-[52px] items-center justify-between gap-3 border-b border-ink/6 px-5 py-3.5 text-sm font-semibold text-ink transition hover:bg-bone/60"
         >
           Review payout setup
-          <span className="text-ink/30">→</span>
+          <ChevronRight className="size-4 text-ui-subtle" />
         </Link>
         <Link
           href="/account/earnings"
           className="flex min-h-[52px] items-center justify-between gap-3 px-5 py-3.5 text-sm font-semibold text-ink transition hover:bg-bone/60"
         >
           View earnings
-          <span className="text-ink/30">→</span>
+          <ChevronRight className="size-4 text-ui-subtle" />
         </Link>
-      </section>
+      </Surface>
 
       {/* ── App-only trust steps ── */}
-      <section className="rounded-[1.6rem] border border-needle/12 bg-needle/6 p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">App-only trust steps</p>
+      <Surface className="border-needle/12 bg-needle/6 p-5">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Trust steps</p>
         <p className="mt-2 text-sm leading-6 text-ink/66">
-          Identity document upload, native body scans, camera-guided proof, push permissions, and stronger reauth flows still work best in the app. Profile setup, portfolio, shop, payouts, and order work are available on web.
+          Body scans, push permissions, and stronger reauth flows still work best in the app. Identity review now starts from this secure smartphone handoff.
         </p>
         <div className="mt-4">
-          <OpenAppButton label="Open app trust flows" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
+          <OpenAppButton label="Open app trust flows" className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white" />
         </div>
-      </section>
+      </Surface>
 
     </div>
   )
@@ -12369,30 +16184,26 @@ function PasswordChangePanel({ session }: { session: Session | null }) {
 
   if (!show) {
     return (
-      <button type="button" onClick={() => setShow(true)} className="text-sm font-semibold text-needle">
-        Change password →
-      </button>
+      <Button variant="ghost" size="sm" onClick={() => setShow(true)}>Change password <ChevronRight /></Button>
     )
   }
 
   return (
     <div className="grid gap-3">
       <ActionNotice error={error} success={success} />
-      <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" className="rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
+      <Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" />
       <div className="grid gap-2 sm:grid-cols-2">
-        <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (8+ chars)" className="rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
-        <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" className="rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
+        <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (8+ chars)" />
+        <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" />
       </div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={changePassword} disabled={busy} className="inline-flex rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+        <Button onClick={changePassword} disabled={busy}>
           {busy ? 'Updating...' : 'Update password'}
-        </button>
-        <button type="button" onClick={() => { setShow(false); setCurrentPassword(''); setNewPassword(''); setConfirm(''); setError(null); setSuccess(null) }} className="inline-flex rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
+        </Button>
+        <Button variant="secondary" onClick={() => { setShow(false); setCurrentPassword(''); setNewPassword(''); setConfirm(''); setError(null); setSuccess(null) }}>
           Cancel
-        </button>
-        <Link href="/account/recovery" className="inline-flex items-center text-sm text-needle">
-          Forgot current password →
-        </Link>
+        </Button>
+        <Button asChild variant="link"><Link href="/account/recovery">Forgot current password</Link></Button>
       </div>
     </div>
   )
@@ -12433,24 +16244,22 @@ function EmailChangePanel({ session }: { session: Session | null }) {
 
   if (!show) {
     return (
-      <button type="button" onClick={() => setShow(true)} className="text-sm font-semibold text-needle">
-        Change email →
-      </button>
+      <Button variant="ghost" size="sm" onClick={() => setShow(true)}>Change email <ChevronRight /></Button>
     )
   }
 
   return (
     <div className="grid gap-3">
       <ActionNotice error={error} success={success} />
-      <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" className="rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
-      <div className="flex gap-2">
-        <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="New email address" className="min-w-0 flex-1 rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/40" />
-        <button type="button" onClick={changeEmail} disabled={busy} className="inline-flex rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+      <Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" />
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+        <Input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="New email address" />
+        <Button onClick={changeEmail} disabled={busy}>
           {busy ? 'Sending...' : 'Send confirmation'}
-        </button>
-        <button type="button" onClick={() => { setShow(false); setNewEmail(''); setCurrentPassword(''); setError(null) }} className="inline-flex rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
+        </Button>
+        <Button variant="secondary" onClick={() => { setShow(false); setNewEmail(''); setCurrentPassword(''); setError(null) }}>
           Cancel
-        </button>
+        </Button>
       </div>
       <p className="text-xs text-ink/44">Drapeon sends confirmation to both addresses. You must click both links.</p>
     </div>
@@ -12559,18 +16368,18 @@ function NotificationPrefsPanel({ session, onRefresh }: { session: Session | nul
   return (
     <div className="grid gap-3">
       {toggles.map(([key, label, body]) => (
-        <label key={key} className="flex cursor-pointer items-start gap-3 rounded-[0.85rem] border border-ink/6 bg-bone/40 px-4 py-3 hover:bg-ink/4">
-          <input type="checkbox" checked={prefs[key]} onChange={(e) => setPrefs((p) => ({ ...p, [key]: e.target.checked }))} className="mt-0.5 h-4 w-4 rounded accent-needle" />
-          <div>
+        <div key={key} className="flex items-start justify-between gap-4 rounded-[8px] border border-ui-border bg-ui-muted/45 px-4 py-3">
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">{label}</p>
             <p className="mt-0.5 text-xs text-ink/48">{body}</p>
           </div>
-        </label>
+          <Switch checked={prefs[key]} onCheckedChange={(checked) => setPrefs((p) => ({ ...p, [key]: checked }))} aria-label={label} />
+        </div>
       ))}
       <ActionNotice error={error} success={success} />
-      <button type="button" onClick={savePrefs} disabled={busy} className="inline-flex w-fit rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+      <Button onClick={savePrefs} disabled={busy} className="w-fit">
         {busy ? 'Saving...' : 'Save preferences'}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -12598,9 +16407,9 @@ function SessionPanel({ session }: { session: Session | null }) {
     <div className="grid gap-3">
       {lastSignIn ? <p className="text-xs text-ink/44">Last sign-in: {formatRelative(lastSignIn)}</p> : null}
       <ActionNotice error={error} success={success} />
-      <button type="button" onClick={signOutOtherDevices} disabled={busy} className="inline-flex w-fit rounded-full border border-rust/18 bg-rust/6 px-4 py-2.5 text-sm font-semibold text-rust transition hover:bg-rust/10 disabled:cursor-not-allowed disabled:text-ink/40">
+      <Button variant="outline" onClick={signOutOtherDevices} disabled={busy} className="w-fit border-rust/20 text-rust hover:bg-rust/5">
         {busy ? 'Signing out...' : 'Sign out all other devices'}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -12649,36 +16458,35 @@ function AccountDeletionPanel({ session, onRefresh }: { session: Session | null;
       <p className="text-xs text-ink/50">
         This starts the guarded account deletion workflow. Active orders, disputes, payouts, or legal retention obligations must be resolved first. Type <span className="font-mono font-semibold text-rust">delete</span> and confirm your current password.
       </p>
-      <textarea
+      <Textarea
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         rows={2}
         placeholder="Optional note for privacy review"
-        className="resize-none rounded-[1rem] border border-rust/18 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-rust/40"
+        className="border-rust/20 focus:border-rust focus:ring-rust/10"
       />
-      <div className="flex flex-wrap gap-2">
-        <input
+      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <Input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           placeholder='Type "delete" to confirm'
-          className="min-w-0 flex-1 rounded-full border border-rust/18 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-rust/40"
+          className="border-rust/20 focus:border-rust focus:ring-rust/10"
         />
-        <input
+        <Input
           type="password"
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
           placeholder="Current password"
           autoComplete="current-password"
-          className="min-w-0 flex-1 rounded-full border border-rust/18 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-rust/40"
+          className="border-rust/20 focus:border-rust focus:ring-rust/10"
         />
-        <button
-          type="button"
+        <Button
           onClick={requestDeletion}
           disabled={busy || confirm.toLowerCase() !== 'delete' || !currentPassword}
-          className="inline-flex rounded-full bg-rust px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
+          variant="destructive"
         >
           {busy ? 'Submitting...' : 'Request deletion'}
-        </button>
+        </Button>
       </div>
       <ActionNotice error={error} success={success} />
     </div>
@@ -12687,14 +16495,12 @@ function AccountDeletionPanel({ session, onRefresh }: { session: Session | null;
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
-      <div className="border-b border-ink/6 px-5 py-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">{title}</p>
-      </div>
-      <div className="divide-y divide-ink/6">
+    <Surface className="overflow-hidden">
+      <SurfaceHeader title={title} />
+      <div className="divide-y divide-ui-border">
         {children}
       </div>
-    </section>
+    </Surface>
   )
 }
 
@@ -12858,22 +16664,20 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
   return (
     <div className="grid gap-5">
       {/* ── FAQ ── */}
-      <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
-        <div className="border-b border-ink/6 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Common questions</p>
-        </div>
+      <Surface className="overflow-hidden">
+        <SurfaceHeader title="Common questions" description="Operational answers for orders, payment, fulfillment, and account access." />
         {faqItems.map(([question, answer], index) => (
           <details key={question} className={`group ${index > 0 ? 'border-t border-ink/6' : ''}`}>
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden">
               <span className="text-sm font-semibold text-ink">{question}</span>
-              <span className="shrink-0 text-xs text-ink/36 transition group-open:rotate-180">▾</span>
+              <ChevronDown className="size-4 shrink-0 text-ink/36 transition group-open:rotate-180" />
             </summary>
             <div className="border-t border-ink/6 bg-bone/40 px-5 py-4">
               <p className="text-sm leading-6 text-ink/62">{answer}</p>
             </div>
           </details>
         ))}
-      </section>
+      </Surface>
 
       {/* ── Support request form ── */}
       <GeneralSupportForm data={data} onRefresh={onRefresh} />
@@ -12883,11 +16687,8 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
 
       {/* ── Order-aware help ── */}
       {activeOrders.length > 0 ? (
-        <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
-          <div className="border-b border-ink/6 px-5 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Your active orders</p>
-            <p className="mt-0.5 text-sm text-ink/52">Select an order to get help specific to that order&apos;s payment, stage, or delivery.</p>
-          </div>
+        <Surface className="overflow-hidden">
+          <SurfaceHeader title="Your active orders" description="Select an order to get help specific to its payment, stage, or delivery." />
           {activeOrders.map((order, index) => (
             <div key={order.id} className={`flex items-center gap-4 px-5 py-4 ${index > 0 ? 'border-t border-ink/6' : ''}`}>
               <div className="min-w-0 flex-1">
@@ -12898,37 +16699,50 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
                 </div>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
-                <Link href={accountRoute(`/account/orders/${order.id}`)} className="inline-flex items-center rounded-full border border-ink/10 bg-white px-3 py-1.5 text-xs font-semibold text-ink">
-                  View order
-                </Link>
-                <a href={mailto(CONTACTS.support, `Help with order: ${order.reference ?? order.id}`)} className="inline-flex items-center rounded-full bg-needle px-3 py-1.5 text-xs font-semibold text-white">
-                  Email support
+                <Button asChild variant="secondary" size="sm"><Link href={accountRoute(`/account/orders/${order.id}`)}>View order</Link></Button>
+                <Button asChild size="sm"><a href={mailto(CONTACTS.support, `Help with order: ${order.reference ?? order.id}`)}>Email support</a></Button>
+                <a
+                  href={buildWhatsAppSupportUrl(`Hi Drapeon, I need help with order ${order.reference ?? order.id}.`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-9 items-center rounded-[8px] border border-needle/15 bg-white px-3 text-xs font-semibold text-needle"
+                >
+                  WhatsApp
                 </a>
               </div>
             </div>
           ))}
-        </section>
+        </Surface>
       ) : null}
 
       {/* ── Direct contact routes ── */}
-      <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
-        <div className="border-b border-ink/6 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/44">Direct contacts</p>
-          <p className="mt-0.5 text-sm text-ink/52">Route to the right inbox for faster resolution.</p>
-        </div>
-        {issueRoutes.map(([title, email, subject], index) => (
-          <a key={title} href={mailto(email, subject)} className={`flex items-center gap-4 px-5 py-4 transition hover:bg-ink/3 ${index > 0 ? 'border-t border-ink/6' : ''}`}>
+      <Surface className="overflow-hidden">
+        <SurfaceHeader title="Direct contacts" description="Route the issue to the right support inbox." />
+        <a
+          href={buildWhatsAppSupportUrl(isTailor ? 'Hi Drapeon, I need tailor support.' : 'Hi Drapeon, I need customer support.')}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-4 px-5 py-4 transition hover:bg-ink/3"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-ink">WhatsApp support</p>
+            <p className="mt-0.5 text-xs font-semibold text-needle">Message Drapeon directly</p>
+          </div>
+          <ChevronRight className="size-4 shrink-0 text-ui-subtle" />
+        </a>
+        {issueRoutes.map(([title, email, subject]) => (
+          <a key={title} href={mailto(email, subject)} className="flex items-center gap-4 border-t border-ink/6 px-5 py-4 transition hover:bg-ink/3">
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-ink">{title}</p>
               <p className="mt-0.5 text-xs font-semibold text-needle">{email}</p>
             </div>
-            <span className="shrink-0 text-xs text-ink/36">→</span>
+            <ChevronRight className="size-4 shrink-0 text-ui-subtle" />
           </a>
         ))}
         <div className="border-t border-ink/6 px-5 py-4">
           <p className="text-xs text-ink/44">Response within 1 business day for most issues. Active order disputes are reviewed within 4 hours.</p>
         </div>
-      </section>
+      </Surface>
     </div>
   )
 }
@@ -12940,6 +16754,7 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [reviewPreviewMedia, setReviewPreviewMedia] = useState<string | null>(null)
 
   if (!tailor) {
     return (
@@ -12950,10 +16765,7 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
       />
     )
   }
-  const portfolio = stringList(tailor.portfolio_photo_urls)
-    .map((src) => safeMediaUrl(src, 'portfolio-photos'))
-    .filter((src): src is string => !!src)
-  const profileMedia = uniqueValues([tailorPhoto(tailor), ...portfolio])
+  const profileMedia = tailorProfileMedia(tailor)
   const readyMade = data.readyMade.filter((item) => (
     account.userId === tailor.user_id || isReadyMadeBuyableOnWeb(item, tailor)
   ))
@@ -12995,10 +16807,18 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
   return (
     <div className="grid gap-5">
       {/* Immersive hero card */}
-      <section className="overflow-hidden rounded-[1.8rem] border border-ink/8 shadow-sm">
+      <Surface className="overflow-hidden">
         <div className="relative h-52 bg-bone sm:h-64 md:h-80">
-          {profileMedia[0] ? (
-            <Image src={profileMedia[0]} alt="Tailor cover" fill sizes="100vw" className="object-cover" unoptimized />
+          {profileMedia[0] && isVideoMediaUrl(profileMedia[0]) ? (
+            <MutedVideo
+              src={profileMedia[0]}
+              className="h-full w-full object-cover"
+              ariaLabel="Tailor cover"
+              autoPlay={true}
+              showMuteToggle
+            />
+          ) : profileMedia[0] ? (
+            <Image src={profileMedia[0]} alt="Tailor cover" fill sizes="100vw" className="object-cover object-top" unoptimized />
           ) : null}
           <div className="absolute inset-0 bg-gradient-to-t from-ink/88 via-ink/30 to-ink/0" />
           <div className="absolute bottom-0 left-0 right-0 p-5 md:p-6">
@@ -13017,7 +16837,7 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
                 </div>
               </div>
               {tailor.is_verified ? (
-                <span className="shrink-0 rounded-full bg-needle px-3 py-1 text-xs font-semibold text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]">Verified</span>
+                <StatusChip status="VERIFIED" className="shadow-sm" />
               ) : null}
             </div>
           </div>
@@ -13041,48 +16861,53 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
 
           <div className="mt-5 flex flex-wrap gap-3">
             {canRequestCustomOrder ? (
-              <Link href={accountRoute(`/account/brief/${tailor.id}`)} className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
-                Request custom order
-              </Link>
+              <Button asChild><Link href={accountRoute(`/account/brief/${tailor.id}`)}>Request custom order</Link></Button>
             ) : tailor.supports_custom_orders ? (
               <button type="button" disabled className="inline-flex cursor-not-allowed items-center justify-center rounded-full bg-ink/10 px-5 py-3 text-sm font-semibold text-ink/48">
                 {customBriefUnavailableLabel(tailor, account.userId)}
               </button>
             ) : null}
-            <button
+            <Button
               type="button"
               onClick={() => { void toggleSaved() }}
               disabled={busy}
-              className={isSaved
-                ? 'inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust disabled:opacity-50'
-                : 'inline-flex items-center justify-center rounded-full border border-needle/20 bg-needle/8 px-5 py-3 text-sm font-semibold text-needle disabled:opacity-50'}
+              variant={isSaved ? 'destructive' : 'secondary'}
             >
               {busy ? 'Updating...' : isSaved ? 'Remove from saved' : 'Save tailor'}
-            </button>
-            <OpenAppButton label="Open in app" className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink" />
+            </Button>
+            <OpenAppButton label="Open in app" className="inline-flex items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink" />
           </div>
         </div>
-      </section>
+      </Surface>
 
       {/* Portfolio strip */}
       {profileMedia.length > 1 ? (
-        <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
-          <p className="px-6 pt-5 text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Portfolio</p>
+        <Surface className="overflow-hidden">
+          <SurfaceHeader title="Portfolio" description="Open any image or video for a closer review." />
           <div className="flex gap-3 overflow-x-auto px-6 pb-5 pt-3">
             {profileMedia.slice(1).map((src, i) => (
-              <a key={src} href={src} target="_blank" rel="noreferrer" className="shrink-0">
-                <div className="relative h-36 w-36 overflow-hidden rounded-[1rem] bg-bone">
-                  <Image src={src} alt={`Portfolio ${i + 2}`} fill sizes="144px" className="object-cover" unoptimized />
-                </div>
-              </a>
+              <MediaViewerDialog key={src} src={src} kind={isVideoMediaUrl(src) ? 'video' : 'image'} title={`Portfolio ${i + 2}`}>
+                <button type="button" className="relative h-36 w-36 shrink-0 cursor-zoom-in overflow-hidden rounded-[8px] bg-bone text-left">
+                  {isVideoMediaUrl(src) ? (
+                    <MutedVideo
+                      src={src}
+                      className="h-full w-full object-cover"
+                      ariaLabel={`Portfolio ${i + 2}`}
+                      showMuteToggle={false}
+                    />
+                  ) : (
+                    <Image src={src} alt={`Portfolio ${i + 2}`} fill sizes="144px" className="object-cover object-top" unoptimized />
+                  )}
+                </button>
+              </MediaViewerDialog>
             ))}
           </div>
-        </section>
+        </Surface>
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-2">
         {/* Craft profile */}
-        <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
+        <Surface className="overflow-hidden">
           <div className="p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Craft profile</p>
             {specialties.length > 0 ? (
@@ -13108,10 +16933,10 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
               </div>
             ) : null}
           </div>
-        </section>
+        </Surface>
 
         {/* Reviews */}
-        <section className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
+        <Surface className="overflow-hidden">
           <div className="p-6 pb-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Reviews</p>
             <p className="mt-1.5 text-2xl font-semibold text-ink">
@@ -13125,6 +16950,9 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
             <div className="divide-y divide-ink/6 max-h-[420px] overflow-y-auto">
               {data.tailorReviews.map((review) => {
                 const reviewStars = Math.round(Number(review.rating ?? 0))
+                const reviewMediaUrls = stringList(review.media_urls)
+                  .map((src) => safeMediaUrl(src, 'review-media'))
+                  .filter((src): src is string => Boolean(src))
                 return (
                   <div key={review.id} className="p-5">
                     <div className="flex items-start justify-between gap-3">
@@ -13145,8 +16973,30 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
                       </div>
                     ) : null}
                     {review.body ? <p className="mt-2 text-sm leading-6 text-ink/62">{safeUserText(review.body)}</p> : null}
+                    {reviewMediaUrls.length > 0 ? (
+                      <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                        {reviewMediaUrls.map((src, index) => (
+                          <button
+                            key={src}
+                            type="button"
+                            onClick={() => setReviewPreviewMedia(src)}
+                            className="relative h-20 w-20 shrink-0 overflow-hidden rounded-[8px] bg-ink/8 text-left"
+                            aria-label={`Open review media ${index + 1}`}
+                          >
+                            {isVideoMediaUrl(src) ? (
+                              <MutedVideo src={src} className="h-full w-full object-cover" ariaLabel="Review video preview" showMuteToggle={false} />
+                            ) : (
+                              <img src={src} alt="Review attachment" className="h-full w-full object-cover" />
+                            )}
+                            {isVideoMediaUrl(src) ? (
+                              <span className="absolute bottom-1 right-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[0.62rem] font-bold text-white">▶</span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {review.tailor_response ? (
-                      <div className="mt-3 rounded-[0.85rem] bg-needle/4 px-4 py-3">
+                      <div className="mt-3 rounded-[8px] bg-needle/4 px-4 py-3">
                         <p className="text-xs font-semibold uppercase tracking-[0.13em] text-needle/70">Tailor response</p>
                         <p className="mt-1 text-sm leading-6 text-ink/66">{safeUserText(review.tailor_response)}</p>
                       </div>
@@ -13156,7 +17006,7 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
               })}
             </div>
           )}
-        </section>
+        </Surface>
       </div>
 
       {/* Ready-made from this tailor */}
@@ -13168,7 +17018,7 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
               <Link
                 key={item.id}
                 href={accountRoute(`/account/items/${item.id}`)}
-                className="group overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_14px_40px_rgba(22,28,24,0.10)]"
+                className="group overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm transition hover:border-needle/30 hover:shadow-md"
               >
                 <div className="relative aspect-[4/3] bg-bone">
                   {itemPhoto(item) ? (
@@ -13184,6 +17034,25 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
             ))}
           </div>
         </section>
+      ) : null}
+
+      {reviewPreviewMedia ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/82 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            onClick={() => setReviewPreviewMedia(null)}
+            className="absolute right-4 top-4 rounded-full bg-white/92 px-4 py-2 text-sm font-semibold text-ink shadow-lg"
+          >
+            Close
+          </button>
+          <div className="max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-[8px] bg-black shadow-2xl">
+            {isVideoMediaUrl(reviewPreviewMedia) ? (
+              <MutedVideo src={reviewPreviewMedia} className="max-h-[82vh] w-full object-contain" ariaLabel="Review video" autoPlay={true} controls={true} showMuteToggle />
+            ) : (
+              <img src={reviewPreviewMedia} alt="Review attachment preview" className="max-h-[82vh] w-full object-contain" />
+            )}
+          </div>
+        </div>
       ) : null}
     </div>
   )
@@ -13209,6 +17078,7 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
   const gallery = stringList(item.photo_urls)
     .map((src) => safeMediaUrl(src, 'seller-item-media'))
     .filter((src): src is string => !!src)
+  const heroMedia = gallery[0] ?? null
   const itemInventoryQuantity = readyMadeInventoryCount(item)
   const canUseReadyMadeItemActions = Boolean(data.userId && data.tailorProfile?.id !== item.tailor_profile_id && item.is_live)
   const itemIsBuyable = isReadyMadeBuyableOnWeb(item, tailor)
@@ -13246,11 +17116,18 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
 
   return (
     <div className="grid gap-5">
-      {/* Hero card */}
-      <section className="overflow-hidden rounded-[1.8rem] border border-ink/8 shadow-sm">
+        {/* Hero card */}
+      <Surface className="overflow-hidden">
         <div className="relative h-52 bg-bone sm:h-64 md:aspect-[16/9] md:h-auto">
-          {gallery[0] ? (
-            <Image src={gallery[0]} alt={safeUserText(item.title, 'Ready-made item')} fill sizes="100vw" className="object-cover" unoptimized />
+          {heroMedia && isVideoMediaUrl(heroMedia) ? (
+            <MutedVideo
+              src={heroMedia}
+              className="h-full w-full object-cover"
+              ariaLabel={safeUserText(item.title, 'Ready-made item')}
+              showMuteToggle
+            />
+          ) : heroMedia ? (
+            <Image src={heroMedia} alt={safeUserText(item.title, 'Ready-made item')} fill sizes="100vw" className="object-cover" unoptimized />
           ) : null}
           <div className="absolute inset-0 bg-gradient-to-t from-ink/88 via-ink/30 to-ink/0" />
           <div className="absolute bottom-0 left-0 right-0 p-5 md:p-6">
@@ -13269,11 +17146,20 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
         {gallery.length > 1 ? (
           <div className="flex gap-3 overflow-x-auto bg-bone/40 px-6 py-4">
             {gallery.slice(1).map((src, i) => (
-              <a key={src} href={src} target="_blank" rel="noreferrer" className="shrink-0">
-                <div className="relative h-20 w-20 overflow-hidden rounded-[0.85rem] bg-bone">
-                  <Image src={src} alt={`Item image ${i + 2}`} fill sizes="80px" className="object-cover" unoptimized />
-                </div>
-              </a>
+              <MediaViewerDialog key={src} src={src} kind={isVideoMediaUrl(src) ? 'video' : 'image'} title={`${safeUserText(item.title, 'Item')} media ${i + 2}`}>
+                <button type="button" className="relative h-20 w-20 shrink-0 cursor-zoom-in overflow-hidden rounded-[8px] bg-bone text-left">
+                  {isVideoMediaUrl(src) ? (
+                    <MutedVideo
+                      src={src}
+                      className="h-full w-full object-cover"
+                      ariaLabel={`Item video ${i + 2}`}
+                      showMuteToggle={false}
+                    />
+                  ) : (
+                    <Image src={src} alt={`Item image ${i + 2}`} fill sizes="80px" className="object-cover" unoptimized />
+                  )}
+                </button>
+              </MediaViewerDialog>
             ))}
           </div>
         ) : null}
@@ -13296,7 +17182,7 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
 
           <div className="mt-6 flex flex-wrap gap-3">
             {canStartWebCheckout ? (
-              <a href="#ready-made-checkout" className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
+              <a href="#ready-made-checkout" className="inline-flex items-center justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white">
                 {checkoutCtaLabel}
               </a>
             ) : canUseReadyMadeItemActions ? (
@@ -13315,22 +17201,22 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
                 type="button"
                 onClick={() => { void startReadyMadeInquiry() }}
                 disabled={inquiryBusy}
-                className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/38"
+                className="inline-flex items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/38"
               >
                 {inquiryBusy ? 'Opening thread...' : 'Ask seller'}
               </button>
             ) : null}
             {item.tailor_profile_id ? (
-              <Link href={accountRoute(`/account/tailors/${item.tailor_profile_id}`)} className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink">
+              <Link href={accountRoute(`/account/tailors/${item.tailor_profile_id}`)} className="inline-flex items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink">
                 View tailor
               </Link>
             ) : null}
             {canStartWebCheckout ? (
-              <OpenAppButton label="Open in app" className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink" />
+              <OpenAppButton label="Open in app" className="inline-flex items-center justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink" />
             ) : null}
           </div>
         </div>
-      </section>
+      </Surface>
 
       {canStartWebCheckout ? (
         <ReadyMadeCheckoutForm item={item} data={data} onRefresh={onRefresh} />
@@ -13338,7 +17224,7 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
 
       <section className="grid gap-5 lg:grid-cols-2">
         {/* Tailor mini-card */}
-        <div className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-[8px] border border-ink/8 bg-white shadow-sm">
           <div className="relative h-24 bg-needle/8">
             {tailorAvatarSrc ? (
               <Image src={tailorAvatarSrc} alt="Tailor" fill sizes="(min-width: 1024px) 50vw, 100vw" className="object-cover" unoptimized />
@@ -13361,10 +17247,10 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
         </div>
 
         {/* Fit guidance */}
-        <div className="rounded-[1.5rem] border border-ink/8 bg-white p-6 shadow-sm">
+        <div className="rounded-[8px] border border-ink/8 bg-white p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Fit guidance</p>
-          <p className="mt-3 text-sm leading-7 text-ink/66">{sizeGuideSummary(item.size_guide)}</p>
-          <p className="mt-4 rounded-[1rem] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
+          <p className="mt-3 text-sm leading-7 text-ink/66">{sizeGuideSummary(item.size_guide, stringList(item.sizes))}</p>
+          <p className="mt-4 rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
             Checkout keeps payment state, fulfillment, and order handoff together. Native push and camera-guided proof are available in the app when needed.
           </p>
         </div>
@@ -13435,6 +17321,8 @@ export function AccountAppSurface({
     ]
     return new Map(orders.map((order) => [order.id, order]))
   }, [checkoutData.orders, orderDetailData.order, ordersData.orders, workData.orders])
+
+  useSessionTimeout({ enabled: Boolean(accountUserId) })
 
   useEffect(() => {
     orderNotificationPermissionRef.current = orderNotificationPermission
@@ -13656,6 +17544,35 @@ export function AccountAppSurface({
       void supabase.removeChannel(channel)
     }
   }, [data.tailorProfile?.id, orderRealtimeIdsKey, realtimeOrdersById, session?.user.id, shellData.tailorProfile?.id, surface])
+
+  useEffect(() => {
+    if (!session?.user.id) return
+    const userId = session.user.id
+    const supabase = createClient()
+    const channel = supabase.channel(`account-verification-review-sync:${userId}`)
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleReviewRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        setReloadKey((current) => current + 1)
+      }, 350)
+    }
+
+    for (const table of ['profile_change_requests', 'payout_change_requests'] as const) {
+      for (const event of ORDER_REALTIME_ROW_EVENTS) {
+        channel.on('postgres_changes', { event, schema: 'public', table, filter: `tailor_user_id=eq.${userId}` }, scheduleReviewRefresh)
+      }
+    }
+
+    channel.subscribe()
+    const poll = window.setInterval(scheduleReviewRefresh, 15000)
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      window.clearInterval(poll)
+      void supabase.removeChannel(channel)
+    }
+  }, [session?.user.id])
 
   useEffect(() => {
     if (!session?.user.id) return

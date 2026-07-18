@@ -7,12 +7,8 @@
  * Supabase sends a POST with the row payload:
  *   { type: 'INSERT', table: 'messages', record: { ... }, old_record: null }
  *
- * Set this up in:
- *   Supabase Dashboard → Database → Webhooks → Create a new hook
- *     Table:  messages
- *     Events: INSERT
- *     URL:    https://<project>.supabase.co/functions/v1/on-message-created
- *     Headers: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>
+ * Any sender calling this function must sign the exact raw request body:
+ *   x-drape-signature: sha256=<HMAC_SHA256(raw_body, WEBHOOK_SECRET)>
  *
  * Required env vars:
  *   SUPABASE_URL
@@ -24,6 +20,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { log } from '../_shared/logger.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { verifyPayload } from '../_shared/hmac.ts'
 import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import {
   getClientIp,
@@ -45,22 +42,22 @@ function jsonResponse(body: Record<string, unknown>, status: number, headers: He
   })
 }
 
-/**
- * Timing-safe string comparison via SHA-256 hashing.
- * Both inputs are hashed to a fixed 32-byte digest before XOR comparison,
- * eliminating early-exit timing leaks present in direct string comparison.
- */
-async function timingSafeEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder()
-  const [hashA, hashB] = await Promise.all([
-    crypto.subtle.digest('SHA-256', enc.encode(a)),
-    crypto.subtle.digest('SHA-256', enc.encode(b)),
-  ])
-  const arrA = new Uint8Array(hashA)
-  const arrB = new Uint8Array(hashB)
-  let diff = 0
-  for (let i = 0; i < 32; i++) diff |= arrA[i] ^ arrB[i]
-  return diff === 0
+function normalizeWebhookSignature(value: string | null): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) return null
+
+  const firstValue = trimmed.split(',').at(0)?.trim() ?? ''
+  const hex = firstValue.toLowerCase().startsWith('sha256=')
+    ? firstValue.slice('sha256='.length)
+    : firstValue
+  return /^[a-f0-9]{64}$/i.test(hex) ? hex : null
+}
+
+function readWebhookSignature(req: Request): string | null {
+  return normalizeWebhookSignature(req.headers.get('x-drape-signature')) ??
+    normalizeWebhookSignature(req.headers.get('x-webhook-signature')) ??
+    normalizeWebhookSignature(req.headers.get('x-supabase-signature')) ??
+    normalizeWebhookSignature(req.headers.get('x-hub-signature-256'))
 }
 
 Deno.serve(async (req) => {
@@ -68,18 +65,17 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    // Verify the request comes from Supabase webhooks using a dedicated WEBHOOK_SECRET.
-    // Configure the Supabase Database Webhook header as:
-    //   Authorization: Bearer <WEBHOOK_SECRET>
-    // where WEBHOOK_SECRET is a separate secret — never reuse SUPABASE_SERVICE_ROLE_KEY.
+    const rawBody = await req.text()
+
+    // Verify the request comes from Supabase webhooks using HMAC-SHA256 over
+    // the exact raw request body. WEBHOOK_SECRET must be a dedicated secret.
     const webhookSecret = Deno.env.get('WEBHOOK_SECRET')
     if (!webhookSecret) {
       log('error', FN, 'auth.misconfigured', { reason: 'WEBHOOK_SECRET not set' })
       return jsonResponse({ error: 'Webhook is not configured.' }, 401, corsHeaders)
     }
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    const valid = await timingSafeEqual(token, webhookSecret)
+    const signature = readWebhookSignature(req)
+    const valid = signature ? await verifyPayload(webhookSecret, rawBody, signature) : false
     if (!valid) {
       log('warn', FN, 'auth.unauthorized')
       return jsonResponse({ error: 'This webhook request is not authorized.' }, 401, corsHeaders)
@@ -97,7 +93,7 @@ Deno.serve(async (req) => {
     )
     if (!limit.allowed) return rateLimitExceededResponse(corsHeaders, limit.retryAfter)
 
-    const payload = await req.json() as {
+    let payload: {
       type: string
       table: string
       record: {
@@ -109,6 +105,11 @@ Deno.serve(async (req) => {
         type: 'TEXT' | 'PHOTO' | 'VOICE'
         body: string | null
       }
+    }
+    try {
+      payload = JSON.parse(rawBody)
+    } catch {
+      return jsonResponse({ error: 'Webhook payload is not valid JSON.' }, 400, corsHeaders)
     }
 
     if (payload.type !== 'INSERT' || payload.table !== 'messages') {
@@ -141,30 +142,33 @@ Deno.serve(async (req) => {
     // Build notification body — preview text or fallback label
     let preview: string
     if (msg.type === 'PHOTO') {
-      preview = '📷 Photo'
+      preview = 'Sent a photo'
     } else if (msg.type === 'VOICE') {
-      preview = '🎙 Voice note'
+      preview = 'Sent a voice note'
     } else {
       // Truncate long messages and strip potential PII from preview
       preview = (msg.body ?? '').slice(0, 60)
       if ((msg.body ?? '').length > 60) preview += '…'
     }
 
+    const notification = {
+      title: msg.sender_name ?? 'New message',
+      body: preview || 'Sent you a message.',
+      preferenceKey: 'messages' as const,
+      channelId: 'default',
+      sound: 'default',
+      data: {
+        orderId: msg.order_id,
+        target: 'messages',
+      },
+    }
     await enqueuePushJob(supabase, {
       userId: recipientId,
       source: FN,
       orderId: msg.order_id,
       idempotencyKey: `message-created:${msg.id}`,
       priority: 20,
-      notification: {
-        title: msg.sender_name ?? 'New message',
-        body: preview || 'Sent you a message.',
-        preferenceKey: 'messages',
-        data: {
-          orderId: msg.order_id,
-          target: 'messages',
-        },
-      },
+      notification,
     })
 
     log('info', FN, 'notification.queued', { order_id: msg.order_id, sender_role: msg.sender_role })

@@ -1,9 +1,11 @@
 import type { ComponentProps } from 'react'
 import { StyleSheet, Text, TouchableOpacity, View, type ViewStyle } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { Colors, Fonts, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { RemoteImage } from './RemoteImage'
 import type { StorageImageBucket } from '@/lib/image-url'
+
+const IMAGE_HEIGHT = 168
 
 type MarketplaceCardProps = {
   title: string
@@ -104,12 +106,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     borderRadius: 18,
-    padding: 23,
+    padding: Spacing.xxl,
     gap: Spacing.lg,
   },
   imageWrap: {
-    height: 168,
-    borderRadius: 14,
+    height: IMAGE_HEIGHT,
+    borderRadius: Radius.lg,
     overflow: 'hidden',
     backgroundColor: Colors.needleGreenLight,
   },
@@ -179,7 +181,6 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
   },
   stock: {
-    marginLeft: 'auto',
     fontFamily: Fonts.bodyBold,
     fontSize: FontSize.sm,
     lineHeight: 20,

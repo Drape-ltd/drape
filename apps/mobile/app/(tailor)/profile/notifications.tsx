@@ -3,9 +3,10 @@
  *
  * Feed of activity on the tailor's orders:
  *   - New bookings (PENDING_QUOTE) needing a quote
- *   - Payment confirmed, customer signed off, disputes, cancellations
+ *   - Stage updates: payment confirmed, disputes, cancellations, etc.
+ *   - New messages from customers
  *
- * Badge clears by stamping last_notif_check on open, same as customer.
+ * Badge clears by stamping last_tailor_notif_check on open, same as customer.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -21,7 +22,7 @@ import { Button, FeatureStateCard } from '@/components/ui'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 
 type NotifItem = {
   id: string
@@ -30,7 +31,9 @@ type NotifItem = {
   garmentType: string
   orderKind: 'CUSTOM' | 'READY_MADE'
   customerName: string
-  stage: OrderStage
+  kind: 'stage_update' | 'message'
+  stage: OrderStage | null
+  messagePreview: string | null
   note: string | null
   createdAt: string
   isNew: boolean
@@ -59,12 +62,25 @@ type TailorNotificationStageUpdateRow = {
   orders: Omit<TailorNotificationOrderRow, 'stage' | 'created_at'> | Omit<TailorNotificationOrderRow, 'stage' | 'created_at'>[] | null
 }
 
+type MessageNotificationRow = {
+  id: string
+  order_id: string
+  sender_name: string | null
+  body: string | null
+  type: string
+  created_at: string
+  orders: Omit<TailorNotificationOrderRow, 'stage' | 'created_at'> | Omit<TailorNotificationOrderRow, 'stage' | 'created_at'>[] | null
+}
+
 function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
 }
 
-function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['name'] {
+function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name'] {
+  if (item.kind === 'message') return 'message-circle'
+  const stage = item.stage
+  if (!stage) return 'bell'
   if (stage === 'PENDING_QUOTE') return 'inbox'
   if (stage === 'PAYMENT_FAILED') return 'alert-circle'
   if (stage === 'CONFIRMED') return 'check-circle'
@@ -79,7 +95,10 @@ function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['nam
   return 'bell'
 }
 
-function stageColor(stage: OrderStage): string {
+function itemColor(item: NotifItem): string {
+  if (item.kind === 'message') return Colors.needleGreen
+  const stage = item.stage
+  if (!stage) return Colors.needleGreen
   if (stage === 'PENDING_QUOTE') return Colors.warning
   if (stage === 'IN_DISPUTE') return Colors.kanteRust
   if (stage === 'PAYMENT_FAILED') return Colors.kanteRust
@@ -87,6 +106,20 @@ function stageColor(stage: OrderStage): string {
   if (stage === 'COMPLETE' || stage === 'COLLECTED' || stage === 'DELIVERED') return Colors.success
   if (stage === 'CONFIRMED') return Colors.needleGreen
   return Colors.needleGreen
+}
+
+function itemTitle(item: NotifItem): string {
+  if (item.kind === 'message') return 'New message'
+  if (!item.stage) return 'Order update'
+  return stageDescription({ stage: item.stage, orderKind: item.orderKind })
+}
+
+function buildMessagePreview(type: string, body: string | null, senderName: string): string {
+  if (type === 'PHOTO') return `${senderName}: Sent a photo`
+  if (type === 'VOICE') return `${senderName}: Sent a voice note`
+  const text = body?.trim() ?? ''
+  const preview = text.slice(0, 60)
+  return preview ? `${senderName}: ${preview}${text.length > 60 ? '…' : ''}` : `${senderName}: Sent a message`
 }
 
 function timeAgo(iso: string): string {
@@ -102,6 +135,7 @@ function timeAgo(iso: string): string {
 }
 
 function stageDescription(item: Pick<NotifItem, 'stage' | 'orderKind'>): string {
+  if (!item.stage) return 'Order update'
   if (item.orderKind === 'READY_MADE' && item.stage === 'PENDING_QUOTE') return 'New ready-made inquiry'
   if (item.stage === 'CONFIRMED') {
     return item.orderKind === 'READY_MADE' ? 'Paid order placed' : 'Payment confirmed by customer'
@@ -149,7 +183,7 @@ export default function TailorNotificationsScreen() {
         const lastCheck = lastTailorNotifCheckRef.current
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         try {
-          const [newOrdersRes, updatesRes] = await Promise.allSettled([
+          const [newOrdersRes, updatesRes, messagesRes] = await Promise.allSettled([
             supabase
               .from('orders')
               .select(`id, reference, garment_type, order_kind, stage, created_at, customer_profiles!customer_id(display_name)`)
@@ -162,15 +196,29 @@ export default function TailorNotificationsScreen() {
               .select(`
                 id, stage, note, created_at, order_id,
                 orders!inner(
-                id, reference, garment_type, order_kind, tailor_id,
-                customer_profiles!customer_id(display_name)
-              )
-            `)
+                  id, reference, garment_type, order_kind, tailor_id,
+                  customer_profiles!customer_id(display_name)
+                )
+              `)
               .eq('orders.tailor_id', userId)
               .in('stage', ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION', 'COMPLETE', 'COLLECTED', 'DELIVERED', 'IN_DISPUTE', 'CANCELLED', 'EXPIRED', 'CONSULTATION'])
               .gte('created_at', since)
               .order('created_at', { ascending: false })
               .limit(40),
+            supabase
+              .from('messages')
+              .select(`
+                id, order_id, sender_name, body, type, created_at,
+                orders!inner(
+                  id, reference, garment_type, order_kind, tailor_id,
+                  customer_profiles!customer_id(display_name)
+                )
+              `)
+              .eq('sender_role', 'CUSTOMER')
+              .eq('orders.tailor_id', userId)
+              .gte('created_at', since)
+              .order('created_at', { ascending: false })
+              .limit(60),
           ])
 
           const bookingItems: NotifItem[] = (
@@ -186,7 +234,9 @@ export default function TailorNotificationsScreen() {
               garmentType: o.garment_type ?? 'Order',
               orderKind: o.order_kind ?? 'CUSTOM',
               customerName: customerProfile?.display_name ?? 'Customer',
+              kind: 'stage_update' as const,
               stage: o.stage ?? 'PENDING_QUOTE',
+              messagePreview: null,
               note: null,
               createdAt: o.created_at,
               isNew: lastCheck ? new Date(o.created_at) > new Date(lastCheck) : true,
@@ -207,8 +257,42 @@ export default function TailorNotificationsScreen() {
               garmentType: order?.garment_type ?? 'Order',
               orderKind: order?.order_kind ?? 'CUSTOM',
               customerName: customerProfile?.display_name ?? 'Customer',
+              kind: 'stage_update' as const,
               stage: row.stage ?? 'PENDING_QUOTE',
+              messagePreview: null,
               note: row.note ?? null,
+              createdAt: row.created_at,
+              isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
+            }
+          })
+
+          // Deduplicate messages to one entry per order (most recent wins)
+          const rawMessages: MessageNotificationRow[] =
+            messagesRes.status === 'fulfilled' && !messagesRes.value.error
+              ? ((messagesRes.value.data ?? []) as MessageNotificationRow[])
+              : []
+
+          const latestMessageByOrder = new Map<string, MessageNotificationRow>()
+          for (const row of rawMessages) {
+            const orderId = firstJoinedRow(row.orders)?.id ?? row.order_id
+            if (!latestMessageByOrder.has(orderId)) latestMessageByOrder.set(orderId, row)
+          }
+
+          const messageItems: NotifItem[] = [...latestMessageByOrder.values()].map((row) => {
+            const order = firstJoinedRow(row.orders)
+            const customerProfile = firstJoinedRow(order?.customer_profiles)
+            const senderName = row.sender_name ?? customerProfile?.display_name ?? 'Customer'
+            return {
+              id: `msg-${row.id}`,
+              orderId: order?.id ?? row.order_id,
+              orderRef: order?.reference ?? '',
+              garmentType: order?.garment_type ?? 'Order',
+              orderKind: order?.order_kind ?? 'CUSTOM',
+              customerName: customerProfile?.display_name ?? 'Customer',
+              kind: 'message' as const,
+              stage: null,
+              messagePreview: buildMessagePreview(row.type, row.body, senderName),
+              note: null,
               createdAt: row.created_at,
               isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
             }
@@ -216,7 +300,8 @@ export default function TailorNotificationsScreen() {
 
           if (
             (newOrdersRes.status === 'rejected' || (newOrdersRes.status === 'fulfilled' && newOrdersRes.value.error)) &&
-            (updatesRes.status === 'rejected' || (updatesRes.status === 'fulfilled' && updatesRes.value.error))
+            (updatesRes.status === 'rejected' || (updatesRes.status === 'fulfilled' && updatesRes.value.error)) &&
+            (messagesRes.status === 'rejected' || (messagesRes.status === 'fulfilled' && messagesRes.value.error))
           ) {
             setFetchError(true)
             setItems([])
@@ -225,10 +310,11 @@ export default function TailorNotificationsScreen() {
 
           const seen = new Set<string>()
           const merged: NotifItem[] = []
-          for (const item of [...bookingItems, ...updateItems].sort(
+          for (const item of [...bookingItems, ...updateItems, ...messageItems].sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           )) {
-            const key = `${item.orderId}-${item.stage}`
+            // Deduplicate stage items by orderId+stage; messages already deduped per order
+            const key = item.kind === 'message' ? `msg-${item.orderId}` : `${item.orderId}-${item.stage}`
             if (!seen.has(key)) {
               seen.add(key)
               merged.push(item)
@@ -239,9 +325,7 @@ export default function TailorNotificationsScreen() {
 
           try {
             const checkedAt = new Date().toISOString()
-            await supabase.auth.updateUser({
-              data: { last_tailor_notif_check: checkedAt },
-            })
+            await supabase.auth.updateUser({ data: { last_tailor_notif_check: checkedAt } })
             lastTailorNotifCheckRef.current = checkedAt
           } catch {
             // Non-fatal — the feed itself loaded successfully.
@@ -262,7 +346,7 @@ export default function TailorNotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -274,7 +358,7 @@ export default function TailorNotificationsScreen() {
         <FeatureStateCard
           eyebrow="Notifications"
           title="Loading your notifications…"
-          body="We’re gathering new bookings, customer responses, and order changes that may need your attention."
+          body="We're gathering new bookings, messages, customer responses, and order changes that may need your attention."
           loading
         />
       ) : fetchError ? (
@@ -297,11 +381,7 @@ export default function TailorNotificationsScreen() {
             variant="secondary"
             onPress={() => router.replace('/(tailor)/orders')}
           />
-          <Button
-            label="Open profile"
-            variant="ghost"
-            onPress={goBack}
-          />
+          <Button label="Open profile" variant="ghost" onPress={goBack} />
         </FeatureStateCard>
       ) : items.length === 0 ? (
         <FeatureStateCard
@@ -311,10 +391,7 @@ export default function TailorNotificationsScreen() {
           accentColor={Colors.warning}
           icon="bell-off"
         >
-          <Button
-            label="Open orders"
-            onPress={() => router.replace('/(tailor)/orders')}
-          />
+          <Button label="Open orders" onPress={() => router.replace('/(tailor)/orders')} />
           <Button
             label="Open dashboard"
             variant="secondary"
@@ -332,40 +409,46 @@ export default function TailorNotificationsScreen() {
             paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl),
             gap: Spacing.xs,
           }}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.card, item.isNew && styles.cardNew]}
-              onPress={() => router.push({
-                pathname: '/(tailor)/orders/[id]',
-                params: { id: item.orderId, returnTo: 'tailor-notifications' },
-              })}
-              activeOpacity={0.7}
-            >
-              {item.isNew && <View style={styles.unreadDot} />}
+          renderItem={({ item }) => {
+            const color = itemColor(item)
+            const metaParts = [
+              item.garmentType,
+              item.orderRef ? `#${item.orderRef}` : null,
+              item.customerName,
+            ].filter(Boolean).join(' · ')
+            return (
+              <TouchableOpacity
+                style={[styles.card, item.isNew && styles.cardNew]}
+                onPress={() => router.push({
+                  pathname: '/(tailor)/orders/[id]',
+                  params: {
+                    id: item.orderId,
+                    historyChain: appendToHistory(undefined, '/(tailor)/profile/notifications'),
+                  },
+                })}
+                activeOpacity={0.7}
+              >
+                {item.isNew && <View style={styles.unreadDot} />}
 
-              <View style={[styles.iconWrap, { backgroundColor: stageColor(item.stage) + '18' }]}>
-                <Feather name={stageIcon(item.stage)} size={18} color={stageColor(item.stage)} />
-              </View>
-
-              <View style={styles.notificationBody}>
-                <View style={styles.titleRow}>
-                  <Text style={styles.itemTitle} numberOfLines={2}>{item.garmentType}</Text>
-                  <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
+                <View style={[styles.iconWrap, { backgroundColor: color + '18' }]}>
+                  <Feather name={itemIcon(item)} size={18} color={color} />
                 </View>
-                <Text style={styles.metaLine} numberOfLines={1}>
-                  #{item.orderRef}{item.customerName ? ` · ${item.customerName}` : ''}
-                </Text>
-                <Text style={styles.stageLine}>
-                  <Text style={{ color: stageColor(item.stage), fontWeight: FontWeight.semibold }}>
-                    {stageDescription(item)}
-                  </Text>
-                </Text>
-                {item.note ? (
-                  <Text style={styles.note} numberOfLines={2}>{item.note}</Text>
-                ) : null}
-              </View>
-            </TouchableOpacity>
-          )}
+
+                <View style={styles.notificationBody}>
+                  <View style={styles.titleRow}>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{itemTitle(item)}</Text>
+                    <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
+                  </View>
+                  <Text style={styles.metaLine} numberOfLines={1}>{metaParts}</Text>
+                  {item.kind === 'message' && item.messagePreview ? (
+                    <Text style={styles.note} numberOfLines={2}>{item.messagePreview}</Text>
+                  ) : item.note ? (
+                    <Text style={styles.note} numberOfLines={2}>{item.note}</Text>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            )
+          }}
         />
       )}
     </SafeAreaView>
@@ -402,22 +485,12 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   notificationBody: { flex: 1, minWidth: 0 },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   itemTitle: {
-    fontSize: 14,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 18,
-    flex: 1,
-    minWidth: 0,
+    fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.ink,
+    lineHeight: 18, flex: 1, minWidth: 0,
   },
-  ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
   metaLine: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
-  stageLine: { fontSize: 12, color: Colors.inkLight, marginTop: 2, lineHeight: 17 },
   note: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
   time: { fontSize: 12, color: Colors.midGrey, flexShrink: 0, marginTop: 1, maxWidth: 70 },
 })

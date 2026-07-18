@@ -44,6 +44,8 @@ env:
 - tapOn:
     id: "message-tailor-btn"
 - assertVisible: "Message…"
+- assertVisible: "Protected chat"
+- assertVisible: "Report"
 
 # ── Attempt to send a phone number ───────────────────────────────────────────
 - tapOn:

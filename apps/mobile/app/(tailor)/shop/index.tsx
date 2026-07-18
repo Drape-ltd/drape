@@ -8,13 +8,15 @@ import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { buildTailorStockAlert, formatSizeInventorySummary, normalizeSizeInventory, type SizeInventory } from '@/lib/ready-made-stock'
 import { Button, RemoteImage } from '@/components/ui'
+import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { isVideoMediaUrl } from '@drape/shared/media-policy'
 
 type SellerItem = {
   id: string
   title: string
   category: string | null
-  priceAmount: number
+  priceAmount: number | null
   currency: string
   sizes: string[]
   sizeInventory: SizeInventory
@@ -40,7 +42,7 @@ type SellerItemRow = {
   title: string
   category: string | null
   sizes: unknown
-  price_amount: number
+  price_amount: number | null
   currency: string
   stock_status: string | null
   inventory_quantity: number | null
@@ -100,7 +102,8 @@ function stockSummary(item: SellerItem) {
   return formatSizeInventorySummary(item.sizes, item.sizeInventory, item.inventoryQuantity)
 }
 
-function formatItemPrice(amountInMinorUnits: number, currency: string) {
+function formatItemPrice(amountInMinorUnits: number | null, currency: string) {
+  if (typeof amountInMinorUnits !== 'number') return 'Price pending'
   const amount = amountInMinorUnits / 100
   const hasCents = Math.abs(amount % 1) > 0
   const formattedAmount = amount.toLocaleString('en-US', {
@@ -435,6 +438,7 @@ export default function TailorShopScreen() {
       params: {
         itemId: item.id,
         filter: fallbackFilter,
+        historyChain: appendToHistory(undefined, '/(tailor)/shop'),
         ...(intent ? { intent } : {}),
       },
     })
@@ -447,7 +451,10 @@ export default function TailorShopScreen() {
 
   function handleEmptyAction(action: ShopEmptyAction) {
     if (action === 'ADD') {
-      router.push('/(tailor)/shop/new')
+      router.push({
+        pathname: '/(tailor)/shop/new',
+        params: { historyChain: appendToHistory(undefined, '/(tailor)/shop') },
+      })
       return
     }
     setFilter(action)
@@ -463,7 +470,15 @@ export default function TailorShopScreen() {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Shop</Text>
-          <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/(tailor)/shop/new')}>
+          <TouchableOpacity
+            style={styles.addBtn}
+            onPress={() =>
+              router.push({
+                pathname: '/(tailor)/shop/new',
+                params: { historyChain: appendToHistory(undefined, '/(tailor)/shop') },
+              })
+            }
+          >
             <Feather name="plus" size={16} color={Colors.textInverse} />
             <Text style={styles.addBtnText}>Add item</Text>
           </TouchableOpacity>
@@ -542,6 +557,7 @@ export default function TailorShopScreen() {
                 {filteredItems.map((item) => {
                   const pillStyles = stockPillStyles(item)
                   const status = effectiveStockStatus(item)
+                  const coverImageUrl = item.photoUrls.find((url) => !isVideoMediaUrl(url)) ?? null
                   const canRelist = status === 'SOLD_OUT' && item.inventoryQuantity > 0
                   const manageLabel =
                     status === 'HIDDEN'
@@ -553,9 +569,9 @@ export default function TailorShopScreen() {
                   return (
                     <View key={item.id} style={styles.itemCard}>
                       <View style={styles.itemMediaWrap}>
-                        {item.photoUrls[0] ? (
+                        {coverImageUrl ? (
                           <RemoteImage
-                            uri={item.photoUrls[0]}
+                            uri={coverImageUrl}
                             bucket="seller-item-media"
                             style={styles.itemThumb}
                             contentFit="cover"
@@ -846,8 +862,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     padding: 12,
     gap: 12,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     flexDirection: 'row',
     alignItems: 'flex-start',
     ...Shadow.sm,
@@ -892,16 +906,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flex: 1,
   },
-  itemActionBtnGhost: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  itemActionBtnDangerGhost: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.error + '40',
-  },
   itemActionBtnDisabled: {
     opacity: 0.55,
   },
@@ -909,16 +913,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.textInverse,
-  },
-  itemActionGhostText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  itemActionDangerGhostText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.error,
   },
   statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
   statusPillOverlay: {

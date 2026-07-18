@@ -79,7 +79,7 @@ export default function Home(): React.JSX.Element {
           {/* How it works steps */}
           <div className="grid gap-3">
             {howItWorks.map(({ step, title, body }) => (
-              <div key={step} className="flex gap-4 rounded-[1.4rem] border border-ink/6 bg-white/84 p-5 shadow-sm">
+              <div key={step} className="flex gap-4 rounded-[8px] border border-ink/6 bg-white/84 p-5 shadow-sm">
                 <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/46">{step}</span>
                 <div>
                   <p className="font-semibold text-ink">{title}</p>
@@ -120,7 +120,7 @@ export default function Home(): React.JSX.Element {
             </div>
             <div className="grid gap-3">
               {forTailors.map((item) => (
-                <div key={item} className="flex items-start gap-3 rounded-[1.25rem] border border-white/10 bg-white/8 px-5 py-4">
+                <div key={item} className="flex items-start gap-3 rounded-[8px] border border-white/10 bg-white/8 px-5 py-4">
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-needle" />
                   <p className="text-sm leading-6 text-white/80">{item}</p>
                 </div>
@@ -132,7 +132,7 @@ export default function Home(): React.JSX.Element {
 
       {/* ── Waitlist CTA ── */}
       <section className="mx-auto max-w-6xl px-5 py-20 sm:px-8 lg:px-12">
-        <div className="overflow-hidden rounded-[1.8rem] border border-ink/8 bg-white/84 p-8 shadow-sm sm:p-12 lg:p-16">
+        <div className="overflow-hidden rounded-[8px] border border-ink/8 bg-white/84 p-8 shadow-sm sm:p-12 lg:p-16">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Early access</p>
           <h2 className="mt-4 max-w-xl text-4xl leading-tight text-ink sm:text-5xl">
             We&apos;re onboarding soon.

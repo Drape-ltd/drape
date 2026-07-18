@@ -97,6 +97,27 @@ export function deriveReadyMadeStockStatus(input: {
   return 'IN_STOCK'
 }
 
+export function resolveReadyMadeListingState(input: {
+  requestedIsLive: boolean
+  canPublishReadyMade: boolean
+  inventoryQuantity: number
+  onboarding?: boolean | null
+}) {
+  const inventoryQuantity = Number.isFinite(input.inventoryQuantity)
+    ? Math.max(0, Math.floor(input.inventoryQuantity))
+    : 0
+  const isLive = input.onboarding === true
+    ? false
+    : input.requestedIsLive && input.canPublishReadyMade
+
+  return {
+    isLive,
+    forcedDraft: input.requestedIsLive && !isLive,
+    stockStatus: deriveReadyMadeStockStatus({ isLive, inventoryQuantity }),
+    inventoryQuantity,
+  }
+}
+
 export function readyMadeStockHint(inventoryQuantity: number) {
   if (inventoryQuantity <= 0) return 'Sold out'
   if (inventoryQuantity <= LOW_STOCK_THRESHOLD) {

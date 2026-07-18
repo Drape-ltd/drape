@@ -81,18 +81,23 @@ function assertMobileSupabaseConfig() {
     )
   }
 
-  return { supabaseUrl, supabasePublishableKey }
+  return { appVariant, supabaseUrl, supabasePublishableKey }
 }
 
-const { supabaseUrl, supabasePublishableKey } = assertMobileSupabaseConfig()
+const { appVariant, supabaseUrl, supabasePublishableKey } = assertMobileSupabaseConfig()
 const supabaseHost = new URL(supabaseUrl).host
-const AUTH_STORAGE_VERSION = 'v2'
+const AUTH_STORAGE_VERSION = appVariant === 'development' ? 'v3' : 'v2'
 const legacySupabaseStorageKey = `drape.auth.${supabaseHost}`
 const supabaseStorageKey = `drape.auth.${AUTH_STORAGE_VERSION}.${supabaseHost}`
+const previousSupabaseStorageKeys =
+  appVariant === 'development'
+    ? [`drape.auth.v2.${supabaseHost}`]
+    : []
 const AUTH_NETWORK_TIMEOUT_MS = 12_000
 const DEFAULT_EDGE_FUNCTION_TIMEOUT_MS = 25_000
 const LEGACY_AUTH_STORAGE_KEYS = [
   legacySupabaseStorageKey,
+  ...previousSupabaseStorageKeys,
   'supabase.auth.token',
   'supabase.auth.token-user',
   'supabase.auth.token-code-verifier',

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, type ComponentType } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
+  BackHandler,
   NativeModules,
   Platform,
   ScrollView,
@@ -19,12 +20,20 @@ import {
 } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { useFeatureFlags } from '@/lib/feature-flags'
-import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
+import { goBackOrReturnToIfNeeded, pickSafeReturnTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
+import {
+  clearPreservedVisionNavigationContext,
+  loadPreservedVisionNavigationContext,
+  mergeVisionNavigationContext,
+  preserveVisionNavigationContext,
+  readPreservedVisionNavigationContextSync,
+} from '@/lib/vision-navigation-context'
 
 type VisionParams = {
   mode?: string
   returnTo?: string
+  historyChain?: string
   diaryId?: string
   orderId?: string
   itemId?: string
@@ -33,6 +42,8 @@ type VisionParams = {
 type NativeVisionScreenModule = {
   default: ComponentType
 }
+
+const VISION_ROUTE_EXIT_DELAY_MS = 100
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value
@@ -78,7 +89,7 @@ function fallbackRouteForMode(mode: DrapeVisionMode) {
 }
 
 function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
-  const safeReturnTo = sanitizeReturnTo(params.returnTo)
+  const safeReturnTo = pickSafeReturnTo(params.historyChain, params.returnTo)
   if (safeReturnTo) return safeReturnTo
   if (mode === 'customer_scan' && params.orderId?.trim()) return `/(customer)/orders/${params.orderId}`
   if (mode === 'garment_qc' && params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
@@ -90,10 +101,13 @@ function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
 
 function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode === 'customer_scan') {
-    const returnTo = sanitizeReturnTo(params.returnTo)
+    const returnTo = pickSafeReturnTo(params.historyChain, params.returnTo)
+    const targetParams = returnTo && returnTo !== '/(customer)/profile/measurements'
+      ? { returnTo, historyChain: returnTo }
+      : {}
     return {
       pathname: '/(customer)/profile/measurements',
-      params: returnTo && returnTo !== '/(customer)/profile/measurements' ? { returnTo } : {},
+      params: targetParams,
     }
   }
 
@@ -106,7 +120,7 @@ function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionPar
 
   if (mode === 'garment_qc') {
     if (params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
-    const returnTo = sanitizeReturnTo(params.returnTo)
+    const returnTo = pickSafeReturnTo(params.historyChain, params.returnTo)
     if (returnTo) return returnTo
     return '/(tailor)/orders'
   }
@@ -117,21 +131,29 @@ function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionPar
 function primaryFallbackLabelForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
   if (params.orderId?.trim()) return 'Return to order'
-  if (sanitizeReturnTo(params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
+  if (pickSafeReturnTo(params.historyChain, params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
   return 'Open orders'
 }
 
 export default function DrapeVisionRoute() {
   const router = useRouter()
   const navigation = useNavigation()
+  const visionExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const visionExitInProgressRef = useRef(false)
   const rawParams = useLocalSearchParams<VisionParams>()
-  const params = useMemo(() => ({
+  const routeParams = useMemo(() => ({
     mode: firstParam(rawParams.mode),
     returnTo: firstParam(rawParams.returnTo),
+    historyChain: firstParam(rawParams.historyChain),
     diaryId: firstParam(rawParams.diaryId),
     orderId: firstParam(rawParams.orderId),
     itemId: firstParam(rawParams.itemId),
-  }), [rawParams.diaryId, rawParams.itemId, rawParams.mode, rawParams.orderId, rawParams.returnTo])
+  }), [rawParams.diaryId, rawParams.historyChain, rawParams.itemId, rawParams.mode, rawParams.orderId, rawParams.returnTo])
+  const [preservedParams, setPreservedParams] = useState(() => readPreservedVisionNavigationContextSync())
+  const params = useMemo(
+    () => mergeVisionNavigationContext(routeParams, preservedParams),
+    [preservedParams, routeParams],
+  )
   const mode: DrapeVisionMode = isDrapeVisionMode(params.mode) ? params.mode : 'customer_scan'
   const meta = DRAPE_VISION_MODE_META[mode]
   const { data: featureFlags } = useFeatureFlags('ALL')
@@ -141,6 +163,42 @@ export default function DrapeVisionRoute() {
   const primaryFallbackTarget = useMemo(() => primaryFallbackTargetForParams(mode, params), [mode, params])
   const primaryFallbackLabel = useMemo(() => primaryFallbackLabelForParams(mode, params), [mode, params])
   const androidPaused = isAndroidLiveScanPausedForLaunch(androidVisionEnabled)
+  const [visionExitPending, setVisionExitPending] = useState(false)
+  const resolveVisionExitReturnRoute = useCallback(() => {
+    const cachedParams = readPreservedVisionNavigationContextSync()
+    return pickSafeReturnTo(
+      params.historyChain,
+      preservedParams?.historyChain,
+      cachedParams?.historyChain,
+      params.returnTo,
+      preservedParams?.returnTo,
+      cachedParams?.returnTo,
+      returnRoute,
+    ) ?? returnRoute
+  }, [
+    params.historyChain,
+    params.returnTo,
+    preservedParams?.historyChain,
+    preservedParams?.returnTo,
+    returnRoute,
+  ])
+
+  useEffect(() => {
+    preserveVisionNavigationContext(routeParams)
+  }, [routeParams])
+
+  useEffect(() => {
+    if (preservedParams) return undefined
+
+    let active = true
+    void loadPreservedVisionNavigationContext().then((context) => {
+      if (active && context) setPreservedParams(context)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [preservedParams])
 
   useEffect(() => {
     const payload = {
@@ -169,15 +227,59 @@ export default function DrapeVisionRoute() {
     })
   }, [NativeVisionScreen, androidPaused, mode])
 
+  useEffect(() => (
+    () => {
+      if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
+    }
+  ), [])
+
+  const openPrimaryFallback = useCallback(() => {
+    if (visionExitInProgressRef.current) return
+    visionExitInProgressRef.current = true
+    setVisionExitPending(true)
+
+    if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
+    visionExitTimerRef.current = setTimeout(() => {
+      router.navigate(primaryFallbackTarget as never)
+      clearPreservedVisionNavigationContext()
+      visionExitTimerRef.current = null
+    }, VISION_ROUTE_EXIT_DELAY_MS)
+  }, [primaryFallbackTarget, router])
+
+  const openReturnRoute = useCallback(() => {
+    if (visionExitInProgressRef.current) return
+    const exitReturnRoute = resolveVisionExitReturnRoute()
+    visionExitInProgressRef.current = true
+    setVisionExitPending(true)
+
+    if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
+    visionExitTimerRef.current = setTimeout(() => {
+      goBackOrReturnToIfNeeded(
+        router,
+        navigation,
+        exitReturnRoute,
+        fallbackRouteForMode(mode) as never,
+        { fromPath: '/vision' },
+      )
+      clearPreservedVisionNavigationContext()
+      visionExitTimerRef.current = null
+    }, VISION_ROUTE_EXIT_DELAY_MS)
+  }, [mode, navigation, resolveVisionExitReturnRoute, router])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      openReturnRoute()
+      return true
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [openReturnRoute])
+
   if (NativeVisionScreen) return <NativeVisionScreen />
-
-  function openPrimaryFallback() {
-    router.replace(primaryFallbackTarget as never)
-  }
-
-  function openReturnRoute() {
-    goBackOrReturnToIfNeeded(router, navigation, returnRoute, fallbackRouteForMode(mode) as never)
-  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -209,12 +311,24 @@ export default function DrapeVisionRoute() {
       </ScrollView>
 
       <View style={styles.ctaBar}>
-        <TouchableOpacity accessibilityRole="button" onPress={openPrimaryFallback} style={styles.primaryButton}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityState={{ disabled: visionExitPending }}
+          disabled={visionExitPending}
+          onPress={openPrimaryFallback}
+          style={[styles.primaryButton, visionExitPending && styles.primaryButtonDisabled]}
+        >
           <Text style={styles.primaryText}>{primaryFallbackLabel}</Text>
           <Feather name="arrow-right" size={18} color={Colors.textInverse} />
         </TouchableOpacity>
-        {sanitizeReturnTo(params.returnTo) ? (
-          <TouchableOpacity accessibilityRole="button" onPress={openReturnRoute} style={styles.secondaryButton}>
+        {pickSafeReturnTo(params.historyChain, params.returnTo) ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityState={{ disabled: visionExitPending }}
+            disabled={visionExitPending}
+            onPress={openReturnRoute}
+            style={[styles.secondaryButton, visionExitPending && styles.secondaryButtonDisabled]}
+          >
             <Text style={styles.secondaryText}>Back to previous screen</Text>
           </TouchableOpacity>
         ) : null}
@@ -311,6 +425,9 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     backgroundColor: Colors.needleGreen,
   },
+  primaryButtonDisabled: {
+    opacity: 0.68,
+  },
   primaryText: {
     color: Colors.textInverse,
     fontSize: FontSize.md,
@@ -324,6 +441,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: DRAPE_VISION_COLORS.line,
     backgroundColor: DRAPE_VISION_COLORS.panel,
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.58,
   },
   secondaryText: {
     color: DRAPE_VISION_COLORS.text,

@@ -15,17 +15,36 @@ import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { RemoteImage } from '@/components/ui'
+import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { PortfolioVideoPreview, RemoteImage } from '@/components/ui'
 import { Sentry } from '@/lib/sentry'
+import {
+  launchImagePickerSafely,
+  preferCompatibleVideoRepresentation,
+  preferCurrentAssetRepresentation,
+} from '@/lib/image-picker-safe'
+import {
+  pickerVideoContentType as portfolioVideoContentType,
+  pickerVideoExtension as portfolioVideoExtension,
+  validateVideoPickerAsset,
+} from '@/lib/video-asset'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import {
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  VIDEO_DURATION_LIMIT_MESSAGE,
+} from '@drape/shared/media-policy'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const GRID_ITEM_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.md) / 2
 
 const CATEGORIES = ['WEDDING', 'CASUAL', 'ASOEBI', 'FORMAL', 'OTHER'] as const
+const MAX_PORTFOLIO_VIDEOS = 4
+const MAX_PORTFOLIO_VIDEO_BYTES = MEDIA_LIMITS_BYTES.portfolioVideo
+const MAX_PORTFOLIO_VIDEO_SECONDS = MEDIA_LIMITS_SECONDS.portfolioVideo
 const CATEGORY_LABEL: Record<string, string> = {
   WEDDING: 'Wedding', CASUAL: 'Casual', ASOEBI: 'Asoebi', FORMAL: 'Formal', OTHER: 'Other',
 }
@@ -49,10 +68,12 @@ type EditForm = {
 }
 
 type PortfolioImageSource = 'camera' | 'library'
+type PortfolioVideoSource = 'camera' | 'library'
 
 type TailorPortfolioProfileRow = {
   id: string | null
   portfolio_photo_urls: unknown
+  portfolio_video_urls: unknown
 }
 
 type PortfolioItemRow = {
@@ -85,14 +106,24 @@ const EMPTY_EDIT: EditForm = {
   id: null, imageUrl: '', imageUri: '', title: '', description: '', category: '',
 }
 
+function validatePortfolioVideoAsset(asset: ImagePicker.ImagePickerAsset) {
+  return validateVideoPickerAsset(asset, {
+    maxBytes: MAX_PORTFOLIO_VIDEO_BYTES,
+    maxSeconds: MAX_PORTFOLIO_VIDEO_SECONDS,
+    maxBytesMessage: `Choose portfolio videos under ${Math.round(MAX_PORTFOLIO_VIDEO_BYTES / (1024 * 1024))} MB.`,
+    durationMessage: VIDEO_DURATION_LIMIT_MESSAGE,
+  })
+}
+
 export default function PortfolioScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const params = useLocalSearchParams<{ returnTo?: string }>()
+  const params = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const { user } = useAuth()
   const userId = user?.id ?? null
 
   const [items, setItems] = useState<PortfolioItem[]>([])
+  const [portfolioVideoUrls, setPortfolioVideoUrls] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
   const [tailorProfileId, setTailorProfileId] = useState<string | null>(null)
@@ -100,6 +131,8 @@ export default function PortfolioScreen() {
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [coverSavingId, setCoverSavingId] = useState<string | null>(null)
+  const [uploadingVideo, setUploadingVideo] = useState(false)
+  const [removingVideoUrl, setRemovingVideoUrl] = useState<string | null>(null)
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [expandedViewerIndex, setExpandedViewerIndex] = useState(0)
 
@@ -108,6 +141,7 @@ export default function PortfolioScreen() {
       setLoading(false)
       setFetchError(false)
       setItems([])
+      setPortfolioVideoUrls([])
       setTailorProfileId(null)
       return
     }
@@ -115,13 +149,14 @@ export default function PortfolioScreen() {
     try {
       const profileRes = await supabase
         .from('tailor_profiles')
-        .select('id, portfolio_photo_urls')
+        .select('id, portfolio_photo_urls, portfolio_video_urls')
         .eq('user_id', userId)
         .maybeSingle()
       if (profileRes.error) throw profileRes.error
       const profileRow = profileRes.data as TailorPortfolioProfileRow | null
       const pid = profileRow?.id ?? null
       const setupPhotoUrls = asStringList(profileRow?.portfolio_photo_urls)
+      setPortfolioVideoUrls(asStringList(profileRow?.portfolio_video_urls))
       setTailorProfileId(pid)
       if (!pid) { setLoading(false); return }
 
@@ -157,6 +192,7 @@ export default function PortfolioScreen() {
     } catch {
       setFetchError(true)
       setItems([])
+      setPortfolioVideoUrls([])
       setTailorProfileId(null)
     } finally {
       setLoading(false)
@@ -199,10 +235,18 @@ export default function PortfolioScreen() {
       aspect: [4, 5] as [number, number],
       quality: 0.85,
     }
-    const result =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync(pickerOptions)
-        : await ImagePicker.launchImageLibraryAsync(pickerOptions)
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera'
+          ? ImagePicker.launchCameraAsync(pickerOptions)
+          : ImagePicker.launchImageLibraryAsync(preferCurrentAssetRepresentation(pickerOptions)),
+      {
+        context: 'tailor_portfolio_photo_picker',
+        mediaLabel: 'portfolio image',
+        extra: { source, userId },
+      }
+    )
+    if (!result) return
     if (!result.canceled && result.assets[0]) {
       onPicked(result.assets[0].uri)
     }
@@ -230,6 +274,131 @@ export default function PortfolioScreen() {
     }
   }
 
+  function openVideoSourcePicker() {
+    if (portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS) {
+      Alert.alert('Video limit', `You can include up to ${MAX_PORTFOLIO_VIDEOS} videos in your portfolio.`)
+      return
+    }
+    Alert.alert('Portfolio video', 'Record a short clip now or choose one from your library.', [
+      { text: 'Record video', onPress: () => void pickPortfolioVideo('camera') },
+      { text: 'Choose from library', onPress: () => void pickPortfolioVideo('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function pickPortfolioVideo(source: PortfolioVideoSource) {
+    if (!userId) return
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to record portfolio videos.'
+          : 'Allow photo access to upload portfolio videos.',
+      )
+      return
+    }
+
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera'
+          ? ImagePicker.launchCameraAsync({
+              mediaTypes: 'videos',
+              quality: 0.8,
+              videoMaxDuration: MAX_PORTFOLIO_VIDEO_SECONDS,
+            })
+          : ImagePicker.launchImageLibraryAsync(
+              preferCompatibleVideoRepresentation({
+                mediaTypes: 'videos',
+                quality: 0.8,
+                videoMaxDuration: MAX_PORTFOLIO_VIDEO_SECONDS,
+              })
+            ),
+      {
+        context: 'tailor_portfolio_video_picker',
+        mediaLabel: 'portfolio video',
+        extra: { source, userId },
+      }
+    )
+    if (!result) return
+    if (result.canceled || !result.assets[0]) return
+
+    const asset = result.assets[0]
+    const validationMessage = validatePortfolioVideoAsset(asset)
+    if (validationMessage) {
+      Alert.alert('Video not added', validationMessage)
+      return
+    }
+
+    setUploadingVideo(true)
+    try {
+      const contentType = portfolioVideoContentType(asset)
+      const extension = portfolioVideoExtension(asset)
+      const payload = await createValidatedUploadPayload(asset.uri, {
+        maxBytes: MAX_PORTFOLIO_VIDEO_BYTES,
+        contentType,
+        allowedContentTypes: ALLOWED_VIDEO_CONTENT_TYPES,
+        purpose: 'PORTFOLIO',
+      })
+      const filename = `portfolio/${userId}/videos/${new Date().getTime()}.${extension}`
+      const { error: uploadError } = await supabase.storage
+        .from('portfolio-photos')
+        .upload(filename, payload.data, { contentType })
+      if (uploadError) throw uploadError
+
+      const { data: publicUrlData } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
+      const nextVideoUrls = Array.from(new Set([...portfolioVideoUrls, publicUrlData.publicUrl])).slice(
+        0,
+        MAX_PORTFOLIO_VIDEOS
+      )
+      const { data: reviewData, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
+        body: { action: 'update-portfolio-videos', videoUrls: nextVideoUrls },
+      })
+      if (error) throw error
+      setPortfolioVideoUrls(nextVideoUrls)
+      if (reviewData?.pendingReview) {
+        Alert.alert('Submitted for review', 'This portfolio video is saved as a pending draft. Customers keep seeing approved media until ops clears it.')
+      }
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'tailor_portfolio_video_upload', userId: user?.id } })
+      Alert.alert(
+        'Video upload failed',
+        isLikelyConnectivityIssue(err)
+          ? 'Connection looks weak. Retry this video when the signal improves.'
+          : 'We could not upload this video right now. Please try again in a moment.'
+      )
+    } finally {
+      setUploadingVideo(false)
+    }
+  }
+
+  async function removePortfolioVideo(videoUrl: string) {
+    setRemovingVideoUrl(videoUrl)
+    try {
+      const nextVideoUrls = portfolioVideoUrls.filter((url) => url !== videoUrl)
+      const { data: reviewData, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
+        body: { action: 'update-portfolio-videos', videoUrls: nextVideoUrls },
+      })
+      if (error) throw error
+      setPortfolioVideoUrls(nextVideoUrls)
+      if (reviewData?.pendingReview) {
+        Alert.alert('Submitted for review', 'This portfolio video is saved as a pending draft. Customers keep seeing approved media until ops clears it.')
+      }
+    } catch (err) {
+      Alert.alert(
+        'Could not remove video',
+        isLikelyConnectivityIssue(err)
+          ? 'Connection looks weak. Retry when the signal improves.'
+          : 'We could not remove this video right now.'
+      )
+    } finally {
+      setRemovingVideoUrl(null)
+    }
+  }
+
   function openNew() {
     setEditModal({ ...EMPTY_EDIT })
   }
@@ -246,7 +415,7 @@ export default function PortfolioScreen() {
   }
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, params.returnTo, '/(tailor)/profile')
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(params.historyChain, params.returnTo), '/(tailor)/profile')
   }
 
   async function handleSave() {
@@ -277,8 +446,9 @@ export default function PortfolioScreen() {
     }
 
     let error: Error | null = null
+    let pendingReview = false
     if (editModal.id) {
-      const res = await invokeFunction('portfolio-item-action', {
+      const res = await invokeFunction<{ pendingReview?: boolean }>('portfolio-item-action', {
         body: {
           action: 'update-item',
           itemId: editModal.id,
@@ -291,8 +461,9 @@ export default function PortfolioScreen() {
         },
       })
       error = res.error
+      pendingReview = res.data?.pendingReview === true
     } else {
-      const res = await invokeFunction('portfolio-item-action', {
+      const res = await invokeFunction<{ pendingReview?: boolean }>('portfolio-item-action', {
         body: {
           action: 'create-item',
           item: {
@@ -304,6 +475,7 @@ export default function PortfolioScreen() {
         },
       })
       error = res.error
+      pendingReview = res.data?.pendingReview === true
     }
 
     setSaving(false)
@@ -315,6 +487,9 @@ export default function PortfolioScreen() {
       return
     }
     setEditModal(null)
+    if (pendingReview) {
+      Alert.alert('Submitted for review', 'This portfolio change is saved as a pending draft. Customers keep seeing the approved portfolio until ops clears it.')
+    }
     void loadData()
   }
 
@@ -449,6 +624,64 @@ export default function PortfolioScreen() {
         <Text style={styles.guideCopy}>
           A few strong pieces beat a crowded gallery. Use this space to signal your taste, quality, and the kind of commissions you want more of.
         </Text>
+      </View>
+
+      <View style={styles.videoCard}>
+        <View style={styles.videoHeader}>
+          <View>
+            <Text style={styles.guideEyebrow}>Portfolio videos</Text>
+            <Text style={styles.videoTitle}>Show movement, finish, and detail.</Text>
+            <Text style={styles.videoHint}>
+              MP4 or MOV, up to {MAX_PORTFOLIO_VIDEO_SECONDS} seconds and {Math.round(MAX_PORTFOLIO_VIDEO_BYTES / (1024 * 1024))} MB.
+            </Text>
+          </View>
+          <Text style={styles.videoCount}>{portfolioVideoUrls.length}/{MAX_PORTFOLIO_VIDEOS}</Text>
+        </View>
+        {portfolioVideoUrls.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.videoStrip}
+          >
+            {portfolioVideoUrls.map((videoUrl, index) => (
+              <View key={videoUrl} style={styles.videoTile}>
+                <PortfolioVideoPreview uri={videoUrl} style={styles.videoPreview} autoplay={false} />
+                <View style={styles.videoOverlayBadge}>
+                  <Feather name="play" size={12} color={Colors.textInverse} />
+                  <Text style={styles.videoOverlayText}>Video {index + 1}</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.videoRemove}
+                  onPress={() => { void removePortfolioVideo(videoUrl) }}
+                  disabled={removingVideoUrl === videoUrl}
+                >
+                  {removingVideoUrl === videoUrl ? (
+                    <ActivityIndicator size="small" color={Colors.textInverse} />
+                  ) : (
+                    <Feather name="x" size={14} color={Colors.textInverse} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
+        <TouchableOpacity
+          style={[
+            styles.videoAddBtn,
+            (uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS) && styles.videoAddBtnDisabled,
+          ]}
+          onPress={openVideoSourcePicker}
+          disabled={uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS}
+        >
+          {uploadingVideo ? (
+            <ActivityIndicator size="small" color={Colors.needleGreen} />
+          ) : (
+            <Feather name="video" size={16} color={Colors.needleGreen} />
+          )}
+          <Text style={styles.videoAddText}>
+            {uploadingVideo ? 'Uploading video…' : 'Add portfolio video'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -799,6 +1032,102 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 20,
+  },
+  videoCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  videoHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  videoTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 22,
+    fontFamily: Fonts.display,
+  },
+  videoHint: {
+    marginTop: 4,
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
+  videoCount: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  videoStrip: {
+    gap: Spacing.sm,
+    paddingRight: Spacing.md,
+  },
+  videoTile: {
+    width: 132,
+    height: 132,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: Colors.ink,
+    position: 'relative',
+  },
+  videoPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  videoOverlayBadge: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.ink,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  videoOverlayText: {
+    fontSize: 10,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
+  videoRemove: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoAddBtn: {
+    minHeight: 44,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+  },
+  videoAddBtnDisabled: {
+    opacity: 0.55,
+  },
+  videoAddText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
   },
   addBtn: {
     width: 36, height: 36, borderRadius: Radius.full,

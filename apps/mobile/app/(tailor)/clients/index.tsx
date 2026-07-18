@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { shareTailorProfile, inviteCustomerFromTailor, sharePassportInvite } from '@/lib/invite'
+import { appendToHistory } from '@/lib/navigation'
 import { AvatarImage } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -482,9 +483,6 @@ export default function TailorClientsScreen() {
               </View>
             ) : (
               <View style={styles.empty}>
-                <View style={styles.emptyPill}>
-                  <Text style={styles.emptyPillText}>Client diary</Text>
-                </View>
                 <Feather name="book" size={36} color={Colors.lightGrey} style={{ marginBottom: Spacing.md }} />
                 <Text style={styles.emptyTitle}>
                   {diarySearch ? 'No results' : 'Build your client passport book'}
@@ -497,7 +495,12 @@ export default function TailorClientsScreen() {
                 {!diarySearch ? (
                   <TouchableOpacity
                     style={styles.addDiaryBtn}
-                    onPress={() => router.push('/(tailor)/clients/diary/new')}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/(tailor)/clients/diary/[id]',
+                        params: { id: 'new', historyChain: appendToHistory(undefined, '/(tailor)/clients') },
+                      })
+                    }
                     activeOpacity={0.8}
                   >
                     <Text style={styles.addDiaryBtnText}>Add first client</Text>
@@ -523,7 +526,12 @@ export default function TailorClientsScreen() {
                 </View>
                 <TouchableOpacity
                   style={styles.diaryBannerCta}
-                  onPress={() => router.push('/(tailor)/clients/diary/new')}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(tailor)/clients/diary/[id]',
+                      params: { id: 'new', historyChain: appendToHistory(undefined, '/(tailor)/clients') },
+                    })
+                  }
                   activeOpacity={0.8}
                 >
                   <Text style={styles.diaryBannerCtaText}>{diary.length > 0 ? 'Add client' : 'Add first client'}</Text>
@@ -534,7 +542,12 @@ export default function TailorClientsScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
-              onPress={() => router.push(`/(tailor)/clients/diary/${item.id}`)}
+              onPress={() =>
+                router.push({
+                  pathname: '/(tailor)/clients/diary/[id]',
+                  params: { id: item.id, historyChain: appendToHistory(undefined, '/(tailor)/clients') },
+                })
+              }
               activeOpacity={0.75}
             >
               <View style={[styles.avatar, { backgroundColor: Colors.needleGreenLight }]}>
@@ -586,7 +599,12 @@ export default function TailorClientsScreen() {
         {showDiaryFab ? (
           <TouchableOpacity
             style={[styles.fab, { bottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl) }]}
-            onPress={() => router.push('/(tailor)/clients/diary/new')}
+            onPress={() =>
+              router.push({
+                pathname: '/(tailor)/clients/diary/[id]',
+                params: { id: 'new', historyChain: appendToHistory(undefined, '/(tailor)/clients') },
+              })
+            }
             activeOpacity={0.85}
           >
             <Feather name="plus" size={22} color={Colors.textInverse} />
@@ -605,9 +623,6 @@ export default function TailorClientsScreen() {
         ListEmptyComponent={
           search ? (
             <View style={styles.empty}>
-              <View style={styles.emptyPill}>
-                <Text style={styles.emptyPillText}>Clients</Text>
-              </View>
               <Text style={styles.emptyTitle}>No results</Text>
               <Text style={styles.emptyHint}>Try a different name.</Text>
             </View>
@@ -655,7 +670,12 @@ export default function TailorClientsScreen() {
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.card}
-            onPress={() => router.push(`/(tailor)/clients/${item.customerId}`)}
+            onPress={() =>
+              router.push({
+                pathname: '/(tailor)/clients/[clientId]',
+                params: { clientId: item.customerId, historyChain: appendToHistory(undefined, '/(tailor)/clients') },
+              })
+            }
             activeOpacity={0.75}
           >
             <AvatarImage
@@ -740,9 +760,6 @@ function ClientsEmptyState({
         <GhostClientCard opacity={0.32} />
         <GhostClientCard opacity={0.15} />
       </View>
-      <View style={clientEmptyStyles.badge}>
-        <Text style={clientEmptyStyles.badgeText}>Clients</Text>
-      </View>
       <Text style={clientEmptyStyles.heading}>{hasDiaryClients ? 'No Drapeon customers yet' : 'No clients yet'}</Text>
       <Text style={clientEmptyStyles.sub}>
         {hasDiaryClients
@@ -797,20 +814,6 @@ const clientEmptyStyles = StyleSheet.create({
   wrap: {
     paddingTop: Spacing.xl, paddingHorizontal: Spacing.xl, paddingBottom: Spacing.xxxl,
     alignItems: 'center',
-  },
-  badge: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    marginBottom: Spacing.sm,
-  },
-  badgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
   },
   heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   sub: {
@@ -898,19 +901,6 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 20, color: Colors.midGrey, lineHeight: 22 },
 
   empty: { paddingTop: Spacing.xxxl, alignItems: 'center', gap: Spacing.sm },
-  emptyPill: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  emptyPillText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', maxWidth: 280, lineHeight: 20 },
 

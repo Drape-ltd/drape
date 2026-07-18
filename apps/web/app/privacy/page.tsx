@@ -14,7 +14,7 @@ const collectedData = [
   },
   {
     title: 'Fit and measurement data',
-    body: 'Manual measurements, fit preferences, Drapeon Vision scan results, measurement history, and order-specific fit context.',
+    body: 'Manual measurements, optional fit notes, Drapeon Vision scan results, measurement history, and order-specific fit context.',
   },
   {
     title: 'Shopping and order data',
@@ -102,7 +102,7 @@ export default function PrivacyPage(): React.JSX.Element {
       }
     >
       <section className="py-8">
-        <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+        <div className="rounded-lg border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
             This Privacy Policy applies to Drapeon mobile apps, drapeon.co, support channels, marketplace features, Drapeon Vision, and related services operated by O4 Group LLC.
@@ -129,7 +129,7 @@ export default function PrivacyPage(): React.JSX.Element {
           title="Camera-assisted measurement stays user controlled."
           description="Drapeon Vision uses computer vision built on Google MediaPipe to help estimate clothing measurements from a phone camera."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           Drapeon Vision does not save raw video by default. Users can retake scans, review measurement results, choose manual entry instead, and decide when measurements or proof photos should be saved or attached to an order. Measurement results may be stored in the user&apos;s measurement profile and used for fit guidance, order briefs, tailor-assisted scans, size guidance, and support review when needed.
         </div>
       </section>
@@ -145,7 +145,7 @@ export default function PrivacyPage(): React.JSX.Element {
             <MarketingCard key={item.title} title={item.title} body={item.body} />
           ))}
         </div>
-        <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+        <div className="mt-8 rounded-lg border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           You can manage cookies and local storage in your browser settings. Public pages should still load, but signed-in features need session storage so Drapeon can keep you logged in and protect account or ops pages.
         </div>
       </section>
@@ -156,7 +156,7 @@ export default function PrivacyPage(): React.JSX.Element {
           title="We use data to run the product, protect orders, and improve fit."
           description="We do not sell personal data."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
             {uses.map((item) => (
               <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">{item}</li>
@@ -171,7 +171,7 @@ export default function PrivacyPage(): React.JSX.Element {
           title="We share data only with providers that help Drapeon run."
           description="Service providers process data for hosting, payments, communication, measurement support, safety, analytics, and support."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+        <div className="mt-10 rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72">
             {providers.map((item) => (
               <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">{item}</li>
@@ -212,15 +212,15 @@ export default function PrivacyPage(): React.JSX.Element {
           description="Use this route for privacy requests, data questions, or account-data concerns."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <a href={`mailto:${CONTACTS.privacy}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+          <a href={`mailto:${CONTACTS.privacy}`} className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.privacy}</h3>
           </a>
-          <a href={`mailto:${CONTACTS.support}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+          <a href={`mailto:${CONTACTS.support}`} className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.support}</h3>
           </a>
-          <a href={`mailto:${CONTACTS.security}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+          <a href={`mailto:${CONTACTS.security}`} className="rounded-lg border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.security}</h3>
           </a>

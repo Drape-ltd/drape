@@ -26,6 +26,7 @@ import { RemoteImage, SkeletonBlock, StateCard } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { hapticLight, hapticWarning } from '@/lib/haptics'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
+import { appendToHistory } from '@/lib/navigation'
 import { loadRecentlyViewedTailors, type RecentlyViewedTailor } from '@/lib/recently-viewed-tailors'
 
 const SAVED_GUIDE_KEY = 'drape_saved_best_use_dismissed'
@@ -73,7 +74,7 @@ export default function SavedScreen() {
     refetch,
   } = useWishlistCollections(user?.id)
 
-  useRefreshOnFocus(refetch, 60_000)
+  useRefreshOnFocus(refetch, 0)
   const refreshRecentlyViewed = useCallback(async () => {
     setRecentlyViewed(await loadRecentlyViewedTailors(user?.id))
   }, [user?.id])
@@ -303,11 +304,18 @@ export default function SavedScreen() {
               width={gridCardWidth}
               onPress={() => {
                 if (item.itemType === 'TAILOR') {
-                  router.push(`/(customer)/tailor/${item.tailor.id}`)
+                  router.push({
+                    pathname: '/(customer)/tailor/[id]',
+                    params: { id: item.tailor.id, historyChain: appendToHistory(undefined, '/(customer)/saved') },
+                  })
                 } else {
                   router.push({
                     pathname: '/(customer)/tailor/item/[itemId]',
-                    params: { itemId: item.readyMadeItem.id, returnTo: '/(customer)/saved' },
+                    params: {
+                      itemId: item.readyMadeItem.id,
+                      returnTo: '/(customer)/saved',
+                      historyChain: appendToHistory(undefined, '/(customer)/saved'),
+                    },
                   })
                 }
               }}
@@ -334,7 +342,7 @@ export default function SavedScreen() {
         <Text style={styles.title}>Wishlists</Text>
         <TouchableOpacity style={styles.newButton} onPress={openCreateSheet} accessibilityRole="button" accessibilityLabel="Create wishlist">
           <Feather name="plus" size={18} color={Colors.needleGreen} />
-          <Text style={styles.newButtonText}>New</Text>
+          <Text style={styles.newButtonText}>New wishlist</Text>
         </TouchableOpacity>
       </View>
 
@@ -371,7 +379,12 @@ export default function SavedScreen() {
                 {recentlyViewed.length > 0 ? (
                   <RecentlyViewedRail
                     tailors={recentlyViewed}
-                    onPress={(tailor) => router.push(`/(customer)/tailor/${tailor.id}`)}
+                    onPress={(tailor) =>
+                      router.push({
+                        pathname: '/(customer)/tailor/[id]',
+                        params: { id: tailor.id, historyChain: appendToHistory(undefined, '/(customer)/saved') },
+                      })
+                    }
                   />
                 ) : null}
                 {collections.length > 0 ? (
@@ -447,7 +460,7 @@ function WishlistOverview({
         <View style={styles.wishlistHint}>
           <Feather name="heart" size={16} color={Colors.needleGreen} />
           <Text style={styles.wishlistHintText} numberOfLines={2}>
-            Save by event, gift, or style idea.
+            Tap the heart on any tailor or item to save it here.
           </Text>
           <TouchableOpacity onPress={() => void onDismissGuide()} style={styles.guideClose} accessibilityRole="button" accessibilityLabel="Hide wishlist guide">
             <Feather name="x" size={16} color={Colors.midGrey} />
@@ -842,21 +855,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: Colors.inkLight,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: Colors.needleGreenLight,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 4,
-  },
-  heroBadgeText: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   guideClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   collectionCard: {
     marginBottom: Spacing.md,
@@ -867,8 +865,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.xl,
     overflow: 'hidden',
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
   collectionCoverImage: { width: '100%', height: '100%' },
   collectionPlaceholder: {
@@ -915,10 +912,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
   },
   recentRailTitle: {
-    fontFamily: Fonts.bodyBold,
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: FontWeight.bold,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.md,
+    lineHeight: 21,
+    fontWeight: FontWeight.semibold,
     color: Colors.ink,
   },
   recentRailHint: {
@@ -1005,10 +1002,10 @@ const styles = StyleSheet.create({
   itemCard: {
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     borderRadius: Radius.xl,
-    padding: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
     ...Shadow.sm,
   },
   itemImageWrap: {
@@ -1088,8 +1085,6 @@ const styles = StyleSheet.create({
     marginTop: Spacing.lg,
     gap: Spacing.sm,
     borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
     ...Shadow.sm,
   },
@@ -1100,8 +1095,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
   },
   emptyWishlistTitle: {
     marginTop: Spacing.xs,
@@ -1154,8 +1147,8 @@ const styles = StyleSheet.create({
   sheetTitle: {
     flex: 1,
     fontFamily: Fonts.display,
-    fontSize: 29,
-    lineHeight: 36,
+    fontSize: 26,
+    lineHeight: 32,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
   },

@@ -3,6 +3,10 @@ import { invokeFunction } from './supabase'
 import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorPayload } from './function-errors'
 
 type OrderCallType = 'audio' | 'video'
+type OrderCallAudience = 'customer' | 'tailor' | 'generic'
+type OrderCallRoomOptions = {
+  notifyCounterpart?: boolean
+}
 
 type OrderCallRoomResponse = {
   url?: string | null
@@ -18,10 +22,61 @@ function readPayloadString(payload: Record<string, unknown> | null, key: string)
   return key === 'code' || !isMachineErrorCodeMessage(trimmed) ? trimmed : null
 }
 
-export async function openDrapeCallUrl(url: string) {
+function orderCallUnavailableMessage(audience: OrderCallAudience) {
+  if (audience === 'customer') {
+    return 'This Drapeon order call link is unavailable right now. Reopen the order details or ask the tailor to reschedule in Messages.'
+  }
+
+  if (audience === 'tailor') {
+    return 'This Drapeon order call link is unavailable right now. Reopen the Order Details screen and schedule a fresh ready-made call if needed.'
+  }
+
+  return 'This Drapeon call link is unavailable right now.'
+}
+
+function orderCallOpenFailedMessage(audience: OrderCallAudience) {
+  if (audience === 'customer') {
+    return 'Please try again in a moment. If it still fails, return to Order Details or ask the tailor to reschedule.'
+  }
+
+  if (audience === 'tailor') {
+    return 'Please try again in a moment. If it still fails, schedule a fresh call from the Order Details screen.'
+  }
+
+  return 'Please try again in a moment.'
+}
+
+function orderCallCodeMessage(code: string | null, audience: OrderCallAudience, payloadMessage: string | null) {
+  if (payloadMessage) return payloadMessage
+
+  switch (code) {
+    case 'ORDER_CALL_NOT_SCHEDULED':
+      return audience === 'customer'
+        ? 'This ready-made call has not been scheduled yet. Open Order Details and choose a time first.'
+        : audience === 'tailor'
+          ? 'Schedule this ready-made order call from the Order Details screen first so the customer knows when to join.'
+          : 'Schedule a call from the Order Details screen first.'
+    case 'ORDER_CALL_TOO_EARLY':
+      return audience === 'customer'
+        ? 'This ready-made call is scheduled, but the room opens shortly before the agreed time.'
+        : audience === 'tailor'
+          ? 'This ready-made call is not open yet. Join near the scheduled time so the customer is ready too.'
+          : 'This ready-made order call opens around the scheduled time.'
+    case 'ORDER_CALL_EXPIRED':
+      return audience === 'customer'
+        ? 'That ready-made call window has passed. Open Order Details or Messages to choose another time with the tailor.'
+        : audience === 'tailor'
+          ? 'That ready-made call window has passed. Schedule a new time from the Order Details screen.'
+          : 'This ready-made order call needs a new scheduled time.'
+    default:
+      return null
+  }
+}
+
+export async function openDrapeCallUrl(url: string, audience: OrderCallAudience = 'generic') {
   const supported = await Linking.canOpenURL(url)
   if (!supported) {
-    Alert.alert('Unable to open call', 'This Drapeon call link is unavailable right now.')
+    Alert.alert('Unable to open call', orderCallUnavailableMessage(audience))
     return false
   }
 
@@ -29,14 +84,19 @@ export async function openDrapeCallUrl(url: string) {
     await Linking.openURL(url)
     return true
   } catch {
-    Alert.alert('Unable to open call', 'Please try again in a moment.')
+    Alert.alert('Unable to open call', orderCallOpenFailedMessage(audience))
     return false
   }
 }
 
-export async function createOrderCallRoom(orderId: string, callType: OrderCallType) {
+export async function createOrderCallRoom(
+  orderId: string,
+  callType: OrderCallType,
+  audience: OrderCallAudience = 'generic',
+  options?: OrderCallRoomOptions,
+) {
   const { data, error } = await invokeFunction<OrderCallRoomResponse>('create-order-call-room', {
-    body: { orderId, callType },
+    body: { orderId, callType, notifyCounterpart: options?.notifyCounterpart ?? true },
   })
 
   if (!error && data?.url) {
@@ -75,14 +135,14 @@ export async function createOrderCallRoom(orderId: string, callType: OrderCallTy
       Alert.alert('Call unavailable', payloadMessage ?? 'Drapeon calling opens once pickup or delivery is actively in progress.')
       return null
     case 'ORDER_CALL_NOT_SCHEDULED':
-      Alert.alert('Schedule the call first', payloadMessage ?? 'Schedule this ready-made order call from Messages first.')
+      Alert.alert('Schedule the call first', orderCallCodeMessage(code, audience, payloadMessage) ?? 'Schedule a call from the Order Details screen first.')
       return null
     case 'ORDER_CALL_TOO_EARLY':
-      Alert.alert('Call not open yet', payloadMessage ?? 'This ready-made order call opens around the scheduled time.')
+      Alert.alert('Call not open yet', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This ready-made order call opens around the scheduled time.')
       return null
     case 'ORDER_CALL_EXPIRED':
     case 'ORDER_CALL_INVALID_TIME':
-      Alert.alert('Schedule a new call', payloadMessage ?? 'This ready-made order call needs a new scheduled time.')
+      Alert.alert('Schedule a new call', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This ready-made order call needs a new scheduled time.')
       return null
     case 'ORDER_NOT_FOUND':
     case 'FORBIDDEN':

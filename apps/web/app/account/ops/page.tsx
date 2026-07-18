@@ -38,7 +38,7 @@ export default function OpsAccountPage(): React.JSX.Element {
             ['Role-scoped controls', 'Finance, trust, support, engineering, and admin actions are separated by operational role.'],
             ['Audit trail', 'Sensitive actions such as refunds, payout release, verification decisions, and escalations remain logged.'],
           ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+            <div key={title} className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <h3 className="text-2xl text-ink">{title}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
             </div>
@@ -53,11 +53,11 @@ export default function OpsAccountPage(): React.JSX.Element {
           description="If you are a customer or tailor, use the app account routes instead."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
-          <Link href="/account/customer" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/customer" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Customers</p>
             <h3 className="mt-4 text-2xl text-ink">Customer account access</h3>
           </Link>
-          <Link href="/account/tailor" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/tailor" className="rounded-[8px] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailors</p>
             <h3 className="mt-4 text-2xl text-ink">Tailor account access</h3>
           </Link>

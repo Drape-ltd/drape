@@ -1,9 +1,9 @@
 /**
- * Seller profile setup wizard — 4 steps
+ * Tailor profile setup wizard — 4 steps
  * Step 0: Identity (display name, phone, location, bio, languages)
  * Step 1: Specialties + pricing
  * Step 2: Portfolio (at least one work sample)
- * Step 3: Availability + ID verification upload
+ * Step 3: Fulfillment + ID verification upload
  */
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import {
@@ -11,25 +11,55 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Animated,
+  Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   Modal,
+  TextInput,
+  UIManager,
+  Vibration,
+  PanResponder,
+  useWindowDimensions,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter, type Href } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import * as ImageManipulator from 'expo-image-manipulator'
 import * as ImagePicker from 'expo-image-picker'
 import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { detectDeviceCurrencyPreference, fetchCurrencyPreferenceContext } from '@/lib/currency'
 import { isDuplicatePhoneError, isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { appendToHistory, resetTo } from '@/lib/navigation'
+import {
+  checkAccountPhoneAvailability,
+  DUPLICATE_PHONE_MESSAGE,
+  sendAccountPhoneOtp,
+  verifyAccountPhoneOtp,
+} from '@/lib/account-profile-actions'
 import { Sentry } from '@/lib/sentry'
+import { useKeyboardState } from '@/lib/useKeyboardState'
+import { hapticSuccess, hapticWarning } from '@/lib/haptics'
+import {
+  launchImagePickerSafely,
+  preferCompatibleVideoRepresentation,
+  preferCurrentAssetRepresentation,
+} from '@/lib/image-picker-safe'
+import {
+  pickerVideoContentType as portfolioVideoContentType,
+  pickerVideoExtension as portfolioVideoExtension,
+  validateVideoPickerAsset,
+} from '@/lib/video-asset'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import {
@@ -37,6 +67,8 @@ import {
   Button,
   Input,
   RemoteImage,
+  AvatarImage,
+  PortfolioVideoPreview,
   TagSelector,
   ProgressStepper,
 } from '@/components/ui'
@@ -57,17 +89,26 @@ import {
   type TailorSetupFieldErrors,
   type TailorSetupStep,
 } from '@drape/shared/tailor-setup'
+import {
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
+  VIDEO_DURATION_LIMIT_MESSAGE,
+} from '@drape/shared/media-policy'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
-type ProfilePhotoSource = 'camera' | 'library'
+type ProfilePhotoSource = AvatarImageSource
 type PortfolioMediaSource = 'camera-photo' | 'camera-video' | 'library'
-type IdDocumentSource = 'camera' | 'library'
+type IdDocumentSource = 'camera'
 type PortfolioItem = { type: 'photo' | 'video'; url: string }
+type PortfolioGridEntry = { item: PortfolioItem; originalIndex: number }
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 type MediaSheetMode = 'profile-photo' | 'portfolio-media' | 'id-document' | null
-type SetupChoiceSheetMode = 'availability' | 'seller-type' | 'order-mode' | 'fulfillment' | 'currency' | null
+type SetupChoiceSheetMode = 'seller-type' | 'capacity' | 'shop-status' | 'fulfillment' | 'currency' | null
+type SetupView = 'hub' | 'section'
+type SetupToast = { type: 'success' | 'error'; message: string }
 
 type TailorSetupProfileRow = {
   display_name: string | null
@@ -81,6 +122,10 @@ type TailorSetupProfileRow = {
   currency: string | null
   seller_type: string | null
   id_verification_status: string | null
+  id_selfie_document_url?: string | null
+  id_verification_rejection_reason?: string | null
+  id_verification_rejected_at?: string | null
+  id_verification_metadata?: Record<string, unknown> | null
   supports_custom_orders: boolean | null
   supports_ready_made: boolean | null
   pickup_available: boolean | null
@@ -88,6 +133,8 @@ type TailorSetupProfileRow = {
   shipping_available: boolean | null
   delivery_fee: number | null
   shipping_fee: number | null
+  accepts_custom_orders_now: boolean | null
+  shop_paused: boolean | null
   portfolio_photo_urls: unknown
   portfolio_video_urls: unknown
   availability: string | null
@@ -123,29 +170,39 @@ type ErrorWithStatus = {
 
 const MAX_PORTFOLIO_ITEMS = 12
 const MIN_PORTFOLIO_ITEMS = 1
-const MAX_PORTFOLIO_VIDEOS = 2
+const MAX_PORTFOLIO_VIDEOS = 4
+const MAX_PORTFOLIO_VIDEO_BYTES = MEDIA_LIMITS_BYTES.portfolioVideo
+const MAX_PORTFOLIO_VIDEO_SECONDS = MEDIA_LIMITS_SECONDS.portfolioVideo
 const MAX_LANGUAGE_TAGS = 12
 const MAX_SPECIALTY_TAGS = 20
 const SUPPORTED_CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const
 const PORTFOLIO_MIN_MARKER_LEFT = `${(MIN_PORTFOLIO_ITEMS / MAX_PORTFOLIO_ITEMS) * 100}%` as `${number}%`
+const PORTFOLIO_GRID_COLUMNS = 3
+const PORTFOLIO_GRID_TILE_SIZE = 100
+const PORTFOLIO_GRID_CELL_SIZE = PORTFOLIO_GRID_TILE_SIZE + Spacing.sm
 
-const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Selling setup']
+const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Setup & verification']
 const STEP_SUBS = [
   'This is your public tailor profile. No contact details here. Buyers find you through Drapeon.',
-  'Tell people what you make and what to expect on price.',
+  'Tell people what you make, your business type, and what to expect on price.',
   'Add at least one real work sample. More photos help buyers trust your profile faster.',
-  'Choose what you sell, how people receive orders, and verify your identity to go live.',
+  'Confirm handoff options, order status, and submit your identity selfie for review.',
 ]
-const STEP_LABELS = ['Identity', 'Specialties', 'Portfolio', 'Selling']
-const AVAILABILITY_SETUP_OPTIONS: Array<{ value: Availability; label: string; hint: string }> = [
-  { value: 'OPEN', label: 'Open', hint: 'Accepting new order requests.' },
-  { value: 'LIMITED', label: 'Limited', hint: 'Visible, but customers see that replies may take longer.' },
-  { value: 'FULLY_BOOKED', label: 'Fully booked', hint: 'New bookings pause. Existing orders are unaffected.' },
-]
+const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+const PROFILE_IMAGE_REJECTION_MESSAGE =
+  'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
+const SETUP_STEP_IDS: TailorSetupStep[] = [0, 1, 2, 3]
+const STEP_LABELS = ['Identity', 'Specialties', 'Portfolio', 'Setup']
+const SETUP_ERROR_FIELD_PRIORITY: Record<TailorSetupStep, TailorSetupField[]> = {
+  0: ['profilePhoto', 'displayName', 'phone', 'location', 'bio', 'languages'],
+  1: ['specialties', 'priceRange'],
+  2: ['portfolio'],
+  3: ['orderMode', 'fulfillment', 'pickupAddress', 'idDocument'],
+}
 const SELLER_TYPE_OPTIONS: Array<{ value: SellerType; label: string; hint: string }> = [
-  { value: 'TAILOR', label: 'Tailor', hint: 'Custom work first.' },
-  { value: 'BOUTIQUE', label: 'Boutique', hint: 'A shop with tailors behind it.' },
-  { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'Custom and ready-made together.' },
+  { value: 'TAILOR', label: 'Tailor', hint: 'Custom and bespoke work made to order.' },
+  { value: 'BOUTIQUE', label: 'Boutique', hint: 'Ready-made garments and stock collections.' },
+  { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'A full studio handling custom orders and ready-made collections together.' },
 ]
 
 // ─── Language options (grouped by region) ────────────────────────────────────
@@ -260,11 +317,159 @@ const PRICE_PRESETS: Array<{
   { label: 'Mid-range', currency: 'NGN', min: '120000', max: '300000' },
   { label: 'Premium', currency: 'NGN', min: '300000', max: '800000' },
 ] as const
+const FOCUSED_FIELD_SCROLL_DELAY_MS = 140
+const FOCUSED_FIELD_TOP_OFFSET = 96
+const PHONE_AVAILABILITY_DEBOUNCE_MS = 650
+
+if (Platform.OS === 'android') {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true)
+}
+
+function getPortfolioDropTargetIndex(fromIndex: number, dx: number, dy: number, itemCount: number) {
+  if (itemCount <= 0 || fromIndex < 0 || fromIndex >= itemCount) return null
+  const columnDelta = Math.round(dx / PORTFOLIO_GRID_CELL_SIZE)
+  const rowDelta = Math.round(dy / PORTFOLIO_GRID_CELL_SIZE)
+  const rawTargetIndex = fromIndex + columnDelta + rowDelta * PORTFOLIO_GRID_COLUMNS
+  return Math.max(0, Math.min(itemCount - 1, rawTargetIndex))
+}
+
+function previewPortfolioGridEntries(
+  items: PortfolioItem[],
+  dragIndex: number | null,
+  hoverIndex: number | null,
+): PortfolioGridEntry[] {
+  const entries = items.map((item, originalIndex) => ({ item, originalIndex }))
+  if (
+    dragIndex == null ||
+    hoverIndex == null ||
+    dragIndex < 0 ||
+    dragIndex >= entries.length ||
+    hoverIndex < 0 ||
+    hoverIndex >= entries.length ||
+    dragIndex === hoverIndex
+  ) {
+    return entries
+  }
+  const next = [...entries]
+  const [dragged] = next.splice(dragIndex, 1)
+  if (!dragged) return entries
+  next.splice(hoverIndex, 0, dragged)
+  return next
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function readStringField(record: Record<string, unknown> | null | undefined, keys: string[]) {
+  if (!record) return null
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return null
+}
+
+function readIdentityRejectionCode(row: {
+  id_verification_metadata?: Record<string, unknown> | null
+}) {
+  const metadata = row.id_verification_metadata && typeof row.id_verification_metadata === 'object'
+    ? row.id_verification_metadata
+    : null
+  const nested = metadata?.identity_verification && typeof metadata.identity_verification === 'object'
+    ? metadata.identity_verification as Record<string, unknown>
+    : null
+  return (
+    readStringField(metadata, ['rejection_code', 'rejectionCode']) ??
+    readStringField(nested, ['rejection_code', 'rejectionCode']) ??
+    ''
+  ).toUpperCase()
+}
+
+function isProfileImageRejectionCode(code: string | null | undefined) {
+  return (code ?? '').trim().toUpperCase() === INVALID_PROFILE_IMAGE_REJECTION_CODE
+}
+
+function readIdentityRejectionMessage(row: {
+  id_verification_rejection_reason?: string | null
+  id_verification_metadata?: Record<string, unknown> | null
+}) {
+  const rejectionCode = readIdentityRejectionCode(row)
+  if (isProfileImageRejectionCode(rejectionCode)) return PROFILE_IMAGE_REJECTION_MESSAGE
+
+  const direct = row.id_verification_rejection_reason?.trim()
+  if (direct) return direct
+
+  const metadata = row.id_verification_metadata && typeof row.id_verification_metadata === 'object'
+    ? row.id_verification_metadata
+    : null
+  const nested = metadata?.identity_verification && typeof metadata.identity_verification === 'object'
+    ? metadata.identity_verification as Record<string, unknown>
+    : null
+  return (
+    readStringField(metadata, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
+    readStringField(nested, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
+    'Identity review needs a clearer retake. Capture a sharp live selfie with your face and physical ID fully visible.'
+  )
+}
+
+function portfolioAssetDuplicateKey(asset: ImagePicker.ImagePickerAsset) {
+  const assetId = typeof asset.assetId === 'string' ? asset.assetId.trim() : ''
+  if (assetId.length > 0) return `${asset.type ?? 'media'}:asset:${assetId}`
+
+  const contentType = asset.mimeType?.split(';')[0]?.trim().toLowerCase() ?? asset.type ?? 'media'
+  const fileName = typeof asset.fileName === 'string' ? asset.fileName.trim().toLowerCase() : ''
+  const fileSize = typeof asset.fileSize === 'number' && Number.isFinite(asset.fileSize)
+    ? String(asset.fileSize)
+    : ''
+  const dimensions =
+    typeof asset.width === 'number' && typeof asset.height === 'number'
+      ? `${asset.width}x${asset.height}`
+      : ''
+  const duration =
+    typeof asset.duration === 'number' && Number.isFinite(asset.duration)
+      ? String(Math.round(asset.duration))
+      : ''
+  const metadataKey = [contentType, fileName, fileSize, dimensions, duration]
+    .filter((part) => part.length > 0)
+    .join(':')
+
+  return metadataKey ? `${asset.type ?? 'media'}:meta:${metadataKey}` : `${asset.type ?? 'media'}:uri:${asset.uri}`
+}
+
+function validatePortfolioVideoAsset(asset: ImagePicker.ImagePickerAsset) {
+  return validateVideoPickerAsset(asset, {
+    maxBytes: MAX_PORTFOLIO_VIDEO_BYTES,
+    maxSeconds: MAX_PORTFOLIO_VIDEO_SECONDS,
+    maxBytesMessage: `Choose portfolio videos under ${Math.round(MAX_PORTFOLIO_VIDEO_BYTES / (1024 * 1024))} MB.`,
+    durationMessage: VIDEO_DURATION_LIMIT_MESSAGE,
+    skipNonVideo: true,
+  })
+}
 
 export default function TailorSetupScreen() {
   const router = useRouter()
+  const routeParams = useLocalSearchParams<{
+    handoffToken?: string | string[]
+    openIdentity?: string | string[]
+    view?: string | string[]
+    step?: string | string[]
+    historyChain?: string | string[]
+  }>()
   const insets = useSafeAreaInsets()
   const { user, signOut, switchRole } = useAuth()
+  const keyboard = useKeyboardState()
+  const handoffToken = useMemo(() => firstParam(routeParams.handoffToken)?.trim() || null, [routeParams.handoffToken])
+  const routeRequestedStep = useMemo<TailorSetupStep | null>(() => {
+    if (firstParam(routeParams.view) !== 'section') return null
+    const parsed = Number(firstParam(routeParams.step))
+    return parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? (parsed as TailorSetupStep) : null
+  }, [routeParams.step, routeParams.view])
+  const openIdentityFromHandoff = handoffToken !== null || firstParam(routeParams.openIdentity) === '1'
+  const scrollRef = useRef<ScrollView | null>(null)
+  const bioFieldYRef = useRef(0)
+  const setupFieldYRef = useRef<Partial<Record<TailorSetupField, number>>>({})
+  const setupToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
   const oauthName =
     user?.user_metadata?.display_name ??
@@ -272,6 +477,12 @@ export default function TailorSetupScreen() {
     user?.user_metadata?.name ??
     ''
   const oauthPhone = typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : ''
+  const oauthVerifiedPhone =
+    typeof user?.user_metadata?.verified_phone === 'string'
+      ? user.user_metadata.verified_phone
+      : typeof user?.user_metadata?.phone_verified_at === 'string'
+        ? oauthPhone
+        : ''
 
   // Guard: if the profile is already complete and ID is not pending re-submission,
   // prevent direct-URL re-entry which would allow upsert-overwrite of existing data.
@@ -334,7 +545,7 @@ export default function TailorSetupScreen() {
                   Alert.alert('Could not switch modes', error)
                   return
                 }
-                router.replace('/(customer)')
+                resetTo(router, '/(customer)')
               })
               .finally(() => setSwitchingToCustomer(false))
           },
@@ -344,20 +555,31 @@ export default function TailorSetupScreen() {
   }
 
   const [step, setStep] = useState<TailorSetupStep>(0)
+  const [setupView, setSetupView] = useState<SetupView>('hub')
   const [saving, setSaving] = useState(false)
   const [switchingToCustomer, setSwitchingToCustomer] = useState(false)
   const [visibleErrors, setVisibleErrors] = useState<TailorSetupFieldErrors>({})
+  const [setupToast, setSetupToast] = useState<SetupToast | null>(null)
+  const [focusedTextField, setFocusedTextField] = useState<string | null>(null)
   const [profileHydrated, setProfileHydrated] = useState(false)
   const [pickupHydrated, setPickupHydrated] = useState(false)
   const [mediaSheetMode, setMediaSheetMode] = useState<MediaSheetMode>(null)
   const [choiceSheetMode, setChoiceSheetMode] = useState<SetupChoiceSheetMode>(null)
   const initialStepResolved = useRef(false)
+  const routeSectionRestoreKey = useRef<string | null>(null)
 
   // Step 0
   const [displayName, setDisplayName] = useState(oauthName)
   const [nameError, setNameError] = useState('')
   const [phone, setPhone] = useState(oauthPhone)
   const [phoneError, setPhoneError] = useState('')
+  const [phoneAvailabilityChecking, setPhoneAvailabilityChecking] = useState(false)
+  const [phoneOtpVisible, setPhoneOtpVisible] = useState(false)
+  const [phoneOtpCode, setPhoneOtpCode] = useState('')
+  const [phoneOtpError, setPhoneOtpError] = useState('')
+  const [phoneOtpSending, setPhoneOtpSending] = useState(false)
+  const [phoneOtpVerifying, setPhoneOtpVerifying] = useState(false)
+  const [verifiedPhone, setVerifiedPhone] = useState(() => normalizePhoneForStorage(oauthVerifiedPhone))
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [bio, setBio] = useState('')
@@ -366,6 +588,18 @@ export default function TailorSetupScreen() {
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const locationDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestPhoneRef = useRef(phone)
+  const phoneAvailabilityRequestRef = useRef(0)
+  const verifiedPhoneRef = useRef(verifiedPhone)
+  const phoneOtpAfterVerifyRef = useRef<'advance' | 'finish' | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (setupToastTimerRef.current) {
+        clearTimeout(setupToastTimerRef.current)
+      }
+    }
+  }, [])
   const [languages, setLanguages] = useState<string[]>(['English'])
 
   // Step 1
@@ -389,22 +623,35 @@ export default function TailorSetupScreen() {
   // Step 2
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([])
   const [uploadingMedia, setUploadingMedia] = useState(false)
+  const [portfolioMediaStatus, setPortfolioMediaStatus] = useState<string | null>(null)
+  const [selectedPortfolioIndex, setSelectedPortfolioIndex] = useState<number | null>(null)
+  const [portfolioReplaceIndex, setPortfolioReplaceIndex] = useState<number | null>(null)
+  const [portfolioDragIndex, setPortfolioDragIndex] = useState<number | null>(null)
+  const [portfolioHoverIndex, setPortfolioHoverIndex] = useState<number | null>(null)
   const pickedUris = useRef<Set<string>>(new Set())
+  const pickedAssetKeys = useRef<Set<string>>(new Set())
 
   // Step 3
   const [availability, setAvailability] = useState<Availability>('OPEN')
   const [sellerType, setSellerType] = useState<SellerType>('TAILOR')
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
   const [supportsReadyMade, setSupportsReadyMade] = useState(false)
+  const [acceptsCustomOrdersNow, setAcceptsCustomOrdersNow] = useState(true)
+  const [shopPaused, setShopPaused] = useState(false)
+  const [readyMadeItemCount, setReadyMadeItemCount] = useState(0)
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
   const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
+  const [savedIdSelfieUrl, setSavedIdSelfieUrl] = useState('')
   const [idVerificationStatus, setIdVerificationStatus] =
     useState<VerificationStatus>('NOT_SUBMITTED')
   const [idError, setIdError] = useState('')
+  const [idRejectionReason, setIdRejectionReason] = useState('')
+  const [idRejectionCode, setIdRejectionCode] = useState('')
+  const [avatarRejectionCleared, setAvatarRejectionCleared] = useState(false)
   const [uploadingId, setUploadingId] = useState(false)
 
   useEffect(() => {
@@ -424,10 +671,11 @@ export default function TailorSetupScreen() {
         `
         display_name, avatar_url, bio, location, languages, specialty_tags,
         price_range_min, price_range_max, currency, seller_type,
-        id_verification_status,
+        id_verification_status, id_selfie_document_url,
+        id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata,
         supports_custom_orders, supports_ready_made,
         pickup_available, delivery_available, shipping_available,
-        delivery_fee, shipping_fee,
+        delivery_fee, shipping_fee, accepts_custom_orders_now, shop_paused,
         portfolio_photo_urls, portfolio_video_urls, availability
       `
       )
@@ -463,6 +711,7 @@ export default function TailorSetupScreen() {
               )
               .map((url: string) => ({ type: 'photo' as const, url }))
           : []
+        const nextIdSelfieUrl = typeof row.id_selfie_document_url === 'string' ? row.id_selfie_document_url.trim() : ''
         const nextVideos = Array.isArray(row.portfolio_video_urls)
           ? row.portfolio_video_urls
               .filter(
@@ -502,6 +751,7 @@ export default function TailorSetupScreen() {
         ) {
           setCurrency(row.currency as typeof currency)
         }
+        setSavedIdSelfieUrl(nextIdSelfieUrl)
         if (nextPhotos.length > 0 || nextVideos.length > 0) {
           setPortfolioItems([...nextPhotos, ...nextVideos])
         }
@@ -521,6 +771,9 @@ export default function TailorSetupScreen() {
           setSupportsCustomOrders(row.supports_custom_orders)
         if (typeof row.supports_ready_made === 'boolean')
           setSupportsReadyMade(row.supports_ready_made)
+        if (typeof row.accepts_custom_orders_now === 'boolean')
+          setAcceptsCustomOrdersNow(row.accepts_custom_orders_now)
+        if (typeof row.shop_paused === 'boolean') setShopPaused(row.shop_paused)
         if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
         if (typeof row.delivery_available === 'boolean')
           setDeliveryAvailable(row.delivery_available)
@@ -537,8 +790,31 @@ export default function TailorSetupScreen() {
               ? 'VERIFIED'
               : (row.id_verification_status as VerificationStatus)
           )
+          if (row.id_verification_status === 'REJECTED') {
+            setIdRejectionCode(readIdentityRejectionCode(row))
+            setIdRejectionReason(readIdentityRejectionMessage(row))
+            setAvatarRejectionCleared(false)
+          } else {
+            setIdRejectionCode('')
+            setIdRejectionReason('')
+            setAvatarRejectionCleared(false)
+          }
         }
         setProfileHydrated(true)
+      })
+
+    supabase
+      .from('tailor_profiles')
+      .select('id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(async ({ data }) => {
+        if (cancelled || !data?.id) return
+        const { count } = await supabase
+          .from('seller_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('tailor_profile_id', data.id)
+        if (!cancelled) setReadyMadeItemCount(count ?? 0)
       })
 
     supabase
@@ -606,6 +882,39 @@ export default function TailorSetupScreen() {
       cancelled = true
     }
   }, [user?.id, oauthName, oauthPhone])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user?.id) return undefined
+      let cancelled = false
+
+      async function refreshReadyMadeItemCount() {
+        const { data } = await supabase
+          .from('tailor_profiles')
+          .select('id')
+          .eq('user_id', user!.id)
+          .maybeSingle()
+
+        if (cancelled) return
+        if (!data?.id) {
+          setReadyMadeItemCount(0)
+          return
+        }
+
+        const { count } = await supabase
+          .from('seller_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('tailor_profile_id', data.id)
+
+        if (!cancelled) setReadyMadeItemCount(count ?? 0)
+      }
+
+      void refreshReadyMadeItemCount()
+      return () => {
+        cancelled = true
+      }
+    }, [user?.id])
+  )
 
   // ── Location autocomplete via Nominatim (OSM, no API key) ───────────────────
 
@@ -686,42 +995,236 @@ export default function TailorSetupScreen() {
     return !error
   }
 
-  function validatePhone(value: string) {
+  const phoneValidationMessage = useCallback((value: string) => {
     if (!value.trim()) {
-      setPhoneError(TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE)
-      return false
+      return TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE
     }
     const error = validatePhoneForProfile(value)
     if (error) {
-      setPhoneError(error)
+      return error
+    }
+    return ''
+  }, [])
+
+  function validatePhone(value: string) {
+    const error = phoneValidationMessage(value)
+    setPhoneError(error)
+    return !error
+  }
+
+  async function validatePhoneAvailability(value: string) {
+    const formatError = phoneValidationMessage(value)
+    const normalizedPhone = normalizePhoneForStorage(value)
+    const requestId = phoneAvailabilityRequestRef.current + 1
+    phoneAvailabilityRequestRef.current = requestId
+
+    if (formatError) {
+      setPhoneAvailabilityChecking(false)
+      setPhoneError(formatError)
+      return formatError
+    }
+
+    setPhoneAvailabilityChecking(true)
+    const result = await checkAccountPhoneAvailability(normalizedPhone)
+
+    if (
+      requestId !== phoneAvailabilityRequestRef.current ||
+      normalizePhoneForStorage(latestPhoneRef.current) !== normalizedPhone
+    ) {
+      return result.error ?? ''
+    }
+
+    setPhoneAvailabilityChecking(false)
+    const availabilityError = result.available ? '' : result.error || DUPLICATE_PHONE_MESSAGE
+    setPhoneError(availabilityError)
+    return availabilityError
+  }
+
+  function markPhoneVerified(value: string) {
+    const normalizedPhone = normalizePhoneForStorage(value)
+    verifiedPhoneRef.current = normalizedPhone
+    setVerifiedPhone(normalizedPhone)
+    setPhoneOtpError('')
+    setPhoneError('')
+    clearVisibleError('phone')
+  }
+
+  function isCurrentPhoneVerified(value = phone) {
+    const normalizedPhone = normalizePhoneForStorage(value)
+    return !!normalizedPhone && verifiedPhoneRef.current === normalizedPhone
+  }
+
+  async function ensurePhoneVerifiedForSetup(afterVerify: 'advance' | 'finish') {
+    const formatError = phoneValidationMessage(phone)
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    if (formatError) {
+      setPhoneError(formatError)
+      setVisibleErrors({ phone: formatError })
+      focusFirstSetupError({ phone: formatError }, 0)
       return false
     }
-    setPhoneError('')
-    return true
+
+    if (isCurrentPhoneVerified(normalizedPhone)) return true
+
+    setPhoneOtpSending(true)
+    const result = await sendAccountPhoneOtp(normalizedPhone)
+    setPhoneOtpSending(false)
+
+    if (result.error) {
+      setPhoneError(result.error)
+      setVisibleErrors({ phone: result.error })
+      focusFirstSetupError({ phone: result.error }, 0)
+      hapticWarning()
+      return false
+    }
+
+    if (result.bypassed) {
+      markPhoneVerified(normalizedPhone)
+      showSetupToast('Phone check passed for this environment', 'success')
+      return true
+    }
+
+    phoneOtpAfterVerifyRef.current = afterVerify
+    setPhoneOtpCode('')
+    setPhoneOtpError('')
+    setPhoneOtpVisible(true)
+    showSetupToast('We sent a 6-digit code to verify your phone', 'success')
+    return false
+  }
+
+  async function verifyPhoneOtpCode() {
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    const code = phoneOtpCode.replace(/\D/g, '')
+    if (code.length !== 6) {
+      setPhoneOtpError('Enter the 6-digit code from the SMS.')
+      hapticWarning()
+      return
+    }
+
+    setPhoneOtpVerifying(true)
+    const result = await verifyAccountPhoneOtp({ phone: normalizedPhone, code })
+    setPhoneOtpVerifying(false)
+
+    if (result.error) {
+      setPhoneOtpError(result.error)
+      hapticWarning()
+      return
+    }
+
+    const action = phoneOtpAfterVerifyRef.current
+    phoneOtpAfterVerifyRef.current = null
+    markPhoneVerified(normalizedPhone)
+    setPhoneOtpVisible(false)
+    setPhoneOtpCode('')
+    showSetupToast(result.bypassed ? 'Phone check passed for this environment' : 'Phone number verified', 'success')
+    hapticSuccess()
+
+    requestAnimationFrame(() => {
+      if (action === 'advance') {
+        openSetupSection(1)
+        return
+      }
+      if (action === 'finish') {
+        void finish()
+      }
+    })
+  }
+
+  async function resendPhoneOtpCode() {
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    setPhoneOtpSending(true)
+    const result = await sendAccountPhoneOtp(normalizedPhone)
+    setPhoneOtpSending(false)
+
+    if (result.error) {
+      setPhoneOtpError(result.error)
+      hapticWarning()
+      return
+    }
+
+    if (result.bypassed) {
+      const action = phoneOtpAfterVerifyRef.current
+      phoneOtpAfterVerifyRef.current = null
+      markPhoneVerified(normalizedPhone)
+      setPhoneOtpVisible(false)
+      setPhoneOtpCode('')
+      showSetupToast('Phone check passed for this environment', 'success')
+      requestAnimationFrame(() => {
+        if (action === 'advance') {
+          openSetupSection(1)
+          return
+        }
+        if (action === 'finish') {
+          void finish()
+        }
+      })
+      return
+    }
+
+    setPhoneOtpError('')
+    showSetupToast('Code resent', 'success')
+  }
+
+  useEffect(() => {
+    latestPhoneRef.current = phone
+
+    const formatError = phoneValidationMessage(phone)
+    const requestId = phoneAvailabilityRequestRef.current + 1
+    phoneAvailabilityRequestRef.current = requestId
+
+    if (!phone.trim() || formatError) {
+      return undefined
+    }
+
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    const timer = setTimeout(() => {
+      setPhoneAvailabilityChecking(true)
+      void checkAccountPhoneAvailability(normalizedPhone).then((result) => {
+        if (
+          requestId !== phoneAvailabilityRequestRef.current ||
+          normalizePhoneForStorage(latestPhoneRef.current) !== normalizedPhone
+        ) {
+          return
+        }
+
+        setPhoneAvailabilityChecking(false)
+        setPhoneError(result.available ? '' : result.error || DUPLICATE_PHONE_MESSAGE)
+      })
+    }, PHONE_AVAILABILITY_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [phone, phoneValidationMessage])
+
+  function getBioValidationError(text: string) {
+    const res = filterContactInfo(text)
+    if (res.blocked) {
+      return "Contact details aren't allowed in your bio."
+    }
+    if (text.trim().length < 80) {
+      return `About you needs at least 80 characters (${text.trim().length}/80).`
+    }
+    if (isBioGibberish(text)) {
+      return 'Please enter a meaningful description of your work and experience.'
+    }
+    return ''
   }
 
   function validateBio(text: string) {
-    const res = filterContactInfo(text)
-    if (res.blocked) {
-      setBioError("Contact details aren't allowed in your bio.")
-      return false
-    }
-    if (text.trim().length < 80) {
-      setBioError(`About you needs at least 80 characters (${text.trim().length}/80).`)
-      return false
-    }
-    if (isBioGibberish(text)) {
-      setBioError('Please enter a meaningful description of your work and experience.')
-      return false
-    }
-    setBioError('')
-    return true
+    const error = getBioValidationError(text)
+    setBioError(error)
+    return !error
   }
+
+  const profileImageRejectionActive =
+    idVerificationStatus === 'REJECTED' &&
+    isProfileImageRejectionCode(idRejectionCode) &&
+    !avatarRejectionCleared
 
   const hasIdDocumentForSetup = useCallback(() => {
     if (idPhotoUri) return true
+    if (isProfileImageRejectionCode(idRejectionCode) && savedIdSelfieUrl) return true
     return idVerificationStatus !== 'NOT_SUBMITTED' && idVerificationStatus !== 'REJECTED'
-  }, [idPhotoUri, idVerificationStatus])
+  }, [idPhotoUri, idRejectionCode, idVerificationStatus, savedIdSelfieUrl])
 
   const getSetupProgress = useCallback((overrides?: {
     nameError?: string
@@ -734,7 +1237,7 @@ export default function TailorSetupScreen() {
       nameError: overrides?.nameError ?? nameError,
       phone,
       phoneError: overrides?.phoneError ?? phoneError,
-      profilePhotoPresent: !!avatarUrl,
+      profilePhotoPresent: !!avatarUrl && !profileImageRejectionActive,
       location,
       bio,
       bioError: overrides?.bioError ?? bioError,
@@ -745,6 +1248,8 @@ export default function TailorSetupScreen() {
       priceMax,
       currency,
       portfolioItemCount: portfolioItems.length,
+      readyMadeItemCount,
+      sellerType,
       supportsCustomOrders,
       supportsReadyMade,
       pickupAvailable,
@@ -759,6 +1264,7 @@ export default function TailorSetupScreen() {
     phone,
     phoneError,
     avatarUrl,
+    profileImageRejectionActive,
     location,
     bio,
     bioError,
@@ -768,6 +1274,8 @@ export default function TailorSetupScreen() {
     priceMax,
     currency,
     portfolioItems.length,
+    readyMadeItemCount,
+    sellerType,
     supportsCustomOrders,
     supportsReadyMade,
     pickupAvailable,
@@ -777,6 +1285,28 @@ export default function TailorSetupScreen() {
     hasIdDocumentForSetup,
   ])
 
+  function applySellerType(nextType: SellerType) {
+    setSellerType(nextType)
+    if (nextType === 'BOUTIQUE') {
+      setSupportsCustomOrders(false)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(false)
+      setShopPaused(false)
+    } else if (nextType === 'TAILOR_SHOP') {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(true)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(false)
+    } else {
+      setSupportsCustomOrders(true)
+      setSupportsReadyMade(false)
+      setAcceptsCustomOrdersNow(true)
+      setShopPaused(true)
+    }
+    clearVisibleError('orderMode')
+    clearVisibleError('portfolio')
+  }
+
   function clearVisibleError(field: TailorSetupField) {
     setVisibleErrors((current) => {
       if (!current[field]) return current
@@ -784,62 +1314,115 @@ export default function TailorSetupScreen() {
       delete next[field]
       return next
     })
+    setSetupToast((current) => (current?.type === 'error' ? null : current))
   }
+
+  const rememberSetupFieldY = useCallback((field: TailorSetupField) => {
+    return (event: { nativeEvent: { layout: { y: number } } }) => {
+      setupFieldYRef.current[field] = event.nativeEvent.layout.y
+    }
+  }, [])
+
+  const showSetupToast = useCallback(
+    (message: string, type: SetupToast['type'] = 'success', autoDismiss = type === 'success') => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+      if (setupToastTimerRef.current) {
+        clearTimeout(setupToastTimerRef.current)
+        setupToastTimerRef.current = null
+      }
+      setSetupToast({ type, message })
+      if (autoDismiss) {
+        setupToastTimerRef.current = setTimeout(() => {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+          setSetupToast(null)
+          setupToastTimerRef.current = null
+        }, 2200)
+      }
+    },
+    []
+  )
+
+  const scrollSetupFieldIntoView = useCallback((field: TailorSetupField) => {
+    Keyboard.dismiss()
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+    setFocusedTextField(null)
+    hapticWarning()
+    setTimeout(() => {
+      const y = setupFieldYRef.current[field] ?? 0
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, y - FOCUSED_FIELD_TOP_OFFSET),
+        animated: true,
+      })
+    }, FOCUSED_FIELD_SCROLL_DELAY_MS)
+  }, [])
+
+  const focusFirstSetupError = useCallback(
+    (errors: TailorSetupFieldErrors, currentStep: TailorSetupStep) => {
+      const priority = SETUP_ERROR_FIELD_PRIORITY[currentStep]
+      const field = priority.find((candidate) => errors[candidate]) ?? priority[0]
+      const message = (field && errors[field]) || 'Finish the highlighted section to continue.'
+      showSetupToast(message, 'error', false)
+      if (field) {
+        scrollSetupFieldIntoView(field)
+      } else {
+        hapticWarning()
+      }
+    },
+    [scrollSetupFieldIntoView, showSetupToast]
+  )
 
   useEffect(() => {
     if (initialStepResolved.current || !profileHydrated || !pickupHydrated) return
-    const progress = getSetupProgress()
-    setStep(progress.firstIncompleteStep)
     initialStepResolved.current = true
-  }, [getSetupProgress, pickupHydrated, profileHydrated])
+    if (openIdentityFromHandoff) {
+      openSetupSection(3)
+      showSetupToast('Secure handoff opened. Capture your live identity selfie.', 'success')
+      return
+    }
+    const progress = getSetupProgress()
+    if (routeRequestedStep !== null) {
+      openSetupSection(progress.firstIncompleteStep)
+      return
+    }
+    setStep(progress.firstIncompleteStep)
+  }, [getSetupProgress, openIdentityFromHandoff, pickupHydrated, profileHydrated, routeRequestedStep, showSetupToast])
+
+  useEffect(() => {
+    if (!profileHydrated || !pickupHydrated || routeRequestedStep === null) return
+    const restoreKey = `section:${routeRequestedStep}`
+    if (routeSectionRestoreKey.current === restoreKey) return
+    routeSectionRestoreKey.current = restoreKey
+    const progress = getSetupProgress()
+    openSetupSection(progress.firstIncompleteStep)
+  }, [getSetupProgress, pickupHydrated, profileHydrated, routeRequestedStep])
 
   function openProfilePhotoPicker() {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+    setFocusedTextField(null)
     setMediaSheetMode('profile-photo')
   }
 
   async function pickProfilePhoto(source: ProfilePhotoSource) {
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (!permission.granted) {
-      Alert.alert(
-        'Permission needed',
-        source === 'camera'
-          ? 'Allow camera access to take your profile photo.'
-          : 'Allow photo access to choose your profile photo.'
-      )
-      return
-    }
-
-    const res =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({
-            mediaTypes: 'images',
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.85,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: 'images',
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.85,
-          })
-    if (res.canceled || !res.assets[0] || !user?.id) return
+    const imageUri = await pickAvatarImageUri(source)
+    if (!imageUri || !user?.id) return
 
     setUploadingAvatar(true)
     try {
-      const cleanUri = await stripExif(res.assets[0].uri, { maxWidth: 900 })
+      const compressed = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 800, height: 800 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      )
       const publicUrl = await uploadPublicStorageImage({
         bucket: 'avatars',
         path: `${user.id}/avatar.jpg`,
-        uri: cleanUri,
+        uri: compressed.uri,
         contentType: 'image/jpeg',
         maxBytes: 5 * 1024 * 1024,
         upsert: true,
       })
       setAvatarUrl(`${publicUrl}?t=${new Date().getTime()}`)
+      if (isProfileImageRejectionCode(idRejectionCode)) setAvatarRejectionCleared(true)
       clearVisibleError('profilePhoto')
     } catch (error) {
       Sentry.captureException(error, {
@@ -857,7 +1440,89 @@ export default function TailorSetupScreen() {
   }
 
   function openPortfolioMediaPicker() {
+    setPortfolioReplaceIndex(null)
     setMediaSheetMode('portfolio-media')
+  }
+
+  function openPortfolioReplacePicker(index: number) {
+    setPortfolioReplaceIndex(index)
+    setSelectedPortfolioIndex(null)
+    setMediaSheetMode('portfolio-media')
+  }
+
+  function syncPortfolioMediaOrder(nextItems: PortfolioItem[]) {
+    if (!user?.id) return
+    void invokeFunction('tailor-profile-action', {
+      body: {
+        action: 'update-portfolio-media',
+        photoUrls: nextItems.filter((item) => item.type === 'photo').map((item) => item.url),
+        videoUrls: nextItems.filter((item) => item.type === 'video').map((item) => item.url),
+      },
+    }).then(({ error }) => {
+      if (error) {
+        Sentry.captureException(error, {
+          extra: { context: 'tailor_setup_portfolio_media_order_sync', userId: user?.id },
+        })
+      }
+    }).catch((error) => {
+      Sentry.captureException(error, {
+        extra: { context: 'tailor_setup_portfolio_media_order_sync', userId: user?.id },
+      })
+    })
+  }
+
+  function movePortfolioItem(fromIndex: number, toIndex: number) {
+    let reorderedItems: PortfolioItem[] | null = null
+    setPortfolioItems((prev) => {
+      if (
+        fromIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex < 0 ||
+        toIndex >= prev.length ||
+        fromIndex === toIndex
+      ) {
+        return prev
+      }
+      const next = [...prev]
+      const [item] = next.splice(fromIndex, 1)
+      if (!item) return prev
+      next.splice(toIndex, 0, item)
+      reorderedItems = next
+      return next
+    })
+    if (reorderedItems) syncPortfolioMediaOrder(reorderedItems)
+    setSelectedPortfolioIndex(toIndex)
+    setPortfolioDragIndex(null)
+    setPortfolioHoverIndex(null)
+    clearVisibleError('portfolio')
+  }
+
+  function handlePortfolioDragMove(fromIndex: number, dx: number, dy: number) {
+    const targetIndex = getPortfolioDropTargetIndex(fromIndex, dx, dy, portfolioItems.length)
+    if (targetIndex == null) return
+    setPortfolioHoverIndex((current) => current === targetIndex ? current : targetIndex)
+  }
+
+  function handlePortfolioDragEnd(fromIndex: number, dx: number, dy: number) {
+    const targetIndex = getPortfolioDropTargetIndex(fromIndex, dx, dy, portfolioItems.length)
+    if (targetIndex != null && targetIndex !== fromIndex) {
+      movePortfolioItem(fromIndex, targetIndex)
+      hapticSuccess()
+      return
+    }
+    setPortfolioDragIndex(null)
+    setPortfolioHoverIndex(null)
+  }
+
+  function removePortfolioItem(index: number) {
+    let nextItems: PortfolioItem[] = []
+    setPortfolioItems((prev) => {
+      nextItems = prev.filter((_, idx) => idx !== index)
+      return nextItems
+    })
+    syncPortfolioMediaOrder(nextItems)
+    setSelectedPortfolioIndex(null)
+    clearVisibleError('portfolio')
   }
 
   async function uploadPortfolioAsset(
@@ -872,10 +1537,15 @@ export default function TailorSetupScreen() {
     const stamp = `${new Date().getTime()}-${index}`
 
     if (isVideo) {
-      const extension = asset.fileName?.split('.').pop()?.toLowerCase() || 'mp4'
+      const extension = portfolioVideoExtension(asset)
       const filename = `portfolio/${user.id}/${stamp}.${extension}`
-      const payload = await createValidatedUploadPayload(asset.uri, 50 * 1024 * 1024)
-      const contentType = asset.mimeType ?? payload.contentType ?? 'video/mp4'
+      const contentType = portfolioVideoContentType(asset)
+      const payload = await createValidatedUploadPayload(asset.uri, {
+        maxBytes: MAX_PORTFOLIO_VIDEO_BYTES,
+        contentType,
+        allowedContentTypes: ALLOWED_VIDEO_CONTENT_TYPES,
+        purpose: 'PORTFOLIO',
+      })
       const { error: videoError } = await supabase.storage
         .from('portfolio-photos')
         .upload(filename, payload.data, { contentType })
@@ -897,11 +1567,22 @@ export default function TailorSetupScreen() {
   }
 
   async function pickPortfolioMedia(source: PortfolioMediaSource) {
-    if (portfolioItems.length >= MAX_PORTFOLIO_ITEMS) {
+    const replacingIndex =
+      portfolioReplaceIndex != null &&
+      portfolioReplaceIndex >= 0 &&
+      portfolioReplaceIndex < portfolioItems.length
+        ? portfolioReplaceIndex
+        : null
+    const replacingItem = replacingIndex != null ? portfolioItems[replacingIndex] : null
+    const isReplacing = replacingIndex != null
+
+    if (!isReplacing && portfolioItems.length >= MAX_PORTFOLIO_ITEMS) {
       Alert.alert('Maximum reached', `You can add up to ${MAX_PORTFOLIO_ITEMS} photos or videos.`)
       return
     }
-    const videoCount = portfolioItems.filter((i) => i.type === 'video').length
+    const videoCount =
+      portfolioItems.filter((i) => i.type === 'video').length -
+      (replacingItem?.type === 'video' ? 1 : 0)
     if (source === 'camera-video' && videoCount >= MAX_PORTFOLIO_VIDEOS) {
       Alert.alert(
         'Video limit',
@@ -924,54 +1605,94 @@ export default function TailorSetupScreen() {
       return
     }
 
-    const res =
-      source === 'library'
-        ? await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images', 'videos'],
-            allowsMultipleSelection: true,
-            orderedSelection: true,
-            selectionLimit: Math.min(
-              MAX_PORTFOLIO_ITEMS - portfolioItems.length,
-              MAX_PORTFOLIO_ITEMS
-            ),
-            quality: 0.85,
-            videoMaxDuration: 30,
-          })
-        : source === 'camera-video'
-          ? await ImagePicker.launchCameraAsync({
-              mediaTypes: 'videos',
-              quality: 0.8,
-              videoMaxDuration: 30,
-            })
-          : await ImagePicker.launchCameraAsync({
-              mediaTypes: 'images',
-              quality: 0.85,
-            })
-    if (res.canceled || !res.assets[0]) return
+    if (source !== 'camera-photo') {
+      setPortfolioMediaStatus(
+        source === 'library'
+          ? 'Preparing selected media. Videos can take a few seconds.'
+          : 'Preparing video. This can take a few seconds.'
+      )
+    }
 
-    const remainingSlots = MAX_PORTFOLIO_ITEMS - portfolioItems.length
+    const res = await launchImagePickerSafely(
+      () =>
+        source === 'library'
+          ? ImagePicker.launchImageLibraryAsync(
+              preferCompatibleVideoRepresentation({
+                mediaTypes: ['images', 'videos'],
+                allowsMultipleSelection: !isReplacing,
+                orderedSelection: true,
+                selectionLimit: Math.min(
+                  isReplacing ? 1 : MAX_PORTFOLIO_ITEMS - portfolioItems.length,
+                  MAX_PORTFOLIO_ITEMS
+                ),
+                quality: 0.85,
+                videoMaxDuration: MAX_PORTFOLIO_VIDEO_SECONDS,
+              })
+            )
+          : source === 'camera-video'
+            ? ImagePicker.launchCameraAsync({
+                mediaTypes: 'videos',
+                quality: 0.8,
+                videoMaxDuration: MAX_PORTFOLIO_VIDEO_SECONDS,
+              })
+            : ImagePicker.launchCameraAsync({
+                mediaTypes: 'images',
+                quality: 0.85,
+              }),
+      {
+        context: 'tailor_setup_portfolio_media_picker',
+        mediaLabel: source === 'library' ? 'portfolio media file' : 'portfolio media',
+        extra: { source, userId: user?.id },
+      }
+    )
+    if (!res) {
+      setPortfolioMediaStatus(null)
+      setPortfolioReplaceIndex(null)
+      return
+    }
+    if (res.canceled || !res.assets[0]) {
+      setPortfolioMediaStatus(null)
+      setPortfolioReplaceIndex(null)
+      return
+    }
+
+    const remainingSlots = isReplacing ? 1 : MAX_PORTFOLIO_ITEMS - portfolioItems.length
     const candidates = res.assets.slice(0, remainingSlots)
     const acceptedAssets: ImagePicker.ImagePickerAsset[] = []
     let skippedDuplicates = 0
     let skippedVideos = 0
+    const validationMessages = new Set<string>()
     let nextVideoCount = videoCount
+    const seenAssetKeys = new Set(pickedAssetKeys.current)
 
     for (const asset of candidates) {
-      if (pickedUris.current.has(asset.uri)) {
+      const duplicateKey = portfolioAssetDuplicateKey(asset)
+      if (pickedUris.current.has(asset.uri) || seenAssetKeys.has(duplicateKey)) {
         skippedDuplicates += 1
         continue
       }
-      if (asset.type === 'video' && nextVideoCount >= MAX_PORTFOLIO_VIDEOS) {
-        skippedVideos += 1
-        continue
+      if (asset.type === 'video') {
+        const validationMessage = validatePortfolioVideoAsset(asset)
+        if (validationMessage) {
+          validationMessages.add(validationMessage)
+          continue
+        }
+        if (nextVideoCount >= MAX_PORTFOLIO_VIDEOS) {
+          skippedVideos += 1
+          continue
+        }
+        nextVideoCount += 1
       }
-      if (asset.type === 'video') nextVideoCount += 1
       acceptedAssets.push(asset)
+      seenAssetKeys.add(duplicateKey)
     }
 
     if (acceptedAssets.length === 0) {
-      const reason =
-        skippedDuplicates > 0
+      setPortfolioMediaStatus(null)
+      setPortfolioReplaceIndex(null)
+      const reason = validationMessages.size
+        ? Array.from(validationMessages)[0]
+        : skippedDuplicates > 0
           ? 'Those files are already in your portfolio.'
           : `You can include up to ${MAX_PORTFOLIO_VIDEOS} videos in your portfolio.`
       Alert.alert('Nothing added', reason)
@@ -979,7 +1700,15 @@ export default function TailorSetupScreen() {
     }
 
     setUploadingMedia(true)
-    acceptedAssets.forEach((asset) => pickedUris.current.add(asset.uri))
+    setPortfolioMediaStatus(
+      acceptedAssets.some((asset) => asset.type === 'video')
+        ? 'Uploading video. Keep this screen open.'
+        : 'Uploading media. Keep this screen open.'
+    )
+    acceptedAssets.forEach((asset) => {
+      pickedUris.current.add(asset.uri)
+      pickedAssetKeys.current.add(portfolioAssetDuplicateKey(asset))
+    })
 
     const uploadedItems: PortfolioItem[] = []
     const failedAssets: ImagePicker.ImagePickerAsset[] = []
@@ -990,6 +1719,7 @@ export default function TailorSetupScreen() {
         } catch (assetError) {
           failedAssets.push(acceptedAssets[i])
           pickedUris.current.delete(acceptedAssets[i].uri)
+          pickedAssetKeys.current.delete(portfolioAssetDuplicateKey(acceptedAssets[i]))
           Sentry.captureException(assetError, {
             extra: { context: 'tailor_setup_media_asset_upload', userId: user?.id },
           })
@@ -997,7 +1727,14 @@ export default function TailorSetupScreen() {
       }
 
       if (uploadedItems.length > 0) {
-        setPortfolioItems((prev) => [...prev, ...uploadedItems].slice(0, MAX_PORTFOLIO_ITEMS))
+        if (isReplacing && uploadedItems[0]) {
+          setPortfolioItems((prev) =>
+            prev.map((item, idx) => (idx === replacingIndex ? uploadedItems[0] : item))
+          )
+          setSelectedPortfolioIndex(replacingIndex)
+        } else {
+          setPortfolioItems((prev) => [...prev, ...uploadedItems].slice(0, MAX_PORTFOLIO_ITEMS))
+        }
         clearVisibleError('portfolio')
       }
 
@@ -1005,6 +1742,7 @@ export default function TailorSetupScreen() {
         failedAssets.length > 0 ||
         skippedDuplicates > 0 ||
         skippedVideos > 0 ||
+        validationMessages.size > 0 ||
         res.assets.length > candidates.length
       ) {
         const notes = [
@@ -1012,6 +1750,7 @@ export default function TailorSetupScreen() {
           failedAssets.length > 0 ? `${failedAssets.length} failed` : null,
           skippedDuplicates > 0 ? `${skippedDuplicates} duplicate` : null,
           skippedVideos > 0 ? `${skippedVideos} over video limit` : null,
+          validationMessages.size > 0 ? Array.from(validationMessages)[0] : null,
           res.assets.length > candidates.length
             ? `${res.assets.length - candidates.length} over portfolio limit`
             : null,
@@ -1020,7 +1759,10 @@ export default function TailorSetupScreen() {
       }
     } catch (error) {
       const capturedError = error as ErrorWithStatus
-      acceptedAssets.forEach((asset) => pickedUris.current.delete(asset.uri))
+      acceptedAssets.forEach((asset) => {
+        pickedUris.current.delete(asset.uri)
+        pickedAssetKeys.current.delete(portfolioAssetDuplicateKey(asset))
+      })
       const details = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not upload this media yet. Retry from this setup step when the signal improves.'
         : 'We could not upload this media right now. Please try again in a moment.'
@@ -1035,6 +1777,8 @@ export default function TailorSetupScreen() {
       Alert.alert('Could not upload media', details)
     } finally {
       setUploadingMedia(false)
+      setPortfolioMediaStatus(null)
+      setPortfolioReplaceIndex(null)
     }
   }
 
@@ -1042,60 +1786,136 @@ export default function TailorSetupScreen() {
     setMediaSheetMode('id-document')
   }
 
-  async function pickIdPhoto(source: IdDocumentSource) {
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+  async function pickIdPhoto(_source: IdDocumentSource) {
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted) {
       Alert.alert(
         'Permission needed',
-        source === 'camera'
-          ? 'Allow camera access to take your ID document photo.'
-          : 'Allow photo access to choose your ID document.'
+        'Allow camera access to capture a live selfie while holding your ID beside your face.'
       )
       return
     }
 
-    const res =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.9 })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.9 })
+    const res = await launchImagePickerSafely(
+      () =>
+        ImagePicker.launchCameraAsync({
+          mediaTypes: 'images',
+          quality: 0.9,
+          allowsEditing: false,
+        }),
+      {
+        context: 'tailor_setup_id_document_picker',
+        mediaLabel: 'identity selfie image',
+        extra: { source: 'camera', userId: user?.id },
+      }
+    )
+    if (!res) return
     if (res.canceled || !res.assets[0]) return
     setIdPhotoUri(res.assets[0].uri)
     clearVisibleError('idDocument')
     setIdError('')
   }
 
-  async function uploadIdAndSave(): Promise<string | null> {
-    if (!idPhotoUri) return null
+  async function submitIdentitySelfieForReview(): Promise<boolean> {
+    if (!idPhotoUri || !user?.id) return false
     setUploadingId(true)
-    const filename = `id-verification/${user?.id}/${Date.now()}.jpg`
     try {
+      let token = handoffToken
+      if (token) {
+        const resolved = await invokeFunction<{
+          handoffId?: string
+        }>('identity-handoff-action', {
+          body: { action: 'resolve-token', token },
+        })
+        if (resolved.error) throw resolved.error
+        if (!resolved.data?.handoffId) throw new Error('Identity handoff could not be found. Start a new session and try again.')
+      } else {
+        const created = await invokeFunction<{
+          token?: string
+        }>('identity-handoff-action', {
+          body: { action: 'create' },
+        })
+        if (created.error) throw created.error
+        token = created.data?.token?.trim() || null
+      }
+      if (!token) throw new Error('Could not start identity verification. Try again.')
+
+      const upload = await invokeFunction<{
+        path?: string
+        uploadToken?: string
+      }>('identity-handoff-action', {
+        body: { action: 'create-upload-url', token },
+      })
+      if (upload.error) throw upload.error
+      const path = upload.data?.path
+      const uploadToken = upload.data?.uploadToken
+      if (!path || !uploadToken) throw new Error('Could not prepare secure identity upload. Try again.')
+
       const cleanUri = await stripExif(idPhotoUri)
       const payload = await createValidatedUploadPayload(cleanUri, 20 * 1024 * 1024)
-      const { error } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from('id-documents')
-        .upload(filename, payload.data, { contentType: 'image/jpeg' })
-      if (error) throw error
+        .uploadToSignedUrl(path, uploadToken, payload.data, { contentType: 'image/jpeg' })
+      if (uploadError) throw uploadError
+
+      const submitted = await invokeFunction<{
+        status?: string
+      }>('identity-handoff-action', {
+        body: { action: 'submit', token, storagePath: path },
+      })
+      if (submitted.error) throw submitted.error
+
+      setIdVerificationStatus('PENDING')
+      setIdRejectionReason('')
       setUploadingId(false)
-      return filename
+      return true
     } catch (error) {
       Sentry.captureException(error, {
-        extra: { context: 'tailor_setup_id_upload', userId: user?.id },
+        extra: { context: 'tailor_setup_identity_handoff_submit', userId: user?.id },
       })
       setUploadingId(false)
-      return null
+      Alert.alert(
+        'Identity review not submitted',
+        await readFunctionErrorMessage(
+          error,
+          'We saved your profile, but identity review still needs your live selfie before review can start.'
+        )
+      )
+      return false
     }
+  }
+
+  function openReadyMadeItemCreator() {
+    const setupReturnPath = '/(tailor)/profile/setup?view=section&step=2' as const
+    const historyChain = appendToHistory(firstParam(routeParams.historyChain), setupReturnPath)
+    const readyMadeItemRoute: Href = {
+      pathname: '/(tailor)/shop/new',
+      params: {
+        returnTo: setupReturnPath,
+        historyChain,
+        onboarding: 'tailor_setup',
+      },
+    }
+
+    router.push(readyMadeItemRoute)
   }
 
   async function finish() {
     if (saving || uploadingId || uploadingMedia) return
 
+    const phoneVerifiedForSubmit = await ensurePhoneVerifiedForSetup('finish')
+    if (!phoneVerifiedForSubmit) {
+      setStep(0)
+      setSetupView('section')
+      return
+    }
+
     if (!hasIdDocumentForSetup()) {
       setStep(3)
+      setSetupView('section')
       setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
       setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+      focusFirstSetupError({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE }, 3)
       return
     }
 
@@ -1104,20 +1924,6 @@ export default function TailorSetupScreen() {
     if (!user?.id) {
       setSaving(false)
       Alert.alert('Session expired', 'Please sign in again and retry profile setup.')
-      return
-    }
-
-    const idUrl = idPhotoUri ? await uploadIdAndSave() : null
-
-    if (idPhotoUri && !idUrl) {
-      setSaving(false)
-      setStep(3)
-      setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
-      setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
-      Alert.alert(
-        'ID upload failed',
-        'We could not upload your ID document yet. Retry from this setup step before submitting.'
-      )
       return
     }
 
@@ -1142,6 +1948,8 @@ export default function TailorSetupScreen() {
           sellerType,
           supportsCustomOrders,
           supportsReadyMade,
+          acceptsCustomOrdersNow,
+          shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
           pickupInstructions: pickupInstructions.trim() || null,
@@ -1149,7 +1957,6 @@ export default function TailorSetupScreen() {
           shippingAvailable,
           deliveryFee: 0,
           shippingFee: 0,
-          idDocumentUrl: idUrl,
         },
       },
     })
@@ -1165,8 +1972,10 @@ export default function TailorSetupScreen() {
           )
       if (message.includes(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)) {
         setStep(3)
+        setSetupView('section')
         setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
         setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+        focusFirstSetupError({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE }, 3)
       }
       Sentry.captureException(error, {
         extra: {
@@ -1184,8 +1993,14 @@ export default function TailorSetupScreen() {
       return
     }
 
+    const phoneVerifiedAt = isCurrentPhoneVerified(normalizedPhone) ? new Date().toISOString() : null
+
     const { error: authError } = await supabase.auth.updateUser({
-      data: { display_name: displayName.trim(), phone: normalizedPhone },
+      data: {
+        display_name: displayName.trim(),
+        phone: normalizedPhone,
+        ...(phoneVerifiedAt ? { phone_verified_at: phoneVerifiedAt, verified_phone: normalizedPhone } : {}),
+      },
     })
 
     if (authError) {
@@ -1220,42 +2035,81 @@ export default function TailorSetupScreen() {
       return
     }
 
-    if (idUrl) {
-      invokeFunction('notify-ops-verification', {
-        body: { tailorId: user.id },
-      }).catch(() => {})
+    if (!idPhotoUri && isProfileImageRejectionCode(idRejectionCode) && avatarRejectionCleared) {
+      setIdVerificationStatus('PENDING')
+      setIdRejectionReason('')
+      setIdRejectionCode('')
+    }
+
+    if (idPhotoUri) {
+      const identitySubmitted = await submitIdentitySelfieForReview()
+      if (!identitySubmitted) {
+        setStep(3)
+        setSetupView('section')
+        return
+      }
     }
 
     Alert.alert(
       'Profile submitted',
-      idUrl
-        ? "We'll review your ID within 24 hours. You'll be notified when your profile goes live."
-        : 'Your profile is saved. Submit a government ID to go live.',
-      [{ text: 'OK', onPress: () => router.replace('/(tailor)/profile') }]
+      idPhotoUri
+        ? "We'll review your live identity selfie within 24 hours. You'll be notified when your profile goes live."
+        : 'Your profile is saved. Capture your identity selfie to submit for review. Payout setup can be completed after your account is created.',
+      [{ text: 'OK', onPress: () => resetTo(router, { pathname: '/(auth)/onboarding', params: { role: 'TAILOR', userId: user.id } }) }]
     )
   }
 
-  function next() {
-    if (saving || uploadingId || uploadingMedia) return
-    const nextNameError = step === 0 ? (validateDisplayName(displayName) ?? '') : nameError
-    const nextPhoneError =
-      step === 0
-        ? !phone.trim()
-          ? TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE
-          : (validatePhoneForProfile(phone) ?? '')
-        : phoneError
-    const bioValid = step === 0 ? validateBio(bio) : true
+  function openSetupSection(targetStep: TailorSetupStep) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+    setFocusedTextField(null)
+    setStep(targetStep)
+    setSetupView('section')
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false })
+    })
+  }
 
-    if (step === 0) {
+  function returnToSetupHub() {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+    setFocusedTextField(null)
+    setSetupToast(null)
+    setSetupView('hub')
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false })
+    })
+  }
+
+  async function next() {
+    if (saving || uploadingId || uploadingMedia) return
+    const shouldValidateIdentity = setupView === 'hub' || step === 0
+    const nextNameError = shouldValidateIdentity ? (validateDisplayName(displayName) ?? '') : nameError
+    const nextPhoneError =
+      shouldValidateIdentity
+        ? await validatePhoneAvailability(phone)
+        : phoneError
+    const nextBioError = shouldValidateIdentity ? getBioValidationError(bio) : bioError
+
+    if (shouldValidateIdentity) {
       setNameError(nextNameError)
       setPhoneError(nextPhoneError)
+      setBioError(nextBioError)
     }
 
     const progress = getSetupProgress({
       nameError: nextNameError,
       phoneError: nextPhoneError,
-      bioError: bioValid ? '' : bioError || TAILOR_SETUP_VALIDATION.BIO_REQUIRED_MESSAGE,
+      bioError: nextBioError,
     })
+
+    if (setupView === 'hub') {
+      if (SETUP_STEP_IDS.every((stepId) => progress.stepValid[stepId]) && hasIdDocumentForSetup()) {
+        setVisibleErrors({})
+        void finish()
+        return
+      }
+      openSetupSection(progress.firstIncompleteStep)
+      return
+    }
 
     if (!progress.stepValid[step]) {
       const currentErrors = progress.stepErrors[step]
@@ -1263,22 +2117,39 @@ export default function TailorSetupScreen() {
       if (currentErrors.idDocument) {
         setIdError(currentErrors.idDocument)
       }
+      focusFirstSetupError(currentErrors, step)
       return
+    }
+
+    if (step === 0) {
+      const phoneVerifiedForAdvance = await ensurePhoneVerifiedForSetup('advance')
+      if (!phoneVerifiedForAdvance) return
     }
 
     setVisibleErrors({})
     if (step === 3 && !hasIdDocumentForSetup()) {
       setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
       setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+      focusFirstSetupError({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE }, 3)
       return
     }
-    if (step < 3) setStep((step + 1) as TailorSetupStep)
-    else finish()
+    setIdError('')
+    if (step < 3) {
+      showSetupToast(`${stepLabels[step]} section completed`, 'success')
+      hapticSuccess()
+      openSetupSection((step + 1) as TailorSetupStep)
+      return
+    }
+    void finish()
   }
 
   function goBack() {
-    if (step > 0) {
-      setStep((step - 1) as TailorSetupStep)
+    if (setupView === 'section') {
+      if (step > 0) {
+        openSetupSection((step - 1) as TailorSetupStep)
+        return
+      }
+      returnToSetupHub()
       return
     }
     Alert.alert(
@@ -1292,52 +2163,81 @@ export default function TailorSetupScreen() {
     )
   }
 
-  const setupProgress = getSetupProgress()
+  const setupProgress = getSetupProgress({
+    nameError: validateDisplayName(displayName) ?? '',
+    phoneError: !phone.trim() ? TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE : (validatePhoneForProfile(phone) ?? ''),
+    bioError: getBioValidationError(bio),
+  })
+  const proofChecklistLabel =
+    sellerType === 'BOUTIQUE'
+      ? 'Ready-made listing'
+      : sellerType === 'TAILOR_SHOP'
+        ? 'Portfolio + ready-made item'
+        : 'Portfolio sample'
+  const proofChecklistDetail =
+    sellerType === 'BOUTIQUE'
+      ? 'Add one ready-made item customers can inspect.'
+      : sellerType === 'TAILOR_SHOP'
+        ? 'Add a work sample and a ready-made item customers can inspect.'
+        : 'Add at least one real work sample customers can inspect.'
   const setupChecklist = [
     {
-      label: 'Phone number',
-      detail: 'Used for order updates and recovery',
-      complete: !setupProgress.fieldErrors.phone && phone.trim().length > 0,
+      label: 'Contact + public profile',
+      detail: 'Verified phone, display name, photo, location, and bio.',
+      complete: setupProgress.stepValid[0] && isCurrentPhoneVerified(phone) && !profileImageRejectionActive,
       targetStep: 0 as TailorSetupStep,
     },
     {
-      label: 'Profile photo',
-      detail: 'A clear face photo builds trust faster',
-      complete: !setupProgress.fieldErrors.profilePhoto,
-      targetStep: 0 as TailorSetupStep,
+      label: 'Business type + pricing',
+      detail: 'Choose Tailor, Boutique, or Tailor shop and set a visible price guide.',
+      complete: setupProgress.stepValid[1],
+      targetStep: 1 as TailorSetupStep,
     },
     {
-      label: 'Portfolio item',
-      detail: 'Add at least one real work sample',
-      complete: !setupProgress.fieldErrors.portfolio,
+      label: proofChecklistLabel,
+      detail: proofChecklistDetail,
+      complete: setupProgress.stepValid[2],
       targetStep: 2 as TailorSetupStep,
     },
     {
-      label: 'ID document',
-      detail: 'Required before trust review',
-      complete: !setupProgress.fieldErrors.idDocument,
+      label: 'Identity & handoff',
+      detail: 'Capture your live ID selfie and add customer handoff details. Payout setup comes after account creation.',
+      complete: setupProgress.stepValid[3],
       targetStep: 3 as TailorSetupStep,
     },
   ]
   const checklistRemaining = setupChecklist.filter((item) => !item.complete).length
-  const selectedAvailability = AVAILABILITY_SETUP_OPTIONS.find((item) => item.value === availability) ?? AVAILABILITY_SETUP_OPTIONS[0]
+  const setupReadyToSubmit = SETUP_STEP_IDS.every((stepId) => setupProgress.stepValid[stepId]) && hasIdDocumentForSetup()
   const selectedSellerType = SELLER_TYPE_OPTIONS.find((item) => item.value === sellerType) ?? SELLER_TYPE_OPTIONS[0]
-  const orderModeLabel =
-    supportsCustomOrders && supportsReadyMade
-      ? 'Custom orders + Shop now'
-      : supportsCustomOrders
-        ? 'Custom orders'
-        : supportsReadyMade
-          ? 'Shop now'
-          : 'Not selected'
-  const orderModeHint =
-    supportsCustomOrders && supportsReadyMade
-      ? 'Customers can request bespoke work or buy ready-made pieces.'
-      : supportsCustomOrders
-        ? 'Customers send details and you quote the work.'
-        : supportsReadyMade
-          ? 'Customers buy ready-made pieces you already have.'
-          : 'Choose at least one way customers can order from you.'
+  const proofStepTitle = sellerType === 'BOUTIQUE' ? 'Shop proof' : sellerType === 'TAILOR_SHOP' ? 'Public proof' : 'Portfolio'
+  const proofStepBody = sellerType === 'BOUTIQUE'
+    ? 'Add your first ready-made item so customers can inspect what your shop sells.'
+    : sellerType === 'TAILOR_SHOP'
+      ? 'Add portfolio media and one ready-made item so customers can inspect both sides of your shop.'
+      : STEP_SUBS[2]
+  const stepTitles = [STEP_TITLES[0], STEP_TITLES[1], proofStepTitle, STEP_TITLES[3]]
+  const stepSubs = [STEP_SUBS[0], STEP_SUBS[1], proofStepBody, STEP_SUBS[3]]
+  const stepLabels = [STEP_LABELS[0], STEP_LABELS[1], proofStepTitle, STEP_LABELS[3]]
+  const hasPortfolioProof = portfolioItems.length >= MIN_PORTFOLIO_ITEMS
+  const hasReadyMadeProof = readyMadeItemCount > 0
+  const proofCountText = sellerType === 'BOUTIQUE'
+    ? hasReadyMadeProof
+      ? String(readyMadeItemCount) + ' ready-made item' + (readyMadeItemCount === 1 ? '' : 's') + ' added'
+      : 'Add 1 ready-made item to continue'
+    : sellerType === 'TAILOR_SHOP'
+      ? hasPortfolioProof && hasReadyMadeProof
+        ? String(portfolioItems.length) + '/' + String(MAX_PORTFOLIO_ITEMS) + ' portfolio media · ' + String(readyMadeItemCount) + ' ready-made item' + (readyMadeItemCount === 1 ? '' : 's')
+        : !hasPortfolioProof && !hasReadyMadeProof
+          ? 'Add portfolio media and 1 ready-made item to continue'
+          : !hasPortfolioProof
+            ? 'Add portfolio media to continue'
+            : 'Add 1 ready-made item to continue'
+      : hasPortfolioProof
+        ? String(portfolioItems.length) + '/' + String(MAX_PORTFOLIO_ITEMS) + ' portfolio media added'
+        : 'Add 1 work sample to continue'
+  const proofVideoText = sellerType !== 'BOUTIQUE'
+    ? ' · ' + String(portfolioItems.filter((i) => i.type === 'video').length) + '/' + String(MAX_PORTFOLIO_VIDEOS) + ' videos'
+    : ''
   const fulfillmentSelections = [
     pickupAvailable ? 'Pickup' : null,
     deliveryAvailable ? 'Delivery' : null,
@@ -1351,184 +2251,312 @@ export default function TailorSetupScreen() {
   const stepBlockingNote =
     step === 1 && (!priceMin || !priceMax)
       ? 'Set a price range to continue'
-      : step === 2 && portfolioItems.length < MIN_PORTFOLIO_ITEMS
-        ? 'Add at least 1 photo or video of your work to continue'
+      : step === 2 && setupProgress.fieldErrors.portfolio
+        ? setupProgress.fieldErrors.portfolio
         : step === 3 && !(supportsCustomOrders || supportsReadyMade)
           ? 'Choose at least one way customers can order from you'
           : step === 3 && !(pickupAvailable || deliveryAvailable || shippingAvailable)
             ? 'Choose at least one way customers receive orders'
             : step === 3 && !hasIdDocumentForSetup()
               ? TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE
-              : ''
+            : ''
+  const primaryCtaLabel = uploadingMedia
+    ? 'Uploading…'
+    : setupView === 'hub'
+      ? saving || uploadingId
+        ? 'Submitting…'
+        : setupReadyToSubmit
+          ? 'Submit for review'
+          : 'Resume setup'
+      : saving || uploadingId
+        ? 'Submitting…'
+        : step === 3
+          ? 'Submit for review'
+          : 'Save and continue'
+  const editingLayoutActive = keyboard.visible || focusedTextField !== null
+  const ctaBottomPadding = editingLayoutActive
+    ? Math.max(insets.bottom + Spacing.xs, Spacing.sm)
+    : Math.max(insets.bottom + Spacing.sm, Spacing.xl)
+  const scrollBottomPadding = editingLayoutActive ? 96 : 160
+  const portfolioGridEntries = useMemo(
+    () => previewPortfolioGridEntries(portfolioItems, portfolioDragIndex, portfolioHoverIndex),
+    [portfolioDragIndex, portfolioHoverIndex, portfolioItems]
+  )
+  const selectedPortfolioItem =
+    selectedPortfolioIndex != null &&
+    selectedPortfolioIndex >= 0 &&
+    selectedPortfolioIndex < portfolioItems.length
+      ? portfolioItems[selectedPortfolioIndex]
+      : null
+  const portfolioVideoLimitReached =
+    portfolioItems.filter((i) => i.type === 'video').length -
+      (portfolioReplaceIndex != null && portfolioItems[portfolioReplaceIndex]?.type === 'video' ? 1 : 0) >=
+    MAX_PORTFOLIO_VIDEOS
+
+  const animateEditingLayout = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+  }, [])
+
+  const focusTextField = useCallback((field: string) => {
+    animateEditingLayout()
+    setFocusedTextField(field)
+  }, [animateEditingLayout])
+
+  const blurTextField = useCallback((field: string) => {
+    animateEditingLayout()
+    setFocusedTextField((current) => (current === field ? null : current))
+  }, [animateEditingLayout])
+
+  const scrollFocusedBioIntoView = useCallback(() => {
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, bioFieldYRef.current - FOCUSED_FIELD_TOP_OFFSET),
+        animated: true,
+      })
+    }, FOCUSED_FIELD_SCROLL_DELAY_MS)
+  }, [])
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {/* Header */}
         <View style={styles.header}>
           <AuthBackButton onPress={goBack} />
-          <Text style={styles.stepCount}>{step + 1} / 4</Text>
+          <Text style={styles.stepCount}>{setupView === 'hub' ? 'Setup' : `${step + 1} / 4`}</Text>
           <View style={styles.headerSpacer} />
         </View>
 
         {/* Progress stepper with step labels */}
-        <ProgressStepper steps={STEP_LABELS} current={step} />
+        {setupView === 'section' ? <ProgressStepper steps={stepLabels} current={step} /> : null}
+
+        {setupToast ? (
+          <View
+            style={[
+              styles.setupToast,
+              setupToast.type === 'error' ? styles.setupToastError : styles.setupToastSuccess,
+            ]}
+          >
+            <Text
+              style={[
+                styles.setupToastText,
+                setupToast.type === 'error' ? styles.setupToastTextError : styles.setupToastTextSuccess,
+              ]}
+            >
+              {setupToast.message}
+            </Text>
+          </View>
+        ) : null}
 
         <ScrollView
+          ref={scrollRef}
           style={styles.scroll}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 120 }}
+          keyboardShouldPersistTaps="handled"
+          scrollEnabled={portfolioDragIndex === null}
+          contentContainerStyle={{ paddingBottom: scrollBottomPadding }}
         >
           <View style={styles.content}>
-            <AuthEntryHeader
-              eyebrow="Seller profile setup"
-              title={STEP_TITLES[step]}
-              body={STEP_SUBS[step]}
-              showWordmark={false}
-            />
+            {setupView === 'hub' ? (
+              <>
+                <AuthEntryHeader
+                  eyebrow="Tailor profile"
+                  title="Finish tailor profile"
+                  body="Complete the profile pieces Drapeon needs before review."
+                  showWordmark={false}
+                />
 
-            <View style={styles.setupChecklistCard}>
-              <View style={styles.setupChecklistHeader}>
-                <Text style={styles.setupChecklistTitle}>Profile review checklist</Text>
-                <Text style={styles.setupChecklistMeta}>
-                  {checklistRemaining === 0 ? 'Ready to submit' : `${checklistRemaining} needed`}
-                </Text>
-              </View>
-              {setupChecklist.map((item) => {
-                const stateLabel = item.complete ? 'Done' : 'Needed'
-                return (
-                  <TouchableOpacity
-                    key={item.label}
-                    style={[
-                      styles.setupChecklistRow,
-                      step === item.targetStep && styles.setupChecklistRowActive,
-                    ]}
-                    onPress={() => {
-                      setStep(item.targetStep)
-                    }}
-                    activeOpacity={0.85}
-                  >
-                    <View
-                      style={[
-                        styles.setupChecklistMark,
-                        item.complete && styles.setupChecklistMarkDone,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.setupChecklistMarkText,
-                          item.complete && styles.setupChecklistMarkTextDone,
-                        ]}
-                      >
-                        {item.complete ? '✓' : '!'}
-                      </Text>
-                    </View>
-                    <View style={styles.setupChecklistTextBlock}>
-                      <Text style={styles.setupChecklistLabel}>{item.label}</Text>
-                      <Text style={styles.setupChecklistDetail}>{item.detail}</Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.setupChecklistState,
-                        item.complete && styles.setupChecklistStateDone,
-                      ]}
-                    >
-                      {stateLabel}
+                {idVerificationStatus === 'REJECTED' ? (
+                  <View style={styles.identityRejectedCard}>
+                    <Text style={styles.identityRejectedTitle}>
+                      {profileImageRejectionActive ? 'Profile photo needs replacement' : 'Identity retake needed'}
                     </Text>
-                  </TouchableOpacity>
-                )
-              })}
-              <View style={styles.setupChecklistFooter}>
-                <Text style={styles.setupChecklistFooterText}>
-                  After profile review, Drapeon will guide you through payout setup before paid work can release earnings.
-                </Text>
-              </View>
-            </View>
+                    <Text style={styles.identityRejectedText}>{idRejectionReason || readIdentityRejectionMessage({})}</Text>
+                  </View>
+                ) : null}
+
+                <View style={styles.setupChecklistCard}>
+                  <View style={styles.setupChecklistHeader}>
+                    <Text style={styles.setupChecklistTitle}>Go-live checklist</Text>
+                    <Text style={styles.setupChecklistMeta}>
+                      {checklistRemaining === 0 ? 'Ready to submit' : `${checklistRemaining} needed`}
+                    </Text>
+                  </View>
+                  {setupChecklist.map((item) => {
+                    const isCurrentStep = item.targetStep === setupProgress.firstIncompleteStep
+                    const isActionable = !setupReadyToSubmit && isCurrentStep
+                    const stateLabel = item.complete ? 'Done' : isActionable ? 'Next' : 'Locked'
+                    return (
+                      <TouchableOpacity
+                        key={item.label}
+                        style={[
+                          styles.setupChecklistRow,
+                          isActionable && styles.setupChecklistRowActive,
+                          !item.complete && !isActionable && styles.setupChecklistRowDeferred,
+                        ]}
+                        onPress={() => {
+                          if (isActionable) openSetupSection(item.targetStep)
+                        }}
+                        disabled={!isActionable}
+                        activeOpacity={0.85}
+                      >
+                        <View
+                          style={[
+                            styles.setupChecklistMark,
+                            item.complete && styles.setupChecklistMarkDone,
+                            !item.complete && !isActionable && styles.setupChecklistMarkDeferred,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.setupChecklistMarkText,
+                              item.complete && styles.setupChecklistMarkTextDone,
+                            ]}
+                          >
+                            {item.complete ? '✓' : isActionable ? '!' : '•'}
+                          </Text>
+                        </View>
+                        <View style={styles.setupChecklistTextBlock}>
+                          <Text style={styles.setupChecklistLabel}>{item.label}</Text>
+                          <Text style={styles.setupChecklistDetail}>{item.detail}</Text>
+                        </View>
+                        <Text
+                          style={[
+                            styles.setupChecklistState,
+                            item.complete && styles.setupChecklistStateDone,
+                            !item.complete && !isActionable && styles.setupChecklistStateDeferred,
+                          ]}
+                        >
+                          {stateLabel}
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                  <View style={styles.setupChecklistFooter}>
+                    <Text style={styles.setupChecklistFooterText}>
+                      Drapeon reviews your public profile, proof, and identity before account access expands. Paid work opens after payout setup is verified.
+                    </Text>
+                  </View>
+                </View>
+              </>
+            ) : !editingLayoutActive ? (
+              <AuthEntryHeader
+                eyebrow="Tailor profile"
+                title={stepTitles[step]}
+                body={stepSubs[step]}
+                showWordmark={false}
+              />
+            ) : null}
 
             {/* ── Step 0: Identity ── */}
-            {step === 0 && (
+            {setupView === 'section' && step === 0 && (
               <View style={styles.formCard}>
                 <View style={styles.fields}>
-                  <TouchableOpacity
-                    style={[
-                      styles.profilePhotoPicker,
-                      !!visibleErrors.profilePhoto && styles.profilePhotoPickerError,
-                    ]}
-                    onPress={openProfilePhotoPicker}
-                    disabled={uploadingAvatar}
-                    activeOpacity={0.86}
-                  >
-                    <View style={styles.profilePhotoPreview}>
-                      {uploadingAvatar ? (
-                        <ActivityIndicator color={Colors.needleGreen} />
-                      ) : avatarUrl ? (
-                        <RemoteImage
-                          uri={avatarUrl}
-                          style={styles.profilePhotoImage}
-                          contentFit="cover"
-                          transition={120}
-                          surface="tailor_setup_profile_photo"
-                        />
-                      ) : (
-                        <Text style={styles.profilePhotoInitial}>
-                          {(displayName.trim()[0] || 'D').toUpperCase()}
-                        </Text>
+                  {!editingLayoutActive ? (
+                    <View onLayout={rememberSetupFieldY('profilePhoto')}>
+                      <TouchableOpacity
+                        style={[
+                          styles.profilePhotoPicker,
+                          !!visibleErrors.profilePhoto && styles.profilePhotoPickerError,
+                          profileImageRejectionActive && styles.profilePhotoPickerRejected,
+                        ]}
+                        onPress={openProfilePhotoPicker}
+                        disabled={uploadingAvatar}
+                        activeOpacity={0.86}
+                      >
+                        <View style={[styles.profilePhotoPreview, profileImageRejectionActive && styles.profilePhotoPreviewRejected]}>
+                          {uploadingAvatar ? (
+                            <ActivityIndicator color={Colors.needleGreen} />
+                          ) : avatarUrl ? (
+                            <AvatarImage
+                              uri={avatarUrl}
+                              initials={displayName || user?.email}
+                              size={68}
+                              borderWidth={0}
+                            />
+                          ) : (
+                            <Text style={styles.profilePhotoInitial}>
+                              {(displayName.trim()[0] || 'D').toUpperCase()}
+                            </Text>
+                          )}
+                          {profileImageRejectionActive ? (
+                            <Text style={styles.profilePhotoRejectedBadge}>Invalid</Text>
+                          ) : null}
+                        </View>
+                        <View style={styles.profilePhotoCopy}>
+                          <Text style={styles.profilePhotoTitle}>Profile photo</Text>
+                          <Text style={[styles.profilePhotoHint, profileImageRejectionActive && styles.profilePhotoHintRejected]}>
+                            {profileImageRejectionActive
+                              ? PROFILE_IMAGE_REJECTION_MESSAGE
+                              : 'Take or choose a clear face photo. Customers see this before booking.'}
+                          </Text>
+                        </View>
+                        <Text style={styles.profilePhotoAction}>{profileImageRejectionActive ? 'Replace' : avatarUrl ? 'Change' : 'Add'}</Text>
+                      </TouchableOpacity>
+                      {!!visibleErrors.profilePhoto && (
+                        <Text style={styles.helperError}>{visibleErrors.profilePhoto}</Text>
                       )}
                     </View>
-                    <View style={styles.profilePhotoCopy}>
-                      <Text style={styles.profilePhotoTitle}>Profile photo</Text>
-                      <Text style={styles.profilePhotoHint}>
-                        Take or choose a clear face photo. Customers see this before booking.
-                      </Text>
-                    </View>
-                    <Text style={styles.profilePhotoAction}>{avatarUrl ? 'Change' : 'Add'}</Text>
-                  </TouchableOpacity>
-                  {!!visibleErrors.profilePhoto && (
-                    <Text style={styles.helperError}>{visibleErrors.profilePhoto}</Text>
-                  )}
-                  <Input
-                    label="Display name"
-                    placeholder="e.g. Emeka Obi"
-                    value={displayName}
-                    onChangeText={(value) => {
-                      setDisplayName(value)
-                      clearVisibleError('displayName')
-                      if (nameError) validateName(value)
-                    }}
-                    onBlur={() => validateName(displayName)}
-                    error={nameError || visibleErrors.displayName}
-                    required
-                    autoCapitalize="words"
-                    hint="No @, URLs, or phone numbers. This is your public name."
-                    testID="display-name-input"
-                  />
-                  <Input
-                    label="Phone number"
-                    placeholder="For order updates and account recovery"
-                    value={phone}
-                    onChangeText={(value) => {
-                      setPhone(value)
-                      clearVisibleError('phone')
-                      if (phoneError) validatePhone(value)
-                    }}
-                    onBlur={() => validatePhone(phone)}
-                    error={phoneError || visibleErrors.phone}
-                    required
-                    keyboardType="phone-pad"
-                    autoCapitalize="none"
-                    hint={PHONE_STORAGE_HINT}
-                    testID="phone-input"
-                  />
-                  <View>
+                  ) : null}
+                  <View onLayout={rememberSetupFieldY('displayName')}>
+                    <Input
+                      label="Display name"
+                      placeholder="e.g. John Doe"
+                      value={displayName}
+                      onChangeText={(value) => {
+                        setDisplayName(value)
+                        clearVisibleError('displayName')
+                        if (nameError) validateName(value)
+                      }}
+                      onFocus={() => focusTextField('displayName')}
+                      onBlur={() => {
+                        blurTextField('displayName')
+                        validateName(displayName)
+                      }}
+                      error={nameError || visibleErrors.displayName}
+                      required
+                      autoCapitalize="words"
+                      hint="No @, URLs, or phone numbers. This is your public name."
+                      testID="display-name-input"
+                    />
+                  </View>
+                  <View onLayout={rememberSetupFieldY('phone')}>
+                    <Input
+                      label="Phone number"
+                      placeholder="For order updates and account recovery"
+                      value={phone}
+                      onChangeText={(value) => {
+                        setPhone(value)
+                        if (phoneValidationMessage(value)) setPhoneAvailabilityChecking(false)
+                        clearVisibleError('phone')
+                        if (phoneError) validatePhone(value)
+                      }}
+                      onFocus={() => focusTextField('phone')}
+                      onBlur={() => {
+                        blurTextField('phone')
+                        void validatePhoneAvailability(phone)
+                      }}
+                      error={phoneError || visibleErrors.phone}
+                      required
+                      keyboardType="phone-pad"
+                      autoCapitalize="none"
+                      hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
+                      testID="phone-input"
+                    />
+                  </View>
+                  <View onLayout={rememberSetupFieldY('location')}>
                     <Input
                       label="Location"
                       placeholder="e.g. Lagos, Nigeria"
                       value={location}
                       onChangeText={onLocationChange}
-                      onBlur={() => setShowSuggestions(false)}
+                      onFocus={() => focusTextField('location')}
+                      onBlur={() => {
+                        blurTextField('location')
+                        setShowSuggestions(false)
+                      }}
                       error={visibleErrors.location}
                       required
                       testID="location-input"
@@ -1552,25 +2580,39 @@ export default function TailorSetupScreen() {
                       </View>
                     )}
                   </View>
-                  <Input
-                    label="About you"
-                    placeholder="Tell people who you are, what you make, and your experience. Min 80 characters."
-                    value={bio}
-                    onChangeText={(v) => {
-                      setBio(v)
-                      clearVisibleError('bio')
-                      validateBio(v)
+                  <View
+                    onLayout={(event) => {
+                      bioFieldYRef.current = event.nativeEvent.layout.y
+                      setupFieldYRef.current.bio = event.nativeEvent.layout.y
                     }}
-                    onBlur={() => validateBio(bio)}
-                    error={bioError || visibleErrors.bio}
-                    required
-                    multiline
-                    numberOfLines={5}
-                    maxLength={500}
-                    filterContact
-                    hint={`Min 80 characters · ${bio.trim().length}/500. No social handles, phone numbers, or URLs.`}
-                    testID="bio-input"
-                  />
+                  >
+                    <Input
+                      label="About you"
+                      placeholder="Tell people who you are, what you make, and your experience. Min 80 characters."
+                      value={bio}
+                      onChangeText={(v) => {
+                        setBio(v)
+                        clearVisibleError('bio')
+                        validateBio(v)
+                      }}
+                      onFocus={() => {
+                        focusTextField('bio')
+                        scrollFocusedBioIntoView()
+                      }}
+                      onBlur={() => {
+                        blurTextField('bio')
+                        validateBio(bio)
+                      }}
+                      error={bioError || visibleErrors.bio}
+                      required
+                      multiline
+                      numberOfLines={5}
+                      maxLength={500}
+                      filterContact
+                      hint={`Min 80 characters · ${bio.trim().length}/500. No social handles, phone numbers, or URLs.`}
+                      testID="bio-input"
+                    />
+                  </View>
                   <Text style={styles.fieldHint}>What customers look for</Text>
                   <View style={styles.helperList}>
                     {BIO_PROMPTS.map((prompt) => (
@@ -1581,48 +2623,63 @@ export default function TailorSetupScreen() {
                     ))}
                   </View>
 
-                  <TagSelector
-                    label="Languages you speak"
-                    options={LANGUAGE_GROUPS}
-                    selected={languages}
-                    maxSelected={MAX_LANGUAGE_TAGS}
-                    maxSelectedMessage={TAILOR_SETUP_VALIDATION.LANGUAGE_LIMIT_MESSAGE}
-                    onChange={(nextLanguages) => {
-                      setLanguages(nextLanguages.slice(0, MAX_LANGUAGE_TAGS))
-                      clearVisibleError('languages')
-                    }}
-                    searchable
-                  />
-                  {!!visibleErrors.languages && (
-                    <Text style={styles.helperError}>{visibleErrors.languages}</Text>
-                  )}
+                  <View onLayout={rememberSetupFieldY('languages')}>
+                    <TagSelector
+                      label="Languages you speak"
+                      options={LANGUAGE_GROUPS}
+                      selected={languages}
+                      maxSelected={MAX_LANGUAGE_TAGS}
+                      maxSelectedMessage={TAILOR_SETUP_VALIDATION.LANGUAGE_LIMIT_MESSAGE}
+                      onChange={(nextLanguages) => {
+                        setLanguages(nextLanguages.slice(0, MAX_LANGUAGE_TAGS))
+                        clearVisibleError('languages')
+                      }}
+                      searchable
+                      searchOnly
+                    />
+                    {!!visibleErrors.languages && (
+                      <Text style={styles.helperError}>{visibleErrors.languages}</Text>
+                    )}
+                  </View>
                 </View>
               </View>
             )}
 
             {/* ── Step 1: Specialties + pricing ── */}
-            {step === 1 && (
+            {setupView === 'section' && step === 1 && (
               <View style={styles.formCard}>
                 <View style={styles.fields}>
-                  <TagSelector
-                    label="What do you make?"
-                    required
-                    hint="Select all that apply. These appear on your public profile."
-                    options={SPECIALTY_GROUPS}
-                    selected={specialties}
-                    maxSelected={MAX_SPECIALTY_TAGS}
-                    maxSelectedMessage={TAILOR_SETUP_VALIDATION.SPECIALTY_LIMIT_MESSAGE}
-                    onChange={(nextSpecialties) => {
-                      setSpecialties(nextSpecialties.slice(0, MAX_SPECIALTY_TAGS))
-                      clearVisibleError('specialties')
-                    }}
-                    searchable
-                  />
-                  {!!visibleErrors.specialties && (
-                    <Text style={styles.helperError}>{visibleErrors.specialties}</Text>
-                  )}
+                  <View onLayout={rememberSetupFieldY('specialties')}>
+                    <TagSelector
+                      label="What do you make?"
+                      required
+                      hint="Select all that apply. These appear on your public profile."
+                      options={SPECIALTY_GROUPS}
+                      selected={specialties}
+                      maxSelected={MAX_SPECIALTY_TAGS}
+                      maxSelectedMessage={TAILOR_SETUP_VALIDATION.SPECIALTY_LIMIT_MESSAGE}
+                      onChange={(nextSpecialties) => {
+                        setSpecialties(nextSpecialties.slice(0, MAX_SPECIALTY_TAGS))
+                        clearVisibleError('specialties')
+                      }}
+                      searchable
+                    />
+                    {!!visibleErrors.specialties && (
+                      <Text style={styles.helperError}>{visibleErrors.specialties}</Text>
+                    )}
+                  </View>
 
                   <View>
+                    <Text style={styles.fieldLabel}>Business type</Text>
+                    <SetupSelectorCard
+                      title={selectedSellerType.label}
+                      body={selectedSellerType.hint}
+                      meta="Business type"
+                      onPress={() => setChoiceSheetMode('seller-type')}
+                    />
+                  </View>
+
+                  <View onLayout={rememberSetupFieldY('priceRange')}>
                     <Text style={styles.fieldLabel}>
                       Typical price range <Text style={styles.required}>*</Text>
                     </Text>
@@ -1632,8 +2689,8 @@ export default function TailorSetupScreen() {
                     </Text>
                     <Text style={styles.fieldHint}>
                       {currencySource === 'UNSUPPORTED_FALLBACK'
-                        ? 'Your region is not mapped to a supported local currency yet, so we preselected USD. Change it here if another supported currency fits your business better.'
-                        : `We preselected ${currency} from your device region. Change it now if you want a different supported account currency.`}
+                        ? 'Currency starts from your region when available. USD is the fallback for regions we do not support yet.'
+                        : 'Currency starts from your region when available. You can change it before saving.'}
                     </Text>
                     <SetupSelectorCard
                       title={currency}
@@ -1641,6 +2698,11 @@ export default function TailorSetupScreen() {
                       meta="Pricing currency"
                       onPress={() => setChoiceSheetMode('currency')}
                     />
+                    <View style={[styles.infoBox, styles.currencyProviderNote]}>
+                      <Text style={styles.infoText}>
+                        Customers see this currency. Payout setup follows it later, so choose one you can accept payouts in.
+                      </Text>
+                    </View>
                     {currency === 'NGN' ? (
                       <View style={styles.quickRangeList}>
                         {PRICE_PRESETS.map((preset) => (
@@ -1675,6 +2737,8 @@ export default function TailorSetupScreen() {
                           setPriceMin(value)
                           clearVisibleError('priceRange')
                         }}
+                        onFocus={() => focusTextField('priceMin')}
+                        onBlur={() => blurTextField('priceMin')}
                         keyboardType="decimal-pad"
                         required
                         containerStyle={styles.priceInput}
@@ -1687,6 +2751,8 @@ export default function TailorSetupScreen() {
                           setPriceMax(value)
                           clearVisibleError('priceRange')
                         }}
+                        onFocus={() => focusTextField('priceMax')}
+                        onBlur={() => blurTextField('priceMax')}
                         keyboardType="decimal-pad"
                         required
                         containerStyle={styles.priceInput}
@@ -1706,10 +2772,10 @@ export default function TailorSetupScreen() {
             )}
 
             {/* ── Step 2: Portfolio ── */}
-            {step === 2 && (
+            {setupView === 'section' && step === 2 && (
               <View style={styles.formCard}>
                 <View style={styles.fields}>
-                  <View style={styles.portfolioStatus}>
+                  <View style={styles.portfolioStatus} onLayout={rememberSetupFieldY('portfolio')}>
                     <View style={styles.portfolioBar}>
                       <View
                         style={[
@@ -1720,106 +2786,137 @@ export default function TailorSetupScreen() {
                       <View style={styles.portfolioBarMinMarker} />
                     </View>
                     <Text style={styles.portfolioCount}>
-                      {portfolioItems.length >= MIN_PORTFOLIO_ITEMS
-                        ? `${portfolioItems.length}/${MAX_PORTFOLIO_ITEMS} added · add more to build trust`
-                        : 'Add 1 work sample to continue'}
-                      {' · '}
-                      {portfolioItems.filter((i) => i.type === 'video').length}/
-                      {MAX_PORTFOLIO_VIDEOS} videos
+                      {proofCountText}{proofVideoText}
                     </Text>
                     {!!visibleErrors.portfolio && (
                       <Text style={styles.helperError}>{visibleErrors.portfolio}</Text>
                     )}
+                    {portfolioMediaStatus ? (
+                      <View style={styles.portfolioMediaStatus}>
+                        <ActivityIndicator size="small" color={Colors.needleGreen} />
+                        <Text style={styles.portfolioMediaStatusText}>{portfolioMediaStatus}</Text>
+                      </View>
+                    ) : null}
                   </View>
 
+                  {sellerType === 'BOUTIQUE' || sellerType === 'TAILOR_SHOP' ? (
+                    <View style={styles.infoBox}>
+                      <Text style={styles.infoText}>
+                        {readyMadeItemCount > 0
+                          ? 'Ready-made item added: ' + String(readyMadeItemCount) + ' item' + (readyMadeItemCount === 1 ? '' : 's') + ' in your shop.'
+                          : sellerType === 'TAILOR_SHOP'
+                            ? 'Add one ready-made item so customers can inspect your shop side too.'
+                            : 'Add one ready-made item customers can inspect before review.'}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.inlineActionButton}
+                        onPress={() => { void openReadyMadeItemCreator() }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.inlineActionText}>Create ready-made item</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+
+                  {sellerType !== 'BOUTIQUE' ? (
                   <View style={styles.portfolioGrid}>
-                    {portfolioItems.map((item, i) => (
-                      <View key={i} style={styles.portfolioThumb}>
-                        {item.type === 'photo' ? (
-                          <RemoteImage
-                            uri={item.url}
-                            style={styles.portfolioImg}
-                            contentFit="cover"
-                            transition={120}
-                            surface="tailor_setup_portfolio_preview"
-                          />
-                        ) : (
-                          <View style={[styles.portfolioImg, styles.videoThumb]}>
-                            <Text style={styles.videoIcon}>▶</Text>
-                            <Text style={styles.videoLabel}>Video</Text>
-                          </View>
-                        )}
-                        <TouchableOpacity
-                          style={styles.portfolioRemove}
-                          onPress={() => {
-                            setPortfolioItems((prev) => prev.filter((_, idx) => idx !== i))
-                            clearVisibleError('portfolio')
-                          }}
-                        >
-                          <Text style={styles.portfolioRemoveText}>✕</Text>
-                        </TouchableOpacity>
-                      </View>
+                    {portfolioGridEntries.map(({ item, originalIndex }, visualIndex) => (
+                      <PortfolioSortableTile
+                        key={`${item.type}-${item.url}-${originalIndex}`}
+                        item={item}
+                        index={visualIndex}
+                        isCover={visualIndex === 0}
+                        dragging={portfolioDragIndex === originalIndex}
+                        onOpen={() => setSelectedPortfolioIndex(originalIndex)}
+                        onDelete={() => removePortfolioItem(originalIndex)}
+                        onDragStart={() => {
+                          setPortfolioDragIndex(originalIndex)
+                          setPortfolioHoverIndex(originalIndex)
+                        }}
+                        onDragMove={(dx, dy) => handlePortfolioDragMove(originalIndex, dx, dy)}
+                        onDragEnd={(dx, dy) => handlePortfolioDragEnd(originalIndex, dx, dy)}
+                      />
                     ))}
+                    {uploadingMedia ? (
+                      <View style={[styles.portfolioAdd, styles.portfolioPending]}>
+                        <ActivityIndicator size="small" color={Colors.needleGreen} />
+                        <Text style={styles.portfolioAddLabel}>Adding</Text>
+                      </View>
+                    ) : null}
                     {portfolioItems.length < MAX_PORTFOLIO_ITEMS && (
                       <TouchableOpacity
                         style={styles.portfolioAdd}
                         onPress={openPortfolioMediaPicker}
                         disabled={uploadingMedia}
                       >
-                        <Text style={styles.portfolioAddIcon}>{uploadingMedia ? '…' : '+'}</Text>
+                        <Text style={styles.portfolioAddIcon}>+</Text>
                         <Text style={styles.portfolioAddLabel}>Add media</Text>
                         <Text style={styles.portfolioAddHint}>Multi-select from library</Text>
                       </TouchableOpacity>
                     )}
                   </View>
+                  ) : null}
                 </View>
               </View>
             )}
 
+            {selectedPortfolioItem ? (
+              <PortfolioMediaManagerModal
+                items={portfolioItems}
+                index={selectedPortfolioIndex ?? 0}
+                onIndexChange={setSelectedPortfolioIndex}
+                onClose={() => setSelectedPortfolioIndex(null)}
+                onReplace={() => {
+                  if (selectedPortfolioIndex != null) {
+                    const replaceIndex = selectedPortfolioIndex
+                    setSelectedPortfolioIndex(null)
+                    openPortfolioReplacePicker(replaceIndex)
+                  }
+                }}
+                onDelete={() => {
+                  if (selectedPortfolioIndex != null) removePortfolioItem(selectedPortfolioIndex)
+                }}
+              />
+            ) : null}
+
             {/* ── Step 3: Selling setup + ID verification ── */}
-            {step === 3 && (
+            {setupView === 'section' && step === 3 && (
               <View style={styles.formCard}>
                 <View style={styles.fields}>
-                  <View>
-                    <Text style={styles.fieldLabel}>Availability</Text>
-                    <SetupSelectorCard
-                      title={selectedAvailability.label}
-                      body={selectedAvailability.hint}
-                      meta="Availability"
-                      onPress={() => setChoiceSheetMode('availability')}
-                    />
-                  </View>
+                  {supportsCustomOrders ? (
+                    <View>
+                      <Text style={styles.fieldLabel}>Custom order status</Text>
+                      <SetupSelectorCard
+                        title={acceptsCustomOrdersNow ? 'Taking custom orders' : 'Custom orders paused'}
+                        body={acceptsCustomOrdersNow
+                          ? 'Customers can send custom briefs for quotes.'
+                          : 'Your profile stays visible, but custom brief requests are paused.'}
+                        meta="Custom orders"
+                        onPress={() => setChoiceSheetMode('capacity')}
+                      />
+                    </View>
+                  ) : null}
 
-                  <View>
-                    <Text style={styles.fieldLabel}>Seller type</Text>
-                    <SetupSelectorCard
-                      title={selectedSellerType.label}
-                      body={selectedSellerType.hint}
-                      meta="Business type"
-                      onPress={() => setChoiceSheetMode('seller-type')}
-                    />
-                    {!!visibleErrors.orderMode && (
-                      <Text style={styles.helperError}>{visibleErrors.orderMode}</Text>
-                    )}
-                  </View>
+                  {supportsReadyMade ? (
+                    <View>
+                      <Text style={styles.fieldLabel}>Ready-made shop status</Text>
+                      <SetupSelectorCard
+                        title={shopPaused ? 'Shop checkout paused' : 'Shop checkout open'}
+                        body={shopPaused
+                          ? 'Customers can browse your items, but checkout is paused.'
+                          : 'Customers can buy ready-made items when inventory is live.'}
+                        meta="Shop status"
+                        onPress={() => setChoiceSheetMode('shop-status')}
+                      />
+                    </View>
+                  ) : null}
 
-                  <View>
-                    <Text style={styles.fieldLabel}>What customers can do</Text>
-                    <SetupSelectorCard
-                      title={orderModeLabel}
-                      body={orderModeHint}
-                      meta="Order paths"
-                      warning={!!visibleErrors.orderMode || !(supportsCustomOrders || supportsReadyMade)}
-                      onPress={() => setChoiceSheetMode('order-mode')}
-                    />
-                  </View>
-
-                  <View>
-                    <Text style={styles.fieldLabel}>Fulfillment</Text>
+                  <View onLayout={rememberSetupFieldY('fulfillment')}>
+                    <Text style={styles.fieldLabel}>How customers receive orders</Text>
                     <SetupSelectorCard
                       title={fulfillmentLabel}
                       body={fulfillmentHint}
-                      meta="Receiving orders"
+                      meta="Customer handoff"
                       warning={!!visibleErrors.fulfillment || fulfillmentSelections.length === 0}
                       onPress={() => setChoiceSheetMode('fulfillment')}
                     />
@@ -1827,7 +2924,7 @@ export default function TailorSetupScreen() {
                       <Text style={styles.helperError}>{visibleErrors.fulfillment}</Text>
                     )}
                     {pickupAvailable ? (
-                      <View style={styles.fulfillmentFeeBlock}>
+                      <View style={styles.fulfillmentFeeBlock} onLayout={rememberSetupFieldY('pickupAddress')}>
                         <Text style={styles.fieldLabel}>Private pickup details</Text>
                         <Text style={styles.fieldHint}>
                           Double-check this exact address before you save. Customers only see it
@@ -1841,6 +2938,8 @@ export default function TailorSetupScreen() {
                             setPickupAddress(value)
                             clearVisibleError('pickupAddress')
                           }}
+                          onFocus={() => focusTextField('pickupAddress')}
+                          onBlur={() => blurTextField('pickupAddress')}
                           hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
                           multiline
                         />
@@ -1849,6 +2948,8 @@ export default function TailorSetupScreen() {
                           placeholder="e.g. Ask for the front desk and bring your collection code."
                           value={pickupInstructions}
                           onChangeText={setPickupInstructions}
+                          onFocus={() => focusTextField('pickupInstructions')}
+                          onBlur={() => blurTextField('pickupInstructions')}
                         />
                         {pickupAddress.trim().length === 0 ? (
                           <Text style={styles.helperError}>
@@ -1865,23 +2966,29 @@ export default function TailorSetupScreen() {
                     ) : null}
                     {deliveryAvailable || shippingAvailable ? (
                       <View style={styles.fulfillmentFeeBlock}>
-                        <Text style={styles.fieldLabel}>Standard Drapeon dispatch fees</Text>
+                        <Text style={styles.fieldLabel}>Drapeon-coordinated dispatch</Text>
                         <Text style={styles.fieldHint}>
-                          Drapeon now collects the standard delivery or shipping fee at checkout based
-                          on the buyer address and your location. You only need to choose whether
-                          you offer delivery or shipping here.
+                          Drapeon coordinates delivery and shipping with you when an order needs it.
+                          Choose the handoff options you can support.
                         </Text>
                       </View>
                     ) : null}
                   </View>
 
-                  <View>
+                  <View onLayout={rememberSetupFieldY('idDocument')}>
                     <Text style={styles.fieldLabel}>Identity verification</Text>
                     <Text style={styles.fieldHint}>
-                      Upload a government-issued photo ID (passport, national ID, or driver's
-                      licence) before submitting. Your profile goes live once we've reviewed your ID
-                      within 24 hours.
+                      Capture a live selfie while holding your physical passport, national ID, or
+                      driver's licence beside your face. Payout setup can be completed after your account is created.
                     </Text>
+                    {idVerificationStatus === 'REJECTED' ? (
+                      <View style={styles.identityRejectedCardCompact}>
+                        <Text style={styles.identityRejectedTitle}>
+                          {profileImageRejectionActive ? 'Profile photo needs replacement' : 'Retake guidance'}
+                        </Text>
+                        <Text style={styles.identityRejectedText}>{idRejectionReason || readIdentityRejectionMessage({})}</Text>
+                      </View>
+                    ) : null}
                     {idPhotoUri ? (
                       <View style={styles.idPreviewWrap}>
                         <RemoteImage
@@ -1906,11 +3013,11 @@ export default function TailorSetupScreen() {
                           <Feather name="file-text" size={14} color={Colors.needleGreen} />
                         </View>
                         <View style={styles.idExistingCopy}>
-                          <Text style={styles.idExistingTitle}>ID document uploaded</Text>
-                          <Text style={styles.idExistingHint}>Submit with this document or replace it before continuing.</Text>
+                          <Text style={styles.idExistingTitle}>Identity selfie submitted</Text>
+                          <Text style={styles.idExistingHint}>Identity review is already in progress or complete for this profile.</Text>
                         </View>
                         <TouchableOpacity onPress={openIdPhotoPicker} hitSlop={8}>
-                          <Text style={styles.idExistingAction}>Replace</Text>
+                          <Text style={styles.idExistingAction}>Retake live photo</Text>
                         </TouchableOpacity>
                       </View>
                     ) : (
@@ -1919,9 +3026,9 @@ export default function TailorSetupScreen() {
                         onPress={openIdPhotoPicker}
                       >
                         <Text style={styles.idPickIcon}>🪪</Text>
-                        <Text style={styles.idPickLabel}>Upload ID document</Text>
+                        <Text style={styles.idPickLabel}>Take live ID selfie</Text>
                         <Text style={styles.idPickHint}>
-                          Passport · National ID · Driver's licence
+                          Face + physical ID in one live camera photo
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -1936,22 +3043,14 @@ export default function TailorSetupScreen() {
         </ScrollView>
 
         {/* CTA */}
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
+        <View style={[styles.cta, editingLayoutActive && styles.ctaCompact, { paddingBottom: ctaBottomPadding }]}>
           <Button
-            label={
-              uploadingMedia
-                ? 'Uploading…'
-	                : step < 3
-	                  ? 'Continue'
-	                  : saving || uploadingId
-	                    ? 'Submitting…'
-	                    : 'Submit for review'
-            }
+            label={primaryCtaLabel}
             onPress={next}
-            loading={saving || uploadingId || uploadingMedia}
-            disabled={saving || uploadingId || uploadingMedia}
+            loading={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+            disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
           />
-          {step === 0 && (
+          {setupView === 'hub' && !editingLayoutActive && (
             <>
               <TouchableOpacity
                 onPress={switchBackToCustomer}
@@ -1973,11 +3072,16 @@ export default function TailorSetupScreen() {
               </TouchableOpacity>
             </>
           )}
-          {stepBlockingNote ? <Text style={styles.minNote}>{stepBlockingNote}</Text> : null}
+          {setupView === 'section' && stepBlockingNote && !editingLayoutActive ? (
+            <Text style={styles.minNote}>{stepBlockingNote}</Text>
+          ) : null}
         </View>
         <MediaChoiceSheet
           mode={mediaSheetMode}
-          onClose={() => setMediaSheetMode(null)}
+          onClose={() => {
+            setMediaSheetMode(null)
+            setPortfolioReplaceIndex(null)
+          }}
           onProfilePhoto={(source) => {
             setMediaSheetMode(null)
             void pickProfilePhoto(source)
@@ -1990,34 +3094,27 @@ export default function TailorSetupScreen() {
             setMediaSheetMode(null)
             void pickIdPhoto(source)
           }}
-          videoLimitReached={portfolioItems.filter((i) => i.type === 'video').length >= MAX_PORTFOLIO_VIDEOS}
+          videoLimitReached={portfolioVideoLimitReached}
         />
         <SetupChoiceSheet
           mode={choiceSheetMode}
           onClose={() => setChoiceSheetMode(null)}
-          availability={availability}
           sellerType={sellerType}
-          supportsCustomOrders={supportsCustomOrders}
-          supportsReadyMade={supportsReadyMade}
+          acceptsCustomOrdersNow={acceptsCustomOrdersNow}
+          shopPaused={shopPaused}
           pickupAvailable={pickupAvailable}
           deliveryAvailable={deliveryAvailable}
           shippingAvailable={shippingAvailable}
           currency={currency}
-          onAvailability={(value) => {
-            setAvailability(value)
-            setChoiceSheetMode(null)
-          }}
           onSellerType={(value) => {
-            setSellerType(value)
+            applySellerType(value)
             setChoiceSheetMode(null)
           }}
-          onToggleCustomOrders={() => {
-            setSupportsCustomOrders((value) => !value)
-            clearVisibleError('orderMode')
+          onToggleCustomOrdersNow={() => {
+            setAcceptsCustomOrdersNow((value) => !value)
           }}
-          onToggleReadyMade={() => {
-            setSupportsReadyMade((value) => !value)
-            clearVisibleError('orderMode')
+          onToggleShopPaused={() => {
+            setShopPaused((value) => !value)
           }}
           onTogglePickup={() => {
             setPickupAvailable((value) => !value)
@@ -2040,8 +3137,375 @@ export default function TailorSetupScreen() {
             setChoiceSheetMode(null)
           }}
         />
+        <PhoneOtpModal
+          visible={phoneOtpVisible}
+          phone={normalizePhoneForStorage(phone)}
+          code={phoneOtpCode}
+          error={phoneOtpError}
+          sending={phoneOtpSending}
+          verifying={phoneOtpVerifying}
+          onChangeCode={(value) => {
+            setPhoneOtpCode(value.replace(/\D/g, '').slice(0, 6))
+            if (phoneOtpError) setPhoneOtpError('')
+          }}
+          onVerify={verifyPhoneOtpCode}
+          onResend={resendPhoneOtpCode}
+          onClose={() => {
+            phoneOtpAfterVerifyRef.current = null
+            setPhoneOtpVisible(false)
+            setPhoneOtpCode('')
+            setPhoneOtpError('')
+          }}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
+  )
+}
+
+function PhoneOtpModal({
+  visible,
+  phone,
+  code,
+  error,
+  sending,
+  verifying,
+  onChangeCode,
+  onVerify,
+  onResend,
+  onClose,
+}: {
+  visible: boolean
+  phone: string
+  code: string
+  error: string
+  sending: boolean
+  verifying: boolean
+  onChangeCode: (value: string) => void
+  onVerify: () => void
+  onResend: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.otpOverlay}>
+        <TouchableOpacity style={styles.otpScrim} activeOpacity={1} onPress={onClose} />
+        <View style={styles.otpCard}>
+          <View style={styles.otpHeader}>
+            <View style={styles.otpIcon}>
+              <Feather name="shield" size={18} color={Colors.needleGreen} />
+            </View>
+            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityLabel="Close phone verification">
+              <Feather name="x" size={20} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.otpTitle}>Verify phone number</Text>
+          <Text style={styles.otpBody}>
+            Enter the 6-digit code sent to {phone}. This keeps random numbers off Drapeon accounts.
+          </Text>
+          <TextInput
+            value={code}
+            onChangeText={onChangeCode}
+            placeholder="000000"
+            placeholderTextColor={Colors.midGrey}
+            keyboardType="number-pad"
+            textContentType="oneTimeCode"
+            autoComplete="sms-otp"
+            maxLength={6}
+            style={[styles.otpInput, !!error && styles.otpInputError]}
+            editable={!verifying}
+            autoFocus
+          />
+          {!!error && <Text style={styles.otpError}>{error}</Text>}
+          <View style={styles.otpActions}>
+            <Button
+              label="Verify code"
+              onPress={onVerify}
+              loading={verifying}
+              disabled={verifying || sending || code.length !== 6}
+            />
+            <Button
+              label={sending ? 'Sending...' : 'Resend code'}
+              onPress={onResend}
+              variant="secondary"
+              size="md"
+              loading={sending}
+              disabled={sending || verifying}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function PortfolioSortableTile({
+  item,
+  index,
+  isCover,
+  dragging,
+  onOpen,
+  onDelete,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+}: {
+  item: PortfolioItem
+  index: number
+  isCover: boolean
+  dragging: boolean
+  onOpen: () => void
+  onDelete: () => void
+  onDragStart: () => void
+  onDragMove: (dx: number, dy: number) => void
+  onDragEnd: (dx: number, dy: number) => void
+}) {
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dragActiveRef = useRef(false)
+  const scaleAnim = useRef(new Animated.Value(1)).current
+  const opacityAnim = useRef(new Animated.Value(1)).current
+  // Stable callback refs so the PanResponder (created once) always calls current props
+  const onDragStartRef = useRef(onDragStart)
+  const onDragMoveRef = useRef(onDragMove)
+  const onDragEndRef = useRef(onDragEnd)
+  const onOpenRef = useRef(onOpen)
+  onDragStartRef.current = onDragStart
+  onDragMoveRef.current = onDragMove
+  onDragEndRef.current = onDragEnd
+  onOpenRef.current = onOpen
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    }
+  }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          dragActiveRef.current = false
+          longPressTimerRef.current = setTimeout(() => {
+            dragActiveRef.current = true
+            Vibration.vibrate(30)
+            onDragStartRef.current()
+            Animated.spring(scaleAnim, { toValue: 1.05, useNativeDriver: true, friction: 6, tension: 200 }).start()
+            Animated.spring(opacityAnim, { toValue: 0.7, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          }, 400)
+        },
+        onPanResponderMove: (_, gesture) => {
+          if (!dragActiveRef.current && (Math.abs(gesture.dx) > 5 || Math.abs(gesture.dy) > 5)) {
+            if (longPressTimerRef.current) {
+              clearTimeout(longPressTimerRef.current)
+              longPressTimerRef.current = null
+            }
+            return
+          }
+          if (dragActiveRef.current) {
+            onDragMoveRef.current(gesture.dx, gesture.dy)
+          }
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+          }
+          const wasDrag = dragActiveRef.current
+          dragActiveRef.current = false
+          Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          Animated.spring(opacityAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          if (wasDrag) {
+            onDragEndRef.current(gesture.dx, gesture.dy)
+          } else {
+            onOpenRef.current()
+          }
+        },
+        onPanResponderTerminate: (_, gesture) => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+          }
+          const wasDrag = dragActiveRef.current
+          dragActiveRef.current = false
+          Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          Animated.spring(opacityAnim, { toValue: 1, useNativeDriver: true, friction: 6, tension: 200 }).start()
+          if (wasDrag) {
+            onDragEndRef.current(gesture.dx, gesture.dy)
+          }
+        },
+      }),
+    []
+  )
+
+  return (
+    <View style={styles.portfolioThumb}>
+      <Animated.View
+        style={[
+          styles.portfolioThumbPress,
+          dragging && styles.portfolioThumbDragging,
+          { transform: [{ scale: scaleAnim }], opacity: opacityAnim },
+        ]}
+        {...panResponder.panHandlers}
+        accessibilityRole="button"
+        accessibilityLabel={`Open portfolio media ${index + 1}`}
+      >
+        {item.type === 'photo' ? (
+          <RemoteImage
+            uri={item.url}
+            style={styles.portfolioImg}
+            contentFit="cover"
+            contentPosition="top"
+            transition={120}
+            surface="tailor_setup_portfolio_preview"
+          />
+        ) : (
+          <View style={[styles.portfolioImg, styles.videoThumb]}>
+            <PortfolioVideoPreview uri={item.url} style={styles.portfolioImg} autoplay={false} />
+            <View style={styles.videoBadge}>
+              <Feather name="play" size={12} color={Colors.textInverse} />
+              <Text style={styles.videoLabel}>Video</Text>
+            </View>
+          </View>
+        )}
+        {isCover ? (
+          <View style={styles.coverBadge}>
+            <Text style={styles.coverBadgeText}>Cover</Text>
+          </View>
+        ) : null}
+        {dragging ? (
+          <View style={styles.portfolioDragBadge}>
+            <Text style={styles.portfolioDragBadgeText}>Drop to reorder</Text>
+          </View>
+        ) : null}
+      </Animated.View>
+      <TouchableOpacity
+        style={styles.portfolioRemove}
+        onPress={onDelete}
+        accessibilityRole="button"
+        accessibilityLabel="Remove portfolio media"
+      >
+        <Text style={styles.portfolioRemoveText}>x</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+function PortfolioMediaManagerModal({
+  items,
+  index,
+  onIndexChange,
+  onClose,
+  onReplace,
+  onDelete,
+}: {
+  items: PortfolioItem[]
+  index: number
+  onIndexChange: (index: number | null) => void
+  onClose: () => void
+  onReplace: () => void
+  onDelete: () => void
+}) {
+  const insets = useSafeAreaInsets()
+  const { width } = useWindowDimensions()
+  const pageWidth = Math.max(280, width - Spacing.lg * 2)
+  const activeIndex = Math.max(0, Math.min(index, items.length - 1))
+  const activeItem = items[activeIndex] ?? null
+  const listRef = useRef<FlatList<PortfolioItem> | null>(null)
+
+  useEffect(() => {
+    if (!activeItem) return
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: activeIndex, animated: false })
+    })
+  }, [activeIndex, activeItem, pageWidth])
+
+  if (!activeItem) return null
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.mediaManagerOverlay}>
+        <TouchableOpacity style={styles.mediaManagerScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.mediaManagerSheet, { paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl) }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.mediaManagerHeader}>
+            <View>
+              <Text style={styles.mediaManagerEyebrow}>Portfolio media</Text>
+              <Text style={styles.mediaManagerTitle}>
+                {activeIndex === 0 ? 'Cover media' : `Media ${activeIndex + 1} of ${items.length}`}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose} accessibilityLabel="Close media preview">
+              <Text style={styles.sheetCloseText}>x</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.mediaManagerPreview, { width: pageWidth }]}>
+            <FlatList
+              ref={listRef}
+              data={items}
+              keyExtractor={(item, itemIndex) => `${item.type}-${item.url}-${itemIndex}`}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              initialScrollIndex={activeIndex}
+              getItemLayout={(_, itemIndex) => ({ length: pageWidth, offset: pageWidth * itemIndex, index: itemIndex })}
+              onScrollToIndexFailed={() => undefined}
+              onMomentumScrollEnd={(event) => {
+                const nextIndex = Math.round(event.nativeEvent.contentOffset.x / pageWidth)
+                onIndexChange(Math.max(0, Math.min(items.length - 1, nextIndex)))
+              }}
+              renderItem={({ item, index: itemIndex }) => (
+                <View style={[styles.mediaManagerCarouselPage, { width: pageWidth }]}>
+                  {item.type === 'photo' ? (
+                    <RemoteImage
+                      uri={item.url}
+                      style={styles.mediaManagerPreviewMedia}
+                      contentFit="cover"
+                      contentPosition="top"
+                      transition={120}
+                      surface="tailor_setup_portfolio_manager"
+                    />
+                  ) : (
+                    <PortfolioVideoPreview
+                      uri={item.url}
+                      style={styles.mediaManagerPreviewMedia}
+                      contentFit="contain"
+                      nativeControls
+                      autoplay={itemIndex === activeIndex}
+                    />
+                  )}
+                </View>
+              )}
+            />
+          </View>
+
+          <View style={styles.mediaManagerDots}>
+            {items.map((item, itemIndex) => (
+              <View
+                key={`${item.type}-${item.url}-${itemIndex}-dot`}
+                style={[styles.mediaManagerDot, itemIndex === activeIndex && styles.mediaManagerDotActive]}
+              />
+            ))}
+          </View>
+
+          <Text style={styles.mediaManagerHint}>Drag thumbnails in the grid to change the cover and order.</Text>
+
+          <View style={styles.mediaManagerActions}>
+            <View style={styles.mediaManagerActionRow}>
+              <TouchableOpacity style={[styles.mediaManagerAction, styles.mediaManagerActionCompact]} onPress={onReplace} activeOpacity={0.82}>
+                <Feather name="refresh-cw" size={16} color={Colors.needleGreen} />
+                <Text style={styles.mediaManagerActionText}>Replace</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.mediaManagerAction, styles.mediaManagerActionCompact, styles.mediaManagerActionDestructive]} onPress={onDelete} activeOpacity={0.82}>
+                <Feather name="trash-2" size={16} color={Colors.kanteRust} />
+                <Text style={[styles.mediaManagerActionText, styles.mediaManagerActionTextDestructive]}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -2077,18 +3541,16 @@ function SetupSelectorCard({
 function SetupChoiceSheet({
   mode,
   onClose,
-  availability,
   sellerType,
-  supportsCustomOrders,
-  supportsReadyMade,
+  acceptsCustomOrdersNow,
+  shopPaused,
   pickupAvailable,
   deliveryAvailable,
   shippingAvailable,
   currency,
-  onAvailability,
   onSellerType,
-  onToggleCustomOrders,
-  onToggleReadyMade,
+  onToggleCustomOrdersNow,
+  onToggleShopPaused,
   onTogglePickup,
   onToggleDelivery,
   onToggleShipping,
@@ -2096,18 +3558,16 @@ function SetupChoiceSheet({
 }: {
   mode: SetupChoiceSheetMode
   onClose: () => void
-  availability: Availability
   sellerType: SellerType
-  supportsCustomOrders: boolean
-  supportsReadyMade: boolean
+  acceptsCustomOrdersNow: boolean
+  shopPaused: boolean
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
   currency: (typeof SUPPORTED_CURRENCIES)[number]
-  onAvailability: (value: Availability) => void
   onSellerType: (value: SellerType) => void
-  onToggleCustomOrders: () => void
-  onToggleReadyMade: () => void
+  onToggleCustomOrdersNow: () => void
+  onToggleShopPaused: () => void
   onTogglePickup: () => void
   onToggleDelivery: () => void
   onToggleShipping: () => void
@@ -2117,26 +3577,26 @@ function SetupChoiceSheet({
   const visible = mode !== null
   const sheetBottomPadding = Math.max(insets.bottom + Spacing.lg, Spacing.xxl)
   const title =
-    mode === 'availability'
-      ? 'Availability'
-      : mode === 'seller-type'
-        ? 'Seller type'
-        : mode === 'order-mode'
-          ? 'Order paths'
+    mode === 'seller-type'
+      ? 'Business type'
+      : mode === 'capacity'
+        ? 'Custom order status'
+        : mode === 'shop-status'
+          ? 'Ready-made shop status'
           : mode === 'fulfillment'
-            ? 'Fulfillment'
+            ? 'Customer handoff'
             : 'Pricing currency'
   const body =
-    mode === 'availability'
-      ? 'Choose how customers should see your availability before they try to book.'
-      : mode === 'seller-type'
-        ? 'Pick the description that best matches how your business works.'
-        : mode === 'order-mode'
-          ? 'Choose what customers can start from your profile.'
+    mode === 'seller-type'
+      ? 'Pick the description that best matches how your business works.'
+      : mode === 'capacity'
+        ? 'Pause or reopen custom brief requests without hiding your profile.'
+        : mode === 'shop-status'
+          ? 'Pause or reopen checkout for ready-made inventory.'
           : mode === 'fulfillment'
-            ? 'Choose how customers receive orders. Pickup details stay private until collection.'
+            ? 'Choose how customers receive orders. Drapeon coordinates delivery and shipping details with you.'
             : 'Choose the currency customers see on your public profile price guide.'
-  const isMulti = mode === 'order-mode' || mode === 'fulfillment'
+  const isMulti = mode === 'fulfillment'
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -2157,18 +3617,6 @@ function SetupChoiceSheet({
             contentContainerStyle={styles.sheetChoicesContent}
             showsVerticalScrollIndicator={false}
           >
-            {mode === 'availability'
-              ? AVAILABILITY_SETUP_OPTIONS.map((item) => (
-                  <ChoiceSheetRow
-                    key={item.value}
-                    title={item.label}
-                    body={item.hint}
-                    selected={availability === item.value}
-                    onPress={() => onAvailability(item.value)}
-                  />
-                ))
-              : null}
-
             {mode === 'seller-type'
               ? SELLER_TYPE_OPTIONS.map((item) => (
                   <ChoiceSheetRow
@@ -2181,21 +3629,36 @@ function SetupChoiceSheet({
                 ))
               : null}
 
-            {mode === 'order-mode' ? (
+            {mode === 'capacity' ? (
               <>
                 <ChoiceSheetRow
-                  title="Custom orders"
-                  body="Customers send a brief and you quote the work."
-                  selected={supportsCustomOrders}
-                  onPress={onToggleCustomOrders}
-                  multi
+                  title="Taking custom orders"
+                  body="Customers can send custom briefs for quotes."
+                  selected={acceptsCustomOrdersNow}
+                  onPress={onToggleCustomOrdersNow}
                 />
                 <ChoiceSheetRow
-                  title="Shop now"
-                  body="Customers buy ready-made pieces you already have."
-                  selected={supportsReadyMade}
-                  onPress={onToggleReadyMade}
-                  multi
+                  title="Custom orders paused"
+                  body="Your profile stays visible, but custom brief requests are paused."
+                  selected={!acceptsCustomOrdersNow}
+                  onPress={onToggleCustomOrdersNow}
+                />
+              </>
+            ) : null}
+
+            {mode === 'shop-status' ? (
+              <>
+                <ChoiceSheetRow
+                  title="Shop checkout open"
+                  body="Customers can buy ready-made items when inventory is live."
+                  selected={!shopPaused}
+                  onPress={onToggleShopPaused}
+                />
+                <ChoiceSheetRow
+                  title="Shop checkout paused"
+                  body="Customers can browse your items, but checkout is paused."
+                  selected={shopPaused}
+                  onPress={onToggleShopPaused}
                 />
               </>
             ) : null}
@@ -2211,14 +3674,14 @@ function SetupChoiceSheet({
                 />
                 <ChoiceSheetRow
                   title="Delivery"
-                  body="You or your team deliver nearby orders."
+                  body="Drapeon coordinates nearby delivery with you."
                   selected={deliveryAvailable}
                   onPress={onToggleDelivery}
                   multi
                 />
                 <ChoiceSheetRow
                   title="Shipping"
-                  body="Courier or shipping partner handles it."
+                  body="Drapeon coordinates courier shipping with you."
                   selected={shippingAvailable}
                   onPress={onToggleShipping}
                   multi
@@ -2309,13 +3772,13 @@ function MediaChoiceSheet({
       ? 'Profile photo'
       : mode === 'portfolio-media'
         ? 'Add portfolio media'
-        : 'ID document'
+        : 'Identity selfie'
   const body =
     mode === 'profile-photo'
       ? 'Use a clear face photo customers can recognize before they book you.'
       : mode === 'portfolio-media'
         ? 'Add real work samples. Photos build trust fastest; short videos help with movement and finish.'
-        : 'Use a clear, readable photo of your passport, national ID, or driver’s licence.'
+        : 'Take one live selfie while holding your passport, national ID, or driver’s licence beside your face.'
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -2348,7 +3811,11 @@ function MediaChoiceSheet({
               />
               <SheetOption
                 title="Record short video"
-                body={videoLimitReached ? 'Video limit reached for this portfolio.' : 'Record up to 30 seconds.'}
+                body={
+                  videoLimitReached
+                    ? 'Video limit reached for this portfolio.'
+                    : `Record up to ${MAX_PORTFOLIO_VIDEO_SECONDS} seconds.`
+                }
                 onPress={() => onPortfolioMedia('camera-video')}
                 disabled={videoLimitReached}
               />
@@ -2357,8 +3824,7 @@ function MediaChoiceSheet({
 
           {mode === 'id-document' ? (
             <>
-              <SheetOption title="Take photo" body="Best when the ID is with you now." onPress={() => onIdDocument('camera')} />
-              <SheetOption title="Choose from library" body="Use an existing clear ID photo." onPress={() => onIdDocument('library')} />
+              <SheetOption title="Capture live selfie + ID" body="Camera only. Hold the physical ID beside your face." onPress={() => onIdDocument('camera')} />
             </>
           ) : null}
         </View>
@@ -2405,6 +3871,105 @@ const styles = StyleSheet.create({
   },
   headerSpacer: { width: 68 },
   stepCount: { fontSize: FontSize.sm, color: Colors.midGrey },
+  setupToast: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  setupToastSuccess: {
+    backgroundColor: Colors.needleGreenLight,
+    borderColor: Colors.needleGreen + '33',
+  },
+  setupToastError: {
+    backgroundColor: Colors.errorLight,
+    borderColor: Colors.kanteRust,
+  },
+  setupToastText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  setupToastTextSuccess: { color: Colors.needleGreen },
+  setupToastTextError: { color: Colors.kanteRust },
+  otpOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: Spacing.xl,
+  },
+  otpScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(12, 12, 11, 0.38)',
+  },
+  otpCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.md,
+  },
+  otpHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  otpIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  otpClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  otpTitle: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  otpBody: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  otpInput: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.lg,
+    fontSize: 24,
+    letterSpacing: 4,
+    color: Colors.ink,
+    fontFamily: Fonts.bodyBold,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    backgroundColor: Colors.white,
+  },
+  otpInputError: {
+    borderColor: Colors.kanteRust,
+  },
+  otpError: {
+    color: Colors.kanteRust,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  otpActions: {
+    gap: Spacing.sm,
+  },
 
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
@@ -2484,6 +4049,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   setupChecklistRowActive: { backgroundColor: Colors.needleGreenLight },
+  setupChecklistRowDeferred: { opacity: 0.62 },
   setupChecklistMark: {
     width: 28,
     height: 28,
@@ -2537,6 +4103,32 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 17,
   },
+  identityRejectedCard: {
+    backgroundColor: Colors.errorLight,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  identityRejectedCardCompact: {
+    backgroundColor: Colors.errorLight,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  identityRejectedTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.kanteRust,
+    fontWeight: FontWeight.bold,
+  },
+  identityRejectedText: {
+    fontSize: FontSize.xs,
+    color: Colors.kanteRust,
+    lineHeight: 18,
+  },
   formCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -2558,6 +4150,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.error,
     backgroundColor: Colors.errorLight,
   },
+  profilePhotoPickerRejected: {
+    borderColor: Colors.kanteRust,
+    backgroundColor: Colors.errorLight,
+  },
   profilePhotoPreview: {
     width: 68,
     height: 68,
@@ -2567,7 +4163,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
   },
-  profilePhotoImage: { width: '100%', height: '100%' },
+  profilePhotoPreviewRejected: {
+    borderWidth: 2,
+    borderColor: Colors.kanteRust,
+  },
+  profilePhotoRejectedBadge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: Colors.kanteRust,
+    color: Colors.textInverse,
+    textAlign: 'center',
+    fontSize: 9,
+    fontWeight: FontWeight.bold,
+    paddingVertical: 2,
+  },
   profilePhotoInitial: {
     color: Colors.needleGreen,
     fontSize: FontSize.xl,
@@ -2584,6 +4195,9 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.midGrey,
     lineHeight: 17,
+  },
+  profilePhotoHintRejected: {
+    color: Colors.kanteRust,
   },
   profilePhotoAction: {
     fontSize: FontSize.sm,
@@ -2721,23 +4335,86 @@ const styles = StyleSheet.create({
     borderRadius: 1,
   },
   portfolioCount: { fontSize: FontSize.xs, color: Colors.midGrey },
+  portfolioMediaStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  portfolioMediaStatusText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+  },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   portfolioThumb: {
     width: 100,
     height: 100,
     borderRadius: Radius.md,
     position: 'relative',
-    overflow: 'hidden',
   },
+  portfolioThumbDragging: {
+    borderWidth: 2,
+    borderColor: Colors.needleGreen,
+  },
+  portfolioThumbPress: { width: '100%', height: '100%', overflow: 'hidden', borderRadius: Radius.md },
   portfolioImg: { width: '100%', height: '100%' },
   videoThumb: {
     backgroundColor: Colors.ink,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    position: 'relative',
   },
-  videoIcon: { fontSize: 24, color: Colors.textInverse },
-  videoLabel: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.7)' },
+  videoBadge: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.ink,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  videoLabel: { fontSize: 10, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  coverBadge: {
+    position: 'absolute',
+    left: 6,
+    top: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  coverBadgeText: {
+    fontSize: 10,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.bold,
+  },
+  portfolioDragBadge: {
+    position: 'absolute',
+    left: 6,
+    right: 6,
+    bottom: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.ink + 'CC',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  portfolioDragBadgeText: {
+    fontSize: 9,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.bold,
+  },
   portfolioRemove: {
     position: 'absolute',
     top: 4,
@@ -2765,6 +4442,121 @@ const styles = StyleSheet.create({
   portfolioAddIcon: { fontSize: 24, color: Colors.midGrey },
   portfolioAddLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   portfolioAddHint: { fontSize: 9, color: Colors.midGrey, textAlign: 'center' },
+  portfolioPending: {
+    borderStyle: 'solid',
+    borderColor: Colors.needleGreen + '40',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  mediaManagerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  mediaManagerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+  },
+  mediaManagerSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    gap: Spacing.md,
+  },
+  mediaManagerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  mediaManagerEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+  },
+  mediaManagerTitle: {
+    fontSize: FontSize.lg,
+    color: Colors.ink,
+    fontWeight: FontWeight.bold,
+    fontFamily: Fonts.display,
+  },
+  mediaManagerPreview: {
+    height: 320,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    backgroundColor: Colors.ink,
+  },
+  mediaManagerPreviewMedia: {
+    width: '100%',
+    height: '100%',
+  },
+  mediaManagerCarouselPage: {
+    height: '100%',
+  },
+  mediaManagerDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  mediaManagerDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.lightGrey,
+  },
+  mediaManagerDotActive: {
+    width: 18,
+    backgroundColor: Colors.needleGreen,
+  },
+  mediaManagerHint: {
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    color: Colors.midGrey,
+    textAlign: 'center',
+  },
+  mediaManagerActions: {
+    gap: Spacing.sm,
+  },
+  mediaManagerActionRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  mediaManagerAction: {
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  mediaManagerActionCompact: {
+    flex: 1,
+  },
+  mediaManagerActionDisabled: {
+    backgroundColor: Colors.bone,
+    opacity: 0.72,
+  },
+  mediaManagerActionDestructive: {
+    borderColor: Colors.kanteRust + '24',
+    backgroundColor: Colors.kanteRustLight,
+  },
+  mediaManagerActionText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  mediaManagerActionTextDisabled: {
+    color: Colors.midGrey,
+  },
+  mediaManagerActionTextDestructive: {
+    color: Colors.kanteRust,
+  },
 
   // Availability
   availCard: {
@@ -2878,6 +4670,23 @@ const styles = StyleSheet.create({
     borderColor: Colors.needleGreen + '25',
   },
   infoText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  inlineActionButton: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  inlineActionText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
+  currencyProviderNote: {
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
 
   cta: {
     padding: Spacing.xl,
@@ -2885,6 +4694,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.lightGrey,
     gap: Spacing.sm,
+  },
+  ctaCompact: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.xs,
+    gap: 0,
   },
   modeSwitchLink: { alignSelf: 'center', minHeight: 28, alignItems: 'center', justifyContent: 'center' },
   modeSwitchText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },

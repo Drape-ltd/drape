@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import {
   fetchCustomerPaymentHistory,
@@ -330,7 +330,15 @@ export default function CustomerPaymentHistoryScreen() {
                 <TouchableOpacity
                   key={row.paymentId}
                   style={styles.transactionCard}
-                  onPress={() => router.navigate(`/(customer)/orders/${row.orderId}`)}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: '/(customer)/orders/[id]',
+                      params: {
+                        id: row.orderId,
+                        historyChain: appendToHistory(undefined, '/(customer)/profile/payments'),
+                      },
+                    })
+                  }
                   activeOpacity={0.78}
                 >
                   <View style={styles.rowTop}>

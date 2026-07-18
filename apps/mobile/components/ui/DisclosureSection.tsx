@@ -34,7 +34,7 @@ export function DisclosureSection({
   const toneColor = TONE_COLOR[tone]
 
   return (
-    <View style={[styles.wrap, { borderLeftColor: toneColor }]}>
+    <View style={styles.wrap}>
       <TouchableOpacity
         style={styles.header}
         onPress={() => setExpanded((value) => !value)}
@@ -61,7 +61,6 @@ const styles = StyleSheet.create({
   wrap: {
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderLeftWidth: 4,
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
     overflow: 'hidden',

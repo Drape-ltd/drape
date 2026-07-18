@@ -75,7 +75,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
 
   return (
     <form
-      className="mt-8 grid gap-4 rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_55px_rgba(22,28,24,0.06)] sm:p-6"
+      className="mt-8 grid gap-4 rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_55px_rgba(22,28,24,0.06)] sm:p-6"
       noValidate
       onSubmit={(event) => {
         event.preventDefault()
@@ -97,16 +97,16 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
           placeholder="you@example.com"
           type="email"
           autoComplete="email"
-          className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+          className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
         />
       </label>
       {error ? (
-        <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+        <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
           {error}
         </div>
       ) : null}
       {message ? (
-        <div className="rounded-[1rem] border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
+        <div className="rounded-lg border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
           {message}
         </div>
       ) : null}

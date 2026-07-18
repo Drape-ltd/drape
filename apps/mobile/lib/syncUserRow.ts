@@ -9,6 +9,7 @@ type SyncPayload = {
   currencySource?: 'DEVICE_LOCALE' | 'IP_GEO' | 'USER_SELECTED' | 'UNSUPPORTED_FALLBACK' | null
   regionCode?: string | null
   currencyConfirmedAt?: string | null
+  phoneVerifiedAt?: string | null
   strict?: boolean
 }
 
@@ -36,6 +37,7 @@ export async function syncUserRow({
   currencySource,
   regionCode,
   currencyConfirmedAt,
+  phoneVerifiedAt,
   strict,
 }: SyncPayload) {
   if (!userId || usersMirrorAvailability === 'missing') return
@@ -61,6 +63,9 @@ export async function syncUserRow({
   }
   if (typeof currencyConfirmedAt === 'string' && currencyConfirmedAt.trim().length > 0) {
     updates.currency_confirmed_at = currencyConfirmedAt
+  }
+  if (typeof phoneVerifiedAt === 'string' && phoneVerifiedAt.trim().length > 0) {
+    updates.phone_verified_at = phoneVerifiedAt
   }
   if (Object.keys(updates).length === 0) return
 

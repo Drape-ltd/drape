@@ -5,6 +5,7 @@ import * as React from 'react'
 import { AuthLandingRedirect } from '../components/auth-landing-redirect'
 import { WebAnalytics } from '../components/web-analytics'
 import { WebSessionScopeGuard } from '../components/web-session-scope-guard'
+import { UiProvider } from '../components/ui/ui-provider'
 import {
   defaultDescription,
   defaultTitle,
@@ -126,7 +127,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="en" data-scroll-behavior="smooth">
-      <body className="bg-bone text-ink antialiased">
+      <body className="bg-ui-canvas text-ink antialiased">
         <a href="#main-content" className="skip-link">
           Skip to main content
         </a>
@@ -155,9 +156,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <WebAnalytics />
         <WebSessionScopeGuard />
         <AuthLandingRedirect />
-        <div id="main-content" tabIndex={-1}>
-          {children}
-        </div>
+        <UiProvider>
+          <div id="main-content" tabIndex={-1}>
+            {children}
+          </div>
+        </UiProvider>
       </body>
     </html>
   )

@@ -9,6 +9,8 @@ import { supabase } from '@/lib/supabase'
 import { Input, TierBadgeChip, StarRating, Tag, RemoteImage } from '@/components/ui'
 import type { TierBadge } from '@/components/ui'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
+import { appendToHistory } from '@/lib/navigation'
+import { useRefreshOnFocus } from '@/lib/queries'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const GARMENT_FILTERS = ['All', 'Agbada', 'Suits', 'Ankara', 'Bridal', 'Crochet', 'Knitwear', 'Ready-made']
@@ -144,7 +146,6 @@ export default function SearchScreen() {
         .from('tailor_profiles')
         .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, availability, avg_response_hours, price_range_min, currency, avatar_url, supports_custom_orders, supports_ready_made')
         .eq('is_live', true)
-        .neq('availability', 'FULLY_BOOKED')
 
       let query = baseQuery
 
@@ -199,6 +200,10 @@ export default function SearchScreen() {
       setLoading(false)
     }
   }, [])
+
+  useRefreshOnFocus(() => {
+    if (searched) void search(query, garment, tier)
+  }, 0)
 
   function handleSearch() { search(query, garment, tier) }
 
@@ -318,7 +323,12 @@ export default function SearchScreen() {
               style={styles.card}
               testID={`tailor-result-${item.id}`}
               accessibilityLabel={`${item.displayName} card`}
-              onPress={() => router.push(`/(customer)/tailor/${item.id}`)}
+              onPress={() =>
+                router.push({
+                  pathname: '/(customer)/tailor/[id]',
+                  params: { id: item.id, historyChain: appendToHistory(undefined, '/(customer)/search') },
+                })
+              }
             >
               <View style={styles.cardTop}>
                 <View style={styles.avatar}>

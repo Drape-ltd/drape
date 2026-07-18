@@ -7,6 +7,7 @@ import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -40,40 +41,42 @@ export default function CustomerReviewsScreen() {
   const { user } = useAuth()
   const [reviews, setReviews] = useState<CustomerReviewRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
+  const [fetchError, setFetchError] = useState<string>('')
 
-  useFocusEffect(useCallback(() => {
-    async function load() {
-      setLoading(true)
-      setFetchError(false)
-      const { data, error } = await supabase
-        .from('customer_reviews')
-        .select('id, rating, tags, body, reviewer_name, created_at')
-        .eq('customer_id', user?.id)
-        .order('created_at', { ascending: false })
+  const load = useCallback(async () => {
+    setLoading(true)
+    setFetchError('')
+    const { data, error } = await supabase
+      .from('customer_reviews')
+      .select('id, rating, tags, body, reviewer_name, created_at')
+      .eq('customer_id', user?.id)
+      .order('created_at', { ascending: false })
 
-      if (error) {
-        setFetchError(true)
-        setReviews([])
-        setLoading(false)
-        return
-      }
-
-      setReviews(
-        ((data ?? []) as CustomerReviewQueryRow[]).map((row) => ({
-          id: row.id,
-          rating: row.rating ?? 0,
-          tags: asStringList(row.tags),
-          body: row.body ?? null,
-          reviewerName: row.reviewer_name ?? 'Tailor',
-          createdAt: row.created_at,
-        }))
+    if (error) {
+      setFetchError(
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your reviews should still be here — retry when the signal improves.'
+          : 'Could not load your reviews right now. Please try again in a moment.'
       )
+      setReviews([])
       setLoading(false)
+      return
     }
 
-    void load()
-  }, [user?.id]))
+    setReviews(
+      ((data ?? []) as CustomerReviewQueryRow[]).map((row) => ({
+        id: row.id,
+        rating: row.rating ?? 0,
+        tags: asStringList(row.tags),
+        body: row.body ?? null,
+        reviewerName: row.reviewer_name ?? 'Tailor',
+        createdAt: row.created_at,
+      }))
+    )
+    setLoading(false)
+  }, [user?.id])
+
+  useFocusEffect(useCallback(() => { void load() }, [load]))
 
   const averageRating = reviews.length > 0
     ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
@@ -99,18 +102,25 @@ export default function CustomerReviewsScreen() {
         </View>
       ) : fetchError ? (
         <View style={styles.stateWrap}>
-          <Text style={styles.stateTitle}>Couldn’t load reviews.</Text>
+          <Text style={styles.stateTitle}>Couldn't load reviews.</Text>
+          <Text style={styles.stateHint}>{fetchError}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { void load() }}>
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      ) : reviews.length === 0 ? (
+        <View style={styles.stateWrap}>
+          <Text style={styles.stateTitle}>No reviews yet.</Text>
+          <Text style={styles.stateHint}>Reviews from tailors will appear here after completed orders.</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryValue}>{averageRating ? averageRating.toFixed(1) : 'No rating'}</Text>
-            <Text style={styles.summaryLabel}>
-              {reviews.length > 0 ? `${reviews.length} review${reviews.length === 1 ? '' : 's'}` : 'No reviews yet'}
-            </Text>
+            <Text style={styles.summaryValue}>{averageRating!.toFixed(1)}</Text>
+            <Text style={styles.summaryLabel}>{reviews.length} review{reviews.length === 1 ? '' : 's'}</Text>
           </View>
 
-          {reviews.length > 0 ? reviews.map((review) => (
+          {reviews.map((review) => (
             <View key={review.id} style={styles.reviewCard}>
               <View style={styles.reviewHeader}>
                 <View style={styles.avatar}>
@@ -139,11 +149,7 @@ export default function CustomerReviewsScreen() {
 
               {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
             </View>
-          )) : (
-            <View style={styles.stateWrap}>
-              <Text style={styles.stateTitle}>No reviews yet.</Text>
-            </View>
-          )}
+          ))}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -165,30 +171,16 @@ const styles = StyleSheet.create({
   backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   content: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 36 },
-  introCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: 4,
-    ...Shadow.sm,
-  },
-  introEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  introTitle: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    fontFamily: Fonts.display,
-    lineHeight: 22,
-  },
-  introCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl, gap: Spacing.md },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 20 },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+  },
+  retryBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   summaryCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,

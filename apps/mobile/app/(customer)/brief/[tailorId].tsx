@@ -23,7 +23,7 @@ import {
   readFunctionErrorMessage,
 } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
 import {
   buildOrderFitProfile,
   COVERAGE_PREFERENCE_LABELS,
@@ -43,8 +43,26 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
-import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { Button, ChoiceSheet, Input, MeasurementModule, RemoteImage } from '@/components/ui'
+import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import {
+  Button,
+  ChoiceSheet,
+  Input,
+  MeasurementModule,
+  PortfolioVideoPreview,
+  RemoteImage,
+} from '@/components/ui'
+import {
+  launchImagePickerSafely,
+  preferCompatibleVideoRepresentation,
+  preferCurrentAssetRepresentation,
+} from '@/lib/image-picker-safe'
+import {
+  pickerVideoContentType,
+  pickerVideoExtension,
+  validateVideoPickerAsset,
+} from '@/lib/video-asset'
+import { SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
 import {
   CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS,
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
@@ -55,18 +73,26 @@ import {
   CUSTOM_ORDER_RESUMABLE_STAGES,
   CUSTOM_ORDER_SHIPPING_PREFERENCES,
   CUSTOM_ORDER_STYLE_ATTRIBUTES,
+  ALLOWED_VIDEO_CONTENT_TYPES,
+  BULK_FABRIC_MODE_OPTIONS,
+  FABRIC_SUBSTITUTION_OPTIONS,
+  MEDIA_LIMITS_BYTES,
+  MEDIA_LIMITS_SECONDS,
   ORDER_CANCELLATION_ACK_COPY,
   ORDER_CANCELLATION_POLICY_ROWS,
   customOrderDefaultDeadline,
   customOrderMinimumDeliveryDate,
+  getCustomOrderFabricIssues,
   isAllowedCustomStyleReference,
   isCustomOrderBriefLongEnough,
+  measurementCoreCompleteness,
   normalizeAccountCurrency,
+  promoteSpecialistMeasurementsToProfileValues,
+  stripDrapeVisionFit360DraftFields,
 } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
-import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
@@ -74,6 +100,7 @@ const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type FabricSource = 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES'
+type MediaPickerSource = 'camera' | 'library'
 type DeliveryMethod = 'SHIPPING' | 'LOCAL_DELIVERY' | 'LOCAL_COLLECTION'
 type RecipientMode = 'SELF' | 'OTHER'
 type WearerMode = 'SELF' | 'OTHER'
@@ -96,6 +123,21 @@ type NominatimSuggestion = {
   display_name?: string
   address?: Record<string, string | undefined>
 }
+
+type BriefMediaAsset = {
+  id: string
+  uri: string
+  kind: 'photo' | 'video'
+  contentType?: string
+  extension?: string
+}
+
+type FabricSubstitutionPreference = (typeof FABRIC_SUBSTITUTION_OPTIONS)[number]['value']
+type BulkFabricMode = (typeof BULK_FABRIC_MODE_OPTIONS)[number]['value']
+
+const MAX_FABRIC_REFERENCE_MEDIA = 4
+const FABRIC_REFERENCE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.portfolioVideo
+const FABRIC_REFERENCE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.portfolioVideo
 
 const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; hint: string }> = [
   {
@@ -147,6 +189,7 @@ const STEP_SUBS = [
 
 const SUPPORTED_STYLE_LINK_LABELS = ['Instagram posts / reels', 'Pinterest pins', 'TikTok videos']
 const STALE_MEASUREMENT_MONTHS = 6
+const DRAPE_VISION_FIT_360_CAPTURE_METHOD = 'DRAPE_VISION_ROTATION'
 
 type MeasurementAgeSummary = {
   lastUpdatedAt: string
@@ -157,11 +200,12 @@ type MeasurementAgeSummary = {
 
 function buildBriefRoute(
   tailorId: string,
-  options?: { draftSession?: string | null; resumeDraft?: boolean }
+  options?: { draftSession?: string | null; resumeDraft?: boolean; historyChain?: string | null }
 ) {
   const search = new URLSearchParams()
   if (options?.draftSession) search.set('draftSession', options.draftSession)
   if (options?.resumeDraft) search.set('resumeDraft', '1')
+  if (options?.historyChain) search.set('historyChain', options.historyChain)
   const query = search.toString()
   return query.length > 0
     ? `/(customer)/brief/${tailorId}?${query}`
@@ -190,15 +234,34 @@ function asStringList(value: unknown): string[] {
   return []
 }
 
+function isRecord(value: unknown): value is MeasurementRecord {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isFit360VisionProfile(measurements: MeasurementRecord) {
+  const latestFitProfile = isRecord(measurements.latestFitProfile) ? measurements.latestFitProfile : null
+  return measurements.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    latestFitProfile?.captureMethod === DRAPE_VISION_FIT_360_CAPTURE_METHOD ||
+    measurements.scanFlow === 'FIT_TURN_360_V1' ||
+    latestFitProfile?.scanFlow === 'FIT_TURN_360_V1'
+}
+
+function normalizeLoadedMeasurementProfile(measurements: MeasurementRecord | null | undefined) {
+  if (!measurements) return null
+  const promoted = promoteSpecialistMeasurementsToProfileValues(measurements).measurements
+  if (!isFit360VisionProfile(promoted)) return promoted
+  return stripDrapeVisionFit360DraftFields(promoted)
+}
+
 function hasCompleteMeasurementProfile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false
   const measurement = value as MeasurementRecord
-  const hasCore =
-    measurement.chest != null &&
-    measurement.waist != null &&
-    measurement.hips != null &&
-    measurement.height != null &&
-    typeof measurement.fitStyle === 'string'
+  const coreFields = measurementCoreCompleteness(measurement).present.map((field) => field.key)
+  const hasChestAndWaist = coreFields.includes('chest') && coreFields.includes('waist')
+  const hasVisionCore =
+    hasChestAndWaist &&
+    (coreFields.includes('hips') || coreFields.includes('shoulderWidth') || coreFields.includes('height'))
+  const hasFitStyle = typeof measurement.fitStyle === 'string'
   const hasContext =
     typeof measurement.garmentContext === 'string' && measurement.garmentContext.length > 0
   const bodyShapes = Array.isArray(measurement.bodyShape)
@@ -206,7 +269,8 @@ function hasCompleteMeasurementProfile(value: unknown): boolean {
     : measurement.bodyShape
       ? [measurement.bodyShape]
       : []
-  return hasCore && hasContext && bodyShapes.length > 0
+  const hasManualProfileContext = hasFitStyle && hasContext && bodyShapes.length > 0
+  return hasChestAndWaist && (hasManualProfileContext || hasVisionCore)
 }
 
 function measurementTimestamp(value: unknown) {
@@ -240,10 +304,22 @@ function measurementAgeFromSnapshot(value: unknown, now = new Date()): Measureme
   }
 }
 
-function createBriefPhotoPath(userId: string | undefined) {
+function createBriefMediaPath(
+  userId: string | undefined,
+  folder: 'style' | 'fabric',
+  extension: string,
+) {
   const owner = userId ?? 'guest'
   const suffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`
-  return `briefs/${owner}/${suffix}.jpg`
+  return `briefs/${owner}/${folder}/${suffix}.${extension.replace(/[^a-z0-9]/gi, '') || 'jpg'}`
+}
+
+function createBriefPhotoPath(userId: string | undefined) {
+  return createBriefMediaPath(userId, 'style', 'jpg')
+}
+
+function createBriefMediaId() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`
 }
 
 async function resolveOrderSubmitErrorMessage(error: Error | null) {
@@ -297,9 +373,10 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OrderBriefScreen() {
-  const { tailorId, returnTo, draftSession, freshStart, resumeDraft } = useLocalSearchParams<{
+  const { tailorId, returnTo, historyChain, draftSession, freshStart, resumeDraft } = useLocalSearchParams<{
     tailorId: string
     returnTo?: string
+    historyChain?: string
     draftSession?: string
     freshStart?: string
     resumeDraft?: string
@@ -311,7 +388,20 @@ export default function OrderBriefScreen() {
   const userId = user?.id
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, returnTo, `/(customer)/tailor/${tailorId}`)
+    goBackOrReturnTo(
+      router,
+      navigation,
+      pickSafeReturnTo(historyChain, returnTo),
+      `/(customer)/tailor/${tailorId}`,
+    )
+  }
+
+  function buildResumeBriefReturnParams() {
+    const returnTarget = buildBriefRoute(tailorId, { draftSession, resumeDraft: true })
+    return {
+      returnTo: returnTarget,
+      historyChain: appendToHistory(historyChain, returnTarget),
+    }
   }
 
   const [step, setStep] = useState(0)
@@ -371,6 +461,20 @@ export default function OrderBriefScreen() {
   const [fabricHandoffMode, setFabricHandoffMode] = useState<FabricHandoffMode | null>(null)
   const [fabricDescription, setFabricDescription] = useState('')
   const [fabricBudgetAmount, setFabricBudgetAmount] = useState('')
+  const [fabricBudgetCurrency, setFabricBudgetCurrency] = useState<CurrencyCode>('USD')
+  const [fabricCurrencySheetOpen, setFabricCurrencySheetOpen] = useState(false)
+  const [fabricReferenceMedia, setFabricReferenceMedia] = useState<BriefMediaAsset[]>([])
+  const [fabricReferenceLinks, setFabricReferenceLinks] = useState<string[]>([])
+  const [fabricReferenceInput, setFabricReferenceInput] = useState('')
+  const [fabricReferenceLinkError, setFabricReferenceLinkError] = useState('')
+  const [fabricSubstitutionPreference, setFabricSubstitutionPreference] =
+    useState<FabricSubstitutionPreference | null>(null)
+  const [bulkFabricMode, setBulkFabricMode] = useState<BulkFabricMode | null>(null)
+  const [fabricVendorName, setFabricVendorName] = useState('')
+  const [fabricVendorLocation, setFabricVendorLocation] = useState('')
+  const [fabricVendorLink, setFabricVendorLink] = useState('')
+  const [fabricVendorNotes, setFabricVendorNotes] = useState('')
+  const [fabricVendorLinkError, setFabricVendorLinkError] = useState('')
   const [fabricSourcingDeadlineDays, setFabricSourcingDeadlineDays] = useState(
     CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS
   )
@@ -393,7 +497,6 @@ export default function OrderBriefScreen() {
     NominatimSuggestion[]
   >([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
-  const [accountCurrency, setAccountCurrency] = useState('USD')
   const suppressNextDeliveryLookup = useRef(false)
   const handledLaunchRef = useRef<string | null>(null)
 
@@ -504,6 +607,19 @@ export default function OrderBriefScreen() {
     setFabricHandoffMode(null)
     setFabricDescription('')
     setFabricBudgetAmount('')
+    setFabricBudgetCurrency('USD')
+    setFabricCurrencySheetOpen(false)
+    setFabricReferenceMedia([])
+    setFabricReferenceLinks([])
+    setFabricReferenceInput('')
+    setFabricReferenceLinkError('')
+    setFabricSubstitutionPreference(null)
+    setBulkFabricMode(null)
+    setFabricVendorName('')
+    setFabricVendorLocation('')
+    setFabricVendorLink('')
+    setFabricVendorNotes('')
+    setFabricVendorLinkError('')
     setFabricSourcingDeadlineDays(CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS)
     setDeliveryMethod(null)
     setShippingPreference('STANDARD')
@@ -522,7 +638,7 @@ export default function OrderBriefScreen() {
     setDeliveryAddressSearch('')
     setDeliveryAddressSuggestions([])
     setShowDeliverySuggestions(false)
-    setAccountCurrency('USD')
+    setFabricBudgetCurrency('USD')
   }
 
   useEffect(() => {
@@ -585,6 +701,7 @@ export default function OrderBriefScreen() {
                   params: {
                     id: existingOrder.id,
                     returnTo: '/(customer)/orders?tab=active',
+                    historyChain: appendToHistory(undefined, '/(customer)/orders?tab=active'),
                     tab: 'active',
                   },
                 }),
@@ -619,20 +736,23 @@ export default function OrderBriefScreen() {
       setFetchError(true)
     }
 
-    setAccountCurrency(normalizeAccountCurrency(accountData?.default_currency) ?? 'USD')
+    const resolvedAccountCurrency = normalizeAccountCurrency(accountData?.default_currency) ?? 'USD'
+    setFabricBudgetCurrency(resolvedAccountCurrency)
     setMeasurementProfiles((profileData ?? []) as MeasurementProfileRow[])
 
     const defaultProfile = (profileData ?? []).find((profile) => profile.is_default)
     const defaultProfileMeasurements = defaultProfile?.measurements
-      ? {
+      ? normalizeLoadedMeasurementProfile({
           ...defaultProfile.measurements,
           unit: defaultProfile.measurements.unit ?? defaultProfile.unit_preference,
           measurementProfileLabel: defaultProfile.label,
-        }
+        })
       : null
-    const hasMeasurements = hasCompleteMeasurementProfile(defaultProfileMeasurements ?? measurementData?.measurements)
+    const storedMeasurements = normalizeLoadedMeasurementProfile(measurementData?.measurements ?? null)
+    const selectedMeasurements = defaultProfileMeasurements ?? storedMeasurements
+    const hasMeasurements = hasCompleteMeasurementProfile(selectedMeasurements)
     if (hasMeasurements) {
-      setMeasurements(enrichMeasurementSnapshot(defaultProfileMeasurements ?? measurementData?.measurements ?? null))
+      setMeasurements(enrichMeasurementSnapshot(selectedMeasurements))
       setInitialLoading(false)
       return
     }
@@ -700,12 +820,55 @@ export default function OrderBriefScreen() {
     return true
   }
 
+  function fabricBudgetAmountValue() {
+    const amount = Number.parseInt(fabricBudgetAmount, 10)
+    return Number.isFinite(amount) && amount > 0 ? amount : null
+  }
+
+  function fabricBulkRecipientCount() {
+    const count = Number.parseInt(bulkRecipientCount, 10)
+    return Number.isFinite(count) ? count : null
+  }
+
+  function normalizedVendorLink() {
+    const trimmed = fabricVendorLink.trim()
+    if (!trimmed) return null
+    try {
+      const url = new URL(/^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`)
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null
+    } catch {
+      return null
+    }
+  }
+
+  function currentFabricIssues() {
+    return getCustomOrderFabricIssues({
+      fabricSource,
+      fabricDescription,
+      fabricBudgetAmount: fabricBudgetAmountValue(),
+      fabricBudgetCurrency,
+      fabricReferenceMediaCount: fabricReferenceMedia.length,
+      fabricReferenceLinkCount: fabricReferenceLinks.length,
+      fabricSubstitutionPreference,
+      fabricHandoffMode,
+      isBulkOrder,
+      bulkRecipientCount: fabricBulkRecipientCount(),
+      bulkFabricMode,
+      suggestedVendorName: fabricVendorName,
+      suggestedVendorLocation: fabricVendorLocation,
+      suggestedVendorLink: normalizedVendorLink(),
+      suggestedVendorNotes: fabricVendorNotes,
+    })
+  }
+
   function validateFabricStep() {
-    if (!fabricSource) return false
-    if (fabricSource === 'CUSTOMER_SUPPLIES') return !!fabricHandoffMode
-    const budget = Number.parseInt(fabricBudgetAmount, 10)
-    const validBudget = !fabricBudgetAmount.trim() || (Number.isFinite(budget) && budget >= 0)
-    return fabricDescription.trim().length >= 8 && validBudget
+    const vendorLinkInvalid = fabricVendorLink.trim().length > 0 && !normalizedVendorLink()
+    return (
+      currentFabricIssues().length === 0 &&
+      !fabricReferenceLinkError &&
+      !fabricVendorLinkError &&
+      !vendorLinkInvalid
+    )
   }
 
   function composeDeliveryAddress() {
@@ -857,11 +1020,16 @@ export default function OrderBriefScreen() {
       setMeasurementProfileSheetOpen(false)
       return
     }
-    setMeasurements(enrichMeasurementSnapshot({
+    const normalizedMeasurements = normalizeLoadedMeasurementProfile({
       ...profile.measurements,
       unit: profile.measurements.unit ?? profile.unit_preference ?? measurements?.unit ?? 'in',
       measurementProfileLabel: profile.label,
-    }))
+    })
+    if (!normalizedMeasurements) {
+      setMeasurementProfileSheetOpen(false)
+      return
+    }
+    setMeasurements(enrichMeasurementSnapshot(normalizedMeasurements))
     setMeasurementProfileSheetOpen(false)
   }
 
@@ -869,18 +1037,227 @@ export default function OrderBriefScreen() {
     if (submitting) return
     if (photos.length >= CUSTOM_ORDER_MAX_REFERENCE_PHOTOS) {
       Alert.alert(
-        `Maximum ${CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} reference photos`,
+        'Maximum ' + CUSTOM_ORDER_MAX_REFERENCE_PHOTOS + ' reference photos',
         'Remove one of your current references before adding another.'
       )
       return
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow photo access to upload style references.')
+      return
+    }
+    const pickerOptions = preferCurrentAssetRepresentation({
+      mediaTypes: 'images' as const,
       quality: 0.8,
     })
+    const result = await launchImagePickerSafely(
+      () => ImagePicker.launchImageLibraryAsync(pickerOptions),
+      {
+        context: 'custom_order_style_reference_picker',
+        mediaLabel: 'style reference image',
+        extra: { userId },
+      }
+    )
+    if (!result) return
     if (!result.canceled && result.assets[0]) {
       setPhotos((prev) => [...prev, result.assets[0].uri])
     }
+  }
+
+  function openFabricMediaPicker() {
+    if (submitting) return
+    if (fabricReferenceMedia.length >= MAX_FABRIC_REFERENCE_MEDIA) {
+      Alert.alert(
+        'Maximum ' + MAX_FABRIC_REFERENCE_MEDIA + ' fabric references',
+        'Remove one fabric photo or video before adding another.'
+      )
+      return
+    }
+    Alert.alert('Fabric reference', 'Add fabric proof or sourcing inspiration.', [
+      { text: 'Take photo', onPress: () => void pickFabricPhoto('camera') },
+      { text: 'Choose photo', onPress: () => void pickFabricPhoto('library') },
+      { text: 'Record video', onPress: () => void pickFabricVideo('camera') },
+      { text: 'Choose video', onPress: () => void pickFabricVideo('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function pickFabricPhoto(source: MediaPickerSource) {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to take fabric photos.'
+          : 'Allow photo access to upload fabric photos.'
+      )
+      return
+    }
+    const pickerOptions = preferCurrentAssetRepresentation({
+      mediaTypes: 'images' as const,
+      quality: 0.85,
+    })
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera'
+          ? ImagePicker.launchCameraAsync(pickerOptions)
+          : ImagePicker.launchImageLibraryAsync(pickerOptions),
+      {
+        context: 'custom_order_fabric_photo_picker',
+        mediaLabel: 'fabric photo',
+        extra: { source, userId },
+      }
+    )
+    if (!result) return
+    if (result.canceled || !result.assets[0]) return
+    setFabricReferenceMedia((prev) => [
+      ...prev,
+      { id: createBriefMediaId(), uri: result.assets[0].uri, kind: 'photo' as const, contentType: 'image/jpeg', extension: 'jpg' },
+    ].slice(0, MAX_FABRIC_REFERENCE_MEDIA))
+  }
+
+  async function pickFabricVideo(source: MediaPickerSource) {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to record fabric videos.'
+          : 'Allow photo access to upload fabric videos.'
+      )
+      return
+    }
+    const result = await launchImagePickerSafely(
+      () =>
+        source === 'camera'
+          ? ImagePicker.launchCameraAsync({
+              mediaTypes: 'videos' as const,
+              quality: 0.8,
+              videoMaxDuration: FABRIC_REFERENCE_VIDEO_MAX_SECONDS,
+            })
+          : ImagePicker.launchImageLibraryAsync(
+              preferCompatibleVideoRepresentation({
+                mediaTypes: 'videos' as const,
+                quality: 0.8,
+                videoMaxDuration: FABRIC_REFERENCE_VIDEO_MAX_SECONDS,
+              })
+            ),
+      {
+        context: 'custom_order_fabric_video_picker',
+        mediaLabel: 'fabric video',
+        extra: { source, userId },
+      }
+    )
+    if (!result) return
+    if (result.canceled || !result.assets[0]) return
+
+    const asset = result.assets[0]
+    const validationMessage = validateVideoPickerAsset(asset, {
+      maxBytes: FABRIC_REFERENCE_VIDEO_MAX_BYTES,
+      maxSeconds: FABRIC_REFERENCE_VIDEO_MAX_SECONDS,
+      maxBytesMessage: 'Fabric videos must be 30 MB or smaller.',
+      unsupportedMessage: 'Choose an MP4 or MOV fabric video.',
+      durationMessage: 'Fabric videos can be up to 30 seconds.',
+    })
+    if (validationMessage) {
+      Alert.alert('Video not added', validationMessage)
+      return
+    }
+
+    setFabricReferenceMedia((prev) => [
+      ...prev,
+      {
+        id: createBriefMediaId(),
+        uri: asset.uri,
+        kind: 'video' as const,
+        contentType: pickerVideoContentType(asset),
+        extension: pickerVideoExtension(asset),
+      },
+    ].slice(0, MAX_FABRIC_REFERENCE_MEDIA))
+  }
+
+  function removeFabricReferenceMedia(id: string) {
+    setFabricReferenceMedia((prev) => prev.filter((item) => item.id !== id))
+  }
+
+  function addFabricReferenceLink() {
+    const trimmed = fabricReferenceInput.trim()
+    if (!trimmed) return
+    if (fabricReferenceLinks.length >= CUSTOM_ORDER_MAX_STYLE_LINKS) {
+      setFabricReferenceLinkError('Maximum ' + CUSTOM_ORDER_MAX_STYLE_LINKS + ' fabric links per order.')
+      return
+    }
+    if (fabricReferenceLinks.includes(trimmed)) {
+      setFabricReferenceLinkError('That link is already added.')
+      return
+    }
+    if (!isAllowedCustomStyleReference(trimmed)) {
+      setFabricReferenceLinkError('Fabric links must be from Instagram, Pinterest, or TikTok.')
+      return
+    }
+    setFabricReferenceLinkError('')
+    setFabricReferenceLinks((prev) => [...prev, trimmed])
+    setFabricReferenceInput('')
+  }
+
+  function removeFabricReferenceLink(link: string) {
+    setFabricReferenceLinks((prev) => prev.filter((item) => item !== link))
+  }
+
+  function validateFabricVendorLink(value = fabricVendorLink) {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      setFabricVendorLinkError('')
+      return true
+    }
+    try {
+      const url = new URL(/^https?:\/\//iu.test(trimmed) ? trimmed : 'https://' + trimmed)
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        setFabricVendorLinkError('')
+        return true
+      }
+    } catch {
+      setFabricVendorLinkError('Enter a valid vendor website or social link.')
+      return false
+    }
+    setFabricVendorLinkError('Enter a valid vendor website or social link.')
+    return false
+  }
+
+  async function uploadFabricReferenceAsset(asset: BriefMediaAsset) {
+    if (asset.kind === 'photo') {
+      const cleanUri = await stripExif(asset.uri)
+      return uploadPublicStorageImage({
+        bucket: 'order-photos',
+        path: createBriefMediaPath(user?.id, 'fabric', 'jpg'),
+        uri: cleanUri,
+        contentType: 'image/jpeg',
+        maxBytes: MEDIA_LIMITS_BYTES.image,
+        purpose: 'ORDER_REFERENCE',
+      })
+    }
+
+    const contentType = asset.contentType ?? 'video/mp4'
+    const extension = asset.extension ?? 'mp4'
+    const payload = await createValidatedUploadPayload(asset.uri, {
+      maxBytes: FABRIC_REFERENCE_VIDEO_MAX_BYTES,
+      contentType,
+      allowedContentTypes: ALLOWED_VIDEO_CONTENT_TYPES,
+      purpose: 'ORDER_REFERENCE',
+    })
+    const path = createBriefMediaPath(user?.id, 'fabric', extension)
+    const { error: uploadError } = await supabase.storage
+      .from('order-photos')
+      .upload(path, payload.data, { contentType })
+    if (uploadError) throw uploadError
+    return supabase.storage.from('order-photos').getPublicUrl(path).data.publicUrl
   }
 
   function canProceed(): boolean {
@@ -995,12 +1372,12 @@ export default function OrderBriefScreen() {
     if (!validateDeadline(deadline)) return
     if (!validateStyleReferences()) return
     if (!validateFitNote(fitNote)) return
-    if (!validateFabricStep()) {
+    if (!validateFabricVendorLink()) return
+    const fabricIssues = currentFabricIssues()
+    if (fabricIssues.length > 0 || fabricReferenceLinkError) {
       Alert.alert(
         'Fabric details needed',
-        fabricSource === 'TAILOR_SOURCES'
-          ? 'Describe the fabric you want the tailor to source before submitting.'
-          : 'Choose how your fabric will reach the tailor before submitting.'
+        fabricReferenceLinkError || fabricIssues[0]?.message || 'Complete the fabric details before submitting.'
       )
       return
     }
@@ -1040,6 +1417,26 @@ export default function OrderBriefScreen() {
           warningShown: measurementAge.stale,
         }
       : null
+    const fabricBudget = fabricBudgetAmountValue()
+    const fabricSubstitutionOption = FABRIC_SUBSTITUTION_OPTIONS.find(
+      (option) => option.value === fabricSubstitutionPreference
+    )
+    const bulkFabricOption = BULK_FABRIC_MODE_OPTIONS.find((option) => option.value === bulkFabricMode)
+    const suggestedFabricVendor =
+      fabricVendorName.trim() || fabricVendorLocation.trim() || fabricVendorLink.trim() || fabricVendorNotes.trim()
+        ? {
+            name: fabricVendorName.trim() || null,
+            location: fabricVendorLocation.trim() || null,
+            link: normalizedVendorLink(),
+            notes: fabricVendorNotes.trim() || null,
+          }
+        : null
+    const fabricReferenceSummary = {
+      mediaCount: fabricReferenceMedia.length,
+      linkCount: fabricReferenceLinks.length,
+      links: fabricReferenceLinks,
+      sourceMode: fabricSource,
+    }
     const fabricPolicy =
       fabricSource === 'CUSTOMER_SUPPLIES'
         ? {
@@ -1096,6 +1493,8 @@ export default function OrderBriefScreen() {
           measurementPrivacy: 'TAILOR_ONLY' as const,
           statusPolicy: 'OPS_MANAGED_LINKED_CHILDREN' as const,
           dyeLotConsistencyRequired: true,
+          fabricMode: bulkFabricMode,
+          fabricModeLabel: bulkFabricOption?.label ?? null,
           notes: bulkNotes.trim() || null,
         }
       : null
@@ -1114,6 +1513,13 @@ export default function OrderBriefScreen() {
             fabricHandoffMode,
             fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
             fabricPolicy,
+            fabricReference: fabricReferenceSummary,
+            customerFabricProof: {
+              requiredBeforeQuote: true,
+              mediaCount: fabricReferenceMedia.length,
+              linkCount: fabricReferenceLinks.length,
+              referenceLinks: fabricReferenceLinks,
+            },
             bulkOrder,
             wearerContext,
             measurementAge: measurementAgeMeta,
@@ -1128,6 +1534,7 @@ export default function OrderBriefScreen() {
             fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
             fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
             fabricPolicy,
+            fabricReference: fabricReferenceSummary,
             bulkOrder,
             wearerContext,
             measurementAge: measurementAgeMeta,
@@ -1139,11 +1546,16 @@ export default function OrderBriefScreen() {
             bodyNote: fitNote.trim() || null,
             fabricSourcing: {
               description: fabricDescription.trim() || null,
-              budgetAmount: fabricBudgetAmount.trim()
-                ? Number.parseInt(fabricBudgetAmount, 10)
-                : null,
-              budgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
+              budgetAmount: fabricBudget,
+              budgetCurrency: fabricBudget ? fabricBudgetCurrency : null,
               deadlineBusinessDays: fabricSourcingDeadlineDays,
+              referenceLinks: fabricReferenceLinks,
+              referenceMediaCount: fabricReferenceMedia.length,
+              substitutionPreference: fabricSubstitutionPreference,
+              substitutionLabel: fabricSubstitutionOption?.label ?? null,
+              suggestedVendor: suggestedFabricVendor,
+              bulkFabricMode,
+              bulkFabricModeLabel: bulkFabricOption?.label ?? null,
             },
           }
 
@@ -1151,45 +1563,80 @@ export default function OrderBriefScreen() {
 
     const buildOrderPayload = (
       action: 'preflight-create-order' | 'create-order',
-      uploadedReferencePhotos: string[]
-    ) => ({
-      action,
-      tailorProfileId: tailorId,
-      garmentType,
-      description: description.trim(),
-      occasion: occasion.trim() || null,
-      deadline: deadline?.toISOString() ?? null,
-      referencePhotos: uploadedReferencePhotos,
-      referencePhotoCount: photos.length,
-      customerMeasurementsSnapshot: measurementSnapshot,
-      fitNote: composedFitNote,
-      fabricSource,
-      supportMeta,
-      deliveryMethod,
-      garmentTypeOther: garmentType === 'Other' ? garmentTypeOther.trim() : null,
-      genderPresentation,
-      styleReferenceLinks: inspirationLinks,
-      styleNotes: styleNotes.trim() || null,
-      bodyNote: composedFitNote,
-      fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
-      fabricBudgetAmount: fabricBudgetAmount.trim()
-        ? Number.parseInt(fabricBudgetAmount, 10)
-        : null,
-      fabricBudgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
-      fabricSourcingDeadlineDays:
-        fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
-      shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
-      deliveryInstructions: deliveryInstructions.trim() || null,
-      deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
-      deliveryCity: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCity.trim() : null,
-      deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
-      deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
-      deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
-      recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
-      recipientPhone:
-        deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
-      cancellationPolicyAcknowledged,
-    })
+      uploadedReferencePhotos: string[],
+      uploadedFabricReferenceMedia: string[] = []
+    ) => {
+      const supportMetaRecord = supportMeta as Record<string, unknown>
+      const fabricReferenceWithUploads = {
+        ...fabricReferenceSummary,
+        mediaUrls: uploadedFabricReferenceMedia,
+      }
+      const payloadSupportMeta = {
+        ...supportMetaRecord,
+        fabricReference: fabricReferenceWithUploads,
+        ...(fabricSource === 'TAILOR_SOURCES'
+          ? {
+              fabricSourcing: {
+                ...(supportMetaRecord.fabricSourcing as Record<string, unknown>),
+                referenceMediaUrls: uploadedFabricReferenceMedia,
+              },
+            }
+          : {
+              customerFabricProof: {
+                ...(supportMetaRecord.customerFabricProof as Record<string, unknown>),
+                mediaUrls: uploadedFabricReferenceMedia,
+              },
+            }),
+      }
+
+      return {
+        action,
+        tailorProfileId: tailorId,
+        garmentType,
+        description: description.trim(),
+        occasion: occasion.trim() || null,
+        deadline: deadline?.toISOString() ?? null,
+        referencePhotos: uploadedReferencePhotos,
+        referencePhotoCount: photos.length,
+        customerMeasurementsSnapshot: measurementSnapshot,
+        fitNote: composedFitNote,
+        fabricSource,
+        supportMeta: payloadSupportMeta,
+        deliveryMethod,
+        garmentTypeOther: garmentType === 'Other' ? garmentTypeOther.trim() : null,
+        genderPresentation,
+        styleReferenceLinks: inspirationLinks,
+        styleNotes: styleNotes.trim() || null,
+        bodyNote: composedFitNote,
+        fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
+        fabricBudgetAmount: fabricSource === 'TAILOR_SOURCES' ? fabricBudget : null,
+        fabricBudgetCurrency: fabricSource === 'TAILOR_SOURCES' ? fabricBudgetCurrency : null,
+        fabricSourcingDeadlineDays:
+          fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
+        fabricReferenceMedia: uploadedFabricReferenceMedia,
+        fabricReferenceMediaCount: fabricReferenceMedia.length,
+        fabricReferenceLinks,
+        fabricSubstitutionPreference:
+          fabricSource === 'TAILOR_SOURCES' ? fabricSubstitutionPreference : null,
+        bulkFabricMode: isBulkOrder ? bulkFabricMode : null,
+        fabricVendorName: fabricSource === 'TAILOR_SOURCES' ? fabricVendorName.trim() || null : null,
+        fabricVendorLocation:
+          fabricSource === 'TAILOR_SOURCES' ? fabricVendorLocation.trim() || null : null,
+        fabricVendorLink: fabricSource === 'TAILOR_SOURCES' ? normalizedVendorLink() : null,
+        fabricVendorNotes: fabricSource === 'TAILOR_SOURCES' ? fabricVendorNotes.trim() || null : null,
+        shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
+        deliveryInstructions: deliveryInstructions.trim() || null,
+        deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
+        deliveryCity: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCity.trim() : null,
+        deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
+        deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
+        deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
+        recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
+        recipientPhone:
+          deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
+        cancellationPolicyAcknowledged,
+      }
+    }
 
     const { data: preflightData, error: preflightError } = await invokeFunction<{
       ok: boolean
@@ -1237,10 +1684,26 @@ export default function OrderBriefScreen() {
       }
     }
 
+    const uploadedFabricUrls: string[] = []
+    for (const asset of fabricReferenceMedia) {
+      try {
+        uploadedFabricUrls.push(await uploadFabricReferenceAsset(asset))
+      } catch (error) {
+        setSubmitting(false)
+        Alert.alert(
+          'Upload failed',
+          isLikelyConnectivityIssue(error)
+            ? 'Connection looks weak. One of your fabric references could not be uploaded yet. Retry when the signal improves.'
+            : 'One of your fabric references could not be uploaded right now. Please try again in a moment.'
+        )
+        return
+      }
+    }
+
     const { data, error } = await invokeFunction<{ ok: boolean; orderId?: string }>(
       'custom-order-action',
       {
-        body: buildOrderPayload('create-order', uploadedUrls),
+        body: buildOrderPayload('create-order', uploadedUrls, uploadedFabricUrls),
       }
     )
 
@@ -1260,6 +1723,7 @@ export default function OrderBriefScreen() {
     capture('order_placed', {
       garment_type: garmentType,
       has_photos: uploadedUrls.length > 0,
+      fabric_reference_media_count: uploadedFabricUrls.length,
       has_measurements: !!measurementSnapshot,
       measurement_source: measurementSnapshot?.measurementSource ?? null,
       fabric_source: fabricSource,
@@ -1270,7 +1734,7 @@ export default function OrderBriefScreen() {
       has_deadline: !!deadline,
     })
 
-    router.replace({
+    resetTo(router, {
       pathname: '/(customer)/orders/[id]',
       params: {
         id: data.orderId,
@@ -1291,11 +1755,9 @@ export default function OrderBriefScreen() {
           {
             text: 'Set up now',
             onPress: () =>
-              router.push({
+              router.replace({
                 pathname: '/(customer)/profile/measurements',
-                params: {
-                  returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
-                },
+                params: buildResumeBriefReturnParams(),
               }),
           },
           { text: 'Cancel', style: 'cancel' },
@@ -1320,9 +1782,9 @@ export default function OrderBriefScreen() {
     await AsyncStorage.setItem(MEAS_PROMPT_KEY, '1')
     setShowMeasPrompt(false)
     if (goToMeasurements) {
-      router.push({
+      router.replace({
         pathname: '/(customer)/profile/measurements',
-        params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
+        params: buildResumeBriefReturnParams(),
       })
     }
   }
@@ -1344,6 +1806,140 @@ export default function OrderBriefScreen() {
     if (value === 'CUSTOMER_SUPPLIES') return 'I will provide the fabric'
     if (value === 'TAILOR_SOURCES') return 'Tailor sources the fabric'
     return 'Not set'
+  }
+
+  function fabricSubstitutionLabel() {
+    return FABRIC_SUBSTITUTION_OPTIONS.find((option) => option.value === fabricSubstitutionPreference)?.label ?? 'Not set'
+  }
+
+  function bulkFabricModeLabel() {
+    return BULK_FABRIC_MODE_OPTIONS.find((option) => option.value === bulkFabricMode)?.label ?? 'Not set'
+  }
+
+  function renderFabricReferenceSection() {
+    if (!fabricSource) return null
+    const title = fabricSource === 'CUSTOMER_SUPPLIES' ? 'Fabric proof' : 'Fabric references'
+    const hint = fabricSource === 'CUSTOMER_SUPPLIES'
+      ? 'Add at least one photo or short video of the fabric you will provide, including color, texture, and available yardage if possible.'
+      : 'Add a fabric photo, short video, or sourcing link so the tailor knows what to search for before quoting.'
+
+    return (
+      <View>
+        <Text style={styles.fieldLabel}>
+          {title} <Text style={styles.required}>*</Text>
+        </Text>
+        <Text style={styles.fieldHint}>{hint}</Text>
+        <View style={[styles.photoGrid, { marginTop: Spacing.md }]}>
+          {fabricReferenceMedia.map((asset) => (
+            <View key={asset.id} style={styles.photoThumb}>
+              {asset.kind === 'video' ? (
+                <PortfolioVideoPreview
+                  uri={asset.uri}
+                  style={styles.photoImage}
+                  autoplay={false}
+                  isLooping={false}
+                  nativeControls={false}
+                />
+              ) : (
+                <RemoteImage
+                  uri={asset.uri}
+                  style={styles.photoImage}
+                  contentFit="cover"
+                  transition={120}
+                  surface="customer_brief_fabric_reference_preview"
+                />
+              )}
+              <View style={styles.mediaKindBadge}>
+                <Text style={styles.mediaKindBadgeText}>{asset.kind === 'video' ? 'VIDEO' : 'PHOTO'}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.photoRemove}
+                onPress={() => removeFabricReferenceMedia(asset.id)}
+                accessibilityRole="button"
+                accessibilityLabel="Remove fabric reference"
+              >
+                <Text style={styles.photoRemoveText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+          {fabricReferenceMedia.length < MAX_FABRIC_REFERENCE_MEDIA && (
+            <TouchableOpacity style={styles.photoAdd} onPress={openFabricMediaPicker}>
+              <Text style={styles.photoAddIcon}>+</Text>
+              <Text style={styles.photoAddLabel}>Add media</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <Text style={styles.photoCount}>
+          {fabricReferenceMedia.length}/{MAX_FABRIC_REFERENCE_MEDIA} media files
+        </Text>
+
+        {fabricSource === 'TAILOR_SOURCES' ? (
+          <View style={styles.fabricLinkBlock}>
+            <Text style={styles.fieldLabel}>Fabric links</Text>
+            <Text style={styles.fieldHint}>
+              Optional Instagram, Pinterest, or TikTok fabric references. A media upload or one supported link is required.
+            </Text>
+            <View style={styles.inspirationInputRow}>
+              <View style={{ flex: 1 }}>
+                <Input
+                  label=""
+                  placeholder="Paste an Instagram / Pinterest / TikTok link"
+                  value={fabricReferenceInput}
+                  onChangeText={(value) => {
+                    setFabricReferenceInput(value)
+                    if (fabricReferenceLinkError) setFabricReferenceLinkError('')
+                  }}
+                  containerStyle={{ marginBottom: 0 }}
+                  onSubmitEditing={addFabricReferenceLink}
+                  returnKeyType="done"
+                />
+              </View>
+              <TouchableOpacity style={styles.inspirationAddBtn} onPress={addFabricReferenceLink}>
+                <Text style={styles.inspirationAddText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+            {fabricReferenceLinkError ? <Text style={styles.linkError}>{fabricReferenceLinkError}</Text> : null}
+            {fabricReferenceLinks.length > 0 ? (
+              <View style={styles.selectedLinks}>
+                {fabricReferenceLinks.map((link) => (
+                  <View key={link} style={styles.selectedLinkBadge}>
+                    <Text style={styles.selectedLinkText} numberOfLines={1}>{link}</Text>
+                    <TouchableOpacity onPress={() => removeFabricReferenceLink(link)}>
+                      <Text style={styles.selectedLinkRemove}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    )
+  }
+
+  function renderBulkFabricModeSection() {
+    if (!isBulkOrder || !fabricSource) return null
+    return (
+      <View>
+        <Text style={styles.fieldLabel}>
+          Group fabric plan <Text style={styles.required}>*</Text>
+        </Text>
+        <Text style={styles.fieldHint}>
+          Tell the tailor whether this group needs one dye lot, coordinated variations, or separate fabric per wearer.
+        </Text>
+        <View style={[styles.optionCards, { marginTop: Spacing.sm }]}>
+          {BULK_FABRIC_MODE_OPTIONS.map((option) => (
+            <OptionCard
+              key={option.value}
+              title={option.label}
+              hint={option.hint}
+              active={bulkFabricMode === option.value}
+              onPress={() => setBulkFabricMode(option.value)}
+            />
+          ))}
+        </View>
+      </View>
+    )
   }
 
   if (fetchError) {
@@ -1375,11 +1971,9 @@ export default function OrderBriefScreen() {
             <TouchableOpacity
               style={[styles.errorBtn, styles.errorBtnSecondary]}
               onPress={() =>
-                router.push({
+                router.replace({
                   pathname: '/(customer)/profile/measurements',
-                  params: {
-                    returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
-                  },
+                  params: buildResumeBriefReturnParams(),
                 })
               }
             >
@@ -1969,14 +2563,9 @@ export default function OrderBriefScreen() {
                           <TouchableOpacity
                             style={styles.measureAgeAction}
                             onPress={() =>
-                              router.push({
+                              router.replace({
                                 pathname: '/(customer)/profile/measurements',
-                                params: {
-                                  returnTo: buildBriefRoute(tailorId, {
-                                    draftSession,
-                                    resumeDraft: true,
-                                  }),
-                                },
+                                params: buildResumeBriefReturnParams(),
                               })
                             }
                           >
@@ -2031,7 +2620,7 @@ export default function OrderBriefScreen() {
                     )}
                     <View style={styles.measureSubcard}>
                       <View style={styles.measureSourceRow}>
-                        <Text style={styles.measureSourceLabel}>Guided fit intake</Text>
+                        <Text style={styles.measureSourceLabel}>Fit notes</Text>
                         <Text style={styles.measureSourceValue}>
                           {guidedFitProfile?.status
                             ? MEASUREMENT_SCAN_STATUS_LABELS[guidedFitProfile.status]
@@ -2075,30 +2664,25 @@ export default function OrderBriefScreen() {
                           <Text style={styles.measureSubcardHint}>
                             {guidedFitProfile.requiresTailorReview
                               ? 'This order will carry a tailor-review checkpoint before cutting starts.'
-                              : 'This fit intake will be attached to the order for pre-cutting review.'}
+                              : 'These fit notes will be attached to the order for pre-cutting review.'}
                           </Text>
                         </>
                       ) : (
                         <>
                           <Text style={styles.measureSubcardHint}>
-                            Add posture, stretch, coverage, and symmetry notes once so future quotes
-                            start from a fuller fit brief.
+                            Add optional posture, stretch, coverage, and symmetry notes when this
+                            order needs more context than measurements.
                           </Text>
                           <TouchableOpacity
                             style={styles.measureActionBtn}
                             onPress={() =>
-                              router.push({
+                              router.replace({
                                 pathname: '/(customer)/profile/guided-fit',
-                                params: {
-                                  returnTo: buildBriefRoute(tailorId, {
-                                    draftSession,
-                                    resumeDraft: true,
-                                  }),
-                                },
+                                params: buildResumeBriefReturnParams(),
                               })
                             }
                           >
-                            <Text style={styles.measureActionBtnText}>Add guided fit intake</Text>
+                            <Text style={styles.measureActionBtnText}>Add fit notes</Text>
                           </TouchableOpacity>
                         </>
                       )}
@@ -2106,46 +2690,21 @@ export default function OrderBriefScreen() {
                   </View>
                 ) : (
                   <View style={styles.noMeasureCard}>
-                    <Text style={styles.noMeasureTitle}>Choose how to add measurements</Text>
+                    <Text style={styles.noMeasureTitle}>Measurements not set up</Text>
                     <Text style={styles.noMeasureHint}>
-                      Your tailor needs your fit profile before they can quote accurately. Scan with
-                      Drapeon Vision or enter measurements manually, then return to this brief.
+                      Add saved measurements before sending this brief so the tailor can quote accurately.
                     </Text>
-                    <View style={styles.optionCards}>
-                      <OptionCard
-                        title="Scan with Drapeon Vision"
-                        hint="Guided rotation scan. Your progress in this order will stay here when you come back."
-                        active={false}
-                        onPress={() =>
-                          router.push({
-                            pathname: DRAPE_VISION_ROUTE,
-                            params: {
-                              mode: 'customer_scan',
-                              returnTo: buildBriefRoute(tailorId, {
-                                draftSession,
-                                resumeDraft: true,
-                              }),
-                            },
-                          } as never)
-                        }
-                      />
-                      <OptionCard
-                        title="Enter measurements manually"
-                        hint="Guided manual profile. Your progress in this order will stay here when you come back."
-                        active={false}
-                        onPress={() =>
-                          router.push({
-                            pathname: '/(customer)/profile/measurements',
-                            params: {
-                              returnTo: buildBriefRoute(tailorId, {
-                                draftSession,
-                                resumeDraft: true,
-                              }),
-                            },
-                          })
-                        }
-                      />
-                    </View>
+                    <TouchableOpacity
+                      style={styles.noMeasureBtn}
+                      onPress={() =>
+                        router.replace({
+                          pathname: '/(customer)/profile/measurements',
+                          params: buildResumeBriefReturnParams(),
+                        })
+                      }
+                    >
+                      <Text style={styles.noMeasureBtnText}>Set up measurements</Text>
+                    </TouchableOpacity>
                   </View>
                 )}
 
@@ -2207,6 +2766,9 @@ export default function OrderBriefScreen() {
                   </View>
                 </View>
 
+                {fabricSource ? renderFabricReferenceSection() : null}
+                {renderBulkFabricModeSection()}
+
                 {fabricSource === 'CUSTOMER_SUPPLIES' && (
                   <View>
                     <View style={styles.guideCard}>
@@ -2249,14 +2811,105 @@ export default function OrderBriefScreen() {
                       hint="Describe enough for sourcing approval."
                       showCharacterCount
                     />
-                    <Input
-                      label={`Fabric budget (optional, ${accountCurrency})`}
-                      placeholder="e.g. 75000"
-                      value={fabricBudgetAmount}
-                      onChangeText={(value) => setFabricBudgetAmount(value.replace(/[^\d]/g, ''))}
-                      keyboardType="number-pad"
-                      hint="The tailor will still quote the final amount before you pay."
-                    />
+                    <View>
+                      <Input
+                        label="Fabric budget"
+                        placeholder="e.g. 75000"
+                        value={fabricBudgetAmount}
+                        onChangeText={(value) => setFabricBudgetAmount(value.replace(/[^\d]/g, ''))}
+                        keyboardType="number-pad"
+                        required
+                        hint="Set the maximum fabric sourcing budget before the tailor quotes."
+                      />
+                      <Text style={styles.fieldLabel}>
+                        Budget currency <Text style={styles.required}>*</Text>
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.dropdownField}
+                        onPress={() => setFabricCurrencySheetOpen(true)}
+                        activeOpacity={0.78}
+                        accessibilityRole="button"
+                        accessibilityLabel="Choose fabric budget currency"
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.dropdownValue}>{fabricBudgetCurrency}</Text>
+                          <Text style={styles.dropdownMeta}>
+                            {SUPPORTED_CURRENCIES.find((option) => option.code === fabricBudgetCurrency)?.name ?? 'Budget currency'}
+                          </Text>
+                        </View>
+                        <Text style={styles.dropdownChevron}>⌄</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View>
+                      <Text style={styles.fieldLabel}>
+                        Substitution rule <Text style={styles.required}>*</Text>
+                      </Text>
+                      <Text style={styles.fieldHint}>
+                        Decide what should happen if the exact fabric cannot be found.
+                      </Text>
+                      <View style={[styles.optionCards, { marginTop: Spacing.sm }]}>
+                        {FABRIC_SUBSTITUTION_OPTIONS.map((option) => (
+                          <OptionCard
+                            key={option.value}
+                            title={option.label}
+                            hint={option.hint}
+                            active={fabricSubstitutionPreference === option.value}
+                            onPress={() => setFabricSubstitutionPreference(option.value)}
+                          />
+                        ))}
+                      </View>
+                    </View>
+
+                    <View>
+                      <Text style={styles.fieldLabel}>Suggested vendor</Text>
+                      <Text style={styles.fieldHint}>
+                        Optional. Share a market stall, shop, or supplier you want the tailor to check first.
+                      </Text>
+                      <View style={styles.vendorFields}>
+                        <Input
+                          label="Vendor name"
+                          placeholder="e.g. Balogun Market stall"
+                          value={fabricVendorName}
+                          onChangeText={setFabricVendorName}
+                          maxLength={120}
+                          filterContact
+                        />
+                        <Input
+                          label="Vendor location"
+                          placeholder="City, market, store location"
+                          value={fabricVendorLocation}
+                          onChangeText={setFabricVendorLocation}
+                          maxLength={180}
+                          filterContact
+                        />
+                        <Input
+                          label="Vendor link"
+                          placeholder="Website or social link"
+                          value={fabricVendorLink}
+                          onChangeText={(value) => {
+                            setFabricVendorLink(value)
+                            if (fabricVendorLinkError) setFabricVendorLinkError('')
+                          }}
+                          onBlur={() => validateFabricVendorLink()}
+                          autoCapitalize="none"
+                          keyboardType="url"
+                          maxLength={240}
+                          error={fabricVendorLinkError}
+                        />
+                        <Input
+                          label="Vendor note"
+                          placeholder="Anything the tailor should ask or confirm"
+                          value={fabricVendorNotes}
+                          onChangeText={setFabricVendorNotes}
+                          multiline
+                          numberOfLines={3}
+                          maxLength={400}
+                          filterContact
+                          showCharacterCount
+                        />
+                      </View>
+                    </View>
+
                     <View>
                       <Text style={styles.fieldLabel}>
                         Sourcing deadline <Text style={styles.required}>*</Text>
@@ -2635,6 +3288,19 @@ export default function OrderBriefScreen() {
 
                 <ReviewSection title="Fabric" onEdit={() => setStep(3)}>
                   <SummaryRow label="Fabric" value={fabricSourceLabel(fabricSource)} />
+                  <SummaryRow
+                    label="Fabric proof"
+                    value={
+                      fabricReferenceMedia.length +
+                      ' media' +
+                      (fabricReferenceLinks.length
+                        ? ' + ' + fabricReferenceLinks.length + ' link' + (fabricReferenceLinks.length === 1 ? '' : 's')
+                        : '')
+                    }
+                  />
+                  {isBulkOrder ? (
+                    <SummaryRow label="Group fabric" value={bulkFabricModeLabel()} />
+                  ) : null}
                   {fabricSource === 'CUSTOMER_SUPPLIES' && fabricHandoffMode ? (
                     <SummaryRow label="Handoff" value={FABRIC_HANDOFF_LABELS[fabricHandoffMode]} />
                   ) : null}
@@ -2645,13 +3311,24 @@ export default function OrderBriefScreen() {
                         label="Budget"
                         value={
                           fabricBudgetAmount.trim()
-                            ? `${accountCurrency} ${fabricBudgetAmount.trim()}`
+                            ? fabricBudgetCurrency + ' ' + fabricBudgetAmount.trim()
                             : 'Not set'
                         }
                       />
+                      <SummaryRow label="Substitution" value={fabricSubstitutionLabel()} />
+                      {fabricVendorName.trim() || fabricVendorLocation.trim() || fabricVendorLink.trim() ? (
+                        <SummaryRow
+                          label="Vendor"
+                          value={
+                            [fabricVendorName.trim(), fabricVendorLocation.trim()]
+                              .filter(Boolean)
+                              .join(' · ') || fabricVendorLink.trim() || 'Suggested'
+                          }
+                        />
+                      ) : null}
                       <SummaryRow
                         label="Sourcing update"
-                        value={`${fabricSourcingDeadlineDays} business days`}
+                        value={fabricSourcingDeadlineDays + ' business days'}
                       />
                     </>
                   ) : null}
@@ -2942,6 +3619,25 @@ export default function OrderBriefScreen() {
         selectedValue={measurementProfiles.find((profile) => profile.label === savedMeasurementProfileLabel)?.id}
         onClose={() => setMeasurementProfileSheetOpen(false)}
         onSelect={selectMeasurementProfile}
+      />
+
+      <ChoiceSheet
+        visible={fabricCurrencySheetOpen}
+        title="Fabric budget currency"
+        subtitle="Use the currency you expect the tailor to source fabric in."
+        options={SUPPORTED_CURRENCIES.map((option) => ({
+          value: option.code,
+          title: option.code,
+          body: option.name,
+          meta: option.symbol,
+        }))}
+        selectedValue={fabricBudgetCurrency}
+        onClose={() => setFabricCurrencySheetOpen(false)}
+        onSelect={(value) => {
+          const normalized = normalizeAccountCurrency(value)
+          if (normalized) setFabricBudgetCurrency(normalized)
+          setFabricCurrencySheetOpen(false)
+        }}
       />
 
       <Modal
@@ -3671,6 +4367,21 @@ const styles = StyleSheet.create({
   photoAddIcon: { fontSize: 24, color: Colors.midGrey },
   photoAddLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   photoCount: { fontSize: FontSize.xs, color: Colors.midGrey },
+  mediaKindBadge: {
+    position: 'absolute',
+    left: 5,
+    top: 5,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(0,0,0,0.58)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  mediaKindBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 9,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0,
+  },
 
   // Measurements summary
   measureSummaryCard: {
@@ -3728,20 +4439,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.kanteRust,
   },
-  measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  measureSummaryItem: { width: '47%', gap: 2 },
-  measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
-  measureSummaryValue: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  additionalMeasurePreview: { gap: Spacing.sm, paddingTop: Spacing.xs },
-  additionalMeasurePreviewTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
   flagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   flagBadge: {
     paddingHorizontal: Spacing.sm,
@@ -3782,7 +4479,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     flexWrap: 'wrap',
   },
-  measureEditNote: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureEditHint: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
@@ -3865,13 +4561,13 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingVertical: 10,
     paddingHorizontal: Spacing.xl,
+    justifyContent: 'center',
   },
   noMeasureBtnText: {
     color: Colors.textInverse,
     fontWeight: FontWeight.semibold,
     fontSize: FontSize.sm,
   },
-
   // Style inspiration
   inspirationSection: { gap: Spacing.sm },
   handlesScroll: { marginTop: Spacing.sm },
@@ -3886,10 +4582,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     justifyContent: 'center',
   },
-  handleChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   handleChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  handleChipTextActive: { color: Colors.needleGreen },
   inspirationInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  fabricLinkBlock: { gap: Spacing.sm, marginTop: Spacing.md },
+  vendorFields: { gap: Spacing.sm, marginTop: Spacing.sm },
   inspirationAddBtn: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.md,
@@ -3927,8 +4623,9 @@ const styles = StyleSheet.create({
   linkError: { fontSize: FontSize.xs, color: Colors.error, marginTop: Spacing.xs, lineHeight: 18 },
 
   // Fabric & delivery options
-  optionCards: { gap: Spacing.sm },
+  optionCards: { gap: Spacing.sm, alignSelf: 'stretch', width: '100%' },
   optionCard: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: Spacing.md,

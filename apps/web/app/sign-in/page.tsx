@@ -21,7 +21,7 @@ export default function SignInPage(): React.JSX.Element {
         <PublicSiteHeader />
         <section className="grid gap-8 py-8 lg:grid-cols-[1fr_1fr] lg:items-start lg:py-12">
           {/* Left marketing panel */}
-          <div className="hidden rounded-[1.6rem] border border-ink/8 bg-white/72 p-8 shadow-[0_18px_60px_rgba(22,28,24,0.05)] lg:block">
+          <div className="hidden rounded-[8px] border border-ink/8 bg-white/72 p-8 shadow-[0_18px_60px_rgba(22,28,24,0.05)] lg:block">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
               Your tailoring workspace
             </p>

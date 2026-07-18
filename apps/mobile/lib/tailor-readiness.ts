@@ -127,7 +127,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       canPublishPaidItems,
       payoutProviderLabel,
       blockers,
-      title: 'Finish your seller profile first',
+      title: 'Finish your tailor profile first',
       body: 'Your profile, portfolio, and verification need to be in place before customers can discover you as a normal live business.',
       actionLabel: 'Complete profile',
       tone: 'warning',
@@ -147,10 +147,10 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       title: idVerificationStatus === 'PENDING' ? 'Identity review is in progress' : 'Identity verification is still needed',
       body:
         idVerificationStatus === 'PENDING'
-          ? 'Your profile can finish review before it goes live. Paid work should still wait until identity review and payout setup are both complete.'
+          ? 'Your profile can finish review before paid work opens. Paid quotes and live shop publishing stay paused until identity review and payout setup are both complete.'
           : idVerificationStatus === 'REJECTED'
             ? 'Your verification needs attention before Drapeon can show you publicly or let you take paid work.'
-            : 'Customers should not discover or pay an unverified seller profile as if it were fully ready.',
+            : 'Customers should not discover or pay an unverified tailor profile as if it were fully ready.',
       actionLabel:
         idVerificationStatus === 'PENDING'
           ? null

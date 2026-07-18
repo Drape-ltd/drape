@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
-import { buildMetadata, publicPhoneDisplay, publicPhoneE164, socialLinks } from '../../lib/metadata'
+import { buildMetadata, publicPhoneE164, socialLinks } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Contact',
@@ -27,9 +27,15 @@ export default function ContactPage(): React.JSX.Element {
   const publicContactRoutes = [
     {
       label: 'Phone',
-      value: publicPhoneDisplay,
+      value: 'Call or text Drapeon',
       href: `tel:${publicPhoneE164}`,
       description: 'Call or text the public Drapeon line for launch and support routing.',
+    },
+    {
+      label: 'WhatsApp',
+      value: 'Message Drapeon',
+      href: buildWhatsAppSupportUrl('Hi Drapeon, I need support.'),
+      description: 'Message Drapeon on WhatsApp for quick launch support and human routing.',
     },
     ...socialLinks.map((link) => ({
       label: link.label,
@@ -65,7 +71,7 @@ export default function ContactPage(): React.JSX.Element {
               key={String(email)}
               href={`mailto:${email}`}
               aria-label={`Email ${label.toLowerCase()} at ${email}`}
-              className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+              className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
               <p className="mt-3 break-words text-lg font-semibold text-ink">{email}</p>
@@ -89,7 +95,7 @@ export default function ContactPage(): React.JSX.Element {
               target={route.href.startsWith('http') ? '_blank' : undefined}
               rel={route.href.startsWith('http') ? 'me noopener noreferrer' : undefined}
               aria-label={`${route.label}: ${route.value}`}
-              className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+              className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{route.label}</p>
               <p className="mt-3 break-words text-lg font-semibold text-ink">{route.value}</p>
@@ -111,7 +117,7 @@ export default function ContactPage(): React.JSX.Element {
               key={String(email)}
               href={`mailto:${email}`}
               aria-label={`Email ${label.toLowerCase()} at ${email}`}
-              className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
+              className="rounded-[8px] border border-ink/6 bg-white/82 p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
               <p className="mt-3 break-words text-lg font-semibold text-ink">{email}</p>
