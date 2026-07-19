@@ -7,6 +7,7 @@ import {
   payoutBlockReasonMessage,
   payoutWindowClosesAt,
   resolvePaymentProviderForCurrency,
+  validateUuid,
   type OpsVerificationEvidenceSummary,
   type OpsVerificationProofItemEvidence,
   type PayoutBlockedReason,
@@ -1818,7 +1819,9 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   }
 
   const tailorProfilesByUserId = new Map<string, TailorProfileContextRow>()
-  const tailorContextUserIds = new Set<string>([...dispatchTailorIds, ...userIds])
+  const tailorContextUserIds = new Set<string>(
+    [...dispatchTailorIds, ...userIds].filter(validateUuid),
+  )
   if (tailorContextUserIds.size > 0) {
     const { data, error } = await client
       .from('tailor_profiles')
@@ -1834,12 +1837,13 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     }
   }
 
+  const accountUserIds = [...userIds].filter(validateUuid)
   const customerProfilesByUserId = new Map<string, CustomerProfileContextRow>()
-  if (userIds.size > 0) {
+  if (accountUserIds.length > 0) {
     const { data, error } = await client
       .from('customer_profiles')
       .select('user_id, display_name')
-      .in('user_id', [...userIds])
+      .in('user_id', accountUserIds)
 
     if (error) {
       issues.push(formatIssue('Customer context', error))
@@ -1851,11 +1855,11 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   }
 
   const usersById = new Map<string, UserRow>()
-  if (userIds.size > 0) {
+  if (accountUserIds.length > 0) {
     const { data, error } = await client
       .from('users')
       .select('id, email, display_name, role')
-      .in('id', [...userIds])
+      .in('id', accountUserIds)
 
     if (error) {
       issues.push(formatIssue('User account context', error))

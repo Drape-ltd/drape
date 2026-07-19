@@ -214,6 +214,21 @@ async function registerAndStore(userId: string) {
 
     const token = tokenData.data
 
+    const { data: authData, error: authError } = await supabase.auth.getUser()
+    if (authError || authData.user?.id !== userId) {
+      Sentry.addBreadcrumb({
+        category: 'push',
+        message: 'Push token storage skipped because the session is no longer valid',
+        level: 'warning',
+        data: {
+          expectedUserId: userId,
+          authenticatedUserId: authData.user?.id ?? null,
+          authStatus: authError?.status ?? null,
+        },
+      })
+      return
+    }
+
     // Store token in Supabase — upsert so re-installs update cleanly
     const { error } = await supabase.from('push_tokens').upsert(
       { user_id: userId, token, platform: Platform.OS, updated_at: new Date().toISOString() },

@@ -7,7 +7,7 @@ import { sendOpsCustomerRefundEmail } from '../../../lib/ops-customer-email'
 import { sendSmsToUser } from '../../../lib/sms'
 import { checkPublicRateLimit, getClientIp } from '../../../lib/request-security'
 import { invalidateOpsDashboardDataCache } from '../../../lib/ops-data'
-import { buildOrderReviewRefundTerminalRequest } from '@drape/shared'
+import { buildOrderReviewRefundTerminalRequest, buildRefundOrderPaymentsRequest } from '@drape/shared'
 import { OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '@drape/shared'
 import {
@@ -685,11 +685,7 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
       apikey: serviceRoleKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      orderId,
-      reason: input.reason,
-      ...(typeof input.amount === 'number' && input.amount > 0 ? { amount: input.amount } : {}),
-    }),
+    body: JSON.stringify(buildRefundOrderPaymentsRequest({ orderId, ...input })),
   })
 
   const payload = await response.json().catch(() => null) as {

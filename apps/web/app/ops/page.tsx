@@ -2941,8 +2941,14 @@ function OrderReviewCard({
           <DetailList
             items={[
               { label: 'Requested by', value: review.requestedBy },
-              { label: 'Current stage', value: review.orderStage ?? '—' },
-              { label: 'Opened from', value: review.requestedFromStage ?? '—' },
+              {
+                label: 'Current stage',
+                value: <StatusChip status={review.orderStage} domain="order" fallback="Not available" />,
+              },
+              {
+                label: 'Opened from',
+                value: <StatusChip status={review.requestedFromStage} domain="order" fallback="Not available" />,
+              },
               { label: 'Opened', value: formatDateTime(review.requestedAt) },
             ]}
           />
@@ -2994,7 +3000,7 @@ function OrderReviewCard({
           </button>
         </div>
         <p className="text-xs leading-6 text-ink/58">
-          Both sides will see this result in the order timeline, and the order will either move to <code className="rounded bg-bone px-1 py-0.5 text-[11px]">REFUNDED</code> or return to its previous live stage.
+          Both sides will see this result in the order timeline. A refund closes the order; keeping it active returns it to the previous live stage.
         </p>
       </form>
     </CardCollapse>

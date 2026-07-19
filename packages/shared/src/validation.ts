@@ -31,6 +31,7 @@ export const VALID_ORDER_STATUSES = [
 ] as const satisfies readonly OrderStage[]
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MIN_PHONE_DIGITS = 7
 const MAX_PHONE_DIGITS = 15
 
@@ -64,6 +65,10 @@ export function validateString(str: unknown, maxLength: number): boolean {
 
 export function validateEmail(email: unknown): boolean {
   return typeof email === 'string' && email.length <= 254 && EMAIL_PATTERN.test(email.trim())
+}
+
+export function validateUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value.trim())
 }
 
 export function validatePhoneNumber(phone: unknown, country?: string | null): boolean {
