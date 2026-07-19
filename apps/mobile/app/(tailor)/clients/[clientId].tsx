@@ -14,10 +14,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
-import { AvatarImage } from '@/components/ui'
+import { AvatarImage, DrapeStatusChip } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
-import { stageColor } from '@/lib/stageColors'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -792,18 +791,11 @@ export default function ClientDetailScreen() {
                       </Text>
                     </View>
                     <View style={styles.orderRight}>
-                      <View
-                        style={[
-                          styles.stagePill,
-                          { backgroundColor: stageColor(order.stage).bg },
-                        ]}
-                      >
-                        <Text
-                          style={[styles.stageText, { color: stageColor(order.stage).text }]}
-                        >
-                          {clientStageLabel(order)}
-                        </Text>
-                      </View>
+                      <DrapeStatusChip
+                        value={order.stage}
+                        label={clientStageLabel(order)}
+                        domain="order"
+                      />
                       {order.quotedAmount ? (
                         <Text style={styles.orderAmount}>
                           {formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
@@ -1010,8 +1002,6 @@ const styles = StyleSheet.create({
   orderGarment: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   orderRef: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   orderRight: { alignItems: 'flex-end', gap: 4 },
-  stagePill: { paddingHorizontal: Spacing.sm, paddingVertical: 3, borderRadius: Radius.full },
-  stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   orderAmount: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   errorRetry: {
     backgroundColor: Colors.needleGreen,

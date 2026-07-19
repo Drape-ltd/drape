@@ -7,7 +7,8 @@ import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
-import { Button, FeatureStateCard } from '@/components/ui'
+import { Button, DrapeStatusChip, FeatureStateCard } from '@/components/ui'
+import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { openConsultationCallUrl } from '@/lib/consultation'
 import { tailorOrderHint, tailorOrderPriority, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
@@ -18,7 +19,6 @@ import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
-import { stageColor } from '@/lib/stageColors'
 
 type Tab = 'active' | 'completed'
 type TailorOrdersProfileRow = {
@@ -41,6 +41,7 @@ function orderHintForItem(item: { stage: OrderStage; orderKind?: 'CUSTOM' | 'REA
 
 export default function TailorOrdersScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const userId = user?.id
@@ -225,9 +226,13 @@ export default function TailorOrdersScreen() {
         </FeatureStateCard>
       ) : (
         <FlatList
+          {...capsuleNavScroll}
           data={sortedOrders}
           keyExtractor={(o) => o.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={isFetching && !loading} onRefresh={refetch} tintColor={Colors.needleGreen} />}
           ListEmptyComponent={
@@ -279,11 +284,11 @@ export default function TailorOrdersScreen() {
                     <Text style={styles.garment}>{item.garmentType}</Text>
                     <Text style={styles.customer}>{item.customerName}</Text>
                   </View>
-                  <View style={[styles.stagePill, { backgroundColor: stageColor(item.stage).bg }]}>
-                    <Text style={[styles.stageText, { color: stageColor(item.stage).text }]}>
-                      {tailorOrderStageLabel(item.stage, item.orderKind ?? 'CUSTOM')}
-                    </Text>
-                  </View>
+                  <DrapeStatusChip
+                    value={item.stage}
+                    label={tailorOrderStageLabel(item.stage, item.orderKind ?? 'CUSTOM')}
+                    domain="order"
+                  />
                 </View>
                 <View style={styles.cardMeta}>
                   <Text style={styles.ref}>#{item.reference}</Text>
@@ -476,8 +481,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
   },
   customer: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
-  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
-  stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   due: { fontSize: FontSize.xs, color: Colors.midGrey },

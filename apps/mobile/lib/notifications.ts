@@ -52,8 +52,11 @@ function resolveNotificationPath(
 ) {
   const base = role === 'TAILOR' ? '/(tailor)' : '/(customer)'
   const target = typeof data.target === 'string' ? data.target : null
+  const destination = typeof data.destination === 'string' ? data.destination : null
   const screen = typeof data.screen === 'string' ? data.screen : null
   const orderId = isUuid(data.orderId) ? data.orderId : null
+  const eventId = isUuid(data.eventId) ? data.eventId : null
+  const messageId = isUuid(data.messageId) ? data.messageId : null
   const rawCallKind = typeof data.callKind === 'string' ? data.callKind : null
   const rawCallType = typeof data.callType === 'string' ? data.callType : null
   const callKind = rawCallKind === 'consultation' || rawCallKind === 'ready-made' ? rawCallKind : null
@@ -68,8 +71,12 @@ function resolveNotificationPath(
     return `/call-join?${params.toString()}`
   }
 
-  if (orderId && target === 'messages') {
-    return `${base}/messages/${orderId}`
+  if (orderId && (target === 'messages' || destination === 'messages')) {
+    const focusParams = new URLSearchParams()
+    if (eventId) focusParams.set('eventId', eventId)
+    if (messageId) focusParams.set('messageId', messageId)
+    const query = focusParams.toString()
+    return `${base}/messages/${orderId}${query ? `?${query}` : ''}`
   }
 
   if (orderId) {

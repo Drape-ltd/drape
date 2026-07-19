@@ -1,0 +1,79 @@
+appId: com.drape.app
+name: "Messages — media mosaic, paging, and per-item reply"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites (created by seed-e2e.ts):
+#   - CONFIRMED order with a three-photo tailor message batch
+---
+
+- launchApp:
+    clearState: true
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+- tapOn:
+    id: "tab-orders"
+- extendedWaitUntil:
+    visible:
+      id: "order-card-CONFIRMED"
+    timeout: 10000
+- tapOn:
+    id: "order-card-CONFIRMED"
+- extendedWaitUntil:
+    visible:
+      id: "message-tailor-btn"
+    timeout: 8000
+- tapOn:
+    id: "message-tailor-btn"
+
+- extendedWaitUntil:
+    visible:
+      id: "message-media-mosaic"
+    timeout: 10000
+- tapOn:
+    id: "message-media-mosaic-item-1"
+- extendedWaitUntil:
+    visible:
+      id: "message-media-viewer"
+    timeout: 5000
+- assertVisible: "2 of 3"
+- tapOn:
+    id: "message-media-viewer-next"
+- assertVisible: "3 of 3"
+- tapOn:
+    id: "message-media-viewer-close"
+
+# A long press targets the exact media message represented by this tile.
+- longPressOn:
+    id: "message-media-mosaic-item-1"
+- extendedWaitUntil:
+    visible:
+      id: "message-actions-sheet"
+    timeout: 5000
+- tapOn:
+    id: "message-action-reply"
+- assertVisible:
+    id: "message-reply-preview"
+- tapOn:
+    id: "message-input"
+- inputText: "Please use the second reference for the back detail."
+- tapOn: "Send message"
+
+- extendedWaitUntil:
+    visible: "Please use the second reference for the back detail."
+    timeout: 8000

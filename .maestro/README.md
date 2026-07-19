@@ -62,11 +62,15 @@ maestro test --device <UDID> .maestro/flows/
 | `01-customer-signup.yaml` | Customer email sign-up → lands on home |
 | `02-tailor-signup.yaml` | Tailor sign-up → profile setup → home |
 | `03-contact-filter.yaml` | Contact filter blocks phone/social in messages |
-| `04-brief-to-quote.yaml` | Full flow: brief → tailor quotes → customer accepts |
+| `04-brief-to-quote.yaml` | Full flow: brief → quote v1 → customer revision → quote v2 → customer accepts |
 | `05-production-stages.yaml` | Tailor advances CONFIRMED → CUTTING → SEWING → FINISHING → SHIPPED |
 | `06-dispute-flow.yaml` | Customer opens dispute from SHIPPED order |
 | `07-sign-in-and-sign-out.yaml` | Session persistence after background, sign out |
 | `08-brief-fit-notes-return.yaml` | Customer opens fit notes from a brief and returns to the same measurements step |
+| `09-message-media.yaml` | Three-item message mosaic → exact-item viewer paging → per-item reply |
+| `10-drape-vision-ui.yaml` | Vision hub → height confidence → scan picker → contextual measurements exit |
+
+Flow `04` also verifies the formal negotiation contract: a customer revision request consumes one round, the tailor's revised quote supersedes the first version, and the customer can only accept the active quote.
 
 ## Notes
 

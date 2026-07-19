@@ -12,7 +12,7 @@ import {
   Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { invokeFunction } from '@/lib/supabase'
@@ -28,6 +28,7 @@ import { appendToHistory, resetTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 
 type TailorProfile = {
   id: string
@@ -81,6 +82,8 @@ const LIVE_BADGE: Record<string, { label: string; color: string; bg: string; dot
 
 export default function TailorProfileScreen() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user, signOut, switchRole } = useAuth()
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
@@ -332,9 +335,13 @@ export default function TailorProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <ScrollView
           style={styles.scroll}
+          {...capsuleNavScroll}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: Math.max(insets.bottom + 112, 140) },
+          ]}
         >
           {/* ── Profile header strip ── */}
           <View style={styles.profileHeader}>
@@ -727,7 +734,7 @@ function FlatRow({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 0 },
+  scrollContent: {},
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',

@@ -303,9 +303,18 @@ export function useOrderPaymentFlow() {
     orderId: string
     customerEmail?: string | null
     customerName?: string | null
+    quoteId?: string | null
+    expectedQuoteVersion?: number | null
   }): Promise<OrderPaymentFlowResult> {
     const { data: prepared, error: prepareError } = await invokeFunction<PreparePaymentResponse>('payment-action', {
-      body: { action: 'prepare-payment', orderId: options.orderId },
+      body: {
+        action: 'prepare-payment',
+        orderId: options.orderId,
+        ...(options.quoteId ? { quoteId: options.quoteId } : {}),
+        ...(options.expectedQuoteVersion
+          ? { expectedQuoteVersion: options.expectedQuoteVersion }
+          : {}),
+      },
     })
 
     if (prepareError || !prepared) {

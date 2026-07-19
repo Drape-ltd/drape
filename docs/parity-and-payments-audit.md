@@ -147,7 +147,7 @@ Based on the parity analysis, the web header should serve two distinct states:
 **Instead:**
 1. The Vision page on marketing site → smart link to open app (or download)
 2. `/account/customer/measurements` on web → manual entry form only, with a banner: *"For faster, more accurate measurements, use Drape Vision in the app."* + smart link
-3. The garment QC scan (tailor shop creation) → mobile-only; web shop creation disables the Vision button with a tooltip: *"Use the Drapeon app for garment scanning."*
+3. Garment QC remains a documented future workflow. Do not expose it on mobile or web until the real-device and product re-entry gates in the Vision runbook pass.
 
 ---
 

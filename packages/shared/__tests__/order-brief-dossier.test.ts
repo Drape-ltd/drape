@@ -5,7 +5,7 @@ describe('order brief dossier display labels', () => {
     const dossier = buildBriefDossier({
       measurementSnapshot: {
         garmentContext: 'BOTH',
-        bodyShape: ['INVERTED_TRIANGLE', 'DEFINED_WAIST'],
+        bodyShape: ['INVERTED_TRIANGLE', 'ShapeRectangle', 'DEFINED_WAIST'],
         fitFlags: ['LARGE_THIGHS', 'BROAD_SHOULDERS'],
         bodyFlags: ['SHORT_TORSO'],
         symmetryFlags: ['LEFT_SHOULDER_LOWER'],
@@ -18,7 +18,7 @@ describe('order brief dossier display labels', () => {
     const bodyContext = measurements?.rows.find((row) => row.id === 'body_flags')
 
     expect(cutContext?.value).toBe('Both')
-    expect(bodyShape?.value).toBe('Inverted Triangle, Defined Waist')
+    expect(bodyShape?.value).toBe('Inverted Triangle, Shape Rectangle, Defined Waist')
     expect(bodyContext?.values).toEqual([
       'Large Thighs',
       'Broad Shoulders',

@@ -16,9 +16,8 @@ import { Feather } from '@expo/vector-icons'
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { sharePassportInvite } from '@/lib/invite'
-import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
@@ -218,24 +217,6 @@ export default function DiaryEntryScreen() {
 
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
-  }
-
-  function openDrapeVisionClientScan() {
-    if (isNew) {
-      Alert.alert('Save client first', 'Save this diary entry once, then use Drapeon Vision so the scan has a client record to update.')
-      return
-    }
-
-    const diaryId = id || 'new'
-    router.push({
-      pathname: DRAPE_VISION_ROUTE,
-      params: {
-        mode: 'tailor_client_scan',
-        diaryId,
-        returnTo: `/(tailor)/clients/diary/${diaryId}`,
-        historyChain: appendToHistory(historyChain, `/(tailor)/clients/diary/${diaryId}`),
-      },
-    } as never)
   }
 
   function toggleMeasurementModule(moduleKey: DiaryMeasurementModuleKey) {
@@ -667,23 +648,6 @@ export default function DiaryEntryScreen() {
           {/* ── Measurements ────────────────────────────────────────────── */}
           <View onLayout={(e) => { measurementsY.current = e.nativeEvent.layout.y }}>
           <Section title="Measurements">
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Open Drapeon Vision client scan"
-              onPress={openDrapeVisionClientScan}
-              style={styles.visionDiaryCard}
-            >
-              <View style={styles.visionDiaryIcon}>
-                <Feather name="user-check" size={18} color={Colors.needleGreen} />
-              </View>
-              <View style={styles.visionDiaryCopy}>
-                <Text style={styles.visionDiaryTitle}>Drapeon Vision client scan</Text>
-                <Text style={styles.visionDiaryText}>
-                  Measure in person with consent, then keep every value editable before sending a passport invite.
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-            </TouchableOpacity>
             <Field label="Unit">
               <SegmentPicker
                 options={[{ label: 'cm', value: 'cm' }, { label: 'inches', value: 'in' }]}
@@ -1189,28 +1153,6 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 17,
   },
-  visionDiaryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '35',
-    ...Shadow.sm,
-  },
-  visionDiaryIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
-  },
-  visionDiaryCopy: { flex: 1, gap: 2 },
-  visionDiaryTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  visionDiaryText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 17 },
   errorText: { fontSize: FontSize.xs, color: Colors.error, marginTop: 4 },
   inputError: { borderWidth: 1.5, borderColor: Colors.error },
 

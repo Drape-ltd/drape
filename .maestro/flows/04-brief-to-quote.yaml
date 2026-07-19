@@ -177,7 +177,7 @@ env:
 - tapOn: "Sign out"
 
 # ════════════════════════════════════════════════════════════════════════
-# PART 3: Customer reviews and accepts the quote
+# PART 3: Customer requests a formal quote revision
 # ════════════════════════════════════════════════════════════════════════
 
 - extendedWaitUntil:
@@ -214,8 +214,125 @@ env:
     timeout: 8000
 - assertVisible: "£450"
 
-- tapOn: "Accept & pay"
-- tapOn: "Accept"
+- tapOn:
+    id: "quote-request-changes-btn"
+- extendedWaitUntil:
+    visible:
+      id: "quote-revision-sheet"
+    timeout: 5000
+- tapOn:
+    id: "quote-revision-reason-scope"
+- tapOn:
+    id: "quote-revision-note-input"
+- inputText: "Please include a waistcoat and revise the total for the three-piece set."
+- tapOn:
+    id: "quote-revision-target-input"
+- inputText: "475"
+- tapOn:
+    id: "quote-revision-submit-btn"
+
+- extendedWaitUntil:
+    visible: "Changes requested"
+    timeout: 10000
+
+# Sign out so the tailor can answer the formal request.
+- tapOn:
+    id: "tab-profile"
+- scroll
+- tapOn: "Sign out"
+- tapOn: "Sign out"
+
+# ════════════════════════════════════════════════════════════════════════
+# PART 4: Tailor supersedes quote v1 with quote v2
+# ════════════════════════════════════════════════════════════════════════
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_TAILOR_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible:
+      id: "tailor-home-screen"
+    timeout: 8000
+- tapOn:
+    id: "tab-tailor-orders"
+- extendedWaitUntil:
+    visible:
+      id: "tailor-order-card-QUOTE_SENT"
+    timeout: 10000
+- tapOn:
+    id: "tailor-order-card-QUOTE_SENT"
+- extendedWaitUntil:
+    visible:
+      id: "tailor-revise-quote-btn"
+    timeout: 8000
+- tapOn:
+    id: "tailor-revise-quote-btn"
+- extendedWaitUntil:
+    visible:
+      id: "quote-amount-input"
+    timeout: 5000
+- tapOn:
+    id: "quote-amount-input"
+- eraseText
+- inputText: "475"
+- tapOn:
+    id: "tailor-send-revised-quote-btn"
+
+- extendedWaitUntil:
+    notVisible:
+      id: "tailor-send-revised-quote-btn"
+    timeout: 10000
+
+- tapOn:
+    id: "tab-profile"
+- scroll
+- tapOn: "Sign out"
+- tapOn: "Sign out"
+
+# ════════════════════════════════════════════════════════════════════════
+# PART 5: Customer accepts the active revised quote
+# ════════════════════════════════════════════════════════════════════════
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+- tapOn:
+    id: "tab-orders"
+- extendedWaitUntil:
+    visible:
+      id: "order-card-QUOTE_SENT"
+    timeout: 10000
+- tapOn:
+    id: "order-card-QUOTE_SENT"
+- extendedWaitUntil:
+    visible:
+      id: "quote-received-card"
+    timeout: 8000
+- assertVisible: "£475"
+- tapOn:
+    id: "quote-accept-btn"
+- tapOn: "Continue"
 
 - extendedWaitUntil:
     visible:

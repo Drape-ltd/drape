@@ -19,7 +19,8 @@ During QA freeze, do not add new product scope unless it blocks money movement, 
 
 ## iOS Vision Gate
 
-- Confirm iOS live scan starts from customer measurements, custom brief, tailor diary, garment QC, and listing size-guide entry points.
+- Confirm iOS Fit 360 starts from customer measurements and any explicitly enabled customer brief entry point.
+- Confirm Tailor Guide/client scan, Garment QC, and Vision listing size guide have no launch-facing dashboard, diary, order, or listing entry point; stale deep links must return safely to the originating context.
 - Confirm fitted-clothing guidance appears before scan and mentions loose garments such as boubou, agbada, kaftan, oversized hoodies, and layers.
 - Confirm scan start, scan failure, save failure, native module unavailable, and retry/profile-update breadcrumbs are visible in Sentry.
 - Confirm result screen requires review before save.
@@ -33,7 +34,7 @@ During QA freeze, do not add new product scope unless it blocks money movement, 
 
 - Pixel customer account: custom order, ready-made order, payment, messages, notifications, order detail, support, profile/settings.
 - Samsung A17 tailor account: order accept/quote, production updates with fresh media, ready-made listing, earnings, payout messaging, profile/settings.
-- iPhone/iOS device: Drape Vision customer scan, tailor-assisted scan, garment QC, size-guide scan, retake, manual fallback, save, and return navigation.
+- iPhone/iOS device: Drape Vision customer scan, enabled specialist paths, retake, manual fallback, save, and return navigation.
 
 ## No-Go Criteria
 

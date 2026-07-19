@@ -33,12 +33,31 @@ import {
   formatCallCountdown,
   getCallLifecycleState,
 } from '@drape/shared/call-scheduling-policy'
+import {
+  deriveOrderConversationActions,
+  ORDER_EVENT_LABELS,
+  type OrderConversationAction,
+  type OrderEvent,
+  type QuoteRevisionRequest,
+} from '@drape/shared/order-negotiation'
+import type { OrderStage } from '@drape/shared/order-machine'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { RemoteImage } from '@/components/ui/RemoteImage'
 import { PortfolioVideoPreview } from '@/components/ui/PortfolioVideoPreview'
 import { BottomSheetScaffold } from './BottomSheetScaffold'
-import { MediaLightboxModal, type MediaLightboxItem } from './MediaLightboxModal'
+import type { MediaLightboxItem } from './MediaLightboxModal'
+import { DrapeMediaViewer } from './DrapeMediaViewer'
+import { DrapeMediaMosaic, type DrapeMediaMosaicItem } from './DrapeMediaMosaic'
+import { DrapeVoicePlayer } from './DrapeVoicePlayer'
+import {
+  DrapeCapsuleButton,
+  DrapeIconButton,
+  DrapeInlineActionCard,
+  DrapeSheet,
+  DrapeStatusChip,
+} from './DrapePrimitives'
 import {
   ALLOWED_IMAGE_CONTENT_TYPES,
   ALLOWED_VIDEO_CONTENT_TYPES,
@@ -98,6 +117,17 @@ type MessageMediaPreview = {
   index: number
 }
 
+type ThreadEntry =
+  | { kind: 'messages'; key: string; createdAt: string; messages: Message[] }
+  | { kind: 'event'; key: string; createdAt: string; event: OrderEvent }
+
+type NegotiationState = {
+  activeQuote: { id: string; version: number; status: 'ACTIVE' } | null
+  openRevision: Pick<QuoteRevisionRequest, 'id' | 'status' | 'roundNumber'> | null
+  roundsUsed: number
+  roundLimit: number
+}
+
 interface Props {
   orderId: string
   currentUserId: string
@@ -117,6 +147,11 @@ interface Props {
   callGateActionLabel?: string | null
   onPressCallGateAction?: () => void
   callLifecycleEvent?: CallLifecycleEvent | null
+  orderKind?: 'CUSTOM' | 'READY_MADE'
+  orderStage?: OrderStage
+  focusedEventId?: string | null
+  focusedMessageId?: string | null
+  onConversationAction?: (action: OrderConversationAction) => void
 }
 
 // Rate limit: max 8 sends in 30 seconds
@@ -125,10 +160,7 @@ const RATE_LIMIT_WINDOW_MS = 30_000
 const MESSAGE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.messageVideo
 const MESSAGE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.messageVideo
 const MESSAGE_MEDIA_TILE_SIZE = 216
-const MESSAGE_MEDIA_MOSAIC_GAP = 4
-const MESSAGE_MEDIA_MOSAIC_TILE_SIZE = (MESSAGE_MEDIA_TILE_SIZE - MESSAGE_MEDIA_MOSAIC_GAP) / 2
-const VOICE_NOTE_MIN_WIDTH = 220
-const VOICE_NOTE_MAX_WIDTH = 272
+const CHAT_ORDER_ACTIONS_ENABLED = MOBILE_FEATURE_FLAGS.chatOrderActionsV1
 const MESSAGE_SIGNED_URL_CACHE_WINDOW_MS = 50 * 60 * 1000
 const messageSignedUrlCache = new Map<string, { url: string; expiresAt: number }>()
 
@@ -452,12 +484,6 @@ function resolveThreadLoadError(error: unknown, hasCachedMessages: boolean) {
   return 'Could not load this conversation right now. Refresh the thread or reopen the order.'
 }
 
-function formatVoiceDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
 function formatPresenceTime(isoString: string): string {
   const date = parseDateValue(isoString)
   if (!date) return 'recently'
@@ -517,11 +543,24 @@ export function MessageThread({
   callGateActionLabel,
   onPressCallGateAction,
   callLifecycleEvent,
+  orderKind = 'CUSTOM',
+  orderStage,
+  focusedEventId,
+  focusedMessageId,
+  onConversationAction,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
   const [contextMenuMessage, setContextMenuMessage] = useState<Message | null>(null)
   const [mediaPreview, setMediaPreview] = useState<MessageMediaPreview | null>(null)
+  const [orderEvents, setOrderEvents] = useState<OrderEvent[]>([])
+  const [negotiationState, setNegotiationState] = useState<NegotiationState>({
+    activeQuote: null,
+    openRevision: null,
+    roundsUsed: 0,
+    roundLimit: 3,
+  })
+  const [showConversationActions, setShowConversationActions] = useState(false)
   const [replyingTo, setReplyingTo] = useState<Message | null>(null)
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [reactions, setReactions] = useState<MessageReaction[]>([])
@@ -544,6 +583,8 @@ export function MessageThread({
   const recordingStartingRef = useRef(false)
   const recordingStoppingRef = useRef(false)
   const recordingGestureActiveRef = useRef(false)
+  const recordingStopRequestedRef = useRef(false)
+  const recordingSessionRef = useRef(0)
   const isCancelledRef = useRef(false)
   const sendingRef = useRef(false)
   const channelRef = useRef<RealtimeChannel | null>(null)
@@ -559,6 +600,7 @@ export function MessageThread({
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
         recordingGestureActiveRef.current = true
+        recordingStopRequestedRef.current = false
         void startRecording()
       },
       onPanResponderMove: (_, g) => {
@@ -570,16 +612,18 @@ export function MessageThread({
       },
       onPanResponderRelease: () => {
         recordingGestureActiveRef.current = false
+        recordingStopRequestedRef.current = true
         void stopRecording()
       },
       onPanResponderTerminate: () => {
         recordingGestureActiveRef.current = false
+        recordingStopRequestedRef.current = true
         isCancelledRef.current = true
         void stopRecording()
       },
     })
   ).current
-  const flatListRef = useRef<FlashListRef<Message[]>>(null)
+  const flatListRef = useRef<FlashListRef<ThreadEntry>>(null)
   const composerInputRef = useRef<TextInput>(null)
   const sendTimestamps = useRef<number[]>([])
   const insets = useSafeAreaInsets()
@@ -594,6 +638,38 @@ export function MessageThread({
 
   const messagesById = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
   const messageGroups = useMemo(() => groupMessageMediaClusters(messages), [messages])
+  const timelineEntries = useMemo<ThreadEntry[]>(() => {
+    const messageEntries: ThreadEntry[] = messageGroups
+      .filter((group) => group.length > 0)
+      .map((group) => ({
+        kind: 'messages',
+        key: `messages:${group.map((message) => message.id).join(':')}`,
+        createdAt: group[0]?.created_at ?? '',
+        messages: group,
+      }))
+    const eventEntries: ThreadEntry[] = orderEvents.map((event) => ({
+      kind: 'event',
+      key: `event:${event.id}`,
+      createdAt: event.createdAt,
+      event,
+    }))
+    return [...messageEntries, ...eventEntries].sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    )
+  }, [messageGroups, orderEvents])
+
+  const conversationActions = useMemo(() => {
+    if (!CHAT_ORDER_ACTIONS_ENABLED || !orderStage) return null
+    return deriveOrderConversationActions({
+      role: currentUserRole,
+      orderKind,
+      stage: orderStage,
+      activeQuote: negotiationState.activeQuote,
+      openRevision: negotiationState.openRevision,
+      negotiationRoundsUsed: negotiationState.roundsUsed,
+      negotiationRoundLimit: negotiationState.roundLimit,
+    })
+  }, [currentUserRole, negotiationState, orderKind, orderStage])
 
   const reactionsByMessageId = useMemo(() => {
     const grouped = new Map<string, MessageReaction[]>()
@@ -663,6 +739,94 @@ export function MessageThread({
       setLoading(false)
     }
   }, [fetchReactionsForMessageIds, orderId])
+
+  const fetchOrderConversationState = useCallback(async () => {
+    if (!CHAT_ORDER_ACTIONS_ENABLED || orderKind !== 'CUSTOM') {
+      setOrderEvents([])
+      setNegotiationState({ activeQuote: null, openRevision: null, roundsUsed: 0, roundLimit: 3 })
+      return
+    }
+
+    const [orderResult, revisionResult, eventResult] = await Promise.all([
+      supabase
+        .from('orders')
+        .select('active_quote_id, active_quote_version, negotiation_rounds_used, negotiation_round_limit')
+        .eq('id', orderId)
+        .maybeSingle(),
+      supabase
+        .from('quote_revision_requests')
+        .select('id, status, round_number')
+        .eq('order_id', orderId)
+        .eq('status', 'OPEN')
+        .maybeSingle(),
+      supabase
+        .from('order_events')
+        .select('id, order_id, event_type, actor_id, actor_role, quote_id, quote_version, revision_request_id, title, summary, metadata, created_at')
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: true }),
+    ])
+
+    if (orderResult.error || revisionResult.error || eventResult.error) {
+      if (__DEV__) {
+        console.warn(
+          '[drape] Could not load conversation actions.',
+          orderResult.error ?? revisionResult.error ?? eventResult.error,
+        )
+      }
+      return
+    }
+
+    const orderRow = orderResult.data as {
+      active_quote_id?: string | null
+      active_quote_version?: number | null
+      negotiation_rounds_used?: number | null
+      negotiation_round_limit?: number | null
+    } | null
+    const revisionRow = revisionResult.data as {
+      id: string
+      status: QuoteRevisionRequest['status']
+      round_number: number
+    } | null
+    const eventRows = (eventResult.data ?? []) as Array<{
+      id: string
+      order_id: string
+      event_type: OrderEvent['eventType']
+      actor_id: string | null
+      actor_role: OrderEvent['actorRole']
+      quote_id: string | null
+      quote_version: number | null
+      revision_request_id: string | null
+      title: string
+      summary: string | null
+      metadata: Record<string, unknown> | null
+      created_at: string
+    }>
+
+    setNegotiationState({
+      activeQuote: orderRow?.active_quote_id && orderRow.active_quote_version
+        ? { id: orderRow.active_quote_id, version: orderRow.active_quote_version, status: 'ACTIVE' }
+        : null,
+      openRevision: revisionRow
+        ? { id: revisionRow.id, status: revisionRow.status, roundNumber: revisionRow.round_number }
+        : null,
+      roundsUsed: orderRow?.negotiation_rounds_used ?? 0,
+      roundLimit: orderRow?.negotiation_round_limit ?? 3,
+    })
+    setOrderEvents(eventRows.map((row) => ({
+      id: row.id,
+      orderId: row.order_id,
+      eventType: row.event_type,
+      actorId: row.actor_id,
+      actorRole: row.actor_role,
+      quoteId: row.quote_id,
+      quoteVersion: row.quote_version,
+      revisionRequestId: row.revision_request_id,
+      title: row.title,
+      summary: row.summary,
+      metadata: row.metadata ?? {},
+      createdAt: row.created_at,
+    })))
+  }, [orderId, orderKind])
 
   async function loadEarlier() {
     if (!hasEarlier || loadingEarlierRef.current || messages.length === 0) return
@@ -793,6 +957,61 @@ export function MessageThread({
       supabase.removeChannel(channel)
     }
   }, [fetchMessages, orderId, currentUserId])
+
+  useEffect(() => {
+    if (!CHAT_ORDER_ACTIONS_ENABLED || orderKind !== 'CUSTOM') return undefined
+
+    const initialLoad = setTimeout(() => {
+      void fetchOrderConversationState()
+    }, 0)
+    const channel = supabase
+      .channel(`order-conversation:${orderId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'order_events', filter: `order_id=eq.${orderId}` },
+        () => { void fetchOrderConversationState() },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quote_revision_requests', filter: `order_id=eq.${orderId}` },
+        () => { void fetchOrderConversationState() },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${orderId}` },
+        () => { void fetchOrderConversationState() },
+      )
+      .subscribe()
+
+    return () => {
+      clearTimeout(initialLoad)
+      void supabase.removeChannel(channel)
+    }
+  }, [fetchOrderConversationState, orderId, orderKind])
+
+  useEffect(() => {
+    if (!focusedEventId || timelineEntries.length === 0) return
+    const index = timelineEntries.findIndex(
+      (entry) => entry.kind === 'event' && entry.event.id === focusedEventId,
+    )
+    if (index < 0) return
+    const timer = setTimeout(() => {
+      flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.45 })
+    }, 180)
+    return () => clearTimeout(timer)
+  }, [focusedEventId, timelineEntries])
+
+  useEffect(() => {
+    if (!focusedMessageId || timelineEntries.length === 0) return
+    const index = timelineEntries.findIndex(
+      (entry) => entry.kind === 'messages' && entry.messages.some((message) => message.id === focusedMessageId),
+    )
+    if (index < 0) return
+    const timer = setTimeout(() => {
+      flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.45 })
+    }, 180)
+    return () => clearTimeout(timer)
+  }, [focusedMessageId, timelineEntries])
 
   // Mark incoming messages as read
   useEffect(() => {
@@ -1090,11 +1309,17 @@ export function MessageThread({
       sendingRef.current
     ) return
 
+    const sessionId = recordingSessionRef.current + 1
+    recordingSessionRef.current = sessionId
     recordingStartingRef.current = true
     isCancelledRef.current = false
     setShowCancelHint(false)
     try {
-      const permission = await Audio.requestPermissionsAsync()
+      const currentPermission = await Audio.getPermissionsAsync()
+      const permission = currentPermission.granted || !currentPermission.canAskAgain
+        ? currentPermission
+        : await Audio.requestPermissionsAsync()
+      if (recordingSessionRef.current !== sessionId) return
       if (!permission.granted) {
         if (recordingGestureActiveRef.current) {
           Alert.alert('Microphone unavailable', 'Drapeon could not access your microphone. Check your phone permissions and try again.')
@@ -1104,7 +1329,7 @@ export function MessageThread({
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true })
       const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY)
 
-      if (!recordingGestureActiveRef.current) {
+      if (recordingSessionRef.current !== sessionId) {
         await rec.stopAndUnloadAsync().catch(() => undefined)
         await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => undefined)
         return
@@ -1112,17 +1337,24 @@ export function MessageThread({
 
       recordingRef.current = rec
       setIsRecording(true)
+      if (recordingStopRequestedRef.current || !recordingGestureActiveRef.current) {
+        await stopRecording(sessionId)
+      }
     } catch (error) {
       if (__DEV__) console.warn('[drape] Could not start voice recording.', error)
-      if (recordingGestureActiveRef.current) {
+      if (recordingSessionRef.current === sessionId && recordingGestureActiveRef.current) {
         Alert.alert('Recording unavailable', 'Drapeon could not start a voice note right now. Please try again.')
       }
     } finally {
-      recordingStartingRef.current = false
+      if (recordingSessionRef.current === sessionId) {
+        recordingStartingRef.current = false
+      }
     }
   }
 
-  async function stopRecording() {
+  async function stopRecording(expectedSessionId = recordingSessionRef.current) {
+    recordingStopRequestedRef.current = true
+    if (expectedSessionId !== recordingSessionRef.current) return
     const rec = recordingRef.current
     if (!rec || recordingStoppingRef.current) return
     recordingStoppingRef.current = true
@@ -1169,7 +1401,7 @@ export function MessageThread({
         Alert.alert('Recording too large', 'Voice notes must be under 25 MB.')
         return
       }
-      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/m4a' })
+      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/mp4' })
       if (uploadError) throw uploadError
 
       const { error: insertError } = await invokeFunction('message-action', {
@@ -1296,13 +1528,16 @@ export function MessageThread({
 
       <FlashList
         ref={flatListRef}
-        data={messageGroups}
-        keyExtractor={(group) => group.map((message) => message.id).join(':')}
+        data={timelineEntries}
+        keyExtractor={(entry) => entry.key}
         drawDistance={420}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        onContentSizeChange={() => {
+          if (focusedEventId || focusedMessageId) return
+          flatListRef.current?.scrollToEnd({ animated: false })
+        }}
         ListHeaderComponent={hasListHeader ? (
           <View style={styles.listHeaderStack}>
             {hasEarlier ? (
@@ -1344,7 +1579,24 @@ export function MessageThread({
             </View>
           </View>
         }
-        renderItem={({ item: group }) => {
+        renderItem={({ item: entry }) => {
+          if (entry.kind === 'event') {
+            return (
+              <OrderConversationEventCard
+                event={entry.event}
+                focused={entry.event.id === focusedEventId}
+                onOpenQuote={onConversationAction && entry.event.quoteId
+                  ? () => onConversationAction({
+                      kind: 'VIEW_QUOTE',
+                      label: 'View quote',
+                      emphasis: 'SECONDARY',
+                      requiresQuoteVersion: true,
+                    })
+                  : undefined}
+              />
+            )
+          }
+          const group = entry.messages
           const item = group[0]
           if (!item) return null
           if (group.length > 1) {
@@ -1456,9 +1708,20 @@ export function MessageThread({
             </View>
           )}
 
+          {conversationActions?.primary && onConversationAction ? (
+            <OrderConversationActionStrip
+              primary={conversationActions.primary}
+              overflowCount={conversationActions.overflow.length}
+              revisionRoundsUsed={conversationActions.revisionRoundsUsed}
+              revisionRoundLimit={conversationActions.revisionRoundLimit}
+              onPressPrimary={() => onConversationAction(conversationActions.primary!)}
+              onPressMore={() => setShowConversationActions(true)}
+            />
+          ) : null}
+
           {/* Reply preview bar */}
           {replyingTo ? (
-            <View style={styles.replyBar}>
+            <View style={styles.replyBar} testID="message-reply-preview">
               {replyingTo.type === 'PHOTO' ? (
                 <View style={styles.replyBarMedia}>
                   {replyingToMediaIsVideo ? (
@@ -1617,6 +1880,105 @@ export function MessageThread({
           ) : null}
         </>
       )}
+
+      <DrapeSheet
+        visible={showConversationActions}
+        title="Order actions"
+        subtitle={conversationActions
+          ? `Revision ${conversationActions.revisionRoundsUsed} of ${conversationActions.revisionRoundLimit}`
+          : undefined}
+        onDismiss={() => setShowConversationActions(false)}
+        enableDynamicSizing
+      >
+        <View style={styles.conversationActionSheetList}>
+          {conversationActions?.overflow.map((action) => (
+            <DrapeCapsuleButton
+              key={action.kind}
+              label={action.label}
+              tone={action.emphasis === 'DESTRUCTIVE' ? 'destructive' : 'secondary'}
+              onPress={() => {
+                setShowConversationActions(false)
+                onConversationAction?.(action)
+              }}
+            />
+          ))}
+        </View>
+      </DrapeSheet>
+    </View>
+  )
+}
+
+function OrderConversationActionStrip({
+  primary,
+  overflowCount,
+  revisionRoundsUsed,
+  revisionRoundLimit,
+  onPressPrimary,
+  onPressMore,
+}: {
+  primary: OrderConversationAction
+  overflowCount: number
+  revisionRoundsUsed: number
+  revisionRoundLimit: number
+  onPressPrimary: () => void
+  onPressMore: () => void
+}) {
+  return (
+    <View style={styles.conversationActionStrip}>
+      <View style={styles.conversationActionCopy}>
+        <Text style={styles.conversationActionEyebrow}>Order action</Text>
+        <Text style={styles.conversationActionMeta}>
+          Revision {revisionRoundsUsed} of {revisionRoundLimit}
+        </Text>
+      </View>
+      <DrapeCapsuleButton
+        label={primary.label}
+        compact
+        tone={primary.emphasis === 'DESTRUCTIVE' ? 'destructive' : 'primary'}
+        onPress={onPressPrimary}
+        style={styles.conversationPrimaryAction}
+      />
+      {overflowCount > 0 ? (
+        <DrapeIconButton
+          icon="more-horizontal"
+          tone="secondary"
+          accessibilityLabel={`Open ${overflowCount} more order actions`}
+          onPress={onPressMore}
+        />
+      ) : null}
+    </View>
+  )
+}
+
+function OrderConversationEventCard({
+  event,
+  focused,
+  onOpenQuote,
+}: {
+  event: OrderEvent
+  focused: boolean
+  onOpenQuote?: () => void
+}) {
+  const label = ORDER_EVENT_LABELS[event.eventType]
+  const versionLabel = event.quoteVersion ? `Quote v${event.quoteVersion}` : null
+  return (
+    <View style={[styles.orderEventWrap, focused && styles.orderEventWrapFocused]}>
+      <DrapeInlineActionCard
+        eyebrow={[versionLabel, formatPresenceTime(event.createdAt)].filter(Boolean).join(' · ')}
+        title={label}
+        body={event.summary ? decodeDisplayText(event.summary) : null}
+        icon={event.eventType === 'PAYMENT_CONFIRMED' ? 'check-circle' : 'file-text'}
+      >
+        <View style={styles.orderEventFooter}>
+          <DrapeStatusChip
+            label={label}
+            tone={event.eventType.includes('DECLINED') || event.eventType.includes('EXPIRED') ? 'danger' : 'info'}
+          />
+          {onOpenQuote ? (
+            <DrapeCapsuleButton label="View quote" compact tone="secondary" onPress={onOpenQuote} />
+          ) : null}
+        </View>
+      </DrapeInlineActionCard>
     </View>
   )
 }
@@ -1736,75 +2098,6 @@ function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
   )
 }
 
-function ClusterMediaTile({
-  message,
-  messages,
-  index,
-  mediaUrl,
-  onOpenContextMenu,
-  onOpenMedia,
-}: {
-  message: Message
-  messages: Message[]
-  index: number
-  mediaUrl: string | null
-  onOpenContextMenu: (message: Message) => void
-  onOpenMedia: (preview: MessageMediaPreview) => void
-}) {
-  const rawUri = message.photo_url ?? ''
-  const isVideo = isVideoMediaUrl(rawUri) || isVideoMediaUrl(mediaUrl)
-  const isOddLast = messages.length % 2 === 1 && index === messages.length - 1
-  const previewItems = messageMediaPreviewItems(messages, message.id, mediaUrl)
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      onPress={() => onOpenMedia({ items: previewItems, index })}
-      delayLongPress={280}
-      onLongPress={() => {
-        Vibration.vibrate(12)
-        onOpenContextMenu(message)
-      }}
-      accessibilityRole="imagebutton"
-      accessibilityLabel={`Open ${isVideo ? 'video' : 'photo'} ${index + 1} of ${messages.length}`}
-      accessibilityHint="Tap to view. Long press for actions on this media."
-      style={[styles.mediaMosaicTile, isOddLast && styles.mediaMosaicTileWide]}
-    >
-      {mediaUrl ? (
-        isVideo ? (
-          <PortfolioVideoPreview
-            uri={mediaUrl}
-            style={styles.mediaMosaicAsset}
-            contentFit="cover"
-            nativeControls={false}
-            autoplay={false}
-            isLooping={false}
-          />
-        ) : (
-          <RemoteImage
-            uri={mediaUrl}
-            containerStyle={styles.mediaMosaicAsset}
-            style={styles.mediaMosaicAsset}
-            contentFit="cover"
-            transition={120}
-            surface="message_photo_cluster"
-            fallback={<View style={[styles.mediaMosaicAsset, styles.photoFallback]} />}
-          />
-        )
-      ) : (
-        <View style={[styles.mediaMosaicAsset, styles.photoFallback]}>
-          <ActivityIndicator size="small" color={Colors.midGrey} />
-        </View>
-      )}
-      {isVideo ? (
-        <View style={styles.mediaMosaicVideoBadge}>
-          <Feather name="play" size={16} color={Colors.textInverse} />
-        </View>
-      ) : null}
-    </TouchableOpacity>
-  )
-}
-
 function MediaMessageCluster({
   messages,
   isOwn,
@@ -1824,6 +2117,16 @@ function MediaMessageCluster({
   const firstMessage = messages[0]
   const lastMessage = messages[messages.length - 1]
   if (!firstMessage || !lastMessage) return null
+  const mosaicItems: DrapeMediaMosaicItem[] = messages.map((message, index) => {
+    const resolvedUri = mediaUrls.get(message.id) ?? null
+    const isVideo = isVideoMediaUrl(message.photo_url) || isVideoMediaUrl(resolvedUri)
+    return {
+      id: message.id,
+      uri: resolvedUri,
+      kind: isVideo ? 'video' : 'photo',
+      label: `Open ${isVideo ? 'video' : 'photo'} ${index + 1} of ${messages.length}`,
+    }
+  })
 
   const time = (parseDateValue(lastMessage.created_at) ?? new Date()).toLocaleTimeString('en-GB', {
     hour: '2-digit',
@@ -1861,19 +2164,23 @@ function MediaMessageCluster({
             </Text>
           </View>
         ) : null}
-        <View style={styles.mediaMosaic}>
-          {messages.map((message, index) => (
-            <ClusterMediaTile
-              key={message.id}
-              message={message}
-              messages={messages}
-              index={index}
-              mediaUrl={mediaUrls.get(message.id) ?? null}
-              onOpenContextMenu={onOpenContextMenu}
-              onOpenMedia={onOpenMedia}
-            />
-          ))}
-        </View>
+        <DrapeMediaMosaic
+          items={mosaicItems}
+          compact
+          testID="message-media-mosaic"
+          onPressItem={(item, index) => {
+            onOpenMedia({
+              items: messageMediaPreviewItems(messages, item.id, item.uri),
+              index,
+            })
+          }}
+          onLongPressItem={(item) => {
+            const message = messages.find((candidate) => candidate.id === item.id)
+            if (!message) return
+            Vibration.vibrate(12)
+            onOpenContextMenu(message)
+          }}
+        />
         <View style={styles.bubbleMeta}>
           <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
           {isOwn ? (
@@ -1914,8 +2221,6 @@ function MessageBubble({
   clusterPosition?: ClusterPosition
   mediaClusterMessages: Message[]
 }) {
-  const [sound, setSound] = useState<Audio.Sound | null>(null)
-  const [playing, setPlaying] = useState(false)
   const photoUrl = useMessageMediaUrl(message.photo_url)
   const voiceUrl = useMessageMediaUrl(message.voice_url)
   const hasVideoAttachment = !!photoUrl && (isVideoMediaUrl(photoUrl) || isVideoMediaUrl(message.photo_url))
@@ -1935,36 +2240,11 @@ function MessageBubble({
         clusterPosition === 'end' && (isOwn ? styles.mediaClusterOwnEnd : styles.mediaClusterOtherEnd),
       ]
     : null
-  const voiceDurationLabel = (() => {
+  const voiceDurationSeconds = (() => {
     if (message.type !== 'VOICE' || !message.body) return null
     const n = parseInt(message.body, 10)
-    return Number.isFinite(n) && n > 0 ? formatVoiceDuration(n) : null
+    return Number.isFinite(n) && n > 0 ? n : null
   })()
-
-  async function toggleVoice() {
-    if (!voiceUrl) return
-    if (playing && sound) {
-      await sound.pauseAsync()
-      setPlaying(false)
-      return
-    }
-    if (sound) {
-      await sound.playAsync()
-      setPlaying(true)
-      return
-    }
-    const { sound: s } = await Audio.Sound.createAsync({ uri: voiceUrl })
-    setSound(s)
-    setPlaying(true)
-    await s.playAsync()
-    s.setOnPlaybackStatusUpdate((status) => {
-      if (status.isLoaded && status.didJustFinish) {
-        setPlaying(false)
-        s.unloadAsync()
-        setSound(null)
-      }
-    })
-  }
 
   const time = (parseDateValue(message.created_at) ?? new Date()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 
@@ -2088,25 +2368,13 @@ function MessageBubble({
           )
         )}
 
-        {message.type === 'VOICE' && (
-          <TouchableOpacity
-            style={styles.voiceNote}
-            onPress={toggleVoice}
-            accessibilityRole="button"
-            accessibilityLabel={playing ? 'Pause voice note' : 'Play voice note'}
-          >
-            <View style={[styles.voiceNoteIconWrap, isOwn && styles.voiceNoteIconWrapOwn]}>
-              <Feather name={playing ? 'pause' : 'play'} size={16} color={isOwn ? Colors.textInverse : Colors.needleGreen} />
-            </View>
-            <View style={styles.voiceWave}>
-              {[...Array(12)].map((_, i) => {
-                const seed = message.id.charCodeAt(i % message.id.length)
-                return <View key={i} style={[styles.voiceBar, isOwn && styles.voiceBarOwn, { height: (seed % 12) + 4 }]} />
-              })}
-            </View>
-            <Text style={[styles.voiceNoteLabel, isOwn && styles.voiceNoteLabelOwn]}>{voiceDurationLabel ?? 'Voice note'}</Text>
-          </TouchableOpacity>
-        )}
+        {message.type === 'VOICE' ? (
+          <DrapeVoicePlayer
+            uri={voiceUrl}
+            durationSeconds={voiceDurationSeconds}
+            inverse={isOwn}
+          />
+        ) : null}
 
         <View style={styles.bubbleMeta}>
           {message.edited_at ? (
@@ -2166,11 +2434,12 @@ function MessageMediaPreviewModal({
   onOpenItemActions: (item: MediaLightboxItem, index: number) => void
 }) {
   return (
-    <MediaLightboxModal
+    <DrapeMediaViewer
       items={preview?.items ?? []}
       activeIndex={preview?.index ?? null}
       onDismiss={onDismiss}
       onOpenItemActions={onOpenItemActions}
+      testID="message-media-viewer"
     />
   )
 }
@@ -2218,6 +2487,7 @@ function MessageContextSheet({
   return (
     <BottomSheetScaffold
       visible={visible}
+      testID="message-actions-sheet"
       title="Message actions"
       subtitle={previewLabel}
       onDismiss={onDismiss}
@@ -2246,7 +2516,12 @@ function MessageContextSheet({
 
       <View style={styles.sheetActionList}>
         {canReply ? (
-          <TouchableOpacity style={styles.sheetActionRow} onPress={() => { onReply(); onDismiss() }} accessibilityRole="button">
+          <TouchableOpacity
+            style={styles.sheetActionRow}
+            onPress={() => { onReply(); onDismiss() }}
+            accessibilityRole="button"
+            testID="message-action-reply"
+          >
             <Text style={styles.sheetActionLabel}>Reply</Text>
           </TouchableOpacity>
         ) : null}
@@ -2598,8 +2873,8 @@ const styles = StyleSheet.create({
   messageAvatar: { marginBottom: 2 },
   messageAvatarSpacer: { width: 32 },
   bubble: {
-    maxWidth: '76%',
-    minWidth: 92,
+    maxWidth: '82%',
+    minWidth: 0,
     borderRadius: Radius.lg,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
@@ -2611,42 +2886,6 @@ const styles = StyleSheet.create({
   },
   mediaMosaicBubble: {
     width: MESSAGE_MEDIA_TILE_SIZE + 12,
-  },
-  mediaMosaic: {
-    width: MESSAGE_MEDIA_TILE_SIZE,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: MESSAGE_MEDIA_MOSAIC_GAP,
-  },
-  mediaMosaicTile: {
-    position: 'relative',
-    width: MESSAGE_MEDIA_MOSAIC_TILE_SIZE,
-    height: MESSAGE_MEDIA_MOSAIC_TILE_SIZE,
-    borderRadius: Radius.sm,
-    overflow: 'hidden',
-    backgroundColor: Colors.boneDeep,
-  },
-  mediaMosaicTileWide: {
-    width: MESSAGE_MEDIA_TILE_SIZE,
-  },
-  mediaMosaicAsset: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mediaMosaicVideoBadge: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: 36,
-    height: 36,
-    marginLeft: -18,
-    marginTop: -18,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.56)',
   },
   bubbleOther: {
     backgroundColor: Colors.white, borderBottomLeftRadius: 4,
@@ -2683,32 +2922,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.46)',
   },
-  voiceNote: {
-    minWidth: VOICE_NOTE_MIN_WIDTH,
-    maxWidth: VOICE_NOTE_MAX_WIDTH,
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: 2,
-  },
-  voiceNoteIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
-  },
-  voiceNoteIconWrapOwn: {
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-  voiceWave: { flex: 1, minHeight: 22, flexDirection: 'row', alignItems: 'center', gap: 2 },
-  voiceBar: { width: 3, backgroundColor: Colors.needleGreen, borderRadius: 2 },
-  voiceBarOwn: { backgroundColor: 'rgba(255,255,255,0.84)' },
-  voiceNoteLabel: { fontSize: FontSize.xs, color: Colors.inkLight },
-  voiceNoteLabelOwn: { color: 'rgba(255,255,255,0.84)' },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, justifyContent: 'flex-end' },
   bubbleTime: { fontSize: 10, color: Colors.midGrey },
   bubbleTimeOwn: { color: 'rgba(255,255,255,0.7)' },
@@ -2784,6 +2997,50 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.midGrey,
     fontStyle: 'italic',
+  },
+  conversationActionStrip: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.bone,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+  },
+  conversationActionCopy: { flex: 1, gap: 2 },
+  conversationActionEyebrow: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 10,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+  },
+  conversationActionMeta: {
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  conversationPrimaryAction: { flexShrink: 1, minWidth: 132 },
+  conversationActionSheetList: { gap: Spacing.sm, paddingBottom: Spacing.md },
+  orderEventWrap: {
+    width: '88%',
+    maxWidth: 380,
+    alignSelf: 'center',
+    paddingVertical: Spacing.sm,
+  },
+  orderEventWrapFocused: {
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.xs,
+  },
+  orderEventFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
   },
 
   // Reply bar above composer

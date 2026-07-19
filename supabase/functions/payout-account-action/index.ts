@@ -10,6 +10,7 @@ import { createStripeAccountLink, createStripeConnectAccount, retrieveStripeConn
 import { isApprovedTailorProfile, stagePayoutChangeRequest } from '../_shared/verification-review.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
+import { classifyPayoutNameMatch } from '../../../packages/shared/src/identity-trust.ts'
 import {
   MANUAL_BANK_ENTRY_NOTE,
   payoutBankLogoUrl,
@@ -22,6 +23,7 @@ const STRIPE_PAYOUT_CURRENCIES = new Set(['USD', 'GBP', 'EUR', 'CAD'])
 const PAYOUT_CHANGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 const PAYOUT_DESTINATION_HOLD_MS = 72 * 60 * 60 * 1000
 const MANUAL_BANK_ENTRY_ENABLED = Deno.env.get('MANUAL_BANK_ENTRY_ENABLED') === '1'
+const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEMENT') === 'true'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -76,6 +78,7 @@ type TailorProfileRow = {
   display_name?: string | null
   profile_completed?: boolean | null
   id_verification_status?: string | null
+  legal_name?: string | null
   is_live?: boolean | null
   payout_currency?: string | null
   payout_provider?: 'PAYSTACK' | 'STRIPE' | null
@@ -104,6 +107,9 @@ type TailorProfileRow = {
   payout_account_last_changed_at?: string | null
   payout_account_change_locked_until?: string | null
   payout_destination_hold_until?: string | null
+  payout_name_match_status?: 'NOT_CHECKED' | 'MATCH' | 'REVIEW_REQUIRED' | 'MISMATCH' | null
+  payout_name_match_checked_at?: string | null
+  payout_name_match_metadata?: Record<string, unknown> | null
 }
 
 type PayoutChangeRequestRow = {
@@ -257,6 +263,8 @@ function currentPayoutDestinationKey(profile: TailorProfileRow) {
 function hasVerifiedPayoutDestination(profile: TailorProfileRow) {
   return profile.payout_account_verified === true
     && profile.payout_reverification_required !== true
+    && profile.payout_name_match_status !== 'MISMATCH'
+    && profile.payout_name_match_status !== 'REVIEW_REQUIRED'
     && currentPayoutDestinationKey(profile) !== null
 }
 
@@ -283,6 +291,9 @@ function currentDestinationPayload(profile: TailorProfileRow) {
     manual_bank_swift_bic: profile.manual_bank_swift_bic ?? null,
     manual_bank_account_name: profile.manual_bank_account_name ?? null,
     manual_bank_verification_status: profile.manual_bank_verification_status ?? null,
+    payout_name_match_status: profile.payout_name_match_status ?? 'NOT_CHECKED',
+    payout_name_match_checked_at: profile.payout_name_match_checked_at ?? null,
+    payout_name_match_metadata: profile.payout_name_match_metadata ?? {},
   }
 }
 
@@ -373,6 +384,7 @@ async function loadTailorProfile(supabase: any, userId: string) {
       display_name,
       profile_completed,
       id_verification_status,
+      legal_name,
       is_live,
       payout_currency,
       payout_provider,
@@ -400,7 +412,10 @@ async function loadTailorProfile(supabase: any, userId: string) {
       payout_account_change_count,
       payout_account_last_changed_at,
       payout_account_change_locked_until,
-      payout_destination_hold_until
+      payout_destination_hold_until,
+      payout_name_match_status,
+      payout_name_match_checked_at,
+      payout_name_match_metadata
     `)
     .eq('user_id', userId)
     .maybeSingle()
@@ -585,6 +600,68 @@ Deno.serve(async (req) => {
         }, 409, cors)
       }
 
+      const nameMatchStatus = IDENTITY_RETENTION_ENFORCEMENT
+        ? classifyPayoutNameMatch(profile.legal_name, resolved.account_name)
+        : 'NOT_CHECKED'
+      const nameMatchCheckedAt = IDENTITY_RETENTION_ENFORCEMENT
+        ? new Date().toISOString()
+        : null
+      const nameMatchMetadata = IDENTITY_RETENTION_ENFORCEMENT
+        ? {
+            provider: 'PAYSTACK',
+            legal_name_present: Boolean(profile.legal_name?.trim()),
+            resolved_account_name: resolved.account_name,
+          }
+        : {}
+
+      if (IDENTITY_RETENTION_ENFORCEMENT && nameMatchStatus !== 'MATCH') {
+        const { error: matchUpdateError } = await supabase
+          .from('tailor_profiles')
+          .update({
+            payout_name_match_status: nameMatchStatus,
+            payout_name_match_checked_at: nameMatchCheckedAt,
+            payout_name_match_metadata: nameMatchMetadata,
+          })
+          .eq('id', profile.id)
+        if (matchUpdateError) throw matchUpdateError
+
+        await createPayoutChangeReviewIssue(supabase, {
+          callerId: caller.id,
+          profile,
+          requestId: null,
+          provider: 'PAYSTACK',
+          payoutCurrency: body.payoutCurrency,
+          title: nameMatchStatus === 'MISMATCH'
+            ? 'Payout destination name mismatch'
+            : 'Payout destination name needs review',
+          description: nameMatchStatus === 'MISMATCH'
+            ? 'The provider-resolved payout name does not overlap the verified legal name. Payout setup was blocked.'
+            : 'The provider-resolved payout name partially matches or the verified legal name is unavailable. Trust review is required before payout activation.',
+          metadata: nameMatchMetadata,
+        })
+
+        await audit(supabase, {
+          event: 'seller.payout_name_match_review_required',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: nameMatchStatus === 'MISMATCH' ? 'warn' : 'info',
+          payload: {
+            function: FN,
+            match_status: nameMatchStatus,
+            provider: 'PAYSTACK',
+          },
+        })
+
+        return jsonResponse({
+          code: nameMatchStatus === 'MISMATCH'
+            ? 'PAYOUT_DESTINATION_MISMATCH'
+            : 'PAYOUT_NAME_REVIEW_REQUIRED',
+          error: nameMatchStatus === 'MISMATCH'
+            ? 'The verified payout account name does not match the legal name on your identity review.'
+            : 'This payout account name needs a trust review before it can be activated.',
+        }, 409, cors)
+      }
+
       let recipient
       try {
         recipient = await createPaystackTransferRecipient({
@@ -627,6 +704,11 @@ Deno.serve(async (req) => {
         paystack_account_id: recipient.recipient_code,
         stripe_connect_account_id: null,
         stripe_account_id: null,
+        ...(IDENTITY_RETENTION_ENFORCEMENT ? {
+          payout_name_match_status: 'MATCH',
+          payout_name_match_checked_at: nameMatchCheckedAt,
+          payout_name_match_metadata: nameMatchMetadata,
+        } : {}),
         ...manualBankResetPatch(),
       }
 
@@ -689,6 +771,11 @@ Deno.serve(async (req) => {
           paystack_account_id: recipient.recipient_code,
           stripe_connect_account_id: null,
           stripe_account_id: null,
+          ...(IDENTITY_RETENTION_ENFORCEMENT ? {
+            payout_name_match_status: 'MATCH',
+            payout_name_match_checked_at: nameMatchCheckedAt,
+            payout_name_match_metadata: nameMatchMetadata,
+          } : {}),
           ...manualBankResetPatch(),
           ...payoutChangePatch(profile, nextDestinationKey, now),
         })

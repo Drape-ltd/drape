@@ -11,8 +11,8 @@ import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import {
   getClientIp,
   RATE_LIMITS,
@@ -22,6 +22,7 @@ import {
 import { buildQuoteExpiredTerminalRequest } from '../../../packages/shared/src/order-terminal.ts'
 
 const FN = 'expire-quotes'
+const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
 }
@@ -45,9 +46,55 @@ type OrderRow = {
   customer_id: string | null
   tailor_id: string | null
   quote_expires_at: string | null
+  active_quote_id: string | null
+  active_quote_version: number | null
 }
 
 async function expireQuote(supabase: SupabaseClient, order: OrderRow) {
+  let eventId = ''
+  if (QUOTE_NEGOTIATION_V1 && order.active_quote_id) {
+    const { data: updatedQuote, error: quoteError } = await supabase
+      .from('order_quotes')
+      .update({ status: 'EXPIRED' })
+      .eq('id', order.active_quote_id)
+      .eq('order_id', order.id)
+      .eq('status', 'ACTIVE')
+      .select('id, version')
+      .maybeSingle()
+    if (quoteError) throw quoteError
+
+    let expiredQuote = updatedQuote as { id: string; version: number } | null
+    if (!expiredQuote) {
+      const { data: existingQuote, error: existingQuoteError } = await supabase
+        .from('order_quotes')
+        .select('id, version')
+        .eq('id', order.active_quote_id)
+        .eq('order_id', order.id)
+        .eq('status', 'EXPIRED')
+        .maybeSingle()
+      if (existingQuoteError) throw existingQuoteError
+      expiredQuote = existingQuote as { id: string; version: number } | null
+    }
+
+    if (expiredQuote?.id) {
+      const { data: recordedEventId, error: eventError } = await supabase.rpc('record_order_event', {
+        p_order_id: order.id,
+        p_event_type: 'QUOTE_EXPIRED',
+        p_actor_id: null,
+        p_actor_role: 'SYSTEM',
+        p_title: 'Quote expired',
+        p_idempotency_key: `quote-expired:${expiredQuote.id}`,
+        p_summary: 'The quote expired before payment began.',
+        p_quote_id: expiredQuote.id,
+        p_quote_version: expiredQuote.version,
+        p_revision_request_id: null,
+        p_metadata: { source: FN },
+      })
+      if (eventError) throw eventError
+      eventId = typeof recordedEventId === 'string' ? recordedEventId : ''
+    }
+  }
+
   const result = await finalizeOrderTerminal(
     supabase,
     order.id,
@@ -63,26 +110,69 @@ async function expireQuote(supabase: SupabaseClient, order: OrderRow) {
 
   const orderLabel = order.garment_type ?? 'order'
 
+  const notificationData = {
+    orderId: order.id,
+    destination: 'messages',
+    ...(eventId ? { eventId } : {}),
+    ...(order.active_quote_id ? { quoteId: order.active_quote_id } : {}),
+  }
+
   if (order.customer_id) {
     EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id, {
-        title: 'Quote expired',
-        body: `Your quote for ${orderLabel} expired before payment started. Ask the tailor to send a fresh quote if you still want to continue.`,
-        preferenceKey: 'quotes',
-        data: { orderId: order.id },
+      enqueuePushJob(supabase, {
+        userId: order.customer_id,
+        source: FN,
+        orderId: order.id,
+        idempotencyKey: `quote-expired:${order.id}:${order.active_quote_id ?? 'legacy'}:customer`,
+        priority: 25,
+        notification: {
+          title: 'Quote expired',
+          body: `Your quote for ${orderLabel} expired before payment started. Ask the tailor to send a fresh quote if you still want to continue.`,
+          preferenceKey: 'quotes',
+          data: notificationData,
+        },
       }),
     )
+    EdgeRuntime.waitUntil(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.customer_id,
+      audience: 'CUSTOMER',
+      subject: 'Your quote expired',
+      headline: 'Quote expired',
+      body: `The quote for ${orderLabel} expired before payment started. You can message the tailor if you want a fresh quote.`,
+      ctaLabel: 'Open conversation',
+      source: FN,
+      idempotencyKey: `quote-expired:${order.id}:${order.active_quote_id ?? 'legacy'}:customer`,
+    }))
   }
 
   if (order.tailor_id) {
     EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.tailor_id, {
-        title: 'Quote expired',
-        body: `Your quote for ${orderLabel} expired because the customer did not respond in time.`,
-        preferenceKey: 'newOrders',
-        data: { orderId: order.id },
+      enqueuePushJob(supabase, {
+        userId: order.tailor_id,
+        source: FN,
+        orderId: order.id,
+        idempotencyKey: `quote-expired:${order.id}:${order.active_quote_id ?? 'legacy'}:tailor`,
+        priority: 25,
+        notification: {
+          title: 'Quote expired',
+          body: `Your quote for ${orderLabel} expired because the customer did not respond in time.`,
+          preferenceKey: 'quotes',
+          data: notificationData,
+        },
       }),
     )
+    EdgeRuntime.waitUntil(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.tailor_id,
+      audience: 'TAILOR',
+      subject: 'Your quote expired',
+      headline: 'Quote expired',
+      body: `The quote for ${orderLabel} expired because the customer did not respond before the deadline.`,
+      ctaLabel: 'Open conversation',
+      source: FN,
+      idempotencyKey: `quote-expired:${order.id}:${order.active_quote_id ?? 'legacy'}:tailor`,
+    }))
   }
 
   return true
@@ -112,7 +202,7 @@ Deno.serve(async (req) => {
 
     const { data, error } = await supabase
       .from('orders')
-      .select('id, reference, garment_type, stage, customer_id, tailor_id, quote_expires_at')
+      .select('id, reference, garment_type, stage, customer_id, tailor_id, quote_expires_at, active_quote_id, active_quote_version')
       .eq('stage', 'QUOTE_SENT')
       .not('quote_expires_at', 'is', null)
       .lte('quote_expires_at', nowIso)

@@ -41,6 +41,7 @@ type MediaLightboxModalProps = {
   activeIndex: number | null
   onDismiss: () => void
   onOpenItemActions?: (item: MediaLightboxItem, index: number) => void
+  testID?: string
 }
 
 function inferKind(item: MediaLightboxItem) {
@@ -174,6 +175,7 @@ export function MediaLightboxModal({
   activeIndex,
   onDismiss,
   onOpenItemActions,
+  testID = 'drape-media-viewer',
 }: MediaLightboxModalProps) {
   const insets = useSafeAreaInsets()
   const { width: windowWidth } = useWindowDimensions()
@@ -235,7 +237,7 @@ export function MediaLightboxModal({
       statusBarTranslucent
       onRequestClose={onDismiss}
     >
-      <View style={styles.overlay}>
+      <View style={styles.overlay} testID={testID}>
         <TouchableWithoutFeedback onPress={onDismiss}>
           <View style={StyleSheet.absoluteFill} />
         </TouchableWithoutFeedback>
@@ -274,6 +276,7 @@ export function MediaLightboxModal({
                 style={styles.headerActionButton}
                 accessibilityRole="button"
                 accessibilityLabel="Close media preview"
+                testID={`${testID}-close`}
               >
                 <Feather name="x" size={22} color={Colors.textInverse} />
               </TouchableOpacity>
@@ -295,6 +298,7 @@ export function MediaLightboxModal({
                 contentContainerStyle={styles.galleryContent}
                 accessibilityRole="adjustable"
                 accessibilityLabel="Media gallery"
+                testID={`${testID}-gallery`}
                 accessibilityValue={{
                   min: 1,
                   max: items.length,
@@ -328,6 +332,7 @@ export function MediaLightboxModal({
                   style={[styles.pagerButton, !canGoBack && styles.pagerButtonDisabled]}
                   accessibilityRole="button"
                   accessibilityLabel="Show previous media"
+                  testID={`${testID}-previous`}
                 >
                   <Feather name="chevron-left" size={20} color={Colors.textInverse} />
                 </TouchableOpacity>
@@ -345,6 +350,7 @@ export function MediaLightboxModal({
                   style={[styles.pagerButton, !canGoForward && styles.pagerButtonDisabled]}
                   accessibilityRole="button"
                   accessibilityLabel="Show next media"
+                  testID={`${testID}-next`}
                 >
                   <Feather name="chevron-right" size={20} color={Colors.textInverse} />
                 </TouchableOpacity>

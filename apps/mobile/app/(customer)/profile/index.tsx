@@ -10,7 +10,7 @@ import {
   Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { invokeFunction } from '@/lib/supabase'
@@ -28,6 +28,7 @@ import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/
 import type { OrderStage } from '@drape/shared/order-machine'
 import { promoteSpecialistMeasurementsToProfileValues } from '@drape/shared/measurement-profile'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,8 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
 
 export default function CustomerProfileScreen() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user, signOut, switchRole } = useAuth()
   const { avatarUrl, setAvatarUrl } = useCustomerProfile()
 
@@ -329,9 +332,13 @@ export default function CustomerProfileScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
+        {...capsuleNavScroll}
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(insets.bottom + 112, 140) },
+        ]}
       >
         {/* ── Profile header strip ── */}
         <View style={styles.profileHeader}>
@@ -596,7 +603,7 @@ function FlatRow({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 0 },
+  scrollContent: {},
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',

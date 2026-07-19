@@ -26,6 +26,7 @@ import {
   Vibration,
   PanResponder,
   useWindowDimensions,
+  Linking,
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter, type Href } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -95,6 +96,12 @@ import {
   MEDIA_LIMITS_SECONDS,
   VIDEO_DURATION_LIMIT_MESSAGE,
 } from '@drape/shared/media-policy'
+import {
+  IDENTITY_CONSENT_COPY,
+  IDENTITY_CONSENT_POLICY_VERSION,
+  isValidLegalName,
+  normalizeLegalName,
+} from '@drape/shared/identity-trust'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
@@ -112,6 +119,7 @@ type SetupToast = { type: 'success' | 'error'; message: string }
 
 type TailorSetupProfileRow = {
   display_name: string | null
+  legal_name?: string | null
   avatar_url: string | null
   bio: string | null
   location: string | null
@@ -477,6 +485,8 @@ export default function TailorSetupScreen() {
     user?.user_metadata?.name ??
     ''
   const oauthPhone = typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : ''
+  const oauthLegalName =
+    typeof user?.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : ''
   const oauthVerifiedPhone =
     typeof user?.user_metadata?.verified_phone === 'string'
       ? user.user_metadata.verified_phone
@@ -570,6 +580,10 @@ export default function TailorSetupScreen() {
 
   // Step 0
   const [displayName, setDisplayName] = useState(oauthName)
+  const [legalName, setLegalName] = useState(oauthLegalName)
+  const [legalNameError, setLegalNameError] = useState('')
+  const [identityConsentGranted, setIdentityConsentGranted] = useState(false)
+  const [identityConsentError, setIdentityConsentError] = useState('')
   const [nameError, setNameError] = useState('')
   const [phone, setPhone] = useState(oauthPhone)
   const [phoneError, setPhoneError] = useState('')
@@ -669,7 +683,7 @@ export default function TailorSetupScreen() {
       .from('tailor_profiles')
       .select(
         `
-        display_name, avatar_url, bio, location, languages, specialty_tags,
+        display_name, legal_name, avatar_url, bio, location, languages, specialty_tags,
         price_range_min, price_range_max, currency, seller_type,
         id_verification_status, id_selfie_document_url,
         id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata,
@@ -690,6 +704,7 @@ export default function TailorSetupScreen() {
 
         const row = data as TailorSetupProfileRow
         const nextDisplayName = row.display_name ?? oauthName
+        const nextLegalName = row.legal_name?.trim() || oauthLegalName
         const nextAvatarUrl = row.avatar_url ?? null
         const nextBio = row.bio ?? ''
         const nextLocation = row.location ?? ''
@@ -723,6 +738,9 @@ export default function TailorSetupScreen() {
 
         if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
           setDisplayName(nextDisplayName)
+        }
+        if (nextLegalName) {
+          setLegalName(nextLegalName)
         }
         if (typeof nextAvatarUrl === 'string' && nextAvatarUrl.trim().length > 0) {
           setAvatarUrl(nextAvatarUrl)
@@ -1818,6 +1836,15 @@ export default function TailorSetupScreen() {
 
   async function submitIdentitySelfieForReview(): Promise<boolean> {
     if (!idPhotoUri || !user?.id) return false
+    const normalizedLegalName = normalizeLegalName(legalName)
+    if (!isValidLegalName(normalizedLegalName)) {
+      setLegalNameError('Enter your legal name exactly as shown on your ID. Numbers, emojis, handles, and business symbols are not permitted.')
+      return false
+    }
+    if (!identityConsentGranted) {
+      setIdentityConsentError('Consent is required before identity review can begin.')
+      return false
+    }
     setUploadingId(true)
     try {
       let token = handoffToken
@@ -1861,7 +1888,15 @@ export default function TailorSetupScreen() {
       const submitted = await invokeFunction<{
         status?: string
       }>('identity-handoff-action', {
-        body: { action: 'submit', token, storagePath: path },
+        body: {
+          action: 'submit',
+          token,
+          storagePath: path,
+          consentGranted: true,
+          consentVersion: IDENTITY_CONSENT_POLICY_VERSION,
+          consentSource: 'MOBILE_SETUP',
+          locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        },
       })
       if (submitted.error) throw submitted.error
 
@@ -1919,6 +1954,20 @@ export default function TailorSetupScreen() {
       return
     }
 
+    if (idPhotoUri && !isValidLegalName(legalName)) {
+      setStep(3)
+      setSetupView('section')
+      setLegalNameError('Enter your legal name exactly as shown on your ID. Numbers, emojis, handles, and business symbols are not permitted.')
+      return
+    }
+
+    if (idPhotoUri && !identityConsentGranted) {
+      setStep(3)
+      setSetupView('section')
+      setIdentityConsentError('Consent is required before identity review can begin.')
+      return
+    }
+
     setSaving(true)
 
     if (!user?.id) {
@@ -1934,6 +1983,7 @@ export default function TailorSetupScreen() {
         action: 'upsert-setup',
         profile: {
           displayName: displayName.trim(),
+          ...(legalName.trim() ? { legalName: normalizeLegalName(legalName) } : {}),
           avatarUrl,
           bio: bio.trim() || null,
           location: location.trim(),
@@ -2981,6 +3031,21 @@ export default function TailorSetupScreen() {
                       Capture a live selfie while holding your physical passport, national ID, or
                       driver's licence beside your face. Payout setup can be completed after your account is created.
                     </Text>
+                    {!hasIdDocumentForSetup() || idPhotoUri ? (
+                      <Input
+                        label="Legal name"
+                        placeholder="Exactly as shown on your ID"
+                        value={legalName}
+                        onChangeText={(value) => {
+                          setLegalName(value)
+                          setLegalNameError('')
+                        }}
+                        autoCapitalize="words"
+                        autoCorrect={false}
+                        hint="This stays private and is separate from your public display or business name."
+                        error={legalNameError || undefined}
+                      />
+                    ) : null}
                     {idVerificationStatus === 'REJECTED' ? (
                       <View style={styles.identityRejectedCardCompact}>
                         <Text style={styles.identityRejectedTitle}>
@@ -3024,8 +3089,12 @@ export default function TailorSetupScreen() {
                       <TouchableOpacity
                         style={[styles.idPickBtn, !!idError && styles.idPickBtnError]}
                         onPress={openIdPhotoPicker}
+                        accessibilityRole="button"
+                        accessibilityLabel="Take live identity selfie"
                       >
-                        <Text style={styles.idPickIcon}>🪪</Text>
+                        <View style={styles.idPickIconWrap}>
+                          <Feather name="credit-card" size={22} color={Colors.needleGreen} />
+                        </View>
                         <Text style={styles.idPickLabel}>Take live ID selfie</Text>
                         <Text style={styles.idPickHint}>
                           Face + physical ID in one live camera photo
@@ -3035,6 +3104,40 @@ export default function TailorSetupScreen() {
                     {!!(idError || visibleErrors.idDocument) && (
                       <Text style={styles.helperError}>{idError || visibleErrors.idDocument}</Text>
                     )}
+                    {idPhotoUri ? (
+                      <>
+                        <TouchableOpacity
+                          style={styles.identityConsentRow}
+                          onPress={() => {
+                            setIdentityConsentGranted((current) => !current)
+                            setIdentityConsentError('')
+                          }}
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: identityConsentGranted }}
+                          accessibilityLabel="Consent to identity verification processing"
+                        >
+                          <View style={[
+                            styles.identityConsentBox,
+                            identityConsentGranted && styles.identityConsentBoxChecked,
+                          ]}>
+                            {identityConsentGranted ? (
+                              <Feather name="check" size={15} color={Colors.white} />
+                            ) : null}
+                          </View>
+                          <Text style={styles.identityConsentCopy}>{IDENTITY_CONSENT_COPY}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => { void Linking.openURL('https://drapeon.co/privacy') }}
+                          accessibilityRole="link"
+                          accessibilityLabel="Read Drapeon privacy policy"
+                        >
+                          <Text style={styles.identityPrivacyLink}>Read the Privacy Policy</Text>
+                        </TouchableOpacity>
+                        {identityConsentError ? (
+                          <Text style={styles.helperError}>{identityConsentError}</Text>
+                        ) : null}
+                      </>
+                    ) : null}
                   </View>
                 </View>
               </View>
@@ -4619,7 +4722,14 @@ const styles = StyleSheet.create({
     borderColor: Colors.error,
     backgroundColor: Colors.errorLight,
   },
-  idPickIcon: { fontSize: 40 },
+  idPickIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
   idPickLabel: {
     fontSize: FontSize.md,
     fontWeight: FontWeight.semibold,
@@ -4635,6 +4745,41 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.boneDeep,
   },
   idRemove: { fontSize: FontSize.sm, color: Colors.error },
+  identityConsentRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  identityConsentBox: {
+    width: 24,
+    height: 24,
+    borderRadius: Radius.sm,
+    borderWidth: 1.5,
+    borderColor: Colors.midGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  identityConsentBoxChecked: {
+    backgroundColor: Colors.needleGreen,
+    borderColor: Colors.needleGreen,
+  },
+  identityConsentCopy: {
+    flex: 1,
+    color: Colors.inkLight,
+    fontSize: FontSize.xs,
+    lineHeight: 19,
+  },
+  identityPrivacyLink: {
+    minHeight: 44,
+    paddingVertical: Spacing.sm,
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
   idExistingRow: {
     flexDirection: 'row',
     alignItems: 'center',

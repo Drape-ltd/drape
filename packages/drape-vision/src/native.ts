@@ -1,4 +1,4 @@
-import { NitroModules } from 'react-native-nitro-modules'
+import { NitroModules, type BoxedHybridObject } from 'react-native-nitro-modules'
 import type { Frame } from 'react-native-vision-camera'
 import type {
   DrapePoseDetectionOptions,
@@ -36,6 +36,10 @@ export function getDrapePoseLandmarker() {
   return landmarker
 }
 
+export function boxDrapePoseLandmarker(): BoxedHybridObject<DrapePoseLandmarker> {
+  return NitroModules.box(getDrapePoseLandmarker())
+}
+
 export function initializeDrapePoseLandmarker() {
   return getDrapePoseLandmarker().initialize()
 }
@@ -47,7 +51,6 @@ export function detectPose(frame: Frame, options: DrapePoseDetectionOptions): Vi
 
 export function clearDrapePoseLandmarker() {
   landmarker?.clear()
-  landmarker = null
 }
 
 export function getDrapeHandLandmarker(): DrapeHandLandmarker {
@@ -56,6 +59,10 @@ export function getDrapeHandLandmarker(): DrapeHandLandmarker {
     handLandmarker = NitroModules.createHybridObject<DrapeHandLandmarker>('DrapeHandLandmarker')
   }
   return handLandmarker
+}
+
+export function boxDrapeHandLandmarker(): BoxedHybridObject<DrapeHandLandmarker> {
+  return NitroModules.box(getDrapeHandLandmarker())
 }
 
 export function initializeDrapeHandLandmarker() {
@@ -69,7 +76,6 @@ export function detectHands(frame: Frame, options: DrapeHandDetectionOptions): V
 
 export function clearDrapeHandLandmarker() {
   handLandmarker?.clear()
-  handLandmarker = null
 }
 
 export function getDrapeFaceLandmarker(): DrapeFaceLandmarker {
@@ -78,6 +84,10 @@ export function getDrapeFaceLandmarker(): DrapeFaceLandmarker {
     faceLandmarker = NitroModules.createHybridObject<DrapeFaceLandmarker>('DrapeFaceLandmarker')
   }
   return faceLandmarker
+}
+
+export function boxDrapeFaceLandmarker(): BoxedHybridObject<DrapeFaceLandmarker> {
+  return NitroModules.box(getDrapeFaceLandmarker())
 }
 
 export function initializeDrapeFaceLandmarker() {
@@ -91,7 +101,6 @@ export function detectFace(frame: Frame, options: DrapeFaceDetectionOptions): Vi
 
 export function clearDrapeFaceLandmarker() {
   faceLandmarker?.clear()
-  faceLandmarker = null
 }
 
 export function getDrapeImageSegmenter(): DrapeImageSegmenter {
@@ -100,6 +109,10 @@ export function getDrapeImageSegmenter(): DrapeImageSegmenter {
     imageSegmenter = NitroModules.createHybridObject<DrapeImageSegmenter>('DrapeImageSegmenter')
   }
   return imageSegmenter
+}
+
+export function boxDrapeImageSegmenter(): BoxedHybridObject<DrapeImageSegmenter> {
+  return NitroModules.box(getDrapeImageSegmenter())
 }
 
 export function initializeDrapeImageSegmenter() {
@@ -113,5 +126,4 @@ export function segmentImage(frame: Frame, options: DrapeImageSegmentationOption
 
 export function clearDrapeImageSegmenter() {
   imageSegmenter?.clear()
-  imageSegmenter = null
 }

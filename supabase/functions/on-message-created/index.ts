@@ -160,6 +160,8 @@ Deno.serve(async (req) => {
       data: {
         orderId: msg.order_id,
         target: 'messages',
+        destination: 'messages',
+        messageId: msg.id,
       },
     }
     await enqueuePushJob(supabase, {

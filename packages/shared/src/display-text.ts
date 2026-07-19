@@ -24,6 +24,8 @@ export function formatDatabaseEnumLabel(
 
   return value
     .trim()
+    .replace(/([\p{Ll}\d])([\p{Lu}])/gu, '$1 $2')
+    .replace(/([\p{Lu}])([\p{Lu}][\p{Ll}])/gu, '$1 $2')
     .toLowerCase()
     .split(/[_\s-]+/u)
     .filter(Boolean)

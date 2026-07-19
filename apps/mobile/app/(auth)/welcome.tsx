@@ -16,7 +16,6 @@ type WelcomePalette = {
   greenDark: string
   greenSoft: string
   secondaryButton: string
-  inverse: string
 }
 
 const lightPalette: WelcomePalette = {
@@ -29,7 +28,6 @@ const lightPalette: WelcomePalette = {
   greenDark: colors.primaryDark,
   greenSoft: colors.primaryLight,
   secondaryButton: colors.secondaryActionBg,
-  inverse: colors.textInverse,
 }
 
 const darkPalette: WelcomePalette = {
@@ -42,7 +40,6 @@ const darkPalette: WelcomePalette = {
   greenDark: darkColors.primaryDark,
   greenSoft: darkColors.statusSuccessBg,
   secondaryButton: darkColors.secondaryActionBg,
-  inverse: colors.textInverse,
 }
 
 export default function WelcomeScreen() {
@@ -174,7 +171,7 @@ function RoleButton({
       style={[styles.roleButton, primary ? styles.roleButtonPrimary : styles.roleButtonSecondary]}
     >
       <Text style={[styles.roleTitle, primary && styles.roleTitlePrimary]}>{title}</Text>
-      <Feather name="arrow-right" size={18} color={primary ? palette.inverse : palette.green} />
+      <Feather name="arrow-right" size={18} color={palette.green} />
     </TouchableOpacity>
   )
 }
@@ -238,7 +235,7 @@ function makeStyles(palette: WelcomePalette) {
       paddingVertical: Spacing.sm,
     },
     roleButtonPrimary: {
-      backgroundColor: palette.green,
+      backgroundColor: palette.secondaryButton,
     },
     roleButtonSecondary: {
       backgroundColor: palette.secondaryButton,
@@ -252,7 +249,7 @@ function makeStyles(palette: WelcomePalette) {
       fontWeight: FontWeight.semibold,
     },
     roleTitlePrimary: {
-      color: palette.inverse,
+      color: palette.ink,
     },
     signInButton: {
       alignItems: 'center',

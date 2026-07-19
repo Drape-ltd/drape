@@ -1,14 +1,14 @@
 import { Tabs, useRouter, useSegments } from 'expo-router'
 import { Pressable } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { MaterialIcons } from '@expo/vector-icons'
 import { Colors } from '@/constants/theme'
 import { resetTo } from '@/lib/navigation'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { useAuth } from '@/lib/auth'
 import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { DrapeCapsuleNav, DrapeCapsuleNavProvider } from '@/components/ui/DrapeCapsuleNav'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 
 const PRIMARY_GREEN = Colors.needleGreen
 const MUTED_GREY = Colors.midGrey
@@ -49,47 +49,45 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
 export default function TailorTabLayout() {
   const router = useRouter()
-  const insets = useSafeAreaInsets()
   const pendingCount = useActiveOrderCount()
   const segments = useSegments()
   const hideTabBar = segments[0] === '(tailor)' && segments.length > 2
-  const bottomInset = Math.max(insets.bottom, 8)
 
   return (
-    <Tabs
+    <DrapeCapsuleNavProvider>
+      <Tabs
+      tabBar={MOBILE_FEATURE_FLAGS.interactionSystemV1
+        ? (props) => <DrapeCapsuleNav {...props} hidden={hideTabBar} />
+        : undefined}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: PRIMARY_GREEN,
         tabBarInactiveTintColor: MUTED_GREY,
-        tabBarStyle: {
-          backgroundColor: Colors.white,
-          borderTopColor: Colors.lightGrey,
-          borderTopWidth: 1,
-          height: 62 + bottomInset,
-          paddingBottom: bottomInset,
-          paddingTop: 6,
-          display: hideTabBar ? 'none' : 'flex',
-        },
-        tabBarItemStyle: {
-          minHeight: 49,
-          paddingHorizontal: 0,
-          paddingVertical: 0,
-        },
-        tabBarIconStyle: {
-          marginTop: 0,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          marginTop: 0,
-        },
+        tabBarShowLabel: !MOBILE_FEATURE_FLAGS.interactionSystemV1,
+        tabBarStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : {
+              backgroundColor: Colors.white,
+              borderTopColor: Colors.lightGrey,
+              borderTopWidth: 1,
+              display: hideTabBar ? 'none' : 'flex',
+            },
+        tabBarItemStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : { minHeight: 49, paddingHorizontal: 0, paddingVertical: 0 },
+        tabBarIconStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1 ? undefined : { marginTop: 0 },
+        tabBarLabelStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : { fontSize: 11, marginTop: 0 },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Dashboard',
+          tabBarButtonTestID: 'tab-dashboard',
           popToTopOnBlur: true,
-          tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={25} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="home" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable
               {...pressableTabProps(props)}
@@ -105,6 +103,7 @@ export default function TailorTabLayout() {
         name="clients"
         options={{
           title: 'Clients',
+          tabBarButtonTestID: 'tab-clients',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="users" size={25} color={color} />,
           tabBarButton: (props) => (
@@ -122,6 +121,7 @@ export default function TailorTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
+          tabBarButtonTestID: 'tab-tailor-orders',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
@@ -141,8 +141,9 @@ export default function TailorTabLayout() {
         name="shop"
         options={{
           title: 'Shop',
+          tabBarButtonTestID: 'tab-shop',
           popToTopOnBlur: true,
-          tabBarIcon: ({ color }) => <MaterialIcons name="shopping-cart" size={25} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="shopping-bag" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable
               {...pressableTabProps(props)}
@@ -158,6 +159,7 @@ export default function TailorTabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          tabBarButtonTestID: 'tab-profile',
           popToTopOnBlur: true,
           tabBarIcon: ({ color, focused }) => <ProfileTabIcon color={color} focused={focused} />,
           tabBarButton: (props) => (
@@ -175,6 +177,7 @@ export default function TailorTabLayout() {
       {/* Hidden routes */}
       <Tabs.Screen name="messages" options={{ href: null }} />
       <Tabs.Screen name="earnings" options={{ href: null }} />
-    </Tabs>
+      </Tabs>
+    </DrapeCapsuleNavProvider>
   )
 }

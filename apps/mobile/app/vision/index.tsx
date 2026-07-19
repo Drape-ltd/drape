@@ -15,6 +15,8 @@ import { Feather } from '@expo/vector-icons'
 import {
   DRAPE_VISION_COLORS,
   DRAPE_VISION_MODE_META,
+  isDrapeVisionBodyScanMode,
+  isDrapeVisionDeferredMode,
   isDrapeVisionMode,
   type DrapeVisionMode,
 } from '@/constants/drapeVision'
@@ -62,13 +64,13 @@ function isExpoGo() {
   return expoAppOwnership() === 'expo'
 }
 
-function isAndroidLiveScanPausedForLaunch(androidVisionEnabled = false) {
-  return Platform.OS === 'android' && !androidVisionEnabled
+function isAndroidLiveScanPausedForLaunch(mode: DrapeVisionMode, androidVisionEnabled = false) {
+  return Platform.OS === 'android' && isDrapeVisionBodyScanMode(mode) && !androidVisionEnabled
 }
 
-function loadNativeVisionScreen(androidVisionEnabled = false) {
+function loadNativeVisionScreen(mode: DrapeVisionMode, androidVisionEnabled = false) {
   if (isExpoGo()) return null
-  if (isAndroidLiveScanPausedForLaunch(androidVisionEnabled)) return null
+  if (isAndroidLiveScanPausedForLaunch(mode, androidVisionEnabled)) return null
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- native module must stay lazy so Expo Go and Android fallback do not crash.
@@ -95,6 +97,9 @@ function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode === 'garment_qc' && params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
   if (mode === 'tailor_client_scan' && params.diaryId?.trim() && params.diaryId !== 'new') {
     return `/(tailor)/clients/diary/${params.diaryId}`
+  }
+  if (mode === 'size_guide_scan' && params.itemId?.trim()) {
+    return `/(tailor)/shop/new?itemId=${params.itemId}`
   }
   return fallbackRouteForMode(mode)
 }
@@ -156,13 +161,17 @@ export default function DrapeVisionRoute() {
   )
   const mode: DrapeVisionMode = isDrapeVisionMode(params.mode) ? params.mode : 'customer_scan'
   const meta = DRAPE_VISION_MODE_META[mode]
+  const deferred = isDrapeVisionDeferredMode(mode)
   const { data: featureFlags } = useFeatureFlags('ALL')
   const androidVisionEnabled = featureFlags?.android_drape_vision?.enabled === true
-  const NativeVisionScreen = useMemo(() => loadNativeVisionScreen(androidVisionEnabled)?.default ?? null, [androidVisionEnabled])
+  const NativeVisionScreen = useMemo(
+    () => deferred ? null : loadNativeVisionScreen(mode, androidVisionEnabled)?.default ?? null,
+    [androidVisionEnabled, deferred, mode],
+  )
   const returnRoute = useMemo(() => returnRouteForParams(mode, params), [mode, params])
   const primaryFallbackTarget = useMemo(() => primaryFallbackTargetForParams(mode, params), [mode, params])
   const primaryFallbackLabel = useMemo(() => primaryFallbackLabelForParams(mode, params), [mode, params])
-  const androidPaused = isAndroidLiveScanPausedForLaunch(androidVisionEnabled)
+  const androidPaused = isAndroidLiveScanPausedForLaunch(mode, androidVisionEnabled)
   const [visionExitPending, setVisionExitPending] = useState(false)
   const resolveVisionExitReturnRoute = useCallback(() => {
     const cachedParams = readPreservedVisionNavigationContextSync()
@@ -221,11 +230,15 @@ export default function DrapeVisionRoute() {
     if (NativeVisionScreen) return
     Sentry.addBreadcrumb({
       category: 'drape_vision',
-      level: 'warning',
-      message: androidPaused ? 'android_live_scan_paused_for_launch' : 'native_module_unavailable',
+      level: deferred ? 'info' : 'warning',
+      message: deferred
+        ? 'vision_mode_deferred_for_launch'
+        : androidPaused
+          ? 'android_live_scan_paused_for_launch'
+          : 'native_module_unavailable',
       data: { mode, appOwnership: expoAppOwnership() ?? 'unknown', platform: Platform.OS },
     })
-  }, [NativeVisionScreen, androidPaused, mode])
+  }, [NativeVisionScreen, androidPaused, deferred, mode])
 
   useEffect(() => (
     () => {
@@ -289,22 +302,36 @@ export default function DrapeVisionRoute() {
             <Feather name="aperture" size={28} color={Colors.needleGreen} />
           </View>
           <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-          <Text style={styles.title}>{androidPaused ? 'Use manual measurements on Android' : 'Drapeon Vision is not available in this build'}</Text>
+          <Text style={styles.title}>
+            {deferred
+              ? `${meta.eyebrow} is planned for a future release`
+              : androidPaused
+                ? 'Use manual measurements on Android'
+                : 'Drapeon Vision is not available in this build'}
+          </Text>
           <Text style={styles.body}>
-            {androidPaused
-              ? 'The Android live scanner is paused for launch while we finish device validation. You can keep the order moving with manual measurements.'
-              : "Live scanning needs Drapeon's camera-enabled build. You can keep going with the manual measurement path for now."}
+            {deferred
+              ? 'This workflow is not part of the launch build because it has not completed product and real-device validation. The existing manual workflow remains available.'
+              : androidPaused
+                ? 'The Android live scanner is paused for launch while we finish device validation. You can keep the order moving with manual measurements.'
+                : "Live scanning needs Drapeon's camera-enabled build. You can keep going with the manual measurement path for now."}
           </Text>
         </View>
 
         <View style={styles.noticeBand}>
           <Feather name="tool" size={18} color={Colors.needleGreen} />
           <View style={styles.noticeCopy}>
-            <Text style={styles.noticeTitle}>Manual path is still available</Text>
+            <Text style={styles.noticeTitle}>{deferred ? 'Use the established workflow' : 'Manual path is still available'}</Text>
             <Text style={styles.noticeText}>
-              {androidPaused
-                ? 'Manual measurements feed the same fit profile, tailor brief, ready-made fit check, and order flow without risking a camera crash.'
-                : 'Add or review measurements manually, then return to Drapeon Vision when the camera build is installed.'}
+              {deferred
+                ? mode === 'tailor_client_scan'
+                  ? 'Record and review client measurements directly in Diary. Every value remains editable before a passport invite is sent.'
+                  : mode === 'size_guide_scan'
+                    ? 'Build size ranges and buyer guidance directly in the listing editor. The manual fit guide remains available.'
+                    : 'Use production stage updates and order evidence photos for the final quality and handoff record.'
+                : androidPaused
+                  ? 'Manual measurements feed the same fit profile, tailor brief, ready-made fit check, and order flow without risking a camera crash.'
+                  : 'Add or review measurements manually, then return to Drapeon Vision when the camera build is installed.'}
             </Text>
           </View>
         </View>

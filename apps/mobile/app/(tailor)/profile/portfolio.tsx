@@ -1,8 +1,8 @@
 /**
  * Portfolio management screen — add, edit, delete portfolio items.
- * Each item has: image, title, description, category.
+ * Each item has an image, title, and optional description.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, ActivityIndicator, Alert, Modal, ScrollView,
@@ -16,7 +16,12 @@ import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
-import { PortfolioVideoPreview, RemoteImage } from '@/components/ui'
+import {
+  DrapeMediaViewer,
+  PortfolioVideoPreview,
+  RemoteImage,
+  type DrapeMediaViewerItem,
+} from '@/components/ui'
 import { Sentry } from '@/lib/sentry'
 import {
   launchImagePickerSafely,
@@ -39,22 +44,16 @@ import {
 } from '@drape/shared/media-policy'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
-const GRID_ITEM_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.md) / 2
+const GRID_ITEM_SIZE = (SCREEN_WIDTH - Spacing.lg * 2 - Spacing.md) / 2
 
-const CATEGORIES = ['WEDDING', 'CASUAL', 'ASOEBI', 'FORMAL', 'OTHER'] as const
 const MAX_PORTFOLIO_VIDEOS = 4
 const MAX_PORTFOLIO_VIDEO_BYTES = MEDIA_LIMITS_BYTES.portfolioVideo
 const MAX_PORTFOLIO_VIDEO_SECONDS = MEDIA_LIMITS_SECONDS.portfolioVideo
-const CATEGORY_LABEL: Record<string, string> = {
-  WEDDING: 'Wedding', CASUAL: 'Casual', ASOEBI: 'Asoebi', FORMAL: 'Formal', OTHER: 'Other',
-}
-
 type PortfolioItem = {
   id: string
   imageUrl: string
   title: string
   description: string | null
-  category: string | null
   sortOrder: number
 }
 
@@ -64,7 +63,6 @@ type EditForm = {
   imageUri: string   // local uri for new uploads
   title: string
   description: string
-  category: string
 }
 
 type PortfolioImageSource = 'camera' | 'library'
@@ -81,7 +79,6 @@ type PortfolioItemRow = {
   image_url: string | null
   title: string | null
   description: string | null
-  category: string | null
   sort_order: number | null
 }
 
@@ -97,13 +94,12 @@ function mapPortfolioItem(row: PortfolioItemRow): PortfolioItem {
     imageUrl: row.image_url ?? '',
     title: row.title ?? 'Portfolio work',
     description: row.description ?? null,
-    category: row.category ?? null,
     sortOrder: row.sort_order ?? 0,
   }
 }
 
 const EMPTY_EDIT: EditForm = {
-  id: null, imageUrl: '', imageUri: '', title: '', description: '', category: '',
+  id: null, imageUrl: '', imageUri: '', title: '', description: '',
 }
 
 function validatePortfolioVideoAsset(asset: ImagePicker.ImagePickerAsset) {
@@ -135,6 +131,16 @@ export default function PortfolioScreen() {
   const [removingVideoUrl, setRemovingVideoUrl] = useState<string | null>(null)
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [expandedViewerIndex, setExpandedViewerIndex] = useState(0)
+  const [activePortfolioVideoIndex, setActivePortfolioVideoIndex] = useState<number | null>(null)
+  const portfolioVideoViewerItems = useMemo<DrapeMediaViewerItem[]>(
+    () => portfolioVideoUrls.map((uri, index) => ({
+      uri,
+      kind: 'video',
+      label: `Portfolio video ${index + 1}`,
+      contextId: `portfolio-video-${index + 1}`,
+    })),
+    [portfolioVideoUrls],
+  )
 
   const loadData = useCallback(async () => {
     if (!userId) {
@@ -162,7 +168,7 @@ export default function PortfolioScreen() {
 
       const { data, error } = await supabase
         .from('portfolio_items')
-        .select('id, image_url, title, description, category, sort_order')
+        .select('id, image_url, title, description, sort_order')
         .eq('tailor_profile_id', pid)
         .order('sort_order', { ascending: true })
       if (error) throw error
@@ -182,7 +188,7 @@ export default function PortfolioScreen() {
         if (seedError) throw seedError
         const { data: seeded } = await supabase
           .from('portfolio_items')
-          .select('id, image_url, title, description, category, sort_order')
+          .select('id, image_url, title, description, sort_order')
           .eq('tailor_profile_id', pid)
           .order('sort_order', { ascending: true })
         finalItems = ((seeded ?? []) as PortfolioItemRow[]).map(mapPortfolioItem)
@@ -354,14 +360,11 @@ export default function PortfolioScreen() {
         0,
         MAX_PORTFOLIO_VIDEOS
       )
-      const { data: reviewData, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
+      const { error } = await invokeFunction('tailor-profile-action', {
         body: { action: 'update-portfolio-videos', videoUrls: nextVideoUrls },
       })
       if (error) throw error
       setPortfolioVideoUrls(nextVideoUrls)
-      if (reviewData?.pendingReview) {
-        Alert.alert('Submitted for review', 'This portfolio video is saved as a pending draft. Customers keep seeing approved media until ops clears it.')
-      }
     } catch (err) {
       Sentry.captureException(err, { extra: { context: 'tailor_portfolio_video_upload', userId: user?.id } })
       Alert.alert(
@@ -379,14 +382,11 @@ export default function PortfolioScreen() {
     setRemovingVideoUrl(videoUrl)
     try {
       const nextVideoUrls = portfolioVideoUrls.filter((url) => url !== videoUrl)
-      const { data: reviewData, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
+      const { error } = await invokeFunction('tailor-profile-action', {
         body: { action: 'update-portfolio-videos', videoUrls: nextVideoUrls },
       })
       if (error) throw error
       setPortfolioVideoUrls(nextVideoUrls)
-      if (reviewData?.pendingReview) {
-        Alert.alert('Submitted for review', 'This portfolio video is saved as a pending draft. Customers keep seeing approved media until ops clears it.')
-      }
     } catch (err) {
       Alert.alert(
         'Could not remove video',
@@ -410,7 +410,6 @@ export default function PortfolioScreen() {
       imageUri: '',
       title: item.title,
       description: item.description ?? '',
-      category: item.category ?? '',
     })
   }
 
@@ -446,9 +445,8 @@ export default function PortfolioScreen() {
     }
 
     let error: Error | null = null
-    let pendingReview = false
     if (editModal.id) {
-      const res = await invokeFunction<{ pendingReview?: boolean }>('portfolio-item-action', {
+      const res = await invokeFunction('portfolio-item-action', {
         body: {
           action: 'update-item',
           itemId: editModal.id,
@@ -456,26 +454,24 @@ export default function PortfolioScreen() {
             imageUrl: finalImageUrl!,
             title: editModal.title.trim(),
             description: editModal.description.trim() || null,
-            category: editModal.category || null,
+            category: null,
           },
         },
       })
       error = res.error
-      pendingReview = res.data?.pendingReview === true
     } else {
-      const res = await invokeFunction<{ pendingReview?: boolean }>('portfolio-item-action', {
+      const res = await invokeFunction('portfolio-item-action', {
         body: {
           action: 'create-item',
           item: {
             imageUrl: finalImageUrl!,
             title: editModal.title.trim(),
             description: editModal.description.trim() || null,
-            category: editModal.category || null,
+            category: null,
           },
         },
       })
       error = res.error
-      pendingReview = res.data?.pendingReview === true
     }
 
     setSaving(false)
@@ -487,9 +483,6 @@ export default function PortfolioScreen() {
       return
     }
     setEditModal(null)
-    if (pendingReview) {
-      Alert.alert('Submitted for review', 'This portfolio change is saved as a pending draft. Customers keep seeing the approved portfolio until ops clears it.')
-    }
     void loadData()
   }
 
@@ -607,90 +600,112 @@ export default function PortfolioScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>Proof of craft</Text>
-        </View>
-        <Text style={styles.heroTitle}>Show the work that makes customers stop and trust.</Text>
-        <Text style={styles.heroSub}>
-          A strong portfolio helps customers understand your range, quality, and aesthetic before
-          they ever send a brief.
-        </Text>
-      </View>
-
-      <View style={styles.guideCard}>
-        <Text style={styles.guideEyebrow}>Best approach</Text>
-        <Text style={styles.guideTitle}>Lead with the work you most want to be booked for.</Text>
-        <Text style={styles.guideCopy}>
-          A few strong pieces beat a crowded gallery. Use this space to signal your taste, quality, and the kind of commissions you want more of.
-        </Text>
-      </View>
-
-      <View style={styles.videoCard}>
-        <View style={styles.videoHeader}>
-          <View>
-            <Text style={styles.guideEyebrow}>Portfolio videos</Text>
-            <Text style={styles.videoTitle}>Show movement, finish, and detail.</Text>
-            <Text style={styles.videoHint}>
-              MP4 or MOV, up to {MAX_PORTFOLIO_VIDEO_SECONDS} seconds and {Math.round(MAX_PORTFOLIO_VIDEO_BYTES / (1024 * 1024))} MB.
-            </Text>
-          </View>
-          <Text style={styles.videoCount}>{portfolioVideoUrls.length}/{MAX_PORTFOLIO_VIDEOS}</Text>
-        </View>
-        {portfolioVideoUrls.length > 0 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.videoStrip}
-          >
-            {portfolioVideoUrls.map((videoUrl, index) => (
-              <View key={videoUrl} style={styles.videoTile}>
-                <PortfolioVideoPreview uri={videoUrl} style={styles.videoPreview} autoplay={false} />
-                <View style={styles.videoOverlayBadge}>
-                  <Feather name="play" size={12} color={Colors.textInverse} />
-                  <Text style={styles.videoOverlayText}>Video {index + 1}</Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.videoRemove}
-                  onPress={() => { void removePortfolioVideo(videoUrl) }}
-                  disabled={removingVideoUrl === videoUrl}
-                >
-                  {removingVideoUrl === videoUrl ? (
-                    <ActivityIndicator size="small" color={Colors.textInverse} />
-                  ) : (
-                    <Feather name="x" size={14} color={Colors.textInverse} />
-                  )}
-                </TouchableOpacity>
-              </View>
-            ))}
-          </ScrollView>
-        ) : null}
-        <TouchableOpacity
-          style={[
-            styles.videoAddBtn,
-            (uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS) && styles.videoAddBtnDisabled,
-          ]}
-          onPress={openVideoSourcePicker}
-          disabled={uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS}
-        >
-          {uploadingVideo ? (
-            <ActivityIndicator size="small" color={Colors.needleGreen} />
-          ) : (
-            <Feather name="video" size={16} color={Colors.needleGreen} />
-          )}
-          <Text style={styles.videoAddText}>
-            {uploadingVideo ? 'Uploading video…' : 'Add portfolio video'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
       <FlatList
+        style={styles.list}
         data={items}
         keyExtractor={(item) => item.id}
         numColumns={2}
         contentContainerStyle={styles.grid}
-        columnWrapperStyle={{ gap: Spacing.md }}
+        columnWrapperStyle={styles.gridRow}
         showsVerticalScrollIndicator={false}
+        ListHeaderComponent={(
+          <View style={styles.listHeader}>
+            <View style={styles.heroCard}>
+              <View style={styles.heroBadge}>
+                <Text style={styles.heroBadgeText}>Proof of craft</Text>
+              </View>
+              <Text style={styles.heroTitle}>Show the work that makes customers stop and trust.</Text>
+              <Text style={styles.heroSub}>
+                A strong portfolio helps customers understand your range, quality, and aesthetic before
+                they ever send a brief.
+              </Text>
+            </View>
+
+            <View style={styles.guideCard}>
+              <Text style={styles.guideEyebrow}>Best approach</Text>
+              <Text style={styles.guideTitle}>Lead with the work you most want to be booked for.</Text>
+              <Text style={styles.guideCopy}>
+                A few strong pieces beat a crowded gallery. Use this space to signal your taste, quality, and the kind of commissions you want more of.
+              </Text>
+            </View>
+
+            <View style={styles.videoCard}>
+              <View style={styles.videoHeader}>
+                <View style={styles.videoHeaderCopy}>
+                  <Text style={styles.guideEyebrow}>Portfolio videos</Text>
+                  <Text style={styles.videoTitle}>Show movement, finish, and detail.</Text>
+                  <Text style={styles.videoHint}>
+                    MP4 or MOV, up to {MAX_PORTFOLIO_VIDEO_SECONDS} seconds and {Math.round(MAX_PORTFOLIO_VIDEO_BYTES / (1024 * 1024))} MB.
+                  </Text>
+                </View>
+                <Text style={styles.videoCount}>{portfolioVideoUrls.length}/{MAX_PORTFOLIO_VIDEOS}</Text>
+              </View>
+              {portfolioVideoUrls.length > 0 ? (
+                <ScrollView
+                  horizontal
+                  nestedScrollEnabled
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.videoStrip}
+                >
+                  {portfolioVideoUrls.map((videoUrl, index) => (
+                    <View key={videoUrl} style={styles.videoTile}>
+                      <TouchableOpacity
+                        style={styles.videoOpen}
+                        activeOpacity={0.84}
+                        onPress={() => setActivePortfolioVideoIndex(index)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open portfolio video ${index + 1}`}
+                      >
+                        <PortfolioVideoPreview uri={videoUrl} style={styles.videoPreview} autoplay={false} />
+                        <View style={styles.videoOverlayBadge}>
+                          <Feather name="play" size={12} color={Colors.textInverse} />
+                          <Text style={styles.videoOverlayText}>Video {index + 1}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.videoRemove}
+                        onPress={() => { void removePortfolioVideo(videoUrl) }}
+                        disabled={removingVideoUrl === videoUrl}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove portfolio video ${index + 1}`}
+                      >
+                        {removingVideoUrl === videoUrl ? (
+                          <ActivityIndicator size="small" color={Colors.textInverse} />
+                        ) : (
+                          <Feather name="x" size={14} color={Colors.textInverse} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : null}
+              <TouchableOpacity
+                style={[
+                  styles.videoAddBtn,
+                  (uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS) && styles.videoAddBtnDisabled,
+                ]}
+                onPress={openVideoSourcePicker}
+                disabled={uploadingVideo || portfolioVideoUrls.length >= MAX_PORTFOLIO_VIDEOS}
+                accessibilityRole="button"
+                accessibilityLabel="Add portfolio video"
+              >
+                {uploadingVideo ? (
+                  <ActivityIndicator size="small" color={Colors.needleGreen} />
+                ) : (
+                  <Feather name="video" size={16} color={Colors.needleGreen} />
+                )}
+                <Text style={styles.videoAddText}>
+                  {uploadingVideo ? 'Uploading video…' : 'Add portfolio video'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.galleryHeading}>
+              <Text style={styles.guideEyebrow}>Portfolio work</Text>
+              <Text style={styles.galleryCount}>{items.length} {items.length === 1 ? 'piece' : 'pieces'}</Text>
+            </View>
+          </View>
+        )}
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyBadge}>
@@ -733,11 +748,6 @@ export default function PortfolioScreen() {
               </View>
             ) : null}
             <View style={styles.gridOverlay}>
-              {item.category && (
-                <View style={styles.categoryPill}>
-                  <Text style={styles.categoryPillText}>{CATEGORY_LABEL[item.category] ?? item.category}</Text>
-                </View>
-              )}
               <Text style={styles.gridTitle} numberOfLines={1}>{item.title}</Text>
             </View>
             <TouchableOpacity
@@ -823,25 +833,6 @@ export default function PortfolioScreen() {
                   multiline
                   numberOfLines={3}
                 />
-              </View>
-
-              {/* Category */}
-              <View style={styles.fieldWrap}>
-                <Text style={styles.fieldLabel}>Category</Text>
-                <View style={styles.catRow}>
-                  {CATEGORIES.map((cat) => {
-                    const active = editModal.category === cat
-                    return (
-                      <TouchableOpacity
-                        key={cat}
-                        style={[styles.catBtn, active && styles.catBtnActive]}
-                        onPress={() => setEditModal((m) => m ? { ...m, category: active ? '' : cat } : m)}
-                      >
-                        <Text style={[styles.catLabel, active && styles.catLabelActive]}>{CATEGORY_LABEL[cat]}</Text>
-                      </TouchableOpacity>
-                    )
-                  })}
-                </View>
               </View>
 
               {/* Delete button (edit mode only) */}
@@ -937,6 +928,13 @@ export default function PortfolioScreen() {
           </View>
         </Modal>
       )}
+
+      <DrapeMediaViewer
+        items={portfolioVideoViewerItems}
+        activeIndex={activePortfolioVideoIndex}
+        onDismiss={() => setActivePortfolioVideoIndex(null)}
+        testID="portfolio-video-viewer"
+      />
     </SafeAreaView>
   )
 }
@@ -969,6 +967,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
   },
   headerTitle: { flex: 1, fontSize: FontSize.xl, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  list: { flex: 1 },
+  listHeader: { paddingTop: Spacing.xs },
   heroCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
@@ -1049,6 +1049,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.md,
   },
+  videoHeaderCopy: { flex: 1, minWidth: 0 },
   videoTitle: {
     fontSize: FontSize.md,
     fontWeight: FontWeight.semibold,
@@ -1083,6 +1084,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  videoOpen: { flex: 1 },
   videoOverlayBadge: {
     position: 'absolute',
     left: 8,
@@ -1133,7 +1135,20 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
-  grid: { padding: Spacing.lg, paddingBottom: Spacing.xxxl, gap: Spacing.md },
+  galleryHeading: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  galleryCount: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontFamily: Fonts.bodySemiBold,
+  },
+  grid: { paddingBottom: Spacing.xxxl, gap: Spacing.md },
+  gridRow: { paddingHorizontal: Spacing.lg, gap: Spacing.md },
   gridItem: {
     width: GRID_ITEM_SIZE, borderRadius: Radius.lg, overflow: 'hidden',
     backgroundColor: Colors.white, ...Shadow.sm, position: 'relative',
@@ -1144,11 +1159,6 @@ const styles = StyleSheet.create({
     padding: Spacing.sm, backgroundColor: 'rgba(0,0,0,0.45)',
     gap: 3,
   },
-  categoryPill: {
-    alignSelf: 'flex-start', backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full, paddingHorizontal: 6, paddingVertical: 2,
-  },
-  categoryPillText: { fontSize: 10, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   gridTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   coverBadge: {
     position: 'absolute',
@@ -1173,7 +1183,7 @@ const styles = StyleSheet.create({
     width: 26, height: 26, borderRadius: Radius.full,
     backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
-  empty: { alignItems: 'center', paddingTop: Spacing.xxxl, gap: Spacing.sm },
+  empty: { alignItems: 'center', paddingTop: Spacing.xl, marginHorizontal: Spacing.lg, gap: Spacing.sm },
   emptyBadge: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
@@ -1243,15 +1253,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md, color: Colors.ink,
   },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
-  catRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  catBtn: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.full, backgroundColor: Colors.bone,
-    borderWidth: 1.5, borderColor: Colors.lightGrey,
-  },
-  catBtnActive: { backgroundColor: Colors.needleGreenLight, borderColor: Colors.needleGreen },
-  catLabel: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
-  catLabelActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   coverBtn: {
     flexDirection: 'row',
     alignItems: 'center',

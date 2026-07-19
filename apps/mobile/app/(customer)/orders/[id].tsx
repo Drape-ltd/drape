@@ -49,7 +49,6 @@ import {
   CONSULTATION_NO_SHOW_POLICY_LABELS,
   CONSULTATION_PAYMENT_TIMING_LABELS,
   CONSULTATION_RESCHEDULE_POLICY_LABELS,
-  CONSULTATION_STATUS_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   enrichMeasurementSnapshot,
@@ -65,7 +64,6 @@ import {
   MATERIAL_ISSUE_RESPONSE_LABELS,
   measurementAgeLabel,
   MEASUREMENT_SOURCE_LABELS,
-  MEASUREMENT_SCAN_STATUS_LABELS,
   resolveMeasurementAgeMeta,
   STALE_MEASUREMENT_MONTHS,
   WEAR_DAY_SUPPORT_LABELS,
@@ -76,7 +74,6 @@ import {
   isShippingFabricHandoff,
   parseOrderSupportMeta,
   SCOPE_CHANGE_IMPACT_LABELS,
-  SCOPE_CHANGE_STATUS_LABELS,
   SCOPE_CHANGE_TYPE_LABELS,
   type CancellationReviewReason,
   type DeliveryReviewReason,
@@ -100,10 +97,38 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input, MediaLightboxModal, PortfolioVideoPreview, RemoteImage, type MediaLightboxItem } from '@/components/ui'
+import {
+  Button,
+  DrapeActionBar,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeInlineActionCard,
+  DrapeMediaMosaic,
+  DrapeMediaViewer,
+  DrapeSheet,
+  DrapeStatusChip,
+  HandoffSupportModal,
+  Input,
+  PortfolioVideoPreview,
+  RemoteImage,
+  type DrapeMediaMosaicItem,
+  type MediaLightboxItem,
+} from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { buildBriefDossier } from '@drape/shared'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import {
+  buildBriefDossier,
+  formatConsultationStatusLabel,
+  formatMaterialAdvanceStatusLabel,
+  formatMeasurementStatusLabel,
+  formatScopeChangeStatusLabel,
+} from '@drape/shared'
 import { type OrderStage } from '@drape/shared/order-machine'
+import {
+  QUOTE_REVISION_REASON_LABELS,
+  deriveOrderConversationActions,
+  type QuoteRevisionReason,
+} from '@drape/shared/order-negotiation'
 import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-brief-dossier'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
@@ -113,7 +138,9 @@ import {
 } from '@drape/shared/cancellation-policy'
 import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
+import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 import {
   ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
   ALLOWED_VIDEO_CONTENT_TYPES,
@@ -222,6 +249,10 @@ type OrderQueryRow = {
   tailor_profiles: TailorProfileJoinRow | TailorProfileJoinRow[] | null
   custom_order_details: CustomOrderDetailRow | CustomOrderDetailRow[] | null
   order_stage_updates: OrderStageUpdateRow[] | null
+  active_quote_id: string | null
+  active_quote_version: number | null
+  negotiation_round_limit: number | null
+  negotiation_rounds_used: number | null
 }
 
 function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
@@ -265,6 +296,7 @@ function dossierMediaItems(label: string, mediaUrls: string[]): MediaLightboxIte
 
 const ORDER_EVIDENCE_VIDEO_MAX_BYTES = MEDIA_LIMITS_BYTES.orderUpdateVideo
 const ORDER_EVIDENCE_VIDEO_MAX_SECONDS = MEDIA_LIMITS_SECONDS.orderUpdateVideo
+const QUOTE_NEGOTIATION_UI_ENABLED = MOBILE_FEATURE_FLAGS.quoteNegotiationV1
 
 function orderEvidenceContentType(asset: ImagePicker.ImagePickerAsset) {
   const normalizedMimeType = asset.mimeType?.split(';')[0]?.trim().toLowerCase()
@@ -389,6 +421,10 @@ type OrderDetail = {
   quotedCurrency: CurrencyCode
   consultationFee: number | null
   quotedCompletionDate: string | null
+  activeQuoteId: string | null
+  activeQuoteVersion: number | null
+  negotiationRoundLimit: number
+  negotiationRoundsUsed: number
   fulfillmentPaymentRequestedAt: string | null
   fulfillmentPaymentPaidAt: string | null
   fulfillmentPaymentProvider: string | null
@@ -434,6 +470,15 @@ type OrderDetail = {
   createdAt: string
 }
 
+type OpenQuoteRevision = {
+  id: string
+  roundNumber: number
+  reasonCodes: QuoteRevisionReason[]
+  note: string
+  targetAmount: number | null
+  currency: string
+}
+
 type GroupMember = {
   id: string
   displayName: string
@@ -471,18 +516,6 @@ type MaterialAdvance = {
   receiptNote: string | null
   customerResponseNote: string | null
   createdAt: string
-}
-
-const MATERIAL_ADVANCE_STATUS_LABELS: Record<MaterialAdvanceStatus, string> = {
-  REQUESTED: 'Needs your decision',
-  PAYMENT_PENDING: 'Approved - payment needed',
-  PAYMENT_FAILED: 'Payment failed',
-  PAID: 'Paid - ops review',
-  OPS_REVIEW: 'Paid - ops review',
-  RELEASED: 'Released to tailor',
-  BLOCKED: 'Ops review needed',
-  DECLINED: 'Declined',
-  CANCELLED: 'Canceled',
 }
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
@@ -933,17 +966,19 @@ function formatConsultationStart(value: string | Date | null | undefined) {
 }
 
 export default function OrderTrackingScreen() {
-  const { id, sent, placed, tab, returnTo, historyChain } = useLocalSearchParams<{
+  const { id, sent, placed, tab, returnTo, historyChain, action } = useLocalSearchParams<{
     id: string
     sent?: string
     placed?: string
     tab?: string
     returnTo?: string
     historyChain?: string
+    action?: string
   }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id
 
@@ -1103,6 +1138,7 @@ export default function OrderTrackingScreen() {
               `
             id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, occasion, deadline, item_title, item_size, item_quantity, item_subtotal, stage,
             tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, consultation_fee, fulfillment_fee, quoted_completion_date,
+            active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used,
             source_currency, source_amount, subtotal_amount, platform_fee_amount, tax_amount, tax_rate_bps, tax_region, tax_fallback, tax_fallback_reason, shipping_amount, total_amount,
             fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
             fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
@@ -1236,6 +1272,10 @@ export default function OrderTrackingScreen() {
             quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
             consultationFee: d.consultation_fee ?? null,
             quotedCompletionDate: d.quoted_completion_date,
+            activeQuoteId: d.active_quote_id ?? null,
+            activeQuoteVersion: d.active_quote_version ?? null,
+            negotiationRoundLimit: d.negotiation_round_limit ?? 3,
+            negotiationRoundsUsed: d.negotiation_rounds_used ?? 0,
             fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
             fulfillmentPaymentPaidAt: d.fulfillment_payment_paid_at ?? null,
             fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
@@ -1806,6 +1846,8 @@ export default function OrderTrackingScreen() {
       const result = await startOrderPayment({
         orderId: order.id,
         customerEmail: user?.email,
+        quoteId: order.activeQuoteId,
+        expectedQuoteVersion: order.activeQuoteVersion,
       })
 
       await fetchOrder()
@@ -2226,7 +2268,7 @@ export default function OrderTrackingScreen() {
     scopeChange?.typeLabel ??
     (scopeChange?.type ? SCOPE_CHANGE_TYPE_LABELS[scopeChange.type] : null)
   const scopeChangeStatusLabel =
-    scopeChange?.status ? SCOPE_CHANGE_STATUS_LABELS[scopeChange.status] : null
+    scopeChange?.status ? formatScopeChangeStatusLabel(scopeChange.status) : null
   const handoffStageActive =
     [
       'READY_FOR_COLLECTION',
@@ -2386,6 +2428,7 @@ export default function OrderTrackingScreen() {
         preferredTab={tab}
         returnTarget={explicitReturnPath}
         historyChain={historyChain}
+        initialAction={action}
       />
     )
   }
@@ -2411,9 +2454,11 @@ export default function OrderTrackingScreen() {
             {order.tailorName} · #{order.reference}
           </Text>
           <View style={styles.statusCard} testID="order-pending-quote">
-            <Text style={styles.statusStage}>
-              {isReadyMadeInquiry ? 'Inquiry open' : 'Awaiting quote'}
-            </Text>
+            <DrapeStatusChip
+              value={order.stage}
+              label={isReadyMadeInquiry ? 'Inquiry Open' : 'Awaiting Quote'}
+              domain="order"
+            />
             <Text style={styles.statusNote}>
               {isReadyMadeInquiry
                 ? `Your chat with ${order.tailorName.split(' ')[0]} is open. Ask about size, fit, colour, pickup, or delivery before you buy.`
@@ -2550,6 +2595,7 @@ export default function OrderTrackingScreen() {
 
       <ScrollView
         style={styles.scroll}
+        {...capsuleNavScroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
@@ -2629,9 +2675,11 @@ export default function OrderTrackingScreen() {
 
           {/* Current stage status */}
           <View style={styles.statusCard} testID="order-tracking-status">
-            <Text style={styles.statusStage}>
-              {customerOrderStageLabel(order.stage, order.orderKind)}
-            </Text>
+            <DrapeStatusChip
+              value={order.stage}
+              label={customerOrderStageLabel(order.stage, order.orderKind)}
+              domain="order"
+            />
             {stageHelp && <Text style={styles.statusHelp}>{stageHelp}</Text>}
             {latestUpdate?.note && <Text style={styles.statusNote}>{latestUpdate.note}</Text>}
             {latestUpdate?.photoUrl && (
@@ -2684,8 +2732,7 @@ export default function OrderTrackingScreen() {
                       <View style={styles.disclosureCopy}>
                         <Text style={styles.supportCardTitle}>{advance.title}</Text>
                         <Text style={styles.supportHint}>
-                          {MATERIAL_ADVANCE_STATUS_LABELS[advance.status] ??
-                            advance.status.replace(/_/g, ' ')}
+                          {formatMaterialAdvanceStatusLabel(advance.status, 'customer')}
                         </Text>
                       </View>
                       <Text style={styles.disclosureAction}>{amountLabel}</Text>
@@ -3608,7 +3655,7 @@ export default function OrderTrackingScreen() {
                   {fitProfile.status ? (
                     <SummaryLine
                       label="Status"
-                      value={MEASUREMENT_SCAN_STATUS_LABELS[fitProfile.status]}
+                      value={formatMeasurementStatusLabel(fitProfile.status)}
                     />
                   ) : null}
                   {fitProfile.fitIntent ? (
@@ -3689,11 +3736,7 @@ export default function OrderTrackingScreen() {
                   <View style={styles.supportMetaList}>
                     <SummaryLine
                       label="Status"
-                      value={
-                        consultationMeta.status
-                          ? CONSULTATION_STATUS_LABELS[consultationMeta.status]
-                          : 'Consultation requested'
-                      }
+                      value={formatConsultationStatusLabel(consultationMeta.status)}
                     />
                     <SummaryLine
                       label="Fee"
@@ -4161,7 +4204,7 @@ export default function OrderTrackingScreen() {
                       <View style={styles.disclosureCopy}>
                         <Text style={styles.supportCardTitle}>{advance.title}</Text>
                         <Text style={styles.supportHint}>
-                          {MATERIAL_ADVANCE_STATUS_LABELS[advance.status] ?? advance.status.replace(/_/g, ' ')}
+                          {formatMaterialAdvanceStatusLabel(advance.status, 'customer')}
                         </Text>
                       </View>
                       <Text style={styles.disclosureAction}>{amountLabel}</Text>
@@ -4472,14 +4515,41 @@ export default function OrderTrackingScreen() {
               )}
             </View>
           )}
+
+          {[
+            'CONFIRMED',
+            'DESIGNING',
+            'SOURCING',
+            'CUTTING',
+            'SEWING',
+            'FINISHING',
+            'OUT_FOR_DELIVERY',
+            'SHIPPED',
+            'READY_FOR_COLLECTION',
+          ].includes(order.stage) && (
+            <TouchableOpacity style={styles.disputeEntry} onPress={() => setShowDispute(true)}>
+              <Text style={styles.disputeEntryText}>Something wrong? Raise a concern</Text>
+            </TouchableOpacity>
+          )}
+          {order.stage === 'IN_DISPUTE' && (
+            <TouchableOpacity
+              style={styles.disputeEntry}
+              onPress={() => {
+                void contactSupport()
+              }}
+            >
+              <Text style={styles.disputeEntryText}>Need help with this concern? Contact support</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
 
-      {/* Message CTA */}
-      <View style={[styles.messageCta, { paddingBottom: Math.max(insets.bottom + Spacing.md, Spacing.lg) }]}>
-        <Button
+      <DrapeFloatingActionDock testID="customer-order-message-dock">
+        <DrapeCapsuleButton
           label={conversationCtaLabel}
-          variant="secondary"
+          tone="primary"
+          icon="message-circle"
+          style={{ flex: 1 }}
           onPress={() =>
             router.navigate({
               pathname: '/(customer)/messages/[orderId]',
@@ -4492,33 +4562,7 @@ export default function OrderTrackingScreen() {
           }
           testID="message-tailor-btn"
         />
-        {/* Dispute entry — available from CONFIRMED onward, before auto-release */}
-        {[
-          'CONFIRMED',
-          'DESIGNING',
-          'SOURCING',
-          'CUTTING',
-          'SEWING',
-          'FINISHING',
-          'OUT_FOR_DELIVERY',
-          'SHIPPED',
-          'READY_FOR_COLLECTION',
-        ].includes(order.stage) && (
-          <TouchableOpacity style={styles.disputeEntry} onPress={() => setShowDispute(true)}>
-            <Text style={styles.disputeEntryText}>Something wrong? Raise a concern</Text>
-          </TouchableOpacity>
-        )}
-        {order.stage === 'IN_DISPUTE' && (
-          <TouchableOpacity
-            style={styles.disputeEntry}
-            onPress={() => {
-              void contactSupport()
-            }}
-          >
-            <Text style={styles.disputeEntryText}>Need help with this concern? Contact support</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      </DrapeFloatingActionDock>
 
       {showDispute ? (
         <DisputeModal
@@ -4611,10 +4655,11 @@ export default function OrderTrackingScreen() {
         />
       ) : null}
 
-      <MediaLightboxModal
+      <DrapeMediaViewer
         items={mediaPreview?.items ?? []}
         activeIndex={mediaPreview?.index ?? null}
         onDismiss={() => setMediaPreview(null)}
+        testID="order-dossier-media-viewer"
       />
 
       <HandoffSupportModal
@@ -4684,26 +4729,26 @@ function BriefDossierRowView({
   }
 
   if (row.presentation === 'media' && row.mediaUrls?.length) {
+    const mediaItems = dossierMediaItems(row.label, row.mediaUrls)
+    const mosaicItems: DrapeMediaMosaicItem[] = mediaItems.map((item, index) => ({
+      id: `${item.uri}-${index}`,
+      uri: item.uri,
+      kind: item.kind ?? 'photo',
+      label: `Open ${item.label}`,
+      bucket: item.bucket,
+    }))
     return (
       <View style={styles.dossierRowStacked}>
         <View style={styles.dossierRowHeader}>
           <Text style={styles.summaryLineLabel}>{row.label}</Text>
           {row.value ? <Text style={styles.helperText}>{row.value}</Text> : null}
         </View>
-        <View style={styles.dossierMediaGrid}>
-          {dossierMediaItems(row.label, row.mediaUrls).map((item, index, items) => (
-            <TouchableOpacity
-              key={item.uri + '-' + index}
-              style={styles.dossierMediaTile}
-              onPress={() => onOpenMedia(items, index)}
-              activeOpacity={0.9}
-              accessibilityRole="imagebutton"
-              accessibilityLabel={`Open ${item.label}`}
-            >
-              <StageMediaPreview uri={item.uri} style={styles.dossierMediaImage} surface="customer_order_dossier_media" />
-            </TouchableOpacity>
-          ))}
-        </View>
+        <DrapeMediaMosaic
+          items={mosaicItems}
+          compact
+          testID={`customer-dossier-media-${row.id}`}
+          onPressItem={(_item, index) => onOpenMedia(mediaItems, index)}
+        />
       </View>
     )
   }
@@ -6261,6 +6306,7 @@ function QuoteReviewScreen({
   preferredTab,
   returnTarget,
   historyChain,
+  initialAction,
 }: {
   order: OrderDetail
   onAction: () => Promise<void>
@@ -6269,9 +6315,18 @@ function QuoteReviewScreen({
   preferredTab?: string
   returnTarget?: string
   historyChain?: string
+  initialAction?: string
 }) {
   const [accepting, setAccepting] = useState(false)
   const [declining, setDeclining] = useState(false)
+  const [revisionSheetVisible, setRevisionSheetVisible] = useState(false)
+  const [revisionSaving, setRevisionSaving] = useState(false)
+  const [revisionReasons, setRevisionReasons] = useState<QuoteRevisionReason[]>([])
+  const [revisionNote, setRevisionNote] = useState('')
+  const [revisionTargetAmount, setRevisionTargetAmount] = useState('')
+  const [revisionError, setRevisionError] = useState('')
+  const [openRevision, setOpenRevision] = useState<OpenQuoteRevision | null>(null)
+  const initialActionHandledRef = useRef(false)
   const insets = useSafeAreaInsets()
   const { currency: accountCurrency } = useCurrency()
   const navigation = useNavigation()
@@ -6280,6 +6335,156 @@ function QuoteReviewScreen({
   const orderReturnTab = preferredTab === 'completed' ? 'completed' : 'active'
   const currentOrderReturnTarget = `/(customer)/orders/${order.id}`
   const currentOrderHistoryChain = appendToHistory(historyChain, currentOrderReturnTarget)
+
+  const conversationActions = deriveOrderConversationActions({
+    role: 'CUSTOMER',
+    orderKind: order.orderKind,
+    stage: order.stage,
+    activeQuote: order.activeQuoteId && order.activeQuoteVersion
+      ? { id: order.activeQuoteId, version: order.activeQuoteVersion, status: 'ACTIVE' }
+      : null,
+    openRevision: openRevision
+      ? { id: openRevision.id, status: 'OPEN', roundNumber: openRevision.roundNumber }
+      : null,
+    negotiationRoundsUsed: order.negotiationRoundsUsed,
+    negotiationRoundLimit: order.negotiationRoundLimit,
+  })
+
+  const fetchOpenRevision = useCallback(async () => {
+    if (!QUOTE_NEGOTIATION_UI_ENABLED || !order.activeQuoteId) {
+      setOpenRevision(null)
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('quote_revision_requests')
+      .select('id, round_number, reason_codes, note, target_amount, currency')
+      .eq('order_id', order.id)
+      .eq('source_quote_id', order.activeQuoteId)
+      .eq('status', 'OPEN')
+      .maybeSingle()
+
+    if (error || !data) {
+      setOpenRevision(null)
+      return
+    }
+
+    const next = {
+      id: data.id as string,
+      roundNumber: Number(data.round_number) || 1,
+      reasonCodes: (Array.isArray(data.reason_codes) ? data.reason_codes : []) as QuoteRevisionReason[],
+      note: typeof data.note === 'string' ? data.note : '',
+      targetAmount: typeof data.target_amount === 'number' ? data.target_amount : null,
+      currency: typeof data.currency === 'string' ? data.currency : order.quotedCurrency,
+    }
+    setOpenRevision(next)
+  }, [order.activeQuoteId, order.id, order.quotedCurrency])
+
+  useEffect(() => {
+    void fetchOpenRevision()
+  }, [fetchOpenRevision])
+
+  useEffect(() => {
+    if (initialActionHandledRef.current || !QUOTE_NEGOTIATION_UI_ENABLED) return
+    if (initialAction !== 'REQUEST_QUOTE_CHANGES' && initialAction !== 'EDIT_QUOTE_CHANGE_REQUEST') return
+    if (initialAction === 'EDIT_QUOTE_CHANGE_REQUEST' && !openRevision) return
+    initialActionHandledRef.current = true
+    openRevisionEditor()
+  }, [initialAction, openRevision])
+
+  function openRevisionEditor() {
+    setRevisionReasons(openRevision?.reasonCodes ?? [])
+    setRevisionNote(openRevision?.note ?? '')
+    setRevisionTargetAmount(moneyInputFromMinorUnits(openRevision?.targetAmount))
+    setRevisionError('')
+    setRevisionSheetVisible(true)
+  }
+
+  function toggleRevisionReason(reason: QuoteRevisionReason) {
+    setRevisionReasons((current) => current.includes(reason)
+      ? current.filter((item) => item !== reason)
+      : [...current, reason].slice(0, 4))
+  }
+
+  async function saveRevisionRequest() {
+    if (!order.activeQuoteId || !order.activeQuoteVersion) {
+      setRevisionError('Refresh this order before requesting quote changes.')
+      return
+    }
+    if (revisionReasons.length === 0) {
+      setRevisionError('Choose at least one part of the quote that needs attention.')
+      return
+    }
+    if (revisionNote.trim().length < 10) {
+      setRevisionError('Explain the change you need in at least 10 characters.')
+      return
+    }
+
+    const targetAmount = minorUnitsFromInput(revisionTargetAmount)
+    if (targetAmount == null) {
+      setRevisionError('Enter a valid target amount or leave it blank.')
+      return
+    }
+
+    setRevisionSaving(true)
+    setRevisionError('')
+    const action = openRevision ? 'edit-quote-revision' : 'request-quote-revision'
+    const { error } = await invokeFunction('customer-order-action', {
+      body: {
+        orderId: order.id,
+        action,
+        quoteId: order.activeQuoteId,
+        expectedQuoteVersion: order.activeQuoteVersion,
+        revisionRequestId: openRevision?.id,
+        quoteRevisionReasons: revisionReasons,
+        quoteRevisionNote: revisionNote.trim(),
+        quoteTargetAmount: targetAmount > 0 ? targetAmount : undefined,
+      },
+    })
+    setRevisionSaving(false)
+
+    if (error) {
+      setRevisionError(await readFunctionErrorMessage(error, 'Could not save this quote change request right now.'))
+      return
+    }
+
+    setRevisionSheetVisible(false)
+    await Promise.all([onAction(), fetchOpenRevision()])
+  }
+
+  function withdrawRevisionRequest() {
+    if (!openRevision || !order.activeQuoteId || !order.activeQuoteVersion || revisionSaving) return
+    Alert.alert(
+      'Withdraw change request?',
+      'The current quote will become actionable again. This round will not count because the tailor has not responded.',
+      [
+        { text: 'Keep request', style: 'cancel' },
+        {
+          text: 'Withdraw',
+          style: 'destructive',
+          onPress: async () => {
+            setRevisionSaving(true)
+            const { error } = await invokeFunction('customer-order-action', {
+              body: {
+                orderId: order.id,
+                action: 'withdraw-quote-revision',
+                quoteId: order.activeQuoteId,
+                expectedQuoteVersion: order.activeQuoteVersion,
+                revisionRequestId: openRevision.id,
+              },
+            })
+            setRevisionSaving(false)
+            if (error) {
+              Alert.alert('Could not withdraw request', await readFunctionErrorMessage(error, 'Please try again in a moment.'))
+              return
+            }
+            setRevisionSheetVisible(false)
+            await Promise.all([onAction(), fetchOpenRevision()])
+          },
+        },
+      ],
+    )
+  }
 
   function replaceCurrentOrder() {
     router.replace({
@@ -6328,6 +6533,10 @@ function QuoteReviewScreen({
 
   async function accept() {
     if (accepting || declining) return
+    if (openRevision) {
+      Alert.alert('Quote changes still open', 'Edit or withdraw your change request before accepting this quote.')
+      return
+    }
     Alert.alert(
       'Accept and pay',
       feeLabel
@@ -6344,6 +6553,8 @@ function QuoteReviewScreen({
               const result = await startOrderPayment({
                 orderId: order.id,
                 customerEmail,
+                quoteId: order.activeQuoteId,
+                expectedQuoteVersion: order.activeQuoteVersion,
               })
               await onAction()
 
@@ -6408,7 +6619,12 @@ function QuoteReviewScreen({
           if (declining || accepting) return
           setDeclining(true)
           const { error } = await invokeFunction('customer-order-action', {
-            body: { orderId: order.id, action: 'decline-quote' },
+            body: {
+              orderId: order.id,
+              action: 'decline-quote',
+              quoteId: order.activeQuoteId ?? undefined,
+              expectedQuoteVersion: order.activeQuoteVersion ?? undefined,
+            },
           })
           setDeclining(false)
           if (error) {
@@ -6452,6 +6668,24 @@ function QuoteReviewScreen({
               Quote from {order.tailorName} · #{order.reference}
             </Text>
           </View>
+
+          {QUOTE_NEGOTIATION_UI_ENABLED ? (
+            <DrapeInlineActionCard
+              eyebrow={`Revision ${conversationActions.revisionRoundsUsed} of ${conversationActions.revisionRoundLimit}`}
+              title={openRevision ? 'Changes requested' : 'Review this quote'}
+              body={openRevision
+                ? `${order.tailorName.split(' ')[0]} can revise the quote, retain it with an explanation, or decline the order.`
+                : conversationActions.revisionLimitReached
+                  ? 'The formal revision limit has been reached. Accept, decline, or continue the discussion in chat.'
+                  : 'Chat questions are free. A formal change request only counts when you submit it here.'}
+              icon="file-text"
+            >
+              <DrapeStatusChip
+                label={openRevision ? 'Awaiting tailor response' : 'Active quote'}
+                tone={openRevision ? 'warning' : 'success'}
+              />
+            </DrapeInlineActionCard>
+          ) : null}
 
           {/* Quote card */}
           <View
@@ -6649,40 +6883,134 @@ function QuoteReviewScreen({
         </View>
       </ScrollView>
 
-      {/* CTAs */}
       <View style={[styles.messageCta, { paddingBottom: Math.max(insets.bottom + Spacing.md, Spacing.lg) }]}>
-        <View style={{ flexDirection: 'row', gap: Spacing.md }}>
-          <Button
-            label="Decline"
-            variant="secondary"
+        <DrapeActionBar style={styles.quoteActionBar}>
+          {QUOTE_NEGOTIATION_UI_ENABLED && openRevision ? (
+            <DrapeCapsuleButton
+              label="Edit change request"
+              icon="edit-3"
+              onPress={openRevisionEditor}
+              disabled={revisionSaving}
+              style={styles.quotePrimaryAction}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label="Accept and pay"
+              icon="lock"
+              onPress={accept}
+              loading={accepting}
+              disabled={accepting || declining || !!openRevision}
+              style={styles.quotePrimaryAction}
+              testID="quote-accept-btn"
+            />
+          )}
+          {QUOTE_NEGOTIATION_UI_ENABLED && !openRevision && !conversationActions.revisionLimitReached ? (
+            <DrapeCapsuleButton
+              label="Request changes"
+              tone="secondary"
+              icon="edit-3"
+              onPress={openRevisionEditor}
+              disabled={accepting || declining}
+              compact
+              testID="quote-request-changes-btn"
+            />
+          ) : null}
+        </DrapeActionBar>
+        <View style={styles.quoteSecondaryActions}>
+          <DrapeCapsuleButton
+            label={`Message ${order.tailorName.split(' ')[0]}`}
+            tone="ghost"
+            icon="message-circle"
+            compact
+            onPress={() =>
+              router.navigate({
+                pathname: '/(customer)/messages/[orderId]',
+                params: {
+                  orderId: order.id,
+                  returnTo: `/(customer)/orders/${order.id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                },
+              })
+            }
+          />
+          <DrapeCapsuleButton
+            label="Decline quote"
+            tone="ghost"
+            compact
             onPress={decline}
             loading={declining}
             disabled={accepting || declining}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="Accept and pay"
-            onPress={accept}
-            loading={accepting}
-            disabled={accepting || declining}
-            style={{ flex: 1.6 }}
           />
         </View>
-        <Button
-          label={`Message ${order.tailorName.split(' ')[0]}`}
-          variant="ghost"
-          onPress={() =>
-            router.navigate({
-              pathname: '/(customer)/messages/[orderId]',
-              params: {
-                orderId: order.id,
-                returnTo: `/(customer)/orders/${order.id}`,
-                historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
-              },
-            })
-          }
-        />
       </View>
+
+      <DrapeSheet
+        visible={revisionSheetVisible}
+        testID="quote-revision-sheet"
+        title={openRevision ? 'Edit quote changes' : 'Request quote changes'}
+        subtitle={`Revision ${openRevision?.roundNumber ?? Math.min(order.negotiationRoundsUsed + 1, order.negotiationRoundLimit)} of ${order.negotiationRoundLimit}. Ordinary chat questions do not use a revision.`}
+        onDismiss={() => setRevisionSheetVisible(false)}
+        scrollable
+        snapPoints={['88%']}
+        enableDynamicSizing={false}
+        primaryAction={{
+          label: openRevision ? 'Save request' : 'Send change request',
+          testID: 'quote-revision-submit-btn',
+          onPress: () => { void saveRevisionRequest() },
+          loading: revisionSaving,
+          disabled: revisionSaving,
+          tone: 'primary',
+        }}
+        destructiveAction={openRevision ? {
+          label: 'Withdraw request',
+          onPress: withdrawRevisionRequest,
+          disabled: revisionSaving,
+          tone: 'destructive',
+        } : undefined}
+      >
+        <View style={styles.revisionReasonList}>
+          <Text style={styles.revisionFieldLabel}>What should change?</Text>
+          <View style={styles.revisionReasonGrid}>
+            {(Object.keys(QUOTE_REVISION_REASON_LABELS) as QuoteRevisionReason[]).map((reason) => {
+              const selected = revisionReasons.includes(reason)
+              return (
+                <DrapeCapsuleButton
+                  key={reason}
+                  label={QUOTE_REVISION_REASON_LABELS[reason]}
+                  tone={selected ? 'primary' : 'secondary'}
+                  compact
+                  onPress={() => toggleRevisionReason(reason)}
+                  style={styles.revisionReasonButton}
+                  accessibilityState={{ selected }}
+                  testID={`quote-revision-reason-${reason.toLowerCase()}`}
+                />
+              )
+            })}
+          </View>
+        </View>
+        <Input
+          label="Change details"
+          value={revisionNote}
+          onChangeText={setRevisionNote}
+          placeholder="Explain what should change and what outcome would work for you."
+          multiline
+          maxLength={1200}
+          showCharacterCount
+          required
+          filterContact
+          testID="quote-revision-note-input"
+        />
+        <Input
+          label={`Target total (${orderCurrency})`}
+          value={revisionTargetAmount}
+          onChangeText={setRevisionTargetAmount}
+          placeholder="Optional"
+          keyboardType="decimal-pad"
+          hint="This is a request, not a binding price. The tailor must issue a revised quote."
+          testID="quote-revision-target-input"
+        />
+        {revisionError ? <Text style={styles.revisionError} accessibilityRole="alert">{revisionError}</Text> : null}
+      </DrapeSheet>
     </SafeAreaView>
   )
 }
@@ -6719,6 +7047,14 @@ const styles = StyleSheet.create({
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.md },
+  quoteActionBar: { paddingHorizontal: 0, paddingVertical: 0, justifyContent: 'center', flexWrap: 'wrap' },
+  quotePrimaryAction: { minWidth: 190, flexGrow: 1 },
+  quoteSecondaryActions: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: Spacing.sm },
+  revisionReasonList: { gap: Spacing.sm },
+  revisionFieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  revisionReasonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  revisionReasonButton: { flexGrow: 0, maxWidth: '100%' },
+  revisionError: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.error },
 
   heading: {
     fontSize: FontSize.xxl,
@@ -6767,12 +7103,6 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 5,
     ...Shadow.sm,
-  },
-  statusStage: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    fontFamily: Fonts.display,
   },
   statusNote: {
     fontSize: FontSize.xs,

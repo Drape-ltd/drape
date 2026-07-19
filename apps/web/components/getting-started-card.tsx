@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type JSX } from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
 
@@ -66,7 +66,7 @@ export function GettingStartedCard({
   hasPayoutVerified,
   hasSellerItem,
   hasTailorOrder,
-}: Props) {
+}: Props): JSX.Element | null {
   const [dismissed, setDismissed] = useState(true)
   const [open, setOpen] = useState(true)
 

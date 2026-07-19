@@ -20,6 +20,12 @@ export const DRAPE_VISION_MODES = [
   'size_guide_scan',
 ] as const
 
+export const DRAPE_VISION_DEFERRED_MODES = [
+  'tailor_client_scan',
+  'garment_qc',
+  'size_guide_scan',
+] as const
+
 export const DRAPE_VISION_BODY_SCAN_MODES = ['customer_scan', 'tailor_client_scan'] as const
 
 export type DrapeVisionMode = (typeof DRAPE_VISION_MODES)[number]
@@ -175,16 +181,6 @@ export const DRAPE_VISION_CAPABILITIES = [
     body: 'Core measurements carry into profiles, custom orders, ready-made fit checks, and tailor briefs.',
     icon: 'aperture',
   },
-  {
-    title: 'Tailor Guide',
-    body: 'Tailors can guide walk-in, home, event, or remote clients into Diary before passport claim.',
-    icon: 'user-check',
-  },
-  {
-    title: 'Garment QC',
-    body: 'Tailors can verify finished work before collection, dispatch, or ready-made listing.',
-    icon: 'shield',
-  },
 ] as const
 
 export const DRAPE_VISION_PRIVACY_POINTS = [
@@ -268,6 +264,12 @@ export const DRAPE_VISION_RESULT_FIELDS: DrapeVisionMeasurementField[] = [
 
 export function isDrapeVisionMode(value: unknown): value is DrapeVisionMode {
   return typeof value === 'string' && DRAPE_VISION_MODES.includes(value as DrapeVisionMode)
+}
+
+export function isDrapeVisionDeferredMode(value: DrapeVisionMode) {
+  return DRAPE_VISION_DEFERRED_MODES.includes(
+    value as (typeof DRAPE_VISION_DEFERRED_MODES)[number],
+  )
 }
 
 export function isDrapeVisionBodyScanMode(value: DrapeVisionMode) {

@@ -11,6 +11,7 @@ import {
   type DimensionValue,
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { bottomSheetRuntime, nativeBottomSheetAvailable } from '@/lib/native-sheet-runtime'
 
@@ -19,6 +20,7 @@ type BottomSheetActionTone = 'primary' | 'secondary' | 'destructive'
 export type BottomSheetScaffoldAction = {
   label: string
   onPress: () => void
+  testID?: string
   disabled?: boolean
   loading?: boolean
   accessibilityLabel?: string
@@ -37,6 +39,7 @@ type BottomSheetScaffoldProps = {
   primaryAction?: BottomSheetScaffoldAction
   secondaryAction?: BottomSheetScaffoldAction
   destructiveAction?: BottomSheetScaffoldAction
+  testID?: string
 }
 
 type SheetFrameProps = {
@@ -47,6 +50,9 @@ type SheetFrameProps = {
   actions: BottomSheetScaffoldAction[]
   onClose: () => void
   useNativeSheetBody?: boolean
+  standaloneNativeFrame?: boolean
+  bottomInset: number
+  testID?: string
 }
 
 function SheetActionButton({ action }: { action: BottomSheetScaffoldAction }) {
@@ -64,6 +70,7 @@ function SheetActionButton({ action }: { action: BottomSheetScaffoldAction }) {
       ]}
       accessibilityRole="button"
       accessibilityLabel={action.accessibilityLabel ?? action.label}
+      testID={action.testID}
     >
       {action.loading ? (
         <ActivityIndicator
@@ -93,6 +100,9 @@ function SheetFrame({
   actions,
   onClose,
   useNativeSheetBody = false,
+  standaloneNativeFrame = false,
+  bottomInset,
+  testID,
 }: SheetFrameProps) {
   const RuntimeBottomSheetScrollView = bottomSheetRuntime?.BottomSheetScrollView
   const RuntimeBottomSheetView = bottomSheetRuntime?.BottomSheetView
@@ -102,9 +112,14 @@ function SheetFrame({
       ? (
         <RuntimeBottomSheetScrollView
           style={styles.scrollBody}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            standaloneNativeFrame && styles.standaloneScrollContent,
+            { paddingBottom: Spacing.xl + bottomInset },
+          ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
         >
           {children}
         </RuntimeBottomSheetScrollView>
@@ -112,9 +127,10 @@ function SheetFrame({
       : (
         <ScrollView
           style={styles.scrollBody}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Spacing.xl + bottomInset }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
         >
           {children}
         </ScrollView>
@@ -125,7 +141,10 @@ function SheetFrame({
 
   return (
     <>
-      <View style={styles.header}>
+      <View
+        style={[styles.header, standaloneNativeFrame && styles.standaloneHeader]}
+        testID={testID}
+      >
         <View style={styles.headerCopy}>
           <Text style={styles.title}>{title}</Text>
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
@@ -143,7 +162,13 @@ function SheetFrame({
       {body}
 
       {actions.length > 0 ? (
-        <View style={styles.footer}>
+        <View
+          style={[
+            styles.footer,
+            standaloneNativeFrame && styles.standaloneFooter,
+            { paddingBottom: bottomInset },
+          ]}
+        >
           {actions.map((action) => <SheetActionButton key={action.label} action={action} />)}
         </View>
       ) : null}
@@ -163,7 +188,10 @@ export function BottomSheetScaffold({
   primaryAction,
   secondaryAction,
   destructiveAction,
+  testID,
 }: BottomSheetScaffoldProps) {
+  const insets = useSafeAreaInsets()
+  const contentBottomInset = Math.max(insets.bottom, Spacing.sm)
   const modalRef = useRef<{ present?: () => void; dismiss?: () => void } | null>(null)
   const presentedRef = useRef(false)
   const shouldEnableDynamicSizing = enableDynamicSizing ?? !scrollable
@@ -240,6 +268,8 @@ export function BottomSheetScaffold({
                 scrollable={scrollable}
                 actions={actions}
                 onClose={onDismiss}
+                bottomInset={contentBottomInset}
+                testID={testID}
               >
                 {children}
               </SheetFrame>
@@ -271,18 +301,36 @@ export function BottomSheetScaffold({
       keyboardBlurBehavior="restore"
       enablePanDownToClose={!scrollable}
     >
-      <RuntimeBottomSheetView style={[styles.frame, scrollable && styles.frameScrollable]}>
+      {scrollable ? (
         <SheetFrame
           title={title}
           subtitle={subtitle}
-          scrollable={scrollable}
+          scrollable
           actions={actions}
           onClose={() => modalRef.current?.dismiss?.()}
           useNativeSheetBody
+          standaloneNativeFrame
+          bottomInset={contentBottomInset}
+          testID={testID}
         >
           {children}
         </SheetFrame>
-      </RuntimeBottomSheetView>
+      ) : (
+        <RuntimeBottomSheetView style={styles.frame}>
+          <SheetFrame
+            title={title}
+            subtitle={subtitle}
+            scrollable={false}
+            actions={actions}
+            onClose={() => modalRef.current?.dismiss?.()}
+            useNativeSheetBody
+            bottomInset={contentBottomInset}
+            testID={testID}
+          >
+            {children}
+          </SheetFrame>
+        </RuntimeBottomSheetView>
+      )}
     </RuntimeBottomSheetModal>
   )
 }
@@ -330,6 +378,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.md,
   },
+  standaloneHeader: {
+    marginBottom: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+  },
   headerCopy: {
     flex: 1,
     gap: 4,
@@ -364,9 +416,15 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     paddingBottom: Spacing.xl,
   },
+  standaloneScrollContent: {
+    paddingHorizontal: Spacing.lg,
+  },
   footer: {
     gap: Spacing.sm,
     paddingTop: Spacing.xs,
+  },
+  standaloneFooter: {
+    paddingHorizontal: Spacing.lg,
   },
   footerAction: {
     minHeight: 48,

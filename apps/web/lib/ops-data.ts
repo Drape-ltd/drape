@@ -15,8 +15,6 @@ import {
 import { createServiceRoleClient } from './server-supabase'
 
 const OPS_DASHBOARD_CACHE_TTL_MS = 15_000
-const ID_DOCUMENT_BUCKET = 'id-documents'
-const ID_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60
 
 let opsDashboardDataCache: {
   data: OpsDashboardData
@@ -72,6 +70,7 @@ type TailorVerificationRow = {
   id: string
   user_id: string
   display_name: string
+  legal_name?: string | null
   location: string
   specialty_tags: string[] | null
   id_document_url: string | null
@@ -84,6 +83,8 @@ type TailorVerificationRow = {
   payout_account_verified?: boolean | null
   payout_provider?: string | null
   payout_currency?: string | null
+  payout_name_match_status?: string | null
+  payout_name_match_checked_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -377,6 +378,7 @@ export type OpsVerification = {
   profileId: string
   userId: string
   displayName: string
+  legalName: string | null
   email: string | null
   location: string
   specialtyTags: string[]
@@ -391,6 +393,8 @@ export type OpsVerification = {
   payoutAccountVerified: boolean
   payoutProvider: string | null
   payoutCurrency: string | null
+  payoutNameMatchStatus: string
+  payoutNameMatchCheckedAt: string | null
   createdAt: string
   updatedAt: string
   history: OpsIssueHistoryEntry[]
@@ -730,31 +734,6 @@ function idDocumentStoragePath(value: string | null | undefined): string | null 
   path = path.replace(/^\/+/u, '').replace(/^id-documents\//u, '')
   if (!path.startsWith('id-verification/')) return null
   return path
-}
-
-async function createIdDocumentSignedUrl(
-  client: {
-    storage: {
-      from: (bucket: string) => {
-        createSignedUrl: (
-          path: string,
-          expiresIn: number,
-        ) => Promise<{ data: { signedUrl: string } | null; error: { message: string } | null }>
-      }
-    }
-  },
-  value: string | null | undefined,
-) {
-  const path = idDocumentStoragePath(value)
-  if (!path) return null
-
-  const { data, error } = await client
-    .storage
-    .from(ID_DOCUMENT_BUCKET)
-    .createSignedUrl(path, ID_DOCUMENT_SIGNED_URL_TTL_SECONDS)
-
-  if (error) return null
-  return data?.signedUrl ?? null
 }
 
 const LEGACY_WORKFLOW_ISSUE_EVENTS = [
@@ -1307,7 +1286,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .limit(24),
     client
       .from('tailor_profiles')
-      .select('id, user_id, display_name, location, specialty_tags, id_document_url, id_selfie_document_url, avatar_url, portfolio_photo_urls, portfolio_video_urls, id_verification_status, id_verification_submitted_at, payout_account_verified, payout_provider, payout_currency, created_at, updated_at')
+      .select('id, user_id, display_name, legal_name, location, specialty_tags, id_document_url, id_selfie_document_url, avatar_url, portfolio_photo_urls, portfolio_video_urls, id_verification_status, id_verification_submitted_at, payout_account_verified, payout_provider, payout_currency, payout_name_match_status, payout_name_match_checked_at, created_at, updated_at')
       .eq('id_verification_status', 'PENDING')
       .order('updated_at', { ascending: false })
       .limit(24),
@@ -1913,15 +1892,17 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   }
 
   const idDocumentUrlsByProfileId = new Map<string, string | null>()
-  await Promise.all(
-    pendingVerifications.map(async (profile) => {
-      const verificationDocumentPath = profile.id_selfie_document_url ?? profile.id_document_url
-      idDocumentUrlsByProfileId.set(
-        profile.id,
-        await createIdDocumentSignedUrl(client, verificationDocumentPath),
-      )
-    }),
-  )
+  for (const profile of pendingVerifications) {
+    const verificationDocumentPath = idDocumentStoragePath(
+      profile.id_selfie_document_url ?? profile.id_document_url,
+    )
+    idDocumentUrlsByProfileId.set(
+      profile.id,
+      verificationDocumentPath
+        ? `/ops/identity-document/${encodeURIComponent(profile.id)}`
+        : null,
+    )
+  }
 
   const verificationProofItemsByProfileId = new Map<string, OpsVerificationProofItemEvidence[]>()
   for (const item of verificationProofItems) {
@@ -2024,6 +2005,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         profileId: profile.id,
         userId: profile.user_id,
         displayName: profile.display_name,
+        legalName: profile.legal_name?.trim() || null,
         email: user?.email ?? null,
         location: profile.location,
         specialtyTags: profile.specialty_tags ?? [],
@@ -2038,6 +2020,8 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         payoutAccountVerified: profile.payout_account_verified === true,
         payoutProvider: derivePayoutProvider(profile.payout_currency),
         payoutCurrency: profile.payout_currency ?? null,
+        payoutNameMatchStatus: profile.payout_name_match_status ?? 'NOT_CHECKED',
+        payoutNameMatchCheckedAt: profile.payout_name_match_checked_at ?? null,
         createdAt: profile.created_at,
         updatedAt: profile.updated_at,
         history: verificationIssue?.id ? (issueHistoryByIssueId.get(verificationIssue.id) ?? []) : [],

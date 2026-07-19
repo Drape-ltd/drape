@@ -24,12 +24,15 @@
     "./exception-os": "./src/exception-os.ts",
     "./deadline-context": "./src/deadline-context.ts",
     "./display-text": "./src/display-text.ts",
+    "./status-display": "./src/status-display.ts",
     "./measurement-profile": "./src/measurement-profile.ts",
     "./onboarding-proof-item": "./src/onboarding-proof-item.ts",
     "./ops-verification-evidence": "./src/ops-verification-evidence.ts",
     "./custom-order-fabric": "./src/custom-order-fabric.ts",
     "./order-brief-dossier": "./src/order-brief-dossier.ts",
-    "./message-thread-clusters": "./src/message-thread-clusters.ts"
+    "./order-negotiation": "./src/order-negotiation.ts",
+    "./message-thread-clusters": "./src/message-thread-clusters.ts",
+    "./identity-trust": "./src/identity-trust.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

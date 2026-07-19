@@ -10,6 +10,9 @@ patchedDependencies:
   '@stripe/stripe-react-native@0.50.3':
     hash: ebf066fa327aee7df6b071af75e87469b0bd23e4090f6570d8577f07ab2a1692
     path: patches/@stripe__stripe-react-native@0.50.3.patch
+  react-native-vision-camera@5.1.1:
+    hash: b04b6438c34294956a883239d1811be2b474836fb5e973d59dbd27213336bf89
+    path: patches/react-native-vision-camera@5.1.1.patch
 
 importers:
 
@@ -176,11 +179,11 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))
       react-native-vision-camera:
-        specifier: 5.0.8
-        version: 5.0.8(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        specifier: 5.1.1
+        version: 5.1.1(patch_hash=b04b6438c34294956a883239d1811be2b474836fb5e973d59dbd27213336bf89)(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-vision-camera-worklets:
-        specifier: 5.0.8
-        version: 5.0.8(0e8ac072f148dd412d266344378b18cf)
+        specifier: 5.1.1
+        version: 5.1.1(45ca3fbeeca23215782668b3b4db4974)
       react-native-worklets:
         specifier: ~0.8.1
         version: 0.8.1(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -362,8 +365,8 @@ importers:
         specifier: 0.35.6
         version: 0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-vision-camera:
-        specifier: 5.0.8
-        version: 5.0.8(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        specifier: 5.1.1
+        version: 5.1.1(patch_hash=b04b6438c34294956a883239d1811be2b474836fb5e973d59dbd27213336bf89)(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
 
   packages/shared:
     devDependencies:
@@ -5900,8 +5903,8 @@ packages:
     peerDependencies:
       react-native: '*'
 
-  react-native-vision-camera-worklets@5.0.8:
-    resolution: {integrity: sha512-HO1gX4+DuDWOyj6lyLMLDyUxkTZHAL5tbQmX6hWWggQRV+YfUPiq0VZ9tpTVtw5Y7Ll92F6LkBclesISovkMiQ==}
+  react-native-vision-camera-worklets@5.1.1:
+    resolution: {integrity: sha512-re3XLn+Ho57DWlen1kSscX6NA/eQMUDaHk6z7AQyT+xwtLX1crFxlj07r3AQBJoRyLgcJ6hux6AT7+UxvxBYYQ==}
     peerDependencies:
       react: '*'
       react-native: '*'
@@ -5909,8 +5912,8 @@ packages:
       react-native-vision-camera: '*'
       react-native-worklets: '*'
 
-  react-native-vision-camera@5.0.8:
-    resolution: {integrity: sha512-2dbUCZ5H29KZIoAiWDdTu4FwxrOt0GQL5Y1DYHMpupkvcWE2w69bLRRT8jUT3lhK1tXwa5cwlM9GL119JKyzaw==}
+  react-native-vision-camera@5.1.1:
+    resolution: {integrity: sha512-1lcvktoh+uobUpAmVfcDLEDXGuPYIiVeF6Ikoj6RTlWrAWaQBjV6M9YuLzu+lSCq9u+a9HRKlOFLYhG+lEQ4+w==}
     peerDependencies:
       react: '*'
       react-native: '*'
@@ -13386,15 +13389,15 @@ snapshots:
       react-native: 0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0)
       whatwg-url-without-unicode: 8.0.0-3
 
-  react-native-vision-camera-worklets@5.0.8(0e8ac072f148dd412d266344378b18cf):
+  react-native-vision-camera-worklets@5.1.1(45ca3fbeeca23215782668b3b4db4974):
     dependencies:
       react: 19.1.0
       react-native: 0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0)
       react-native-nitro-modules: 0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
-      react-native-vision-camera: 5.0.8(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      react-native-vision-camera: 5.1.1(patch_hash=b04b6438c34294956a883239d1811be2b474836fb5e973d59dbd27213336bf89)(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-worklets: 0.8.1(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
 
-  react-native-vision-camera@5.0.8(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+  react-native-vision-camera@5.1.1(patch_hash=b04b6438c34294956a883239d1811be2b474836fb5e973d59dbd27213336bf89)(react-native-nitro-image@0.14.0(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native-nitro-modules@0.35.6(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
       react: 19.1.0
       react-native: 0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0)

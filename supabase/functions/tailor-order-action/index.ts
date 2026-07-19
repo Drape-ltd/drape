@@ -110,6 +110,7 @@ import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
 
 const MAX_MONEY_MINOR_UNITS = 999_999_999
+const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -128,6 +129,43 @@ const BodySchema = z.discriminatedUnion('action', [
       summary: z.string().trim().max(300).optional(),
     }).optional(),
     note:           z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId:        uuid,
+    action:         z.literal('revise-quote'),
+    quoteId:        uuid,
+    expectedQuoteVersion: z.number().int().positive(),
+    revisionRequestId: uuid.optional(),
+    changeKind: z.enum(['CUSTOMER_REVISION', 'TAILOR_CORRECTION', 'UNCHANGED_RENEWAL']),
+    amount:         z.number().int().positive().max(MAX_MONEY_MINOR_UNITS),
+    fulfillmentFee: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+    currency:       z.string().trim().min(2).max(5),
+    completionDate: isoDate,
+    breakdown: z.object({
+      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      included: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
+      excluded: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
+      summary: z.string().trim().max(300).optional(),
+    }).optional(),
+    note:           z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('keep-current-quote'),
+    quoteId: uuid,
+    expectedQuoteVersion: z.number().int().positive(),
+    revisionRequestId: uuid,
+    note: z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('decline-after-revision'),
+    quoteId: uuid,
+    expectedQuoteVersion: z.number().int().positive(),
+    revisionRequestId: uuid,
+    note: z.string().trim().max(300).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -338,6 +376,26 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
   })
 }
 
+function quoteNegotiationErrorResponse(cors: HeadersInit, error: unknown) {
+  const message = error && typeof error === 'object' && 'message' in error
+    ? String((error as { message?: unknown }).message ?? '')
+    : String(error)
+  const known = [
+    'QUOTE_VERSION_CHANGED',
+    'QUOTE_REVISION_NOT_OPEN',
+    'PAID_ORDER_CANNOT_BE_REQUOTED',
+    'REVISION_REQUEST_NOT_ALLOWED_FOR_CHANGE_KIND',
+  ].find((code) => message.includes(code))
+  const copy: Record<string, string> = {
+    QUOTE_VERSION_CHANGED: 'The quote changed while you were editing it. Refresh the order before continuing.',
+    QUOTE_REVISION_NOT_OPEN: 'The customer change request is no longer open.',
+    PAID_ORDER_CANNOT_BE_REQUOTED: 'Paid orders cannot be requoted. Use the scope-change workflow instead.',
+    REVISION_REQUEST_NOT_ALLOWED_FOR_CHANGE_KIND: 'This quote change does not match the selected revision type.',
+  }
+  const code = known ?? 'QUOTE_NEGOTIATION_FAILED'
+  return jsonErrorResponse(cors, known ? 409 : 500, code, copy[code] ?? 'We could not update this quote right now.')
+}
+
 async function orderAlreadyScheduledForConsultation(
   supabase: SupabaseClient,
   orderId: string,
@@ -358,6 +416,9 @@ async function orderAlreadyScheduledForConsultation(
 
 type Action =
   | 'send-quote'
+  | 'revise-quote'
+  | 'keep-current-quote'
+  | 'decline-after-revision'
   | 'decline-order'
   | 'request-consultation'
   | 'approve-consultation'
@@ -417,6 +478,10 @@ type OrderRow = {
   collection_code_attempts?: number | null
   collection_code_last_attempt_at?: string | null
   updated_at?: string | null
+  active_quote_id?: string | null
+  active_quote_version?: number | null
+  negotiation_round_limit?: number | null
+  negotiation_rounds_used?: number | null
 }
 
 declare const EdgeRuntime: {
@@ -451,6 +516,9 @@ const SCOPE_CHANGE_STAGES = [
 // Push notification sent to the CUSTOMER after each tailor action
 const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'send-quote':            { title: 'Quote received 💰',       body: 'Your tailor sent you a quote. Review it now.' },
+  'revise-quote':          { title: 'Revised quote received',   body: 'Your tailor responded with a new formal quote.' },
+  'keep-current-quote':    { title: 'Quote response received',  body: 'Your tailor reviewed your request and kept the current quote.' },
+  'decline-after-revision':{ title: 'Order declined',           body: 'Your tailor could not continue after reviewing the requested changes.' },
   'decline-order':         { title: 'Order declined',           body: 'Your tailor was unable to accept this order.' },
   'request-consultation':  { title: 'Consultation scheduled',   body: 'Your tailor reserved a consultation slot. Review the time and pay first if a fee is required.' },
   'approve-consultation':  { title: 'Consultation approved',    body: 'Your tailor approved and reserved the consultation slot. Pay the fee if required before the call.' },
@@ -774,7 +842,7 @@ Deno.serve(async (req) => {
       return rateLimitExceededResponse(cors)
     }
 
-    if (action === 'send-quote') {
+    if (action === 'send-quote' || action === 'revise-quote') {
       const { data: profile, error: profileError } = await supabase
         .from('tailor_profiles')
         .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id, stripe_connect_account_id, paystack_recipient_code, payout_account_verified, payout_reverification_required, payout_account_type, location')
@@ -807,7 +875,7 @@ Deno.serve(async (req) => {
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
-      : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier'
+      : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -851,6 +919,113 @@ Deno.serve(async (req) => {
       extra: { action },
     })
     if (blockedNote) return blockedNote
+
+    if (action === 'keep-current-quote') {
+      if (!QUOTE_NEGOTIATION_V1) {
+        return jsonErrorResponse(cors, 409, 'QUOTE_NEGOTIATION_NOT_ENABLED', 'Formal quote changes are not enabled here yet.')
+      }
+      const { data, error } = await supabase.rpc('keep_current_order_quote', {
+        p_order_id: orderId,
+        p_tailor_id: caller.id,
+        p_revision_request_id: body.revisionRequestId,
+        p_quote_id: body.quoteId,
+        p_expected_quote_version: body.expectedQuoteVersion,
+        p_response_note: body.note?.trim() || null,
+      })
+      if (error) return quoteNegotiationErrorResponse(cors, error)
+
+      const result = (data ?? {}) as Record<string, unknown>
+      const eventId = typeof result.eventId === 'string' ? result.eventId : ''
+      const notification = CUSTOMER_NOTIFICATION['keep-current-quote']
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...notification,
+            preferenceKey: 'quotes',
+            data: {
+              orderId,
+              destination: 'messages',
+              eventId,
+              quoteId: body.quoteId,
+            },
+          }),
+        )
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: order.customer_id.toString(),
+            audience: 'CUSTOMER',
+            subject: notification.title,
+            headline: notification.title,
+            body: notification.body,
+            ctaLabel: 'Review in Drapeon',
+            source: FN,
+            idempotencyKey: `${action}:${orderId}:${eventId || body.revisionRequestId}`,
+          }),
+        )
+      }
+      return jsonResponse({ ok: true, ...result }, 200, cors)
+    }
+
+    if (action === 'decline-after-revision') {
+      if (!QUOTE_NEGOTIATION_V1) {
+        return jsonErrorResponse(cors, 409, 'QUOTE_NEGOTIATION_NOT_ENABLED', 'Formal quote changes are not enabled here yet.')
+      }
+      const { data, error } = await supabase.rpc('decline_order_after_quote_revision', {
+        p_order_id: orderId,
+        p_quote_id: body.quoteId,
+        p_tailor_id: caller.id,
+        p_expected_quote_version: body.expectedQuoteVersion,
+        p_revision_request_id: body.revisionRequestId,
+        p_response_note: body.note?.trim() || null,
+      })
+      if (error) return quoteNegotiationErrorResponse(cors, error)
+
+      const result = (data ?? {}) as Record<string, unknown>
+      const eventId = typeof result.eventId === 'string' ? result.eventId : ''
+
+      const notification = CUSTOMER_NOTIFICATION['decline-after-revision']
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...notification,
+            preferenceKey: 'quotes',
+            data: {
+              orderId,
+              destination: 'messages',
+              eventId,
+              quoteId: body.quoteId,
+            },
+          }),
+        )
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: order.customer_id.toString(),
+            audience: 'CUSTOMER',
+            subject: notification.title,
+            headline: notification.title,
+            body: notification.body,
+            ctaLabel: 'Review closed order',
+            source: FN,
+            idempotencyKey: `decline-after-revision:${orderId}:${eventId || body.quoteId}`,
+          }),
+        )
+      }
+      await audit(supabase, {
+        event: 'quote.declined_after_revision',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: {
+          quote_id: body.quoteId,
+          quote_version: body.expectedQuoteVersion,
+          revision_request_id: body.revisionRequestId,
+          event_id: eventId || null,
+        },
+      })
+      return jsonResponse({ ok: true, ...result }, 200, cors)
+    }
 
     if (action === 'request-style-alignment') {
       if (order.order_kind !== 'CUSTOM') {
@@ -1826,23 +2001,30 @@ Deno.serve(async (req) => {
       })
     }
 
-    // ── send-quote ────────────────────────────────────────────────────────────
-    if (action === 'send-quote') {
+    // ── send or revise quote ──────────────────────────────────────────────────
+    if (action === 'send-quote' || action === 'revise-quote') {
+      if (action === 'revise-quote' && !QUOTE_NEGOTIATION_V1) {
+        return jsonErrorResponse(cors, 409, 'QUOTE_NEGOTIATION_NOT_ENABLED', 'Formal quote revisions are not enabled here yet.')
+      }
       // Idempotent: if already QUOTE_SENT, the previous request succeeded — return ok
-      if (order.stage === 'QUOTE_SENT') {
+      if (action === 'send-quote' && order.stage === 'QUOTE_SENT') {
         return new Response(JSON.stringify({ ok: true, idempotent: true }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
-      if (!['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage)) {
+      const allowedQuoteStages = action === 'send-quote'
+        ? ['PENDING_QUOTE', 'CONSULTATION']
+        : ['QUOTE_SENT']
+      if (!allowedQuoteStages.includes(order.stage)) {
         return new Response(
-          JSON.stringify({ error: `Cannot send-quote from stage ${order.stage}` }),
+          JSON.stringify({ error: `Cannot ${action} from stage ${order.stage}` }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
       // Zod already validated: amount, currency, completionDate — extract safely
-      const { amount, currency, completionDate, breakdown } = body as Extract<typeof body, { action: 'send-quote' }>
+      const quoteBody = body as Extract<typeof body, { action: 'send-quote' }> | Extract<typeof body, { action: 'revise-quote' }>
+      const { amount, currency, completionDate, breakdown } = quoteBody
       const quoteCurrency = normalizeAccountCurrency(currency)
       if (!quoteCurrency) {
         return new Response(
@@ -1987,43 +2169,96 @@ Deno.serve(async (req) => {
         quoteBreakdown: cleanBreakdown,
       }
 
-      const { data: quotedOrder, error } = await supabase
-        .from('orders')
-        .update({
-          stage: 'QUOTE_SENT',
-          quoted_amount: lockedAmounts.totalAmount,
-          fulfillment_fee: fulfillmentFee,
-          fulfillment_payment_requested_at: null,
-          fulfillment_payment_paid_at: null,
-          fulfillment_payment_provider: null,
-          fulfillment_payment_intent_id: null,
-          fulfillment_payment_checkout_url: null,
-          currency: quoteCurrency,
-          quoted_currency: quoteCurrency,
-          source_currency: quoteCurrency,
-          source_amount: amount,
-          fx_rate: 1,
-          fx_rate_timestamp: new Date().toISOString(),
-          subtotal_amount: lockedAmounts.subtotalAmount,
-          platform_fee_amount: lockedAmounts.platformFeeAmount,
-          tax_amount: lockedAmounts.taxAmount,
-          tax_rate_bps: lockedAmounts.taxRateBps,
-          tax_region: resolvedTax.taxRegion,
-          tax_fallback: resolvedTax.fallback,
-          tax_fallback_reason: resolvedTax.fallbackReason,
-          shipping_amount: lockedAmounts.shippingAmount,
-          total_amount: lockedAmounts.totalAmount,
-          quoted_completion_date: parsedDate.toISOString(),
-          quote_note: body.note?.trim() || null,
-          quote_expires_at: nextQuoteExpiryIso(),
-          special_note: serializeOrderSupportMeta(nextSupportMeta),
-          stage_updated_at: new Date().toISOString(),
+      const quoteExpiry = nextQuoteExpiryIso()
+      let quotedOrder: { id: string } | null = null
+      let quoteResult: Record<string, unknown> = {}
+      let error: { message: string } | null = null
+
+      if (QUOTE_NEGOTIATION_V1) {
+        const revisionBody = quoteBody.action === 'revise-quote' ? quoteBody : null
+        const { data, error: snapshotError } = await supabase.rpc('create_order_quote_snapshot', {
+          p_order_id: orderId,
+          p_tailor_id: caller.id,
+          p_expected_quote_id: revisionBody?.quoteId ?? null,
+          p_expected_quote_version: revisionBody?.expectedQuoteVersion ?? null,
+          p_revision_request_id: revisionBody?.revisionRequestId ?? null,
+          p_change_kind: revisionBody?.changeKind ?? 'INITIAL',
+          p_currency: quoteCurrency,
+          p_subtotal_amount: lockedAmounts.subtotalAmount,
+          p_tax_amount: lockedAmounts.taxAmount,
+          p_platform_fee_amount: lockedAmounts.platformFeeAmount,
+          p_delivery_fee_amount: lockedAmounts.shippingAmount,
+          p_total_amount: lockedAmounts.totalAmount,
+          p_completion_date: parsedDate.toISOString(),
+          p_breakdown: cleanBreakdown ? JSON.stringify(cleanBreakdown) : null,
+          p_assumptions: quoteBody.note?.trim() || null,
+          p_expires_at: quoteExpiry,
         })
-        .eq('id', orderId)
-        .eq('tailor_id', caller.id)
-        .in('stage', ['PENDING_QUOTE', 'CONSULTATION'])
-        .select('id')
-        .maybeSingle()
+
+        if (snapshotError) {
+          return quoteNegotiationErrorResponse(cors, snapshotError)
+        }
+
+        quoteResult = (data ?? {}) as Record<string, unknown>
+        quotedOrder = { id: orderId }
+        const { error: projectionError } = await supabase
+          .from('orders')
+          .update({
+            fulfillment_payment_requested_at: null,
+            fulfillment_payment_paid_at: null,
+            fulfillment_payment_provider: null,
+            fulfillment_payment_intent_id: null,
+            fulfillment_payment_checkout_url: null,
+            tax_rate_bps: lockedAmounts.taxRateBps,
+            tax_region: resolvedTax.taxRegion,
+            tax_fallback: resolvedTax.fallback,
+            tax_fallback_reason: resolvedTax.fallbackReason,
+            special_note: serializeOrderSupportMeta(nextSupportMeta),
+          })
+          .eq('id', orderId)
+          .eq('active_quote_id', quoteResult.quoteId)
+        if (projectionError) error = projectionError
+      } else {
+        const legacyResult = await supabase
+          .from('orders')
+          .update({
+            stage: 'QUOTE_SENT',
+            quoted_amount: lockedAmounts.totalAmount,
+            fulfillment_fee: fulfillmentFee,
+            fulfillment_payment_requested_at: null,
+            fulfillment_payment_paid_at: null,
+            fulfillment_payment_provider: null,
+            fulfillment_payment_intent_id: null,
+            fulfillment_payment_checkout_url: null,
+            currency: quoteCurrency,
+            quoted_currency: quoteCurrency,
+            source_currency: quoteCurrency,
+            source_amount: amount,
+            fx_rate: 1,
+            fx_rate_timestamp: new Date().toISOString(),
+            subtotal_amount: lockedAmounts.subtotalAmount,
+            platform_fee_amount: lockedAmounts.platformFeeAmount,
+            tax_amount: lockedAmounts.taxAmount,
+            tax_rate_bps: lockedAmounts.taxRateBps,
+            tax_region: resolvedTax.taxRegion,
+            tax_fallback: resolvedTax.fallback,
+            tax_fallback_reason: resolvedTax.fallbackReason,
+            shipping_amount: lockedAmounts.shippingAmount,
+            total_amount: lockedAmounts.totalAmount,
+            quoted_completion_date: parsedDate.toISOString(),
+            quote_note: quoteBody.note?.trim() || null,
+            quote_expires_at: quoteExpiry,
+            special_note: serializeOrderSupportMeta(nextSupportMeta),
+            stage_updated_at: new Date().toISOString(),
+          })
+          .eq('id', orderId)
+          .eq('tailor_id', caller.id)
+          .in('stage', ['PENDING_QUOTE', 'CONSULTATION'])
+          .select('id')
+          .maybeSingle()
+        quotedOrder = legacyResult.data
+        error = legacyResult.error
+      }
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
@@ -2066,32 +2301,55 @@ Deno.serve(async (req) => {
       })
 
       await audit(supabase, {
-        event: 'quote.sent',
+        event: action === 'revise-quote' ? 'quote.revised' : 'quote.sent',
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        payload: { amount: body.amount, currency: quoteCurrency, from_stage: order.stage },
+        payload: {
+          amount: quoteBody.amount,
+          currency: quoteCurrency,
+          from_stage: order.stage,
+          quote_id: quoteResult.quoteId ?? null,
+          quote_version: quoteResult.quoteVersion ?? null,
+          revision_request_id: quoteResult.revisionRequestId ?? null,
+          event_id: quoteResult.eventId ?? null,
+        },
       })
 
-      log('info', FN, 'quote.sent', { actor_id: caller.id, order_id: orderId })
+      log('info', FN, action === 'revise-quote' ? 'quote.revised' : 'quote.sent', { actor_id: caller.id, order_id: orderId })
 
       if (order.customer_id) {
+        const notification = CUSTOMER_NOTIFICATION[action]
+        const eventId = typeof quoteResult.eventId === 'string' ? quoteResult.eventId : ''
+        const quoteId = typeof quoteResult.quoteId === 'string' ? quoteResult.quoteId : ''
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
-            ...CUSTOMER_NOTIFICATION['send-quote'],
+            ...notification,
             preferenceKey: 'quotes',
-            data: { orderId },
+            data: {
+              orderId,
+              destination: 'messages',
+              eventId,
+              quoteId,
+            },
           })
         )
-        queueCustomerOrderEmail(
-          supabase,
-          order,
-          'Quote received',
-          'Your tailor sent a quote. Review the amount, delivery timing, and terms inside Drape before you pay.',
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: order.customer_id.toString(),
+            audience: 'CUSTOMER',
+            subject: notification.title,
+            headline: notification.title,
+            body: notification.body,
+            ctaLabel: 'Review quote',
+            source: FN,
+            idempotencyKey: `${action}:${orderId}:${eventId || quoteId || quoteExpiry}`,
+          }),
         )
       }
 
-      return new Response(JSON.stringify({ ok: true }), {
+      return new Response(JSON.stringify({ ok: true, ...quoteResult }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }

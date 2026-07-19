@@ -6,6 +6,8 @@ Date: April 2, 2026
 
 This is the hands-on QA path for launch-critical Drape flows.
 
+For Drapeon Vision state, native lifecycle, failure signatures, and its real-device sequence, use `docs/drapeon-vision-design-and-regression-runbook.md` as the authoritative companion to this runbook.
+
 Use this after:
 
 - env vars are in place
@@ -117,6 +119,32 @@ Run each major flow in at least one of these conditions:
 7. Confirm:
    - cutting stays blocked until blockers resolve
    - material issue state is visible on both sides
+
+## Drapeon Vision Real-Device Regression
+
+Run this on a fresh native development build, not only after a Metro reload.
+
+1. Cold-launch the app and open Fit 360 through Saved measurements.
+2. Complete one continuous rightward turn from front through the opposite side.
+3. Confirm the post-back instruction keeps the same direction.
+4. Review and fully scroll the result without the floating action covering content.
+5. Retake and complete a second scan.
+6. Exit during warm-up, reopen, and confirm a third session receives frames.
+7. Complete one specialist lower-body scan.
+8. Exit through X and save; confirm both return to the correct contextual parent.
+9. Confirm no duplicate `PreviewView`, app termination, stale capture, pooled layout-event error, or permanent hold state appears in Metro or native logs.
+10. Record tape comparisons separately; runtime completion is not accuracy certification.
+
+## Contextual Navigation Regression
+
+1. Open an order detail.
+2. Open that order's conversation.
+3. Leave the conversation for another primary tab.
+4. Tap the Messages dock destination.
+5. Confirm the inbox opens immediately with no conversation flash.
+6. Open the conversation from the inbox, then use Back.
+7. Repeat from a notification/deep link when available.
+8. Confirm no order ID or child params remain attached to the Messages tab root.
 
 ## Shipping / Collection Flow
 

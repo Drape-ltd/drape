@@ -1,5 +1,5 @@
 // Mobile aliases for the locked shared Drapeon design system.
-import { Appearance } from 'react-native'
+import { Appearance, useColorScheme } from 'react-native'
 import { colors, darkColors, shadows, typography } from '@drape/shared/design-system'
 
 const lightPalette = {
@@ -37,9 +37,10 @@ const lightPalette = {
   disabledText: colors.disabledText,
 } as const
 
-type ColorPalette = Record<keyof typeof lightPalette, string>
+export type DrapeColorPalette = Record<keyof typeof lightPalette, string>
+export type DrapeColorScheme = 'light' | 'dark'
 
-const darkPalette: ColorPalette = {
+const darkPalette: DrapeColorPalette = {
   // Brand
   needleGreen: darkColors.primary,
   needleGreenLight: darkColors.primaryLight,
@@ -80,12 +81,23 @@ function isDarkMode() {
   return Appearance.getColorScheme() === 'dark'
 }
 
-export function getDrapeColorScheme() {
+export function getDrapeColorScheme(): DrapeColorScheme {
   return isDarkMode() ? 'dark' : 'light'
 }
 
-export function getDrapeColors() {
-  return isDarkMode() ? darkPalette : lightPalette
+export function getDrapeColors(scheme: DrapeColorScheme = getDrapeColorScheme()): DrapeColorPalette {
+  return scheme === 'dark' ? darkPalette : lightPalette
+}
+
+export function useDrapeTheme() {
+  const colorScheme = useColorScheme()
+  const scheme: DrapeColorScheme = colorScheme === 'dark' ? 'dark' : 'light'
+
+  return {
+    scheme,
+    colors: getDrapeColors(scheme),
+    isDark: scheme === 'dark',
+  } as const
 }
 
 function color(name: keyof typeof lightPalette) {
@@ -120,7 +132,7 @@ export const Colors = {
   get timeEveningBg() { return color('timeEveningBg') },
   get disabledFill() { return color('disabledFill') },
   get disabledText() { return color('disabledText') },
-} satisfies ColorPalette
+} satisfies DrapeColorPalette
 
 export const Spacing = {
   xs: 4,

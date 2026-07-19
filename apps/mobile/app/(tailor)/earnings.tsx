@@ -28,6 +28,7 @@ import {
 } from '@/lib/money-history'
 import { formatAmount, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus } from '@/lib/queries'
+import { DrapeStatusChip } from '@/components/ui'
 
 type StatusFilter = 'ALL' | TailorTransactionStatus
 type RangeFilter = 'ALL' | '30D' | '90D' | '365D'
@@ -62,74 +63,6 @@ function withinRange(date: string, range: RangeFilter) {
         ? 90 * 24 * 60 * 60 * 1000
         : 365 * 24 * 60 * 60 * 1000
   return Date.parse(date) >= Date.now() - ms
-}
-
-function statusLabel(status: TailorTransactionStatus) {
-  switch (status) {
-    case 'PENDING':
-      return 'Pending'
-    case 'AVAILABLE':
-      return 'Available'
-    case 'RELEASED':
-      return 'Released'
-    case 'PAID_OUT':
-      return 'Paid out'
-    case 'BLOCKED':
-      return 'Blocked'
-    case 'FAILED':
-      return 'Failed'
-  }
-}
-
-function statusTone(status: TailorTransactionStatus) {
-  switch (status) {
-    case 'PAID_OUT':
-      return { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
-    case 'AVAILABLE':
-    case 'RELEASED':
-      return { bg: Colors.boneDeep, fg: Colors.needleGreen }
-    case 'PENDING':
-      return { bg: Colors.statusPendingBg, fg: Colors.statusPending }
-    case 'BLOCKED':
-      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
-    case 'FAILED':
-      return { bg: Colors.errorLight, fg: Colors.error }
-  }
-}
-
-function payoutStatusLabel(status: TailorPayoutHistoryRecord['status']) {
-  switch (status) {
-    case 'PAID':
-      return 'Completed'
-    case 'PROCESSING':
-      return 'Processing'
-    case 'FAILED':
-      return 'Failed'
-    case 'REVERSED':
-      return 'Reversed'
-    case 'CANCELED':
-      return 'Canceled'
-    case 'BLOCKED':
-      return 'Blocked'
-    case 'PENDING':
-      return 'Pending'
-  }
-}
-
-function payoutStatusTone(status: TailorPayoutHistoryRecord['status']) {
-  switch (status) {
-    case 'PAID':
-      return { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
-    case 'PROCESSING':
-    case 'PENDING':
-      return { bg: Colors.boneDeep, fg: Colors.needleGreen }
-    case 'BLOCKED':
-      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
-    case 'FAILED':
-    case 'REVERSED':
-    case 'CANCELED':
-      return { bg: Colors.errorLight, fg: Colors.error }
-  }
 }
 
 function payoutMethodLabel(data: TailorEarningsDashboardData) {
@@ -486,7 +419,6 @@ export default function TailorEarningsScreen() {
             </View>
           ) : (
             filteredTransactions.map((row) => {
-              const tone = statusTone(row.status)
               return (
                 <TouchableOpacity
                   key={row.orderId}
@@ -513,9 +445,7 @@ export default function TailorEarningsScreen() {
                         })}
                       </Text>
                     </View>
-                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{statusLabel(row.status)}</Text>
-                    </View>
+                    <DrapeStatusChip value={row.status} domain="payment" />
                   </View>
 
                   <View style={styles.moneyBreakdown}>
@@ -553,7 +483,6 @@ export default function TailorEarningsScreen() {
             </View>
           ) : (
             data.payouts.map((row) => {
-              const tone = payoutStatusTone(row.status)
               const reviewMessage = payoutReviewMessage(row)
               return (
                 <View key={row.id} style={styles.payoutCard}>
@@ -564,9 +493,7 @@ export default function TailorEarningsScreen() {
                         {row.provider} · {row.providerReference ?? 'Awaiting provider reference'}
                       </Text>
                     </View>
-                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{payoutStatusLabel(row.status)}</Text>
-                    </View>
+                    <DrapeStatusChip value={row.status} domain="payout" />
                   </View>
                   <Text style={styles.rowMeta}>{payoutMethodLabel(data)}</Text>
                   <Text style={styles.rowMeta}>
@@ -1069,8 +996,6 @@ const styles = StyleSheet.create({
   rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   rowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   rowMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
-  statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
-  statusPillText: { fontSize: 11, fontWeight: FontWeight.semibold },
   moneyBreakdown: {
     borderTopWidth: 1,
     borderTopColor: Colors.lightGrey,

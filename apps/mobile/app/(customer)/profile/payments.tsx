@@ -20,11 +20,11 @@ import {
   fetchCustomerPaymentHistory,
   type CustomerPaymentHistoryData,
   type CustomerPaymentStatus,
-  type CustomerRefundRecord,
 } from '@/lib/money-history'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus } from '@/lib/queries'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { DrapeStatusChip } from '@/components/ui'
 
 type StatusFilter = 'ALL' | CustomerPaymentStatus
 type RangeFilter = 'ALL' | '30D' | '90D' | '365D'
@@ -69,38 +69,6 @@ function withinRange(date: string, range: RangeFilter) {
         ? 90 * 24 * 60 * 60 * 1000
         : 365 * 24 * 60 * 60 * 1000
   return Date.parse(date) >= Date.now() - ms
-}
-
-function statusLabel(status: CustomerPaymentStatus) {
-  switch (status) {
-    case 'IN_ESCROW':
-      return 'Protected'
-    case 'RELEASED':
-      return 'Closed out'
-    case 'PARTIALLY_REFUNDED':
-      return 'Partially refunded'
-    case 'REFUNDED':
-      return 'Refunded'
-  }
-}
-
-function statusTone(status: CustomerPaymentStatus) {
-  switch (status) {
-    case 'IN_ESCROW':
-      return { bg: Colors.boneDeep, fg: Colors.needleGreen }
-    case 'RELEASED':
-      return { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
-    case 'PARTIALLY_REFUNDED':
-      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
-    case 'REFUNDED':
-      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
-  }
-}
-
-function refundStatusTone(status: CustomerRefundRecord['status']) {
-  return status === 'COMPLETED'
-    ? { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
-    : { bg: Colors.boneDeep, fg: Colors.needleGreen }
 }
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint: string }) {
@@ -325,7 +293,6 @@ export default function CustomerPaymentHistoryScreen() {
             </View>
           ) : (
             filteredTransactions.map((row) => {
-              const tone = statusTone(row.status)
               return (
                 <TouchableOpacity
                   key={row.paymentId}
@@ -353,11 +320,7 @@ export default function CustomerPaymentHistoryScreen() {
                         })}
                       </Text>
                     </View>
-                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>
-                        {statusLabel(row.status)}
-                      </Text>
-                    </View>
+                    <DrapeStatusChip value={row.status} domain="payment" />
                   </View>
 
                   <View style={styles.moneyBreakdown}>
@@ -405,7 +368,6 @@ export default function CustomerPaymentHistoryScreen() {
             </View>
           ) : (
             filteredRefunds.map((row) => {
-              const tone = refundStatusTone(row.status)
               return (
                 <View key={row.paymentId} style={styles.refundCard}>
                   <View style={styles.rowTop}>
@@ -415,11 +377,7 @@ export default function CustomerPaymentHistoryScreen() {
                         #{row.reference} · {row.providerReference ?? 'Provider reference pending'}
                       </Text>
                     </View>
-                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>
-                        {row.status === 'COMPLETED' ? 'Completed' : 'Processing'}
-                      </Text>
-                    </View>
+                    <DrapeStatusChip value={row.status} domain="payment" />
                   </View>
                   <Text style={styles.rowMeta}>
                     {row.partial ? 'Partial refund' : 'Full refund'}
@@ -702,8 +660,6 @@ const styles = StyleSheet.create({
   rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   rowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   rowMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
-  statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
-  statusPillText: { fontSize: 11, fontWeight: FontWeight.semibold },
   moneyBreakdown: {
     borderTopWidth: 1,
     borderTopColor: Colors.lightGrey,

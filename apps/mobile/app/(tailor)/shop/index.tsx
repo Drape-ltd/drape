@@ -7,7 +7,8 @@ import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { buildTailorStockAlert, formatSizeInventorySummary, normalizeSizeInventory, type SizeInventory } from '@/lib/ready-made-stock'
-import { Button, RemoteImage } from '@/components/ui'
+import { Button, DrapeStatusChip, RemoteImage } from '@/components/ui'
+import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { isVideoMediaUrl } from '@drape/shared/media-policy'
@@ -113,23 +114,6 @@ function formatItemPrice(amountInMinorUnits: number | null, currency: string) {
   return `${CURRENCY_SYMBOLS[currency] ?? `${currency} `}${formattedAmount}`
 }
 
-function stockPillStyles(item: SellerItem) {
-  const status = effectiveStockStatus(item)
-  if (status === 'SOLD_OUT' && item.inventoryQuantity > 0) {
-    return { container: styles.statusWarning, text: styles.statusWarningText }
-  }
-  if (status === 'SOLD_OUT') {
-    return { container: styles.statusMuted, text: styles.statusMutedText }
-  }
-  if (status === 'HIDDEN') {
-    return { container: styles.statusMuted, text: styles.statusMutedText }
-  }
-  if (status === 'LOW_STOCK') {
-    return { container: styles.statusWarning, text: styles.statusWarningText }
-  }
-  return { container: styles.statusLive, text: styles.statusLiveText }
-}
-
 function getShopEmptyState(
   filter: Filter,
   counts: { liveCount: number; draftCount: number; soldCount: number },
@@ -184,6 +168,7 @@ function getShopEmptyState(
 
 export default function TailorShopScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const params = useLocalSearchParams<{ filter?: string }>()
   const { user } = useAuth()
   const userId = user?.id
@@ -463,9 +448,13 @@ export default function TailorShopScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
+        {...capsuleNavScroll}
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE },
+        ]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} colors={[Colors.needleGreen]} />}
       >
         <View style={styles.header}>
@@ -555,7 +544,6 @@ export default function TailorShopScreen() {
             ) : (
               <View style={styles.itemList}>
                 {filteredItems.map((item) => {
-                  const pillStyles = stockPillStyles(item)
                   const status = effectiveStockStatus(item)
                   const coverImageUrl = item.photoUrls.find((url) => !isVideoMediaUrl(url)) ?? null
                   const canRelist = status === 'SOLD_OUT' && item.inventoryQuantity > 0
@@ -588,11 +576,12 @@ export default function TailorShopScreen() {
                             <Feather name="image" size={22} color={Colors.midGrey} />
                           </View>
                         )}
-                        <View style={[styles.statusPill, styles.statusPillOverlay, pillStyles.container]}>
-                          <Text style={[styles.statusText, pillStyles.text]}>
-                            {stockLabel(item)}
-                          </Text>
-                        </View>
+                        <DrapeStatusChip
+                          value={status}
+                          label={stockLabel(item)}
+                          domain="fabric"
+                          style={styles.statusPillOverlay}
+                        />
                       </View>
                       <View style={styles.itemBody}>
                         <Text style={styles.itemTitle}>{item.title}</Text>
@@ -914,7 +903,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.textInverse,
   },
-  statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
   statusPillOverlay: {
     position: 'absolute',
     top: 10,
@@ -922,13 +910,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.white + 'AA',
   },
-  statusLive: { backgroundColor: Colors.needleGreenLight },
-  statusWarning: { backgroundColor: Colors.kanteRust + '15' },
-  statusMuted: { backgroundColor: Colors.bone },
-  statusText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.4 },
-  statusLiveText: { color: Colors.needleGreen },
-  statusWarningText: { color: Colors.warning },
-  statusMutedText: { color: Colors.midGrey },
   sheetOverlay: {
     flex: 1,
     justifyContent: 'flex-end',

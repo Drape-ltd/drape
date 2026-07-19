@@ -27,6 +27,10 @@ const AH = {
 
 function ok(msg: string)  { console.log(`  ✓ ${msg}`) }
 function log(msg: string) { console.log(`  ${msg}`) }
+function fixtureMedia(label: string, color: string) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200"><rect width="900" height="1200" fill="${color}"/><text x="450" y="600" fill="white" font-family="sans-serif" font-size="64" text-anchor="middle">${label}</text></svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
 async function bail(msg: string, detail?: any): Promise<never> {
   console.error(`  ✗ ${msg}`, detail ?? '')
   await prisma.$disconnect()
@@ -163,7 +167,7 @@ async function main() {
   }
 
   try {
-    await prisma.order.create({ data: {
+    const confirmedOrder = await prisma.order.create({ data: {
       reference:                    `E2ECONF${Date.now().toString(36).toUpperCase()}`,
       customerId:                   customer.id,
       tailorId:                     tailor.id,
@@ -177,7 +181,34 @@ async function main() {
       stage:                        'CONFIRMED',
       customerMeasurementsSnapshot: snap,
     }})
+    await prisma.message.createMany({ data: [
+      {
+        orderId: confirmedOrder.id,
+        senderId: tailor.id,
+        senderRole: 'TAILOR',
+        senderName: 'Test Tailor',
+        type: 'PHOTO',
+        photoUrl: fixtureMedia('Front reference', '#255f49'),
+      },
+      {
+        orderId: confirmedOrder.id,
+        senderId: tailor.id,
+        senderRole: 'TAILOR',
+        senderName: 'Test Tailor',
+        type: 'PHOTO',
+        photoUrl: fixtureMedia('Back reference', '#8f5d4d'),
+      },
+      {
+        orderId: confirmedOrder.id,
+        senderId: tailor.id,
+        senderRole: 'TAILOR',
+        senderName: 'Test Tailor',
+        type: 'PHOTO',
+        photoUrl: fixtureMedia('Detail reference', '#536779'),
+      },
+    ]})
     ok('CONFIRMED order created (flows 03, 05)')
+    ok('three-photo message batch created (flow 09)')
   } catch (e: any) { await bail('CONFIRMED order', e.message) }
 
   try {

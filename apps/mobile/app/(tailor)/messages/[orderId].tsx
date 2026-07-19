@@ -33,6 +33,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constan
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import { getCallLifecycleState } from '@drape/shared/call-scheduling-policy'
+import type { OrderConversationAction } from '@drape/shared/order-negotiation'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
@@ -101,10 +102,12 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 }
 
 export default function TailorMessagesScreen() {
-  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
+  const { orderId, returnTo, historyChain, eventId, messageId } = useLocalSearchParams<{
     orderId: string
     returnTo?: string
     historyChain?: string
+    eventId?: string
+    messageId?: string
   }>()
   const router = useRouter()
   const navigation = useNavigation()
@@ -149,6 +152,18 @@ export default function TailorMessagesScreen() {
       pathname: '/(tailor)/orders/[id]',
       params: {
         id: orderId,
+        returnTo: `/(tailor)/messages/${orderId}`,
+        historyChain: appendToHistory(historyChain, `/(tailor)/messages/${orderId}`),
+      },
+    })
+  }, [historyChain, orderId, router])
+
+  const openConversationAction = useCallback((action: OrderConversationAction) => {
+    router.push({
+      pathname: '/(tailor)/orders/[id]',
+      params: {
+        id: orderId,
+        action: action.kind,
         returnTo: `/(tailor)/messages/${orderId}`,
         historyChain: appendToHistory(historyChain, `/(tailor)/messages/${orderId}`),
       },
@@ -663,6 +678,11 @@ export default function TailorMessagesScreen() {
         tailorAvatarUrl={orderInfo.tailorAvatarUrl}
         customerName={orderInfo.customerName}
         customerAvatarUrl={orderInfo.customerAvatarUrl}
+        orderKind={orderInfo.orderKind}
+        orderStage={orderInfo.stage}
+        focusedEventId={eventId}
+        focusedMessageId={messageId}
+        onConversationAction={openConversationAction}
         callAvailable={callAvailable}
         callLoading={startingCall}
         onPressCall={showCallOptions}

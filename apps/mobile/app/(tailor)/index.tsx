@@ -16,11 +16,11 @@ import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
 import { appendToHistory } from '@/lib/navigation'
 import { getTimeOfDayGreeting } from '@/lib/time-of-day'
 import type { TailorStockAlert } from '@/lib/ready-made-stock'
-import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { MANUAL_BANK_ENTRY_NOTE } from '@drape/shared/payout-setup'
-import { stageColor } from '@/lib/stageColors'
+import { DrapeStatusChip } from '@/components/ui'
+import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
@@ -82,6 +82,7 @@ type StockAlertRow = TailorStockAlert
 export default function TailorDashboard() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [refreshing, setRefreshing] = useState(false)
@@ -150,13 +151,6 @@ export default function TailorDashboard() {
     const timer = setInterval(updateGreeting, 60_000)
     return () => clearInterval(timer)
   }, [])
-
-  function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc' | 'size_guide_scan'>) {
-    router.push({
-      pathname: DRAPE_VISION_ROUTE,
-      params: { mode, returnTo: '/(tailor)', historyChain: appendToHistory(undefined, '/(tailor)') },
-    } as never)
-  }
 
   useRefreshOnFocus(() => {
     setTimeOfDay(getTimeOfDayGreeting())
@@ -357,8 +351,12 @@ export default function TailorDashboard() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
       <ScrollView
+        {...capsuleNavScroll}
         style={styles.scroll}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
@@ -445,17 +443,6 @@ export default function TailorDashboard() {
               </View>
             </View>
 
-            <View style={styles.toolRail}>
-              <TouchableOpacity style={styles.toolRailItem} onPress={() => openDrapeVision('tailor_client_scan')}>
-                <Feather name="user-check" size={15} color={PRIMARY_GREEN} />
-                <Text style={styles.toolRailText}>Scan client</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.toolRailItem} onPress={() => openDrapeVision('garment_qc')}>
-                <Feather name="shield" size={15} color={PRIMARY_GREEN} />
-                <Text style={styles.toolRailText}>QC garment</Text>
-              </TouchableOpacity>
-            </View>
-
             {orders.length > 0 ? (
               <View style={styles.cockpitQueue}>
                 <View style={styles.cockpitQueueHeader}>
@@ -481,11 +468,11 @@ export default function TailorDashboard() {
                       <Text style={styles.cockpitOrderTitle} numberOfLines={1}>{order.garmentType}</Text>
                       <Text style={styles.cockpitOrderMeta} numberOfLines={1}>{order.customerName} · #{order.reference}</Text>
                     </View>
-                    <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
-                      <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                        {tailorOrderStageLabel(order.stage, order.orderKind)}
-                      </Text>
-                    </View>
+                    <DrapeStatusChip
+                      value={order.stage}
+                      label={tailorOrderStageLabel(order.stage, order.orderKind)}
+                      domain="order"
+                    />
                   </TouchableOpacity>
                 ))}
               </View>
@@ -984,23 +971,6 @@ const styles = StyleSheet.create({
     color: PRIMARY_GREEN,
     fontWeight: FontWeight.semibold,
   },
-  toolRail: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  toolRailItem: {
-    flex: 1,
-    minHeight: 38,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.bone,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 6,
-  },
-  toolRailText: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   cockpitQueue: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.lightGrey,
@@ -1209,7 +1179,5 @@ const styles = StyleSheet.create({
   orderCustomer: { fontSize: 13, color: Colors.inkLight, lineHeight: 17 },
   orderHint: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium, marginTop: 4, lineHeight: 16 },
   orderRowRight: { alignItems: 'flex-end', gap: 4 },
-  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full, minHeight: 24, justifyContent: 'center' },
-  stageText: { fontSize: 11, fontWeight: FontWeight.semibold },
   orderDue: { fontSize: 11, color: MUTED_GREY },
 })

@@ -75,6 +75,9 @@ const BodySchema = z.object({
     'request-aftercare-support',
     'request-emergency-support',
     'request-consultation',
+    'request-quote-revision',
+    'edit-quote-revision',
+    'withdraw-quote-revision',
     'request-scope-change',
     'respond-scope-change',
   ]),
@@ -127,9 +130,24 @@ const BodySchema = z.object({
   scopeChangeResponseNote: z.string().trim().max(300).optional(),
   scheduledStartAt: isoDate.optional(),
   timezone: z.string().trim().max(80).optional(),
+  quoteId: uuid.optional(),
+  expectedQuoteVersion: z.number().int().positive().optional(),
+  revisionRequestId: uuid.optional(),
+  quoteRevisionReasons: z.array(z.enum([
+    'PRICE',
+    'SCOPE',
+    'DEADLINE',
+    'FABRIC',
+    'FULFILLMENT',
+    'FIT_MEASUREMENTS',
+    'OTHER',
+  ])).min(1).max(4).optional(),
+  quoteRevisionNote: z.string().trim().min(10).max(1200).optional(),
+  quoteTargetAmount: z.number().int().positive().max(999_999_999).optional(),
 })
 
 const FN = 'customer-order-action'
+const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
 const THREATENING_LANGUAGE_PATTERNS = [
   /\b(i('ll| will|'m going to| am going to)) (kill|hurt|harm|beat|attack|destroy|ruin) (you|u|your|ur)\b/i,
   /\b(you('re| are) (dead|finished|done)|watch your back|i know where you live)\b/i,
@@ -154,6 +172,9 @@ type Action =
   | 'request-aftercare-support'
   | 'request-emergency-support'
   | 'request-consultation'
+  | 'request-quote-revision'
+  | 'edit-quote-revision'
+  | 'withdraw-quote-revision'
   | 'request-scope-change'
   | 'respond-scope-change'
 
@@ -185,6 +206,10 @@ type OrderRow = {
   handoff_completed_at?: string | null
   customer_handoff_confirmed_at?: string | null
   handoff_confirmation_source?: string | null
+  active_quote_id?: string | null
+  active_quote_version?: number | null
+  negotiation_round_limit?: number | null
+  negotiation_rounds_used?: number | null
 }
 
 const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
@@ -227,6 +252,9 @@ const VALID_FROM: Record<Action, string[]> = {
   'request-aftercare-support': ['DELIVERED', 'COLLECTED', 'COMPLETE'],
   'request-emergency-support': [...SCOPE_CHANGE_STAGES, 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED'],
   'request-consultation': ['PENDING_QUOTE'],
+  'request-quote-revision': ['QUOTE_SENT'],
+  'edit-quote-revision': ['QUOTE_SENT'],
+  'withdraw-quote-revision': ['QUOTE_SENT'],
   'request-scope-change': SCOPE_CHANGE_STAGES,
   'respond-scope-change': SCOPE_CHANGE_STAGES,
 }
@@ -242,6 +270,7 @@ const NEXT_STAGE: Partial<Record<Action, string>> = {
 // Push notification sent to the TAILOR after each customer action
 const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string }>> = {
   'confirm-receipt': { title: 'Delivery confirmed 📦',  body: 'The customer confirmed receipt of their order.' },
+  'accept-quote':    { title: 'Quote accepted',           body: 'The customer accepted your quote and can now complete payment.' },
   'decline-quote':   { title: 'Quote declined',          body: 'The customer declined your quote.' },
   'open-dispute':    { title: 'Concern raised ⚠️',       body: 'A customer raised a concern about their order.' },
   'complete-order':  { title: 'Order complete ⭐',       body: 'The customer marked the order complete!' },
@@ -257,6 +286,9 @@ const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string 
   'request-aftercare-support': { title: 'Aftercare support requested', body: 'The customer asked Drape to review a post-delivery fit or finish issue.' },
   'request-emergency-support': { title: 'Emergency support requested', body: 'The customer flagged an event-sensitive order issue. Keep every update inside Drape.' },
   'request-consultation': { title: 'Consultation requested', body: 'A customer asked for a consultation. Approve, price, reschedule, or decline from the order.' },
+  'request-quote-revision': { title: 'Quote changes requested', body: 'The customer requested formal changes to your quote.' },
+  'edit-quote-revision': { title: 'Quote request updated', body: 'The customer updated their formal quote change request.' },
+  'withdraw-quote-revision': { title: 'Quote request withdrawn', body: 'The customer withdrew their quote change request.' },
   'request-scope-change': { title: 'Order change requested', body: 'The customer asked to change this order. Review it before continuing work.' },
   'respond-scope-change': { title: 'Order change updated', body: 'The customer responded to the change request on this order.' },
 }
@@ -337,6 +369,33 @@ function jsonError(cors: HeadersInit, status: number, code: string, error: strin
   return jsonResponse({ code, error, ...(field ? { field } : {}) }, status, cors)
 }
 
+function negotiationErrorResponse(cors: HeadersInit, error: unknown) {
+  const message = error && typeof error === 'object' && 'message' in error
+    ? String((error as { message?: unknown }).message ?? '')
+    : String(error)
+  const known = [
+    'QUOTE_VERSION_CHANGED',
+    'QUOTE_REVISION_ALREADY_OPEN',
+    'QUOTE_REVISION_LIMIT_REACHED',
+    'QUOTE_REVISION_CANNOT_BE_WITHDRAWN',
+    'QUOTE_NEGOTIATION_NOT_AVAILABLE',
+    'QUOTE_REVISION_STILL_OPEN',
+    'QUOTE_DECLINE_NOT_AVAILABLE',
+  ].find((code) => message.includes(code))
+
+  const copy: Record<string, string> = {
+    QUOTE_VERSION_CHANGED: 'The quote changed while you were reviewing it. Refresh the order before continuing.',
+    QUOTE_REVISION_ALREADY_OPEN: 'A quote change request is already waiting for the tailor.',
+    QUOTE_REVISION_LIMIT_REACHED: 'You have used all formal quote revision rounds for this order.',
+    QUOTE_REVISION_CANNOT_BE_WITHDRAWN: 'This request can no longer be withdrawn because the tailor has responded.',
+    QUOTE_NEGOTIATION_NOT_AVAILABLE: 'Formal quote changes are not available at this order stage.',
+    QUOTE_REVISION_STILL_OPEN: 'Resolve or withdraw the open change request before accepting this quote.',
+    QUOTE_DECLINE_NOT_AVAILABLE: 'This quote can no longer be declined. Refresh the order to see its current state.',
+  }
+  const code = known ?? 'QUOTE_NEGOTIATION_FAILED'
+  return jsonError(cors, known ? 409 : 500, code, copy[code] ?? 'We could not update this quote right now. Please try again.')
+}
+
 function hasThreateningLanguage(text: string) {
   return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
 }
@@ -400,7 +459,7 @@ Deno.serve(async (req) => {
     }
 
     const orderSelect =
-      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source'
+      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -480,6 +539,161 @@ Deno.serve(async (req) => {
       premiumDispatch: dispatchRecord?.premiumException ?? null,
     })
 
+    if (
+      action === 'request-quote-revision'
+      || action === 'edit-quote-revision'
+      || action === 'withdraw-quote-revision'
+    ) {
+      if (!QUOTE_NEGOTIATION_V1) {
+        return jsonError(
+          cors,
+          409,
+          'QUOTE_NEGOTIATION_NOT_ENABLED',
+          'Formal quote changes are not enabled for this environment yet.',
+        )
+      }
+
+      const quoteId = parsed.data.quoteId
+      const expectedQuoteVersion = parsed.data.expectedQuoteVersion
+      if (!quoteId || !expectedQuoteVersion) {
+        return jsonError(
+          cors,
+          400,
+          'QUOTE_VERSION_REQUIRED',
+          'Refresh the order before continuing with this quote.',
+          !quoteId ? 'quoteId' : 'expectedQuoteVersion',
+        )
+      }
+
+      const revisionRequestId = parsed.data.revisionRequestId
+      if (action !== 'request-quote-revision' && !revisionRequestId) {
+        return jsonError(cors, 400, 'QUOTE_REVISION_REQUIRED', 'Choose the open quote change request first.', 'revisionRequestId')
+      }
+
+      const note = parsed.data.quoteRevisionNote?.trim() ?? ''
+      const reasons = parsed.data.quoteRevisionReasons ?? []
+      if (action !== 'withdraw-quote-revision' && (note.length < 10 || reasons.length === 0)) {
+        return jsonError(
+          cors,
+          400,
+          'QUOTE_REVISION_DETAILS_REQUIRED',
+          'Choose at least one reason and explain the change you need.',
+          note.length < 10 ? 'quoteRevisionNote' : 'quoteRevisionReasons',
+        )
+      }
+
+      if (note) {
+        const blockedRevision = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'CUSTOMER',
+          surface: `orders.${action}.quoteRevisionNote`,
+          text: note,
+          message: "Contact details can't be included in a quote change request.",
+          orderId,
+          extra: { action, quoteId, expectedQuoteVersion },
+        })
+        if (blockedRevision) return blockedRevision
+      }
+
+      const rpcName = action === 'request-quote-revision'
+        ? 'request_order_quote_revision'
+        : action === 'edit-quote-revision'
+          ? 'edit_order_quote_revision'
+          : 'withdraw_order_quote_revision'
+      const rpcArgs = action === 'request-quote-revision'
+        ? {
+            p_order_id: orderId,
+            p_customer_id: caller.id,
+            p_quote_id: quoteId,
+            p_expected_quote_version: expectedQuoteVersion,
+            p_reason_codes: reasons,
+            p_note: note,
+            p_target_amount: parsed.data.quoteTargetAmount ?? null,
+            p_currency: order.currency ?? order.quoted_currency ?? null,
+          }
+        : action === 'edit-quote-revision'
+          ? {
+              p_order_id: orderId,
+              p_customer_id: caller.id,
+              p_revision_request_id: revisionRequestId,
+              p_quote_id: quoteId,
+              p_expected_quote_version: expectedQuoteVersion,
+              p_reason_codes: reasons,
+              p_note: note,
+              p_target_amount: parsed.data.quoteTargetAmount ?? null,
+            }
+          : {
+              p_order_id: orderId,
+              p_customer_id: caller.id,
+              p_revision_request_id: revisionRequestId,
+              p_quote_id: quoteId,
+              p_expected_quote_version: expectedQuoteVersion,
+            }
+      const { data: negotiationData, error: negotiationError } = await supabase.rpc(rpcName, rpcArgs)
+
+      if (negotiationError) {
+        log('warn', FN, 'quote_negotiation.rejected', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          quote_id: quoteId,
+          quote_version: expectedQuoteVersion,
+          error: negotiationError.message,
+        })
+        return negotiationErrorResponse(cors, negotiationError)
+      }
+
+      const result = (negotiationData ?? {}) as Record<string, unknown>
+      const eventId = typeof result.eventId === 'string' ? result.eventId : ''
+      const notification = TAILOR_NOTIFICATION[action]!
+      if (order.tailor_id) {
+        const destination = 'messages'
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...notification,
+            preferenceKey: 'newOrders',
+            data: {
+              orderId,
+              destination,
+              eventId,
+              quoteId,
+            },
+          }),
+        )
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: order.tailor_id.toString(),
+            audience: 'TAILOR',
+            subject: notification.title,
+            headline: notification.title,
+            body: notification.body,
+            ctaLabel: 'Review in Drapeon',
+            source: FN,
+            idempotencyKey: `${action}:${orderId}:${eventId || revisionRequestId || quoteId}`,
+          }),
+        )
+      }
+
+      await audit(supabase, {
+        event: `quote.${action}`,
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: {
+          quote_id: quoteId,
+          quote_version: expectedQuoteVersion,
+          revision_request_id: result.revisionRequestId ?? revisionRequestId ?? null,
+          event_id: eventId || null,
+        },
+      })
+
+      return jsonResponse({ ok: true, ...result }, 200, cors)
+    }
+
     if (action === 'accept-quote') {
       if (order.order_kind && order.order_kind !== 'CUSTOM') {
         return new Response(
@@ -532,6 +746,153 @@ Deno.serve(async (req) => {
           )
         }
       }
+
+      if (QUOTE_NEGOTIATION_V1) {
+        const quoteId = parsed.data.quoteId
+        const expectedQuoteVersion = parsed.data.expectedQuoteVersion
+        if (!quoteId || !expectedQuoteVersion) {
+          return jsonError(
+            cors,
+            409,
+            'QUOTE_VERSION_REQUIRED',
+            'The quote needs to be refreshed before payment can begin.',
+          )
+        }
+
+        const { data: acceptanceData, error: acceptanceError } = await supabase.rpc(
+          'accept_active_order_quote',
+          {
+            p_order_id: orderId,
+            p_customer_id: caller.id,
+            p_quote_id: quoteId,
+            p_expected_quote_version: expectedQuoteVersion,
+          },
+        )
+        if (acceptanceError) return negotiationErrorResponse(cors, acceptanceError)
+
+        const result = (acceptanceData ?? {}) as Record<string, unknown>
+        await supabase.from('order_stage_updates').insert({
+          order_id: orderId,
+          stage: 'PAYMENT_PENDING',
+          note: STAGE_NOTE['accept-quote'],
+        })
+
+        const eventId = typeof result.eventId === 'string' ? result.eventId : ''
+        const notification = TAILOR_NOTIFICATION['accept-quote']!
+        if (order.tailor_id) {
+          EdgeRuntime.waitUntil(
+            sendPushToUser(supabase, order.tailor_id.toString(), {
+              ...notification,
+              preferenceKey: 'quotes',
+              data: { orderId, destination: 'messages', eventId, quoteId },
+            }),
+          )
+          EdgeRuntime.waitUntil(
+            enqueueOrderEventEmailJob(supabase, {
+              order,
+              recipientUserId: order.tailor_id.toString(),
+              audience: 'TAILOR',
+              subject: notification.title,
+              headline: notification.title,
+              body: notification.body,
+              ctaLabel: 'Open accepted order',
+              source: FN,
+              idempotencyKey: `accept-quote:${orderId}:${eventId || quoteId}`,
+            }),
+          )
+        }
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: caller.id,
+            audience: 'CUSTOMER',
+            subject: 'Your quote is accepted',
+            headline: 'Quote accepted',
+            body: 'Your accepted quote is locked to this order. Complete payment to begin production.',
+            ctaLabel: 'Complete payment',
+            source: FN,
+            idempotencyKey: `accept-quote-confirmation:${orderId}:${eventId || quoteId}`,
+          }),
+        )
+
+        await audit(supabase, {
+          event: 'quote.accepted',
+          actor_id: caller.id,
+          actor_role: 'CUSTOMER',
+          order_id: orderId,
+          payload: {
+            quote_id: quoteId,
+            quote_version: expectedQuoteVersion,
+            event_id: eventId || null,
+          },
+        })
+
+        return jsonResponse({ ok: true, ...result }, 200, cors)
+      }
+    }
+
+    if (action === 'decline-quote' && QUOTE_NEGOTIATION_V1) {
+      const quoteId = parsed.data.quoteId
+      const expectedQuoteVersion = parsed.data.expectedQuoteVersion
+      if (!quoteId || !expectedQuoteVersion) {
+        return jsonError(
+          cors,
+          409,
+          'QUOTE_VERSION_REQUIRED',
+          'The quote needs to be refreshed before it can be declined.',
+        )
+      }
+
+      const { data: declineData, error: declineError } = await supabase.rpc(
+        'decline_active_order_quote',
+        {
+          p_order_id: orderId,
+          p_customer_id: caller.id,
+          p_quote_id: quoteId,
+          p_expected_quote_version: expectedQuoteVersion,
+        },
+      )
+      if (declineError) return negotiationErrorResponse(cors, declineError)
+
+      const result = (declineData ?? {}) as Record<string, unknown>
+      const eventId = typeof result.eventId === 'string' ? result.eventId : ''
+      const notification = TAILOR_NOTIFICATION['decline-quote']!
+      if (order.tailor_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...notification,
+            preferenceKey: 'newOrders',
+            data: { orderId, destination: 'messages', eventId, quoteId },
+          }),
+        )
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: order.tailor_id.toString(),
+            audience: 'TAILOR',
+            subject: notification.title,
+            headline: notification.title,
+            body: notification.body,
+            ctaLabel: 'Review closed order',
+            source: FN,
+            idempotencyKey: `decline-quote:${orderId}:${eventId || quoteId}`,
+          }),
+        )
+      }
+
+      await audit(supabase, {
+        event: 'quote.declined',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: {
+          quote_id: quoteId,
+          quote_version: expectedQuoteVersion,
+          event_id: eventId || null,
+        },
+      })
+
+      return jsonResponse({ ok: true, ...result }, 200, cors)
     }
 
     if (action === 'cancel-order') {

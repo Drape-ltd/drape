@@ -13,7 +13,7 @@ import {
 } from '../_shared/payment-ledger.ts'
 import { enqueueOrderConfirmationEmailJob } from '../_shared/payment-side-effects.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
-import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import {
   fulfillmentPaymentConfirmedStageNote,
   paymentConfirmedStageNote,
@@ -43,6 +43,7 @@ import { resolvePreparedPaymentReference } from '../_shared/payment-recovery.ts'
 import { getProviderCircuit, recordProviderHealth } from '../_shared/provider-health.ts'
 
 const FN = 'payment-action'
+const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -52,6 +53,8 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('prepare-payment'),
     orderId: uuid,
+    quoteId: uuid.optional(),
+    expectedQuoteVersion: z.number().int().positive().optional(),
   }),
   z.object({
     action: z.literal('confirm-payment'),
@@ -92,6 +95,8 @@ type OrderRow = {
   payment_provider?: PaymentProvider | null
   payment_intent_id?: string | null
   payment_checkout_url?: string | null
+  active_quote_id?: string | null
+  active_quote_version?: number | null
 }
 
 function isPaymentProvider(value: string | null | undefined): value is PaymentProvider {
@@ -117,12 +122,13 @@ function paymentIdempotencyAction(phase: PaymentPhase) {
   return 'PAY'
 }
 
-function buildPaymentIdempotencyKey(orderId: string, phase: PaymentPhase) {
-  return `DRAPE-${paymentIdempotencyAction(phase)}-${orderId}`
+function buildPaymentIdempotencyKey(orderId: string, phase: PaymentPhase, quoteVersion?: number | null) {
+  const quoteSuffix = phase === 'INITIAL_ORDER' && quoteVersion ? `-Q${quoteVersion}` : ''
+  return `DRAPE-${paymentIdempotencyAction(phase)}-${orderId}${quoteSuffix}`
 }
 
 function buildPaystackReference(order: OrderRow, phase: PaymentPhase) {
-  return buildPaymentIdempotencyKey(order.id, phase)
+  return buildPaymentIdempotencyKey(order.id, phase, order.active_quote_version)
 }
 
 async function buildPaystackReferenceForNewAttempt(
@@ -891,7 +897,9 @@ Deno.serve(async (req) => {
         item_size,
         payment_provider,
         payment_intent_id,
-        payment_checkout_url
+        payment_checkout_url,
+        active_quote_id,
+        active_quote_version
       `)
       .eq('id', orderId)
       .maybeSingle()
@@ -929,6 +937,108 @@ Deno.serve(async (req) => {
       phase,
       statuses: ['PENDING', 'SUCCEEDED', 'FAILED', 'CANCELED'],
     }).catch(() => null)
+
+    if (
+      QUOTE_NEGOTIATION_V1
+      && parsed.data.action === 'prepare-payment'
+      && phase === 'INITIAL_ORDER'
+      && orderKind === 'CUSTOM'
+      && row.stage === 'QUOTE_SENT'
+    ) {
+      const quoteId = parsed.data.quoteId
+      const expectedQuoteVersion = parsed.data.expectedQuoteVersion
+      if (!quoteId || !expectedQuoteVersion) {
+        return jsonError(cors, 409, 'The quote needs to be refreshed before payment can begin.', {
+          code: 'QUOTE_VERSION_REQUIRED',
+        })
+      }
+
+      const { data: acceptedQuote, error: quoteError } = await supabase.rpc(
+        'accept_active_order_quote',
+        {
+          p_order_id: row.id,
+          p_customer_id: caller.id,
+          p_quote_id: quoteId,
+          p_expected_quote_version: expectedQuoteVersion,
+        },
+      )
+      if (quoteError) {
+        const code = [
+          'QUOTE_VERSION_CHANGED',
+          'QUOTE_REVISION_STILL_OPEN',
+          'QUOTE_ACCEPTANCE_NOT_AVAILABLE',
+        ].find((value) => quoteError.message.includes(value)) ?? 'QUOTE_ACCEPTANCE_FAILED'
+        const message = code === 'QUOTE_VERSION_CHANGED'
+          ? 'The quote changed while you were reviewing it. Refresh the order before paying.'
+          : code === 'QUOTE_REVISION_STILL_OPEN'
+            ? 'Resolve or withdraw the open quote change request before paying.'
+            : 'This quote cannot be accepted right now. Refresh the order and try again.'
+        return jsonError(cors, 409, message, { code })
+      }
+
+      const accepted = (acceptedQuote ?? {}) as Record<string, unknown>
+      const acceptedEventId = typeof accepted.eventId === 'string' ? accepted.eventId : ''
+      row.stage = 'PAYMENT_PENDING'
+      row.active_quote_id = typeof accepted.quoteId === 'string' ? accepted.quoteId : quoteId
+      row.active_quote_version = typeof accepted.quoteVersion === 'number'
+        ? accepted.quoteVersion
+        : expectedQuoteVersion
+      await supabase.from('order_stage_updates').insert({
+        order_id: row.id,
+        stage: 'PAYMENT_PENDING',
+        note: paymentPendingStageNote(orderKind),
+      })
+
+      const acceptedNotification = {
+        title: 'Quote accepted',
+        body: 'The customer accepted your quote and is completing payment.',
+        preferenceKey: 'quotes',
+        data: {
+          orderId: row.id,
+          destination: 'messages',
+          eventId: acceptedEventId,
+          quoteId,
+        },
+      }
+      if (row.tailor_id) {
+        EdgeRuntime.waitUntil(
+          enqueuePushJob(supabase, {
+            userId: row.tailor_id.toString(),
+            orderId: row.id,
+            source: FN,
+            idempotencyKey: `quote-accepted:${row.id}:${acceptedEventId || quoteId}:tailor`,
+            priority: 25,
+            notification: acceptedNotification,
+          }),
+        )
+        EdgeRuntime.waitUntil(
+          enqueueOrderEventEmailJob(supabase, {
+            order: { ...row },
+            recipientUserId: row.tailor_id.toString(),
+            audience: 'TAILOR',
+            subject: acceptedNotification.title,
+            headline: acceptedNotification.title,
+            body: acceptedNotification.body,
+            ctaLabel: 'Open accepted order',
+            source: FN,
+            idempotencyKey: `quote-accepted:${row.id}:${acceptedEventId || quoteId}:tailor`,
+          }),
+        )
+      }
+      EdgeRuntime.waitUntil(
+        enqueueOrderEventEmailJob(supabase, {
+          order: { ...row },
+          recipientUserId: row.customer_id,
+          audience: 'CUSTOMER',
+          subject: 'Your quote is accepted',
+          headline: 'Quote accepted',
+          body: 'Your accepted quote is locked to this order. Complete payment to begin production.',
+          ctaLabel: 'Complete payment',
+          source: FN,
+          idempotencyKey: `quote-accepted:${row.id}:${acceptedEventId || quoteId}:customer`,
+        }),
+      )
+    }
     const storedProviderForPhase =
       phase === 'FULFILLMENT'
         ? row.fulfillment_payment_provider
@@ -1686,7 +1796,7 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
     }
     const existingPaymentIntentId = preparedPayment.providerPaymentId
-    let stripeIdempotencyKey = buildPaymentIdempotencyKey(row.id, phase)
+    let stripeIdempotencyKey = buildPaymentIdempotencyKey(row.id, phase, row.active_quote_version)
 
     if (existingPaymentIntentId) {
       try {

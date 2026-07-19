@@ -7,9 +7,16 @@ import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
-import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { PortfolioVideoPreview, RemoteImage } from '@/components/ui'
+import {
+  Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  PortfolioVideoPreview,
+  RemoteImage,
+} from '@/components/ui'
 import {
   draftToSizeInventory,
   formatSizeInventorySummary,
@@ -33,8 +40,7 @@ import {
 } from '@/lib/ready-made-fit'
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { stripExif } from '@/lib/stripExif'
-import { Button } from '@/components/ui'
-import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
+import { useDrapeCapsuleNavMotion, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { Sentry } from '@/lib/sentry'
 import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
@@ -325,8 +331,8 @@ export default function NewShopItemScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
-  const footerBottomPadding = Platform.OS === 'android' ? 12 : Math.max(insets.bottom + Spacing.sm, 14)
+  const { compact: actionsCompact } = useDrapeCapsuleNavMotion()
+  const actionScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [saving, setSaving] = useState(false)
@@ -371,22 +377,14 @@ export default function NewShopItemScreen() {
   const isEditing = !!itemId
   const isDraftEditor = isEditing && returnFilter !== 'SOLD' && !isRestockIntent
   const isOnboardingSetupItem = firstParam(params.onboarding) === 'tailor_setup'
-  const anchoredHistoryChainRef = useRef<string | undefined>(undefined)
   const anchoredReturnTargetRef = useRef<string | undefined>(undefined)
 
-  if (!anchoredHistoryChainRef.current && rawHistoryChain) {
-    anchoredHistoryChainRef.current = rawHistoryChain
-  }
   if (!anchoredReturnTargetRef.current) {
     anchoredReturnTargetRef.current = pickSafeReturnTo(rawHistoryChain, rawReturnTo)
   }
 
   function anchoredReturnTarget() {
     return anchoredReturnTargetRef.current ?? pickSafeReturnTo(rawHistoryChain, rawReturnTo)
-  }
-
-  function anchoredHistorySeed() {
-    return anchoredHistoryChainRef.current ?? anchoredReturnTarget()
   }
 
   function goBack() {
@@ -620,23 +618,6 @@ export default function NewShopItemScreen() {
   function applyRecommendedFitFields() {
     const recommended = recommendedFitFieldsForCategory(category || null)
     setFitGuideFields(recommended)
-  }
-
-  function openDrapeVisionSizeGuide() {
-    if (!itemId) {
-      Alert.alert('Save draft first', 'Save this item once, then use Drapeon Vision to create a size guide without losing your listing work.')
-      return
-    }
-
-    router.push({
-      pathname: DRAPE_VISION_ROUTE,
-      params: {
-        mode: 'size_guide_scan',
-        itemId,
-        returnTo: `/(tailor)/shop/new?itemId=${itemId}`,
-        historyChain: appendToHistory(anchoredHistorySeed(), `/(tailor)/shop/new?itemId=${itemId}`),
-      },
-    } as never)
   }
 
   function toggleFitField(field: ReadyMadeFitFieldKey) {
@@ -1142,9 +1123,6 @@ export default function NewShopItemScreen() {
   const fitGuideBodyCopy = isHeadwearCategory
     ? 'Set head and crown ranges so buyers know how this piece should sit before they order.'
     : "Drapeon can recommend a size from the customer's saved measurements when you set real body ranges here."
-  const visionSizeGuideCopy = isHeadwearCategory
-    ? 'Capture headwear fit ranges so shoppers can match their fit profile to this listing.'
-    : 'Capture real fit ranges so shoppers can match their fit profile to this listing.'
   const fitNotePlaceholder = isHeadwearCategory
     ? 'Fit note, e.g. Structured crown with a firm band. Best when head circumference is within range.'
     : 'Fit note, e.g. Fitted through the bust with a little ease at the waist.'
@@ -1256,7 +1234,14 @@ export default function NewShopItemScreen() {
           <Text style={styles.loadingText}>Opening your item…</Text>
         </View>
       ) : (
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} scrollEnabled={mediaDragIndex === null}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={mediaDragIndex === null}
+        onScroll={actionScroll.onScroll}
+        scrollEventThrottle={actionScroll.scrollEventThrottle}
+      >
         {renderMediaField()}
 
         {!isOnboardingSetupItem && sellerStatus && (!sellerStatus.supportsReadyMade || !readiness.canPublishPaidItems || (pickupAvailable && !hasPickupAddress)) ? (
@@ -1402,21 +1387,6 @@ export default function NewShopItemScreen() {
             <Text style={styles.fitGuideBody}>
               {fitGuideBodyCopy}
             </Text>
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Open Drapeon Vision size guide"
-              onPress={openDrapeVisionSizeGuide}
-              style={styles.visionFitGuideCallout}
-            >
-              <View style={styles.visionFitGuideIcon}>
-                <Feather name="grid" size={16} color={PRIMARY_GREEN} />
-              </View>
-              <View style={styles.visionFitGuideCopy}>
-                <Text style={styles.visionFitGuideTitle}>Drapeon Vision size guide</Text>
-                <Text style={styles.visionFitGuideText}>{visionSizeGuideCopy}</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-            </TouchableOpacity>
             <View style={styles.fitGuideSelectors}>
               <InlineSelectorRow
                 title="Unit"
@@ -1585,6 +1555,18 @@ export default function NewShopItemScreen() {
         </Field>
         ) : null}
 
+        {isDraftEditor ? (
+          <Button
+            label="Delete draft"
+            variant="ghost"
+            onPress={confirmDeleteDraft}
+            disabled={saving || loadingItem}
+            size="sm"
+            fullWidth={false}
+            style={styles.inlineDeleteButton}
+          />
+        ) : null}
+
       </ScrollView>
       )}
 
@@ -1603,46 +1585,41 @@ export default function NewShopItemScreen() {
         />
       ) : null}
 
-      <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
-        <View style={styles.footerButtons}>
-          {isOnboardingSetupItem ? (
-            <Button
-              label={saving ? 'Adding item…' : 'Add item to setup'}
-              onPress={() => { void saveItem(false) }}
+      <DrapeFloatingActionDock compactWidth={isOnboardingSetupItem ? 76 : 132} testID="shop-item-actions">
+        {isOnboardingSetupItem ? (
+          actionsCompact ? (
+            <DrapeIconButton
+              icon="check"
+              accessibilityLabel="Add item to setup"
+              tone="primary"
               disabled={saving || loadingItem}
-              size="md"
-              fullWidth
-              style={styles.footerSingleButton}
+              onPress={() => { void saveItem(false) }}
             />
           ) : (
-            <>
-              <Button
-                label={
-                  saving
-                    ? 'Saving…'
-                    : isEditing
-                      ? isRestockIntent
-                        ? 'Save stock changes'
-                        : 'Save draft changes'
-                      : 'Save draft'
-                }
-                onPress={() => { void saveItem(false) }}
+            <DrapeCapsuleButton
+              label="Add item to setup"
+              icon="check"
+              loading={saving}
+              disabled={loadingItem}
+              style={styles.footerSingleButton}
+              onPress={() => { void saveItem(false) }}
+            />
+          )
+        ) : (
+          actionsCompact ? (
+            <View style={styles.footerCompactButtons}>
+              <DrapeIconButton
+                icon="save"
+                accessibilityLabel={isRestockIntent ? 'Save stock changes' : 'Save draft changes'}
+                tone="primary"
                 disabled={saving || loadingItem}
-                size="md"
-                fullWidth={false}
-                style={styles.footerPrimaryButton}
+                onPress={() => { void saveItem(false) }}
               />
-              <Button
-                label={
-                  saving
-                    ? 'Saving…'
-                    : isEditing
-                      ? isRestockIntent
-                        ? 'Save and relist'
-                        : 'Review and go live'
-                      : 'Review and go live'
-                }
-                variant="secondary"
+              <DrapeIconButton
+                icon="check-circle"
+                accessibilityLabel={isRestockIntent ? 'Save and relist' : 'Review and go live'}
+                tone="secondary"
+                disabled={saving || loadingItem}
                 onPress={() => {
                   if (!canPublishLive) {
                     Alert.alert(
@@ -1655,24 +1632,45 @@ export default function NewShopItemScreen() {
                   }
                   void saveItem(true)
                 }}
-                disabled={saving || loadingItem}
-                size="md"
-                fullWidth={false}
-                style={styles.footerSecondaryButton}
               />
-              {isDraftEditor ? (
-                <Button
-                  label="Delete draft"
-                  variant="ghost"
-                  onPress={confirmDeleteDraft}
-                  disabled={saving || loadingItem}
-                  size="sm"
-                />
-              ) : null}
-            </>
-          )}
-        </View>
-      </View>
+            </View>
+          ) : (
+            <View style={styles.footerButtons}>
+              <DrapeCapsuleButton
+                label={isEditing
+                  ? isRestockIntent
+                    ? 'Save stock changes'
+                    : 'Save draft changes'
+                  : 'Save draft'}
+                icon="save"
+                loading={saving}
+                disabled={loadingItem}
+                style={styles.footerPrimaryButton}
+                onPress={() => { void saveItem(false) }}
+              />
+              <DrapeCapsuleButton
+                label={isEditing && isRestockIntent ? 'Save and relist' : 'Review and go live'}
+                icon="check-circle"
+                tone="secondary"
+                disabled={saving || loadingItem}
+                style={styles.footerSecondaryButton}
+                onPress={() => {
+                  if (!canPublishLive) {
+                    Alert.alert(
+                      'Live publishing unavailable',
+                      sellerStatus?.supportsReadyMade
+                        ? readiness.body
+                        : 'Enable Shop now on your tailor profile before publishing items live.',
+                    )
+                    return
+                  }
+                  void saveItem(true)
+                }}
+              />
+            </View>
+          )
+        )}
+      </DrapeFloatingActionDock>
       </KeyboardAvoidingView>
       <ListingChoiceSheet
         mode={listingSheetMode}
@@ -2828,27 +2826,6 @@ const styles = StyleSheet.create({
   },
   fitGuideTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, fontFamily: Fonts.display },
   fitGuideBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  visionFitGuideCallout: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '35',
-    backgroundColor: Colors.needleGreenLight,
-    padding: 10,
-  },
-  visionFitGuideIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.white,
-  },
-  visionFitGuideCopy: { flex: 1, gap: 2 },
-  visionFitGuideTitle: { fontSize: 13, color: CHARCOAL, fontWeight: FontWeight.semibold },
-  visionFitGuideText: { fontSize: 11, color: Colors.inkLight, lineHeight: 16 },
   fitGuideSelectors: {
     gap: Spacing.sm,
   },
@@ -2902,11 +2879,31 @@ const styles = StyleSheet.create({
   fitGuideRangeRow: { flex: 1, flexDirection: 'row', gap: 8 },
   fitGuideInput: { flex: 1, minHeight: 44, paddingHorizontal: 10, paddingVertical: 8 },
   fitGuideNotesInput: { minHeight: 72 },
-  footer: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey },
-  footerButtons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  footerSingleButton: { flex: 1, borderRadius: Radius.full },
-  footerPrimaryButton: { flex: 1.05, borderRadius: Radius.full },
-  footerSecondaryButton: { flex: 1, borderRadius: Radius.full },
+  footerButtons: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  footerCompactButtons: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  footerSingleButton: { flex: 1 },
+  footerPrimaryButton: {
+    flexBasis: 0,
+    flexGrow: 1.05,
+    flexShrink: 1,
+  },
+  footerSecondaryButton: {
+    flexBasis: 0,
+    flexGrow: 1,
+    flexShrink: 1,
+  },
+  inlineDeleteButton: { alignSelf: 'center', marginTop: Spacing.md },
   sheetOverlay: {
     flex: 1,
     justifyContent: 'flex-end',

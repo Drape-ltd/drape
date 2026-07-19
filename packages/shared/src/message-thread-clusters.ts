@@ -2,7 +2,7 @@ export type ClusterPosition = 'isolated' | 'start' | 'middle' | 'end'
 
 export type ClusterableMessage = {
   sender_id: string
-  created_at: string
+  created_at: string | null | undefined
   type: string | null | undefined
   photo_url: string | null | undefined
   reply_to_id?: string | null | undefined
@@ -11,7 +11,8 @@ export type ClusterableMessage = {
 
 const CLUSTER_WINDOW_MS = 90 * 1000
 
-function parseTimestamp(value: string) {
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) return null
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) ? timestamp : null
 }

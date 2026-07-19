@@ -12,6 +12,7 @@ const RESEND_API = 'https://api.resend.com/emails'
 const TOKEN_TTL_MS = 15 * 60 * 1000
 const SIGNED_UPLOAD_EXPIRES_SECONDS = 10 * 60
 const ID_BUCKET = 'id-documents'
+const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEMENT') === 'true'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -39,6 +40,10 @@ const BodySchema = z.discriminatedUnion('action', [
     action: z.literal('submit'),
     token: z.string().trim().min(32).max(256),
     storagePath: z.string().trim().min(1).max(500),
+    consentGranted: z.boolean().optional(),
+    consentVersion: z.string().trim().min(1).max(120).optional(),
+    consentSource: z.enum(['MOBILE_SETUP', 'WEB_SETUP', 'MOBILE_HANDOFF', 'WEB_HANDOFF']).optional(),
+    locale: z.string().trim().min(2).max(40).optional(),
   }),
 ])
 
@@ -399,6 +404,18 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === 'submit') {
+      const hasVersionedConsent =
+        body.consentGranted === true &&
+        typeof body.consentVersion === 'string' &&
+        typeof body.consentSource === 'string'
+
+      if (IDENTITY_RETENTION_ENFORCEMENT && !hasVersionedConsent) {
+        return jsonResponse({
+          code: 'IDENTITY_CONSENT_REQUIRED',
+          error: 'Review and accept the identity verification consent before submitting.',
+        }, 400, cors)
+      }
+
       const expectedPrefix = `id-verification/${row.tailor_user_id}/selfie_`
       if (!body.storagePath.startsWith(expectedPrefix) || !/\.jpe?g$/iu.test(body.storagePath)) {
         return jsonResponse({ error: 'Invalid identity selfie upload path.' }, 400, cors)
@@ -410,11 +427,25 @@ Deno.serve(async (req) => {
       const exists = await ensureStorageObjectExists(supabase, body.storagePath)
       if (!exists) return jsonResponse({ error: 'Identity selfie upload was not found. Capture and upload again.' }, 409, cors)
 
-      const { data, error } = await supabase.rpc('submit_identity_verification_handoff', {
-        p_handoff_id: row.id,
-        p_tailor_user_id: row.tailor_user_id,
-        p_storage_path: body.storagePath,
-      })
+      const submissionRpc = hasVersionedConsent
+        ? 'submit_identity_verification_handoff_with_consent'
+        : 'submit_identity_verification_handoff'
+      const submissionParams = hasVersionedConsent
+        ? {
+            p_handoff_id: row.id,
+            p_tailor_user_id: row.tailor_user_id,
+            p_storage_path: body.storagePath,
+            p_policy_version: body.consentVersion,
+            p_source: body.consentSource,
+            p_locale: body.locale ?? null,
+          }
+        : {
+            p_handoff_id: row.id,
+            p_tailor_user_id: row.tailor_user_id,
+            p_storage_path: body.storagePath,
+          }
+
+      const { data, error } = await supabase.rpc(submissionRpc, submissionParams)
 
       if (error) {
         log('warn', FN, 'handoff.submit_failed', {
@@ -430,7 +461,12 @@ Deno.serve(async (req) => {
         actor_id: row.tailor_user_id,
         actor_role: 'TAILOR',
         severity: 'info',
-        payload: { handoff_id: row.id, storage_path: body.storagePath },
+        payload: {
+          handoff_id: row.id,
+          storage_path: body.storagePath,
+          consent_version: hasVersionedConsent ? body.consentVersion : null,
+          consent_source: hasVersionedConsent ? body.consentSource : null,
+        },
       })
 
       const serviceRoleKey = getServiceRoleKey()

@@ -1,28 +1,36 @@
 import { useQuery } from '@tanstack/react-query'
-import { supabase } from '@/lib/supabase'
+import { supabase } from './supabase'
 
-export type DrapeFeatureFlag = {
+export const MOBILE_FEATURE_FLAGS = Object.freeze({
+  interactionSystemV1: process.env.EXPO_PUBLIC_DRAPE_INTERACTION_SYSTEM_V1 === 'true',
+  quoteNegotiationV1: process.env.EXPO_PUBLIC_QUOTE_NEGOTIATION_V1 === 'true',
+  chatOrderActionsV1: process.env.EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1 === 'true',
+  drapeVisionUiV2: __DEV__ || process.env.EXPO_PUBLIC_DRAPE_VISION_UI_V2 === 'true',
+})
+
+type FeatureFlagAudience = 'ALL' | 'CUSTOMER' | 'TAILOR' | 'OPS'
+
+export type RemoteFeatureFlag = {
   enabled: boolean
-  audience: string
+  audience: FeatureFlagAudience | string
   rolloutPercent: number
   metadata: Record<string, unknown>
   updatedAt: string | null
 }
 
-export type DrapeFeatureFlags = Record<string, DrapeFeatureFlag>
+export type RemoteFeatureFlags = Record<string, RemoteFeatureFlag>
 
-async function fetchFeatureFlags(audience: 'ALL' | 'CUSTOMER' | 'TAILOR' | 'OPS' = 'ALL') {
+async function fetchFeatureFlags(audience: FeatureFlagAudience) {
   const { data, error } = await supabase.rpc('get_feature_flags', { p_audience: audience })
   if (error) throw error
-  return (data && typeof data === 'object' ? data : {}) as DrapeFeatureFlags
+  return (data && typeof data === 'object' && !Array.isArray(data) ? data : {}) as RemoteFeatureFlags
 }
 
-export function useFeatureFlags(audience: 'ALL' | 'CUSTOMER' | 'TAILOR' | 'OPS' = 'ALL') {
+export function useFeatureFlags(audience: FeatureFlagAudience = 'ALL') {
   return useQuery({
     queryKey: ['feature-flags', audience],
     queryFn: () => fetchFeatureFlags(audience),
-    staleTime: 5 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    retry: 1,
+    staleTime: 5 * 60_000,
+    refetchOnReconnect: true,
   })
 }

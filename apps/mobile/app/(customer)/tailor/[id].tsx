@@ -18,6 +18,8 @@ import {
   StarRating,
   Tag,
   Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
   SkeletonBlock,
   SaveToWishlistSheet,
   PortfolioVideoPreview,
@@ -25,6 +27,7 @@ import {
 import type { TierBadge } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { hapticLight } from '@/lib/haptics'
 import { getTailorPriceMinMajor } from '@drape/shared/tailor-setup'
@@ -135,6 +138,7 @@ export default function TailorProfileScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const role = useUserRole()
   const scrollRef = useRef<ScrollView | null>(null)
@@ -414,6 +418,7 @@ export default function TailorProfileScreen() {
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
+        {...capsuleNavScroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: Math.max(140, insets.bottom + 112) }}
       >
@@ -629,8 +634,7 @@ export default function TailorProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* Sticky CTA */}
-      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
+      <DrapeFloatingActionDock testID="tailor-profile-actions">
         {profile.userId && user?.id && profile.userId === user.id ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 }}>
             <Text style={{ fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', fontFamily: Fonts.body }}>
@@ -640,9 +644,9 @@ export default function TailorProfileScreen() {
         ) : (
           <>
             {profile.supportsReadyMade ? (
-              <Button
+              <DrapeCapsuleButton
                 label="Shop now"
-                variant="secondary"
+                tone="secondary"
                 onPress={() =>
                   router.push({
                     pathname: '/(customer)/tailor/shop/[id]',
@@ -656,9 +660,9 @@ export default function TailorProfileScreen() {
                 style={{ flex: 1 }}
               />
             ) : (
-              <Button
+              <DrapeCapsuleButton
                 label={customOrdersPaused ? 'Custom unavailable' : 'Message'}
-                variant="secondary"
+                tone="secondary"
                 onPress={() => {
                   if (customOrdersPaused) {
                     Alert.alert(
@@ -696,7 +700,7 @@ export default function TailorProfileScreen() {
               />
             )}
             {profile.supportsCustomOrders ? (
-              <Button
+              <DrapeCapsuleButton
                 label={customOrdersPaused ? 'Custom paused' : 'Custom order'}
                 onPress={() => router.push({
                   pathname: '/(customer)/brief/[tailorId]',
@@ -715,7 +719,7 @@ export default function TailorProfileScreen() {
             ) : null}
           </>
         )}
-      </View>
+      </DrapeFloatingActionDock>
 
       <WishlistPickerModal
         visible={wishlistPickerOpen}

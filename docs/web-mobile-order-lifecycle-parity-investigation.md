@@ -2,11 +2,13 @@
 
 Last updated: 2026-07-09
 
+> **Launch-scope update, 2026-07-18:** Drapeon Vision Garment QC is now deferred and removed from launch-facing mobile navigation. The implementation details below are retained as a historical contract inventory, not as a current mobile/web parity requirement. See `docs/drapeon-vision-design-and-regression-runbook.md` for the re-entry gates.
+
 ## Bottom Line
 
-The web order lifecycle now matches the mobile app for the customer and tailor actions that are backed by the current Edge Function contracts, with one explicit remaining surface gap:
+The web order lifecycle now matches the mobile app for the customer and tailor actions that are backed by the current Edge Function contracts. This investigation originally recorded one Vision surface gap that is no longer in launch scope:
 
-- Remaining gap: mobile exposes Drapeon Vision garment QC and saves `tailor-order-action` `save-garment-qc`; web does not yet expose an equivalent manual or vision QC panel.
+- Deferred historical gap: the dormant mobile Drapeon Vision garment QC implementation can save `tailor-order-action` `save-garment-qc`; neither mobile nor web exposes this as a launch-facing workflow.
 - Edge-constrained mismatch, not a web gap: mobile still contains some fulfillment metadata UI paths for `SHIPPED` and `OUT_FOR_DELIVERY` inside its generic stage modal, but `tailor-order-action` only accepts tailor `advance-stage` targets through `READY_FOR_DRAPE_DISPATCH` or `READY_FOR_COLLECTION`. The shared state machine marks `SHIPPED` and `OUT_FOR_DELIVERY` as platform/system/customer transitions, so web correctly avoids tailor advancement to those stages.
 
 The main bug found in this pass was paired scope-change parity:
@@ -344,9 +346,9 @@ Remaining Realtime caveats:
 - The web implementation intentionally refetches instead of locally patching rows, so it is slightly less instant than optimistic local state but much safer for parity.
 - Browser tab sleep/background throttling can delay web refresh timers; keep the web tab focused for the side-by-side test.
 
-## Remaining Gap Detail: Garment QC
+## Deferred Historical Detail: Garment QC
 
-Mobile Drapeon Vision garment QC supports:
+The dormant mobile Drapeon Vision garment QC implementation contains:
 
 - A dedicated `garment_qc` flow.
 - Garment measurements for fields including chest, waist, hips, shoulder width, sleeve length, back length, under bust, inseam, outseam, bicep, wrist, and headwear fields.
@@ -363,7 +365,7 @@ Evidence:
 - `apps/mobile/components/drapeVision/NativeDrapeVisionScreen.tsx:4347` sends `tailor-order-action` `save-garment-qc`.
 - `supabase/functions/tailor-order-action/index.ts:1402` handles `save-garment-qc` on the backend.
 
-Recommended web parity patch if product wants 100 percent web surface parity:
+Future web parity direction, only after the Vision re-entry gates pass:
 
 - Add a progressive-disclosure "Garment QC" panel to `TailorOrderActions`.
 - Gate it to active tailor orders, ideally near finishing/handoff stages unless product wants the broader Edge-permitted active-order behavior.

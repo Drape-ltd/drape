@@ -23,6 +23,7 @@ import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useRefreshOnFocus, useWishlistCollections, type WishlistCollection, type WishlistItem } from '@/lib/queries'
 import { RemoteImage, SkeletonBlock, StateCard } from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { hapticLight, hapticWarning } from '@/lib/haptics'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
@@ -50,6 +51,7 @@ function savedReadyMadeSignal(item: ReadyMadeSavedItem): SavedItemSignal | null 
 
 export default function SavedScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const { width } = useWindowDimensions()
   const insets = useSafeAreaInsets()
@@ -278,6 +280,7 @@ export default function SavedScreen() {
         </View>
 
         <FlatList
+          {...capsuleNavScroll}
           data={selectedCollection.items}
           keyExtractor={(item) => item.id}
           numColumns={2}
@@ -363,6 +366,7 @@ export default function SavedScreen() {
         </View>
       ) : (
         <FlatList
+          {...capsuleNavScroll}
           data={collections}
           keyExtractor={(collection) => collection.id}
           numColumns={2}

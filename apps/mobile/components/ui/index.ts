@@ -25,7 +25,31 @@ export { RemoteImage } from './RemoteImage'
 export { AvatarImage } from './AvatarImage'
 export { PortfolioVideoPreview } from './PortfolioVideoPreview'
 export { MediaLightboxModal } from './MediaLightboxModal'
+export { DrapeMediaMosaic } from './DrapeMediaMosaic'
+export { DrapeVoicePlayer } from './DrapeVoicePlayer'
+export { DrapeCapsuleNav } from './DrapeCapsuleNav'
+export { DrapeMediaViewer } from './DrapeMediaViewer'
+export type { DrapeMediaViewerItem } from './DrapeMediaViewer'
 export { SkeletonBlock } from './Skeleton'
+export {
+  DrapeActionBar,
+  DrapeCapsuleButton,
+  DrapeEmptyState,
+  DrapeField,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DrapeInlineActionCard,
+  DrapePressable,
+  DrapeSheet,
+  DrapeSkeleton,
+  DrapeStatusChip,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+} from './DrapePrimitives'
+export type {
+  DrapeCapsuleButtonProps,
+  DrapeIconButtonProps,
+  DrapePressableProps,
+} from './DrapePrimitives'
 export type { CollectionPickerRow } from './CollectionPickerSheet'
 export type { ChoiceSheetOption } from './ChoiceSheet'
 export type { MeasurementModuleField } from './MeasurementModule'
@@ -33,3 +57,4 @@ export type { TimelineStep, TimelineStepState } from './OrderTimelineCard'
 export type { TierBadge } from './Badge'
 export type { TagGroup } from './TagSelector'
 export type { MediaLightboxItem } from './MediaLightboxModal'
+export type { DrapeMediaMosaicItem } from './DrapeMediaMosaic'

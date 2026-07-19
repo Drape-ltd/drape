@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
+import {
+  IDENTITY_CONSENT_COPY,
+  IDENTITY_CONSENT_POLICY_VERSION,
+} from '@drape/shared/identity-trust'
 import { createClient } from '../../../lib/supabase'
 
 type HandoffResponse = {
@@ -37,6 +41,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   const [success, setSuccess] = useState(false)
   const [shutterFlash, setShutterFlash] = useState(false)
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
+  const [consentGranted, setConsentGranted] = useState(false)
   const mobileReady = isLikelyMobile()
 
   const stopCamera = useCallback(() => {
@@ -96,7 +101,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   }, [mobileReady, stopCamera, supabase, token])
 
   const captureAndSubmit = useCallback(async () => {
-    if (!videoRef.current || !canvasRef.current || busy) return
+    if (!videoRef.current || !canvasRef.current || busy || !consentGranted) return
     setBusy(true)
     setError(null)
     setShutterFlash(true)
@@ -135,7 +140,15 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       if (uploadError) throw uploadError
 
       const submitted = await supabase.functions.invoke<HandoffResponse>('identity-handoff-action', {
-        body: { action: 'submit', token, storagePath: path },
+        body: {
+          action: 'submit',
+          token,
+          storagePath: path,
+          consentGranted: true,
+          consentVersion: IDENTITY_CONSENT_POLICY_VERSION,
+          consentSource: 'WEB_HANDOFF',
+          locale: navigator.language,
+        },
       })
       if (submitted.error || submitted.data?.error) {
         throw new Error(functionError(submitted.data, submitted.error?.message ?? 'Identity review could not be submitted.'))
@@ -147,7 +160,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
     } finally {
       setBusy(false)
     }
-  }, [busy, stopCamera, supabase, token])
+  }, [busy, consentGranted, stopCamera, supabase, token])
 
   return (
     <main className="min-h-screen bg-bone px-5 py-8 text-ink">
@@ -189,10 +202,24 @@ export default function VerifyHandoffPage(): React.JSX.Element {
                 </div>
               </div>
               <div className="p-5">
+                <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-lg border border-ink/10 bg-bone/62 p-4">
+                  <input
+                    type="checkbox"
+                    checked={consentGranted}
+                    onChange={(event) => setConsentGranted(event.target.checked)}
+                    className="mt-1 h-5 w-5 shrink-0 accent-needle"
+                  />
+                  <span className="text-xs leading-5 text-ink/66">
+                    {IDENTITY_CONSENT_COPY}{' '}
+                    <a href="/privacy" target="_blank" rel="noreferrer" className="font-semibold text-needle underline underline-offset-2">
+                      Read the Privacy Policy.
+                    </a>
+                  </span>
+                </label>
                 <button
                   type="button"
                   onClick={() => { void captureAndSubmit() }}
-                  disabled={!cameraReady || busy}
+                  disabled={!cameraReady || busy || !consentGranted}
                   className="flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:bg-ink/25"
                 >
                   {busy ? 'Submitting...' : cameraReady ? 'Snap Photo' : 'Starting camera...'}

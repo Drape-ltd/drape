@@ -628,12 +628,12 @@ function EmptyState({
 function DetailList({
   items,
 }: {
-  items: Array<{ label: string; value: string }>
+  items: Array<{ label: string; value: ReactNode }>
 }): React.JSX.Element {
   return (
     <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {items.map((item) => (
-        <div key={`${item.label}:${item.value}`} className="rounded-[8px] border border-ink/6 bg-bone/56 px-4 py-3">
+      {items.map((item, index) => (
+        <div key={`${item.label}:${index}`} className="rounded-[8px] border border-ink/6 bg-bone/56 px-4 py-3">
           <dt className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/42">{item.label}</dt>
           <dd className="mt-1 text-sm leading-6 text-ink">{item.value}</dd>
         </div>
@@ -1459,6 +1459,7 @@ function VerificationCard({
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Profile</p>
           <DetailList
             items={[
+              { label: 'Verified legal name', value: profile.legalName ?? 'Not captured' },
               { label: 'Location', value: profile.location },
               { label: 'Specialties', value: profile.specialtyTags.length > 0 ? profile.specialtyTags.join(', ') : '—' },
             ]}
@@ -1470,6 +1471,14 @@ function VerificationCard({
             items={[
               { label: 'Payout path', value: profile.payoutProvider ? `${profile.payoutProvider} · ${profile.payoutCurrency ?? '—'}` : 'Not set up yet' },
               { label: 'Payout verified', value: profile.payoutAccountVerified ? 'Yes' : 'No' },
+              {
+                label: 'Payout name match',
+                value: <StatusChip status={profile.payoutNameMatchStatus} fallback="Not checked" />,
+              },
+              {
+                label: 'Name checked',
+                value: profile.payoutNameMatchCheckedAt ? formatDateTime(profile.payoutNameMatchCheckedAt) : 'Not checked',
+              },
               { label: 'Submitted', value: formatDateTime(profile.idVerificationSubmittedAt ?? profile.createdAt) },
               { label: 'Last updated', value: formatDateTime(profile.updatedAt) },
             ]}

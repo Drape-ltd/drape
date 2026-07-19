@@ -1,0 +1,56 @@
+appId: com.drape.app
+name: "Drapeon Vision — adaptive hub, height setup, and contextual exit"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites:
+#   - Development build with DRAPE_VISION_UI_V2 enabled
+#   - Seeded customer account
+---
+
+- launchApp:
+    clearState: true
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 10000
+
+- openLink: "drape://vision?mode=customer_scan&returnTo=%2F(customer)%2Fmeasurements"
+- extendedWaitUntil:
+    visible:
+      id: "vision-hub"
+    timeout: 10000
+- assertVisible: "Choose what to measure"
+- assertVisible: "Private by design"
+
+- tapOn: "Add your height"
+- extendedWaitUntil:
+    visible:
+      id: "vision-height"
+    timeout: 5000
+- assertVisible: "Set your height"
+- tapOn: "Best estimate"
+- assertVisible: "Tape check recommended"
+- tapOn: "Back to scan picker"
+
+- extendedWaitUntil:
+    visible:
+      id: "vision-hub"
+    timeout: 5000
+- tapOn: "Close Drapeon Vision"
+- extendedWaitUntil:
+    visible: "Saved measurements"
+    timeout: 8000

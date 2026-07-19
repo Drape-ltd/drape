@@ -7,6 +7,8 @@ import { useCustomerProfile } from '@/lib/customerProfile'
 import { useAuth } from '@/lib/auth'
 import { useUnreadMessageCount } from '@/lib/unread-messages'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { DrapeCapsuleNav, DrapeCapsuleNavProvider } from '@/components/ui/DrapeCapsuleNav'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 
 const PRIMARY_GREEN = Colors.needleGreen
 const MUTED_GREY = Colors.midGrey
@@ -42,7 +44,11 @@ export default function CustomerTabLayout() {
   const hideTabBar = segments[0] === '(customer)' && segments.length > 2
 
   return (
-    <Tabs
+    <DrapeCapsuleNavProvider>
+      <Tabs
+      tabBar={MOBILE_FEATURE_FLAGS.interactionSystemV1
+        ? (props) => <DrapeCapsuleNav {...props} hidden={hideTabBar} />
+        : undefined}
       screenOptions={{
         headerShown: false,
         sceneStyle: {
@@ -50,29 +56,29 @@ export default function CustomerTabLayout() {
         },
         tabBarActiveTintColor: PRIMARY_GREEN,
         tabBarInactiveTintColor: MUTED_GREY,
-        tabBarStyle: {
-          backgroundColor: Colors.white,
-          borderTopColor: Colors.lightGrey,
-          borderTopWidth: 1,
-          display: hideTabBar ? 'none' : 'flex',
-        },
-        tabBarItemStyle: {
-          minHeight: 49,
-          paddingVertical: 0,
-        },
-        tabBarIconStyle: {
-          marginTop: 0,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          marginTop: 0,
-        },
+        tabBarShowLabel: !MOBILE_FEATURE_FLAGS.interactionSystemV1,
+        tabBarStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : {
+              backgroundColor: Colors.white,
+              borderTopColor: Colors.lightGrey,
+              borderTopWidth: 1,
+              display: hideTabBar ? 'none' : 'flex',
+            },
+        tabBarItemStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : { minHeight: 49, paddingVertical: 0 },
+        tabBarIconStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1 ? undefined : { marginTop: 0 },
+        tabBarLabelStyle: MOBILE_FEATURE_FLAGS.interactionSystemV1
+          ? undefined
+          : { fontSize: 11, marginTop: 0 },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Explore',
+          tabBarButtonTestID: 'tab-home',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
           tabBarButton: (props) => (
@@ -90,6 +96,7 @@ export default function CustomerTabLayout() {
         name="saved"
         options={{
           title: 'Wishlists',
+          tabBarButtonTestID: 'tab-saved',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
           tabBarButton: (props) => (
@@ -107,6 +114,7 @@ export default function CustomerTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
+          tabBarButtonTestID: 'tab-orders',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           tabBarButton: (props) => (
@@ -124,6 +132,7 @@ export default function CustomerTabLayout() {
         name="messages"
         options={{
           title: 'Messages',
+          tabBarButtonTestID: 'tab-messages',
           popToTopOnBlur: true,
           tabBarBadge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined,
           tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
@@ -143,6 +152,7 @@ export default function CustomerTabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          tabBarButtonTestID: 'tab-profile',
           popToTopOnBlur: true,
           tabBarIcon: ({ color, focused }) => <ProfileTabIcon color={color} focused={focused} />,
           tabBarButton: (props) => (
@@ -161,6 +171,7 @@ export default function CustomerTabLayout() {
       <Tabs.Screen name="tailor" options={{ href: null }} />
       <Tabs.Screen name="brief" options={{ href: null }} />
       <Tabs.Screen name="review" options={{ href: null }} />
-    </Tabs>
+      </Tabs>
+    </DrapeCapsuleNavProvider>
   )
 }

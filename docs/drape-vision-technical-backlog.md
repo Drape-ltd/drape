@@ -16,6 +16,12 @@ The product rule remains:
 - Drape labels confidence.
 - Tailor confirms high-risk fields.
 
+## Deferred Product Workflows
+
+`tailor_client_scan` (Tailor Guide), `garment_qc`, and `size_guide_scan` are intentionally removed from launch-facing navigation. None of these workflows has completed a real-device end-to-end product pass. Their dormant implementation is retained only as future research and must not be described as available.
+
+Re-entry is governed by `docs/drapeon-vision-design-and-regression-runbook.md`. Until those gates pass, tailors use editable Diary measurements for clients, production stage photos for garment handoff evidence, and manual fit ranges for listings.
+
 ## May 11 Progress
 
 - Tailors can now request measurement confirmation for specific fields instead of a vague whole-profile pause.

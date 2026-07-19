@@ -33,7 +33,6 @@ import {
   CONSULTATION_NO_SHOW_POLICY_LABELS,
   CONSULTATION_PAYMENT_TIMING_LABELS,
   CONSULTATION_RESCHEDULE_POLICY_LABELS,
-  CONSULTATION_STATUS_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   DISPATCH_SERVICE_LEVEL_LABELS,
@@ -49,7 +48,6 @@ import {
   MATERIAL_ISSUE_RESPONSE_LABELS,
   measurementAgeLabel,
   MEASUREMENT_SOURCE_LABELS,
-  MEASUREMENT_SCAN_STATUS_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
   labelFitContextFlag,
   fitProfileNeedsTailorReview,
@@ -60,7 +58,6 @@ import {
   parseOrderSupportMeta,
   resolveMeasurementAgeMeta,
   SCOPE_CHANGE_IMPACT_LABELS,
-  SCOPE_CHANGE_STATUS_LABELS,
   SCOPE_CHANGE_TYPE_LABELS,
   STALE_MEASUREMENT_MONTHS,
   type CancellationReviewReason,
@@ -84,14 +81,37 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input, MediaLightboxModal, PortfolioVideoPreview, RemoteImage, type MediaLightboxItem } from '@/components/ui'
+import {
+  Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeInlineActionCard,
+  DrapeMediaMosaic,
+  DrapeMediaViewer,
+  DrapeSheet,
+  DrapeStatusChip,
+  HandoffSupportModal,
+  Input,
+  PortfolioVideoPreview,
+  RemoteImage,
+  type DrapeMediaMosaicItem,
+  type MediaLightboxItem,
+} from '@/components/ui'
 import { BottomSheetScaffold } from '@/components/ui/BottomSheetScaffold'
-import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
-import { buildBriefDossier, currencySymbol } from '@drape/shared'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import {
+  buildBriefDossier,
+  currencySymbol,
+  formatConsultationStatusLabel,
+  formatMaterialAdvanceStatusLabel,
+  formatMeasurementStatusLabel,
+  formatScopeChangeStatusLabel,
+} from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { QUOTE_REVISION_REASON_LABELS, type QuoteRevisionReason } from '@drape/shared/order-negotiation'
 import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-brief-dossier'
 import {
   CANCELLATION_REFUND_COMPONENT_LABELS,
@@ -101,6 +121,7 @@ import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/cu
 import { stageColor } from '@/lib/stageColors'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
 import { hapticSuccess } from '@/lib/haptics'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 import {
   ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES,
   ALLOWED_VIDEO_CONTENT_TYPES,
@@ -108,6 +129,8 @@ import {
   MEDIA_LIMITS_SECONDS,
   OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
 } from '@drape/shared/media-policy'
+
+const QUOTE_NEGOTIATION_UI_ENABLED = MOBILE_FEATURE_FLAGS.quoteNegotiationV1
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -160,17 +183,6 @@ type MaterialAdvance = {
   createdAt: string
 }
 
-const MATERIAL_ADVANCE_STATUS_LABELS: Record<MaterialAdvanceStatus, string> = {
-  REQUESTED: 'Waiting on customer decision',
-  PAYMENT_PENDING: 'Approved - waiting on customer payment',
-  PAYMENT_FAILED: 'Payment failed',
-  PAID: 'Paid - ops review',
-  OPS_REVIEW: 'Paid - ops review',
-  RELEASED: 'Released',
-  BLOCKED: 'Ops review needed',
-  DECLINED: 'Declined',
-  CANCELLED: 'Canceled',
-}
 const ORDER_DETAIL_POLL_INTERVAL_MS = 60_000
 
 type CustomerProfileJoinRow = {
@@ -217,6 +229,10 @@ type TailorOrderDetailQueryRow = {
   shipping_amount: number | null
   total_amount: number | null
   quoted_completion_date: string | null
+  active_quote_id: string | null
+  active_quote_version: number | null
+  negotiation_round_limit: number | null
+  negotiation_rounds_used: number | null
   fulfillment_payment_requested_at: string | null
   fulfillment_payment_paid_at: string | null
   fulfillment_payment_provider: string | null
@@ -294,6 +310,8 @@ type OrderDetail = {
   garmentDescription: string | null; stage: OrderStage
   customerId: string; customerName: string
   quotedAmount: number | null; quotedCurrency: string; quotedCompletionDate: string | null
+  activeQuoteId: string | null; activeQuoteVersion: number | null
+  negotiationRoundLimit: number; negotiationRoundsUsed: number
   sourceAmount: number | null; subtotalAmount: number; taxAmount: number; shippingAmount: number; totalAmount: number
   fulfillmentPaymentRequestedAt: string | null
   fulfillmentPaymentPaidAt: string | null
@@ -331,6 +349,14 @@ type OrderDetail = {
   occasion: string | null; deadline: string | null
   createdAt: string
   stageUpdates: StageUpdate[]
+}
+
+type OpenTailorQuoteRevision = {
+  id: string
+  roundNumber: number
+  note: string
+  reasonCodes: string[]
+  targetAmount: number | null
 }
 
 function asStringList(value: unknown): string[] {
@@ -878,14 +904,16 @@ const BODY_SHAPE_LABELS: Record<string, string> = {
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function TailorOrderDetailScreen() {
-  const { id, returnTo, historyChain } = useLocalSearchParams<{
+  const { id, returnTo, historyChain, action } = useLocalSearchParams<{
     id: string
     returnTo?: string
     historyChain?: string
+    action?: string
   }>()
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
 
@@ -918,6 +946,11 @@ export default function TailorOrderDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [showQuoteModal, setShowQuoteModal] = useState(false)
+  const [quoteModalMode, setQuoteModalMode] = useState<'send' | 'revise'>('send')
+  const [openQuoteRevision, setOpenQuoteRevision] = useState<OpenTailorQuoteRevision | null>(null)
+  const [showRevisionResponseSheet, setShowRevisionResponseSheet] = useState(false)
+  const [revisionResponseSaving, setRevisionResponseSaving] = useState(false)
+  const initialActionHandledRef = useRef(false)
   const [showStageModal, setShowStageModal] = useState(false)
   const [stageModalTarget, setStageModalTarget] = useState<OrderStage | null>(null)
   const [showConsultationModal, setShowConsultationModal] = useState(false)
@@ -994,6 +1027,7 @@ export default function TailorOrderDetailScreen() {
       .select(`
         id, reference, order_kind, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
         customer_id, quoted_amount, currency, quoted_currency, fulfillment_fee, quoted_completion_date,
+        active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used,
         source_amount, subtotal_amount, tax_amount, shipping_amount, total_amount,
         fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
         fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, tracking_number, carrier,
@@ -1027,6 +1061,24 @@ export default function TailorOrderDetailScreen() {
           .eq('order_id', d.id)
           .order('created_at', { ascending: false })
         const customDetail = firstJoinedRow(d.custom_order_details)
+        const { data: openRevisionRow } = QUOTE_NEGOTIATION_UI_ENABLED && d.active_quote_id
+          ? await supabase
+              .from('quote_revision_requests')
+              .select('id, round_number, note, reason_codes, target_amount')
+              .eq('order_id', d.id)
+              .eq('source_quote_id', d.active_quote_id)
+              .eq('status', 'OPEN')
+              .maybeSingle()
+          : { data: null }
+        setOpenQuoteRevision(openRevisionRow ? {
+          id: openRevisionRow.id as string,
+          roundNumber: Number(openRevisionRow.round_number) || 1,
+          note: typeof openRevisionRow.note === 'string' ? openRevisionRow.note : '',
+          reasonCodes: Array.isArray(openRevisionRow.reason_codes)
+            ? openRevisionRow.reason_codes.filter((item): item is string => typeof item === 'string')
+            : [],
+          targetAmount: typeof openRevisionRow.target_amount === 'number' ? openRevisionRow.target_amount : null,
+        } : null)
         setMaterialAdvances(
           ((materialAdvanceRows ?? []) as Array<{
             id: string
@@ -1060,6 +1112,10 @@ export default function TailorOrderDetailScreen() {
           customerId: d.customer_id,
           customerName: displayText(customerProfile?.display_name, 'Customer'),
           quotedAmount: d.quoted_amount, quotedCurrency: d.currency ?? d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
+          activeQuoteId: d.active_quote_id ?? null,
+          activeQuoteVersion: d.active_quote_version ?? null,
+          negotiationRoundLimit: d.negotiation_round_limit ?? 3,
+          negotiationRoundsUsed: d.negotiation_rounds_used ?? 0,
           sourceAmount: d.source_amount ?? null,
           subtotalAmount: d.subtotal_amount ?? d.item_subtotal ?? 0,
           taxAmount: d.tax_amount ?? 0,
@@ -1222,6 +1278,60 @@ export default function TailorOrderDetailScreen() {
       customerId: order.customerId,
     })
   }, [order])
+
+  useEffect(() => {
+    if (initialActionHandledRef.current || !order || !action) return
+    if (action === 'SEND_QUOTE') {
+      initialActionHandledRef.current = true
+      setQuoteModalMode('send')
+      setShowQuoteModal(true)
+      return
+    }
+    if (action === 'REVISE_QUOTE' && openQuoteRevision && order.activeQuoteId && order.activeQuoteVersion) {
+      initialActionHandledRef.current = true
+      setQuoteModalMode('revise')
+      setShowQuoteModal(true)
+      return
+    }
+    if (
+      (action === 'KEEP_CURRENT_QUOTE' || action === 'DECLINE_AFTER_REVISION') &&
+      openQuoteRevision &&
+      order.activeQuoteId &&
+      order.activeQuoteVersion
+    ) {
+      initialActionHandledRef.current = true
+      setShowRevisionResponseSheet(true)
+    }
+  }, [action, openQuoteRevision, order])
+
+  async function respondToQuoteRevision(response: 'keep-current-quote' | 'decline-after-revision') {
+    if (
+      !order?.activeQuoteId ||
+      !order.activeQuoteVersion ||
+      !openQuoteRevision ||
+      revisionResponseSaving
+    ) return
+    setRevisionResponseSaving(true)
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: {
+        orderId: order.id,
+        action: response,
+        quoteId: order.activeQuoteId,
+        expectedQuoteVersion: order.activeQuoteVersion,
+        revisionRequestId: openQuoteRevision.id,
+      },
+    })
+    setRevisionResponseSaving(false)
+    if (error) {
+      Alert.alert(
+        'Response not saved',
+        await readFunctionErrorMessage(error, 'Refresh the order and try this response again.'),
+      )
+      return
+    }
+    setShowRevisionResponseSheet(false)
+    await fetchOrder()
+  }
 
   if (loading) {
     return (
@@ -1470,7 +1580,7 @@ export default function TailorOrderDetailScreen() {
     scopeChange?.typeLabel ??
     (scopeChange?.type ? SCOPE_CHANGE_TYPE_LABELS[scopeChange.type] : null)
   const scopeChangeStatusLabel =
-    scopeChange?.status ? SCOPE_CHANGE_STATUS_LABELS[scopeChange.status] : null
+    scopeChange?.status ? formatScopeChangeStatusLabel(scopeChange.status) : null
   const canRequestDeliveryReview =
     !cancellationReviewOpen &&
     !deliveryReviewOpen &&
@@ -1611,33 +1721,6 @@ export default function TailorOrderDetailScreen() {
         },
       },
     ])
-  }
-
-  async function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc'>) {
-    if (!order) return
-    let diaryId: string | undefined
-    if (mode === 'tailor_client_scan' && user?.id && order.customerId) {
-      const { data } = await supabase
-        .from('diary_entries')
-        .select('id')
-        .eq('tailor_id', user.id)
-        .eq('claimed_by_user_id', order.customerId)
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      diaryId = typeof data?.id === 'string' ? data.id : undefined
-    }
-
-    router.push({
-      pathname: DRAPE_VISION_ROUTE,
-      params: {
-        mode,
-        orderId: order.id,
-        ...(diaryId ? { diaryId } : {}),
-        returnTo: `/(tailor)/orders/${order.id}`,
-        historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
-      },
-    } as never)
   }
 
   async function startCall(callType: 'audio' | 'video') {
@@ -1834,7 +1917,7 @@ export default function TailorOrderDetailScreen() {
       'After consultation',
       'Choose the next step once you have enough information to proceed.',
       [
-        { text: 'Send quote', onPress: () => setShowQuoteModal(true) },
+        { text: 'Send quote', onPress: () => { setQuoteModalMode('send'); setShowQuoteModal(true) } },
         {
           text: 'Decline order',
           style: 'destructive',
@@ -1988,6 +2071,7 @@ export default function TailorOrderDetailScreen() {
 
       <ScrollView
         style={styles.scroll}
+        {...capsuleNavScroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 320, 420) }}
       >
@@ -2003,14 +2087,12 @@ export default function TailorOrderDetailScreen() {
               </View>
             ) : null}
             <View style={styles.stageRow}>
-              <View
-                style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}
+              <DrapeStatusChip
+                value={order.stage}
+                label={tailorOrderStageLabel(order.stage, order.orderKind)}
+                domain="order"
                 testID="tailor-order-stage"
-              >
-                <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                  {tailorOrderStageLabel(order.stage, order.orderKind)}
-                </Text>
-              </View>
+              />
               {quotedHeadlineAmount != null && (
                 <Text style={styles.amount}>
                   {formatAmount(
@@ -2101,7 +2183,11 @@ export default function TailorOrderDetailScreen() {
                   <Text style={styles.alertSub}>
                     Review the order details below and send your quote. You can also request a consultation first.
                   </Text>
-                  <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
+                  <Button
+                    label="Send quote"
+                    onPress={() => { setQuoteModalMode('send'); setShowQuoteModal(true) }}
+                    testID="tailor-send-quote-btn"
+                  />
                   <TouchableOpacity style={styles.compactActionMenuButton} onPress={openQuoteActionMenu}>
                     <Text style={styles.compactActionMenuText}>Consultation or decline</Text>
                     <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
@@ -2110,6 +2196,35 @@ export default function TailorOrderDetailScreen() {
               )}
             </View>
           )}
+
+          {QUOTE_NEGOTIATION_UI_ENABLED && order.stage === 'QUOTE_SENT' && openQuoteRevision ? (
+            <DrapeInlineActionCard
+              eyebrow={`Revision ${openQuoteRevision.roundNumber} of ${order.negotiationRoundLimit}`}
+              title="Customer requested quote changes"
+              body={openQuoteRevision.note}
+              icon="edit-3"
+            >
+              <View style={styles.quoteRevisionReasonRow}>
+                {openQuoteRevision.reasonCodes.map((reason) => (
+                  <DrapeStatusChip
+                    key={reason}
+                    label={QUOTE_REVISION_REASON_LABELS[reason as QuoteRevisionReason] ?? 'Other'}
+                    tone="warning"
+                  />
+                ))}
+              </View>
+              <DrapeCapsuleButton
+                label="Revise quote"
+                onPress={() => { setQuoteModalMode('revise'); setShowQuoteModal(true) }}
+                testID="tailor-revise-quote-btn"
+              />
+              <DrapeCapsuleButton
+                label="Other responses"
+                tone="secondary"
+                onPress={() => setShowRevisionResponseSheet(true)}
+              />
+            </DrapeInlineActionCard>
+          ) : null}
 
           {/* CONSULTATION — tailor awaiting consultation, then sends quote */}
           {order.stage === 'CONSULTATION' && (
@@ -2177,7 +2292,7 @@ export default function TailorOrderDetailScreen() {
                 <View style={styles.supportCard}>
                   <Text style={styles.supportCardTitle}>Consultation policy</Text>
                   <View style={styles.supportMetaList}>
-                    <BriefRow label="Status" value={consultationMeta.status ? CONSULTATION_STATUS_LABELS[consultationMeta.status] : 'Consultation requested'} />
+                    <BriefRow label="Status" value={formatConsultationStatusLabel(consultationMeta.status)} />
                     <BriefRow
                       label="Fee"
                       value={
@@ -2355,22 +2470,6 @@ export default function TailorOrderDetailScreen() {
                   </Text>
                 </View>
               ) : null}
-              <View style={styles.supportCard}>
-                <View style={styles.visionOrderHeader}>
-                  <View style={styles.visionOrderIcon}>
-                    <Feather name="shield" size={16} color={Colors.needleGreen} />
-                  </View>
-                  <Text style={styles.supportCardTitle}>Drapeon Vision garment QC</Text>
-                </View>
-                <Text style={styles.supportHint}>
-                  Verify final garment measurements and handoff readiness before collection or dispatch.
-                </Text>
-                <Button
-                  label="Open garment QC"
-                  variant="secondary"
-                  onPress={() => { void openDrapeVision('garment_qc') }}
-                />
-              </View>
               {order.deliveryMethod === 'LOCAL_COLLECTION' ? (
                 <Button
                   label="Mark ready for collection"
@@ -2411,7 +2510,7 @@ export default function TailorOrderDetailScreen() {
               <Text style={styles.supportCardTitle}>Order evidence timeline</Text>
             </View>
             <Text style={styles.supportHint}>
-              Drapeon Vision QC photos and production updates stay here so you, the customer, and ops are looking at the same proof.
+              Production photos and stage updates stay here so you, the customer, and ops are looking at the same proof.
             </Text>
             <View style={styles.timeline}>
               {order.stageUpdates.length > 0 ? order.stageUpdates.map((update) => (
@@ -2440,7 +2539,7 @@ export default function TailorOrderDetailScreen() {
                   <View style={styles.timelineContent}>
                     <Text style={styles.timelineStage}>No evidence yet</Text>
                     <Text style={styles.timelineNote}>
-                      Add photos when updating production stages or save a Drapeon Vision QC entry before handoff.
+                      Add photos when updating production stages so the final handoff has a clear evidence trail.
                     </Text>
                   </View>
                 </View>
@@ -2717,31 +2816,12 @@ export default function TailorOrderDetailScreen() {
                 </View>
               )}
 
-              {order.orderKind === 'CUSTOM' && PRE_CUTTING_STAGES.includes(order.stage) ? (
-                <View style={styles.supportCard}>
-                  <View style={styles.visionOrderHeader}>
-                    <View style={styles.visionOrderIcon}>
-                      <Feather name="aperture" size={16} color={Colors.needleGreen} />
-                    </View>
-                    <Text style={styles.supportCardTitle}>Drapeon Vision fit check</Text>
-                  </View>
-                  <Text style={styles.supportHint}>
-                    Use this when the customer is with you or when a measurement needs one more review before cutting.
-                  </Text>
-                  <Button
-                    label="Open Vision fit check"
-                    variant="secondary"
-                    onPress={() => { void openDrapeVision('tailor_client_scan') }}
-                  />
-                </View>
-              ) : null}
-
               {fitProfile ? (
                 <View style={styles.supportCard}>
                   <Text style={styles.supportCardTitle}>Fit notes</Text>
                   <View style={styles.supportMetaList}>
                     {fitProfile.status ? (
-                      <BriefRow label="Status" value={MEASUREMENT_SCAN_STATUS_LABELS[fitProfile.status]} />
+                      <BriefRow label="Status" value={formatMeasurementStatusLabel(fitProfile.status)} />
                     ) : null}
                     {fitProfile.fitIntent ? (
                       <BriefRow label="Fit direction" value={FIT_INTENT_LABELS[fitProfile.fitIntent]} />
@@ -2936,7 +3016,7 @@ export default function TailorOrderDetailScreen() {
                             <View style={{ flex: 1 }}>
                               <Text style={styles.advanceTitle}>{advance.title}</Text>
                               <Text style={styles.supportHint}>
-                                {amountLabel} · {MATERIAL_ADVANCE_STATUS_LABELS[advance.status] ?? advance.status.replace(/_/g, ' ')}
+                                {amountLabel} · {formatMaterialAdvanceStatusLabel(advance.status, 'tailor')}
                               </Text>
                               {advance.description ? (
                                 <Text style={styles.supportBodyText}>{advance.description}</Text>
@@ -3147,14 +3227,15 @@ export default function TailorOrderDetailScreen() {
         </View>
       </ScrollView>
 
-      {/* Message CTA */}
-      <View style={[styles.messageCta, { paddingBottom: Math.max(insets.bottom + Spacing.md, Spacing.lg) }]}>
-        <Button
+      <DrapeFloatingActionDock testID="tailor-order-message-dock">
+        <DrapeCapsuleButton
           label={conversationCtaLabel}
-          variant="secondary"
+          tone="primary"
+          icon="message-circle"
+          style={{ flex: 1 }}
           onPress={openOrderMessages}
         />
-      </View>
+      </DrapeFloatingActionDock>
 
       <HandoffSupportModal
         visible={showHandoffSupport}
@@ -3170,6 +3251,7 @@ export default function TailorOrderDetailScreen() {
 
       <BottomSheetScaffold
         visible={showDossierSheet}
+        testID="tailor-dossier-sheet"
         title={briefDossier.title}
         subtitle="Summary, style refs, fabric plan, fulfillment, and proof in one focused review surface."
         onDismiss={() => setShowDossierSheet(false)}
@@ -3187,14 +3269,16 @@ export default function TailorOrderDetailScreen() {
         </View>
       </BottomSheetScaffold>
 
-      <MediaLightboxModal
+      <DrapeMediaViewer
         items={mediaPreview?.items ?? []}
         activeIndex={mediaPreview?.index ?? null}
         onDismiss={() => setMediaPreview(null)}
+        testID="order-dossier-media-viewer"
       />
 
       <BottomSheetScaffold
         visible={showMeasurementSheet}
+        testID="tailor-measurement-sheet"
         title="Measurement profile"
         subtitle="Review body context and garment-specific values before the next production step."
         onDismiss={() => setShowMeasurementSheet(false)}
@@ -3259,9 +3343,15 @@ export default function TailorOrderDetailScreen() {
       {/* Quote modal */}
       {showQuoteModal ? (
         <QuoteModal
-          key={`quote-${order.id}`}
+          key={`quote-${order.id}-${quoteModalMode}-${order.activeQuoteVersion ?? 0}`}
           visible
           orderId={order.id}
+          mode={quoteModalMode}
+          quoteId={order.activeQuoteId}
+          expectedQuoteVersion={order.activeQuoteVersion}
+          revisionRequestId={openQuoteRevision?.id ?? null}
+          initialAmount={quoteModalMode === 'revise' ? order.quotedAmount : null}
+          initialCompletionDate={quoteModalMode === 'revise' ? order.quotedCompletionDate : null}
           defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
           deliveryMethod={order.deliveryMethod}
           customerDeadline={order.deadline}
@@ -3269,6 +3359,33 @@ export default function TailorOrderDetailScreen() {
           onSent={() => { setShowQuoteModal(false); fetchOrder() }}
         />
       ) : null}
+
+      <DrapeSheet
+        visible={showRevisionResponseSheet}
+        title="Respond to quote changes"
+        subtitle={openQuoteRevision
+          ? `Revision ${openQuoteRevision.roundNumber} of ${order.negotiationRoundLimit}`
+          : undefined}
+        onDismiss={() => setShowRevisionResponseSheet(false)}
+        enableDynamicSizing
+      >
+        <View style={styles.stageChoiceList}>
+          <Text style={styles.supportHint}>
+            Keep the current quote only when its price, scope, and date still cover the requested changes. The customer will receive a formal event either way.
+          </Text>
+          <DrapeCapsuleButton
+            label="Keep current quote"
+            loading={revisionResponseSaving}
+            onPress={() => { void respondToQuoteRevision('keep-current-quote') }}
+          />
+          <DrapeCapsuleButton
+            label="Decline order"
+            tone="destructive"
+            disabled={revisionResponseSaving}
+            onPress={() => { void respondToQuoteRevision('decline-after-revision') }}
+          />
+        </View>
+      </DrapeSheet>
 
       {/* Stage update modal */}
       {showStageModal && stageModalTarget ? (
@@ -4744,9 +4861,29 @@ function DeliveryReviewRequestModal({ visible, orderId, onClose, onSent }: {
 
 // ─── Quote Modal ──────────────────────────────────────────────────────────────
 
-function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, customerDeadline, onClose, onSent }: {
+function QuoteModal({
+  visible,
+  orderId,
+  mode,
+  quoteId,
+  expectedQuoteVersion,
+  revisionRequestId,
+  initialAmount,
+  initialCompletionDate,
+  defaultCurrency,
+  deliveryMethod,
+  customerDeadline,
+  onClose,
+  onSent,
+}: {
   visible: boolean
   orderId: string
+  mode: 'send' | 'revise'
+  quoteId: string | null
+  expectedQuoteVersion: number | null
+  revisionRequestId: string | null
+  initialAmount: number | null
+  initialCompletionDate: string | null
   defaultCurrency: CurrencyCode
   deliveryMethod: string
   customerDeadline: string | null
@@ -4754,8 +4891,10 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
   onSent: () => void
 }) {
   const currencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
-  const [amount, setAmount] = useState('')
-  const [completionDate, setCompletionDate] = useState('')
+  const [amount, setAmount] = useState(initialAmount != null ? String(initialAmount / 100) : '')
+  const [completionDate, setCompletionDate] = useState(
+    initialCompletionDate ? initialCompletionDate.slice(0, 10) : '',
+  )
   const [completionDateValue, setCompletionDateValue] = useState<Date | null>(null)
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [laborAmount, setLaborAmount] = useState('')
@@ -4803,6 +4942,10 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
     if (sending) return
     if (!amount || !effectiveCompletionDate) return
     if (!validateNote(note)) return
+    if (mode === 'revise' && (!quoteId || !expectedQuoteVersion || !revisionRequestId)) {
+      Alert.alert('Quote changed', 'Refresh this order before sending a revised quote.')
+      return
+    }
 
     // Validate date — Hermes (iOS) rejects non-padded formats like "2026/04/1"
     const parsedDate = new Date(effectiveCompletionDate)
@@ -4841,7 +4984,13 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
       const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
         body: {
           orderId,
-          action: 'send-quote',
+          action: mode === 'revise' ? 'revise-quote' : 'send-quote',
+          ...(mode === 'revise' ? {
+            quoteId,
+            expectedQuoteVersion,
+            revisionRequestId,
+            changeKind: 'CUSTOMER_REVISION' as const,
+          } : {}),
           amount: amountPence,
           currency: defaultCurrency,
           completionDate: parsedDate.toISOString(),
@@ -4863,7 +5012,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
         throw err
       }
 
-      capture('quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
+      capture(mode === 'revise' ? 'quote_revised' : 'quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
       onSent()
     } catch (e) {
       Sentry.captureException(e, { extra: { context: 'send_quote_submit', orderId } })
@@ -4888,7 +5037,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
             <TouchableOpacity onPress={onClose} disabled={sending}>
               <Text style={styles.modalClose}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Send quote</Text>
+            <Text style={styles.modalTitle}>{mode === 'revise' ? 'Revise quote' : 'Send quote'}</Text>
             <View style={{ width: 60 }} />
           </View>
 
@@ -5020,10 +5169,11 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
           </ScrollView>
           <View style={styles.modalFooter}>
             <Button
-              label="Send quote"
+              label={mode === 'revise' ? 'Send revised quote' : 'Send quote'}
               onPress={send}
               loading={sending}
               disabled={sending || !amount || !effectiveCompletionDate || !!noteError}
+              testID={mode === 'revise' ? 'tailor-send-revised-quote-btn' : 'tailor-send-quote-submit-btn'}
             />
           </View>
         </SafeAreaView>
@@ -5878,26 +6028,26 @@ function BriefDossierRowView({
   }
 
   if (row.presentation === 'media' && row.mediaUrls?.length) {
+    const mediaItems = dossierMediaItems(row.label, row.mediaUrls)
+    const mosaicItems: DrapeMediaMosaicItem[] = mediaItems.map((item, index) => ({
+      id: `${item.uri}-${index}`,
+      uri: item.uri,
+      kind: item.kind ?? 'photo',
+      label: `Open ${item.label}`,
+      bucket: item.bucket,
+    }))
     return (
       <View style={styles.dossierRowStacked}>
         <View style={styles.dossierRowHeader}>
           <Text style={styles.briefRowLabel}>{row.label}</Text>
           {row.value ? <Text style={styles.supportHint}>{row.value}</Text> : null}
         </View>
-        <View style={styles.dossierMediaGrid}>
-          {dossierMediaItems(row.label, row.mediaUrls).map((item, index, items) => (
-            <TouchableOpacity
-              key={item.uri + '-' + index}
-              style={styles.dossierMediaTile}
-              onPress={() => onOpenMedia(items, index)}
-              activeOpacity={0.9}
-              accessibilityRole="imagebutton"
-              accessibilityLabel={`Open ${item.label}`}
-            >
-              <StageMediaPreview uri={item.uri} style={styles.dossierMediaImage} surface="tailor_order_dossier_media" />
-            </TouchableOpacity>
-          ))}
-        </View>
+        <DrapeMediaMosaic
+          items={mosaicItems}
+          compact
+          testID={`tailor-dossier-media-${row.id}`}
+          onPressItem={(_item, index) => onOpenMedia(mediaItems, index)}
+        />
       </View>
     )
   }
@@ -6004,8 +6154,6 @@ const styles = StyleSheet.create({
   heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginTop: Spacing.sm },
-  stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
-  stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   orderTypePill: {
     marginTop: Spacing.sm,
@@ -6091,6 +6239,7 @@ const styles = StyleSheet.create({
   dossierList: { gap: Spacing.sm },
   sheetSectionStack: { gap: Spacing.md },
   stageChoiceList: { gap: Spacing.sm },
+  quoteRevisionReasonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   dossierRowStacked: { gap: 6 },
   dossierRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.sm },
   dossierStackedText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },

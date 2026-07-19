@@ -31,6 +31,7 @@ import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navig
 import { useKeyboardState } from '@/lib/useKeyboardState'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderConversationAction } from '@drape/shared/order-negotiation'
 import { getCallLifecycleState } from '@drape/shared/call-scheduling-policy'
 import type { OrderCallMeta } from '@/lib/order-support'
 
@@ -78,10 +79,12 @@ function formatOrderCallTime(value: string | null | undefined) {
 }
 
 export default function CustomerMessagesScreen() {
-  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
+  const { orderId, returnTo, historyChain, eventId, messageId } = useLocalSearchParams<{
     orderId: string
     returnTo?: string
     historyChain?: string
+    eventId?: string
+    messageId?: string
   }>()
   const router = useRouter()
   const navigation = useNavigation()
@@ -158,6 +161,19 @@ export default function CustomerMessagesScreen() {
       },
     })
   }
+
+  const openConversationAction = useCallback((action: OrderConversationAction) => {
+    if (!resolvedOrderId) return
+    router.push({
+      pathname: '/(customer)/orders/[id]',
+      params: {
+        id: resolvedOrderId,
+        action: action.kind,
+        returnTo: `/(customer)/messages/${resolvedOrderId}`,
+        historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+      },
+    })
+  }, [historyChain, resolvedOrderId, router])
 
   async function startConsultationCall(callType: 'audio' | 'video') {
     if (startingCall) return
@@ -601,6 +617,11 @@ export default function CustomerMessagesScreen() {
           tailorAvatarUrl={orderInfo.tailorAvatarUrl}
           customerName={orderInfo.customerName}
           customerAvatarUrl={orderInfo.customerAvatarUrl}
+          orderKind={orderInfo.orderKind}
+          orderStage={orderInfo.stage}
+          focusedEventId={eventId}
+          focusedMessageId={messageId}
+          onConversationAction={openConversationAction}
           callAvailable={orderInfo.stage === 'CONSULTATION' || isOrderCallStage(orderInfo.stage)}
           callLoading={!!startingCall}
           onPressCall={showDrapeCallOptions}

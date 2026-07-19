@@ -33,6 +33,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  Pause,
+  Play,
   Phone,
   Reply,
   Ruler,
@@ -90,6 +92,12 @@ import {
   FABRIC_SUBSTITUTION_OPTIONS,
   BULK_FABRIC_MODE_OPTIONS,
   formatDatabaseEnumLabel,
+  groupMessageMediaClusters,
+  deriveOrderConversationActions,
+  ORDER_EVENT_LABELS,
+  QUOTE_REVISION_REASON_LABELS,
+  type OrderConversationAction,
+  type OrderEventType,
   validatePhoneForProfile,
   validatePasswordStrength,
 } from '@drape/shared'
@@ -126,6 +134,14 @@ import { OpenAppButton } from './open-app-button'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { DataTable } from './ui/data-table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
 import { Field } from './ui/field'
 import { IconButton } from './ui/icon-button'
 import { Input } from './ui/input'
@@ -187,6 +203,7 @@ type AccountSurface =
   | 'item-detail'
 
 const ORDER_REALTIME_SURFACES = new Set<AccountSurface>(['orders', 'order-detail', 'work', 'checkout'])
+const QUOTE_NEGOTIATION_UI_ENABLED = process.env.NEXT_PUBLIC_QUOTE_NEGOTIATION_V1 === 'true'
 const ORDER_REALTIME_ROW_EVENTS = ['INSERT', 'UPDATE', 'DELETE'] as const
 const ORDER_REALTIME_CHILD_TABLES = [
   'custom_order_details',
@@ -196,6 +213,9 @@ const ORDER_REALTIME_CHILD_TABLES = [
   'order_production_evidence',
   'order_stage_updates',
   'reviews',
+  ...(QUOTE_NEGOTIATION_UI_ENABLED
+    ? ['order_quotes', 'quote_revision_requests', 'order_events'] as const
+    : []),
 ] as const
 
 const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
@@ -283,6 +303,59 @@ type AccountOrder = {
   collection_code_used: boolean | null
   tailor_profiles?: JoinedProfile | JoinedProfile[] | null
   customer_profiles?: JoinedProfile | JoinedProfile[] | null
+  active_quote_id?: string | null
+  active_quote_version?: number | null
+  negotiation_round_limit?: number | null
+  negotiation_rounds_used?: number | null
+}
+
+type AccountOrderQuote = {
+  id: string
+  order_id: string
+  version: number
+  status: 'ACTIVE' | 'SUPERSEDED' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED'
+  change_kind: string
+  currency: string
+  subtotal_amount: number
+  tax_amount: number
+  platform_fee_amount: number
+  delivery_fee_amount: number
+  total_amount: number
+  completion_date: string
+  breakdown: string | null
+  assumptions: string | null
+  expires_at: string | null
+  created_at: string
+}
+
+type AccountQuoteRevision = {
+  id: string
+  order_id: string
+  source_quote_id: string
+  source_quote_version: number
+  round_number: number
+  status: 'OPEN' | 'WITHDRAWN' | 'REVISED' | 'CURRENT_RETAINED' | 'ORDER_DECLINED' | 'CLOSED'
+  reason_codes: string[]
+  note: string
+  target_amount: number | null
+  currency: string
+  created_at: string
+  updated_at: string
+}
+
+type AccountOrderEvent = {
+  id: string
+  order_id: string
+  event_type: OrderEventType
+  actor_id: string | null
+  actor_role: string
+  quote_id: string | null
+  quote_version: number | null
+  revision_request_id: string | null
+  title: string
+  summary: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
 }
 
 type AccountPayment = {
@@ -716,6 +789,9 @@ type OrderDetailSurfaceData = {
   materialAdvances: MaterialAdvance[]
   customOrderDetail: CustomOrderDetail | null
   reviews: AccountReview[]
+  quotes: AccountOrderQuote[]
+  quoteRevisions: AccountQuoteRevision[]
+  orderEvents: AccountOrderEvent[]
   warning: string | null
 }
 
@@ -773,6 +849,7 @@ type BriefRenderData = BriefSurfaceData & {
 type CheckoutSurfaceData = {
   orders: AccountOrder[]
   payments: AccountPayment[]
+  quotes: AccountOrderQuote[]
   warning: string | null
 }
 
@@ -836,6 +913,9 @@ type MessagesSurfaceData = {
   orders: AccountOrder[]
   messages: AccountMessage[]
   reactions: AccountMessageReaction[]
+  quotes: AccountOrderQuote[]
+  quoteRevisions: AccountQuoteRevision[]
+  orderEvents: AccountOrderEvent[]
   warning: string | null
 }
 
@@ -894,6 +974,9 @@ const emptyOrderDetailSurfaceData: OrderDetailSurfaceData = {
   materialAdvances: [],
   customOrderDetail: null,
   reviews: [],
+  quotes: [],
+  quoteRevisions: [],
+  orderEvents: [],
   warning: null,
 }
 
@@ -924,6 +1007,7 @@ const emptyBriefSurfaceData: BriefSurfaceData = {
 const emptyCheckoutSurfaceData: CheckoutSurfaceData = {
   orders: [],
   payments: [],
+  quotes: [],
   warning: null,
 }
 
@@ -961,6 +1045,9 @@ const emptyMessagesSurfaceData: MessagesSurfaceData = {
   orders: [],
   messages: [],
   reactions: [],
+  quotes: [],
+  quoteRevisions: [],
+  orderEvents: [],
   warning: null,
 }
 
@@ -2431,6 +2518,48 @@ const accountOrderSelect = `
   tailor_profiles!tailor_profile_id(display_name, business_name, avatar_url, location)
 `
 
+async function fetchNegotiationSurfaceData(
+  supabase: ReturnType<typeof createClient>,
+  orderIds: string[],
+) {
+  if (!QUOTE_NEGOTIATION_UI_ENABLED || orderIds.length === 0) {
+    return {
+      quotes: [] as AccountOrderQuote[],
+      quoteRevisions: [] as AccountQuoteRevision[],
+      orderEvents: [] as AccountOrderEvent[],
+      warning: null as string | null,
+    }
+  }
+
+  const [quotesRes, revisionsRes, eventsRes] = await Promise.all([
+    supabase
+      .from('order_quotes')
+      .select('id, order_id, version, status, change_kind, currency, subtotal_amount, tax_amount, platform_fee_amount, delivery_fee_amount, total_amount, completion_date, breakdown, assumptions, expires_at, created_at')
+      .in('order_id', orderIds)
+      .order('version', { ascending: false }),
+    supabase
+      .from('quote_revision_requests')
+      .select('id, order_id, source_quote_id, source_quote_version, round_number, status, reason_codes, note, target_amount, currency, created_at, updated_at')
+      .in('order_id', orderIds)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('order_events')
+      .select('id, order_id, event_type, actor_id, actor_role, quote_id, quote_version, revision_request_id, title, summary, metadata, created_at')
+      .in('order_id', orderIds)
+      .order('created_at', { ascending: true })
+      .limit(500),
+  ])
+
+  return {
+    quotes: quotesRes.error ? [] : ((quotesRes.data ?? []) as AccountOrderQuote[]),
+    quoteRevisions: revisionsRes.error ? [] : ((revisionsRes.data ?? []) as AccountQuoteRevision[]),
+    orderEvents: eventsRes.error ? [] : ((eventsRes.data ?? []) as AccountOrderEvent[]),
+    warning: quotesRes.error || revisionsRes.error || eventsRes.error
+      ? 'Quote history is temporarily unavailable. Refresh before taking a quote action.'
+      : null,
+  }
+}
+
 async function hydrateOrderCustomerProfiles(
   supabase: ReturnType<typeof createClient>,
   orders: AccountOrder[],
@@ -3666,7 +3795,7 @@ async function fetchOrdersSurfaceData(userId: string, tailorProfileId?: string |
         .limit(80),
       supabase
         .from('messages')
-        .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at')
+        .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at, is_deleted, edited_at, reply_to_id')
         .in('order_id', orderIds)
         .order('created_at', { ascending: false })
         .limit(100),
@@ -3730,7 +3859,7 @@ async function fetchOrderDetailSurfaceData(
       .limit(80),
     supabase
       .from('messages')
-      .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at')
+      .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at, is_deleted, edited_at, reply_to_id')
       .eq('order_id', order.id)
       .order('created_at', { ascending: false })
       .limit(100),
@@ -3767,6 +3896,8 @@ async function fetchOrderDetailSurfaceData(
   if (paymentsRes.error || messagesRes.error || stageUpdatesRes.error || productionEvidenceRes.error || materialAdvancesRes.error || customOrderDetailRes.error || reviewsRes.error) {
     warning = warning ?? 'Latest order updates are unavailable. Refresh to retry.'
   }
+  const negotiation = await fetchNegotiationSurfaceData(supabase, [order.id])
+  warning = warning ?? negotiation.warning
 
   return {
     order,
@@ -3777,6 +3908,9 @@ async function fetchOrderDetailSurfaceData(
     materialAdvances: materialAdvancesRes.error ? [] : ((materialAdvancesRes.data ?? []) as MaterialAdvance[]),
     customOrderDetail: customOrderDetailRes.error ? null : ((customOrderDetailRes.data ?? null) as CustomOrderDetail | null),
     reviews: reviewsRes.error ? [] : ((reviewsRes.data ?? []) as AccountReview[]),
+    quotes: negotiation.quotes,
+    quoteRevisions: negotiation.quoteRevisions,
+    orderEvents: negotiation.orderEvents,
     warning,
   }
 }
@@ -3955,11 +4089,14 @@ async function fetchMessagesSurfaceData(userId: string, tailorProfileId?: string
 
   let messages: AccountMessage[] = []
   let reactions: AccountMessageReaction[] = []
+  let quotes: AccountOrderQuote[] = []
+  let quoteRevisions: AccountQuoteRevision[] = []
+  let orderEvents: AccountOrderEvent[] = []
   const orderIds = orders.map((order) => order.id)
   if (orderIds.length > 0) {
     const messagesRes = await supabase
       .from('messages')
-      .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at')
+      .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at, is_deleted, edited_at, reply_to_id')
       .in('order_id', orderIds)
       .order('created_at', { ascending: false })
       .limit(100)
@@ -3985,12 +4122,21 @@ async function fetchMessagesSurfaceData(userId: string, tailorProfileId?: string
         reactions = (reactionsRes.data ?? []) as AccountMessageReaction[]
       }
     }
+
+    const negotiation = await fetchNegotiationSurfaceData(supabase, orderIds)
+    quotes = negotiation.quotes
+    quoteRevisions = negotiation.quoteRevisions
+    orderEvents = negotiation.orderEvents
+    warning = warning ?? negotiation.warning
   }
 
   return {
     orders,
     messages,
     reactions,
+    quotes,
+    quoteRevisions,
+    orderEvents,
     warning,
   }
 }
@@ -4101,10 +4247,13 @@ async function fetchCheckoutSurfaceData(userId: string): Promise<CheckoutSurface
       payments = (paymentsRes.data ?? []) as AccountPayment[]
     }
   }
+  const negotiation = await fetchNegotiationSurfaceData(supabase, orderIds)
+  warning = warning ?? negotiation.warning
 
   return {
     orders,
     payments,
+    quotes: negotiation.quotes,
     warning,
   }
 }
@@ -5399,7 +5548,19 @@ function StripeCardAuthorization({
   )
 }
 
-function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: () => void }) {
+function activeQuoteForOrder(quotes: AccountOrderQuote[], orderId: string) {
+  return quotes.find((quote) => quote.order_id === orderId && quote.status === 'ACTIVE') ?? null
+}
+
+function CheckoutAction({
+  order,
+  activeQuote,
+  onRefresh,
+}: {
+  order: AccountOrder
+  activeQuote?: AccountOrderQuote | null
+  onRefresh: () => void
+}) {
   const [busy, setBusy] = useState(false)
   const [declining, setDeclining] = useState(false)
   const [declineArmed, setDeclineArmed] = useState(false)
@@ -5413,6 +5574,15 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
   } | null>(null)
 
   async function handleCheckout() {
+    if (
+      QUOTE_NEGOTIATION_UI_ENABLED &&
+      order.order_kind === 'CUSTOM' &&
+      order.stage === 'QUOTE_SENT' &&
+      !activeQuote
+    ) {
+      setError('The active quote could not be loaded. Refresh this order before paying.')
+      return
+    }
     setBusy(true)
     setError(null)
     setStripePayment(null)
@@ -5428,7 +5598,14 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
         paymentIntentId?: string | null
         amount?: number
         currency?: string
-      }>('payment-action', { action: 'prepare-payment', orderId: order.id })
+      }>('payment-action', {
+        action: 'prepare-payment',
+        orderId: order.id,
+        ...(QUOTE_NEGOTIATION_UI_ENABLED && activeQuote ? {
+          quoteId: activeQuote.id,
+          expectedQuoteVersion: activeQuote.version,
+        } : {}),
+      })
 
       onRefresh()
       if (result.confirmed || result.alreadyPaid) {
@@ -5463,6 +5640,10 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
     if (order.order_kind !== 'CUSTOM' || order.stage !== 'QUOTE_SENT') return
     setError(null)
     setSuccess(null)
+    if (QUOTE_NEGOTIATION_UI_ENABLED && !activeQuote) {
+      setError('The active quote could not be loaded. Refresh this order before declining it.')
+      return
+    }
     if (!declineArmed) {
       setDeclineArmed(true)
       setSuccess('Click decline once more to close this quote.')
@@ -5473,6 +5654,10 @@ function CheckoutAction({ order, onRefresh }: { order: AccountOrder; onRefresh: 
       await invokeAccountFunction('customer-order-action', {
         action: 'decline-quote',
         orderId: order.id,
+        ...(QUOTE_NEGOTIATION_UI_ENABLED && activeQuote ? {
+          quoteId: activeQuote.id,
+          expectedQuoteVersion: activeQuote.version,
+        } : {}),
       })
       setDeclineArmed(false)
       setSuccess('Quote declined. This order is now closed.')
@@ -6456,17 +6641,47 @@ function useMessageMediaUrl(raw: string | null | undefined): string | null {
   return signed?.path === storagePath ? signed.url : null
 }
 
+function messageMediaStoragePath(raw: string | null | undefined) {
+  if (!raw) return null
+  if (raw.startsWith('messages/')) return raw
+  if (raw.startsWith('message-media/')) return raw.replace(/^message-media\//, '')
+  return null
+}
+
+function useMessageMediaUrls(messages: AccountMessage[]) {
+  const sourceKey = messages.map((message) => message.photo_url ?? '').join('|')
+  const [resolved, setResolved] = useState<{ key: string; urls: Array<string | null> } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(messages.map(async (message) => {
+      const immediate = safeMediaUrl(message.photo_url)
+      if (immediate) return immediate
+      const storagePath = messageMediaStoragePath(message.photo_url)
+      return storagePath ? createMessageMediaSignedUrl(storagePath) : null
+    })).then((urls) => {
+      if (!cancelled) setResolved({ key: sourceKey, urls })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [messages, sourceKey])
+
+  return resolved?.key === sourceKey ? resolved.urls : messages.map(() => null)
+}
+
 function voicePlaybackMimeType(raw: string | null | undefined, fallback?: string | null) {
+  const normalizedFallback = fallback?.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (normalizedFallback === 'audio/m4a' || normalizedFallback === 'audio/x-m4a') return 'audio/mp4'
+  if (normalizedFallback.startsWith('audio/')) return normalizedFallback
+
   const source = (raw ?? '').split('?')[0]?.toLowerCase() ?? ''
   if (/\.(m4a|mp4)$/u.test(source)) return 'audio/mp4'
   if (/\.aac$/u.test(source)) return 'audio/aac'
-  if (/\.webm$/u.test(source)) return 'audio/webm; codecs="opus"'
-  if (/\.ogg$/u.test(source)) return 'audio/ogg; codecs="opus"'
+  if (/\.webm$/u.test(source)) return 'audio/webm'
+  if (/\.ogg$/u.test(source)) return 'audio/ogg'
   if (/\.wav$/u.test(source)) return 'audio/wav'
-
-  const normalizedFallback = fallback?.split(';')[0]?.trim().toLowerCase() ?? ''
-  if (normalizedFallback === 'audio/m4a' || normalizedFallback === 'audio/x-m4a') return 'audio/mp4'
-  return normalizedFallback || 'audio/mp4'
+  return 'audio/mp4'
 }
 
 function useMessageVoicePlayback(raw: string | null | undefined) {
@@ -6513,26 +6728,123 @@ function useMessageVoicePlayback(raw: string | null | undefined) {
 
 function VoiceMessagePlayer({ raw }: { raw: string | null | undefined }) {
   const playback = useMessageVoicePlayback(raw)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const [failedSource, setFailedSource] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
+
+  function formatPlaybackTime(seconds: number) {
+    const safeSeconds = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0
+    const minutes = Math.floor(safeSeconds / 60)
+    return `${minutes}:${String(safeSeconds % 60).padStart(2, '0')}`
+  }
+
+  async function togglePlayback() {
+    const audio = audioRef.current
+    if (!audio || failedSource === playback.url) return
+    if (!audio.paused) {
+      audio.pause()
+      return
+    }
+    try {
+      await audio.play()
+    } catch {
+      setFailedSource(playback.url)
+    }
+  }
+
+  function cyclePlaybackRate() {
+    const nextRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1
+    setPlaybackRate(nextRate)
+    if (audioRef.current) audioRef.current.playbackRate = nextRate
+  }
 
   if (playback.loading || !playback.url) {
-    return <div className="h-10 w-full animate-pulse rounded-[8px] bg-ink/8" aria-label="Loading voice note" />
+    return <div className="h-12 w-full animate-pulse rounded-[8px] bg-ink/8" aria-label="Loading voice note" />
   }
   const failed = failedSource === playback.url
 
   return (
-    <div className="grid w-full min-w-0 gap-1.5">
+    <div className="grid w-full min-w-0 gap-2">
       <audio
+        key={playback.url}
+        ref={audioRef}
         src={playback.url}
-        controls
         preload="metadata"
-        className="h-10 w-full min-w-0"
+        className="hidden"
+        muted={muted}
+        onLoadStart={() => {
+          setPlaying(false)
+          setCurrentTime(0)
+          setDuration(0)
+          setFailedSource(null)
+        }}
+        onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false)
+          setCurrentTime(0)
+        }}
         onCanPlay={() => setFailedSource(null)}
         onError={() => setFailedSource(playback.url)}
       />
+      {!failed ? (
+        <div className="flex min-h-12 w-full min-w-0 items-center gap-2 rounded-[8px] border border-current/10 bg-current/[0.045] px-2.5 py-2">
+          <button
+            type="button"
+            onClick={() => { void togglePlayback() }}
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-current/10 transition hover:bg-current/16 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/40"
+            aria-label={playing ? 'Pause voice note' : 'Play voice note'}
+          >
+            {playing ? <Pause className="size-4" /> : <Play className="ml-0.5 size-4" />}
+          </button>
+          <div className="grid min-w-0 flex-1 gap-1">
+            <input
+              type="range"
+              min={0}
+              max={duration > 0 ? duration : 1}
+              step={0.1}
+              value={Math.min(currentTime, duration > 0 ? duration : 1)}
+              onChange={(event) => {
+                const nextTime = Number(event.target.value)
+                setCurrentTime(nextTime)
+                if (audioRef.current) audioRef.current.currentTime = nextTime
+              }}
+              className="h-1.5 w-full cursor-pointer accent-current"
+              aria-label="Voice note position"
+            />
+            <div className="flex items-center justify-between gap-2 text-[0.68rem] font-medium opacity-65">
+              <span>{formatPlaybackTime(currentTime)} / {formatPlaybackTime(duration)}</span>
+              <span>Voice note</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={cyclePlaybackRate}
+            className="min-w-9 shrink-0 rounded-[6px] px-1.5 py-1 text-xs font-semibold transition hover:bg-current/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/40"
+            aria-label={`Playback speed ${playbackRate} times`}
+          >
+            {playbackRate}x
+          </button>
+          <button
+            type="button"
+            onClick={() => setMuted((current) => !current)}
+            className="grid size-8 shrink-0 place-items-center rounded-[6px] transition hover:bg-current/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/40"
+            aria-label={muted ? 'Unmute voice note' : 'Mute voice note'}
+          >
+            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+          </button>
+        </div>
+      ) : null}
       {failed ? (
-        <p className="text-xs leading-5 text-rust">
-          This browser could not decode the voice note.{' '}
+        <p className="rounded-[8px] border border-rust/20 bg-rust/6 px-3 py-2 text-xs leading-5 text-rust">
+          This legacy voice note cannot be decoded by this browser.{' '}
           {playback.fallbackUrl ? (
             <a href={playback.fallbackUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
               Open the original audio
@@ -6586,6 +6898,91 @@ function MessageContent({ message, compact = false }: { message: AccountMessage;
         </MediaViewerDialog>
       ) : null}
       {hasVoiceAttachment ? <VoiceMessagePlayer raw={message.voice_url} /> : null}
+    </div>
+  )
+}
+
+function MessageMediaMosaic({
+  messages,
+  onReply,
+}: {
+  messages: AccountMessage[]
+  onReply: (message: AccountMessage) => void
+}) {
+  const urls = useMessageMediaUrls(messages)
+  const gallery = messages.flatMap((message, index) => {
+    const src = urls[index]
+    return src ? [{
+      src,
+      kind: isVideoMediaUrl(src) ? 'video' as const : 'image' as const,
+      title: `Attachment ${index + 1} of ${messages.length}`,
+    }] : []
+  })
+  const visible = messages.slice(0, 4)
+  const count = messages.length
+  const gridClass = count === 1
+    ? 'grid-cols-1'
+    : 'grid-cols-2'
+
+  return (
+    <div className={`grid min-h-40 overflow-hidden rounded-[8px] bg-black/8 ${gridClass} gap-1`}>
+      {visible.map((message, index) => {
+        const src = urls[index]
+        const galleryIndex = src ? gallery.findIndex((item) => item.src === src) : 0
+        const extra = index === 3 ? Math.max(0, count - 4) : 0
+        const tallFirst = count === 3 && index === 0
+        const kind = src && isVideoMediaUrl(src) ? 'video' as const : 'image' as const
+
+        if (!src) {
+          return <div key={message.id} className={`${tallFirst ? 'row-span-2' : ''} min-h-36 animate-pulse bg-ink/8`} aria-label="Loading attachment" />
+        }
+
+        return (
+          <MediaViewerDialog
+            key={message.id}
+            src={src}
+            kind={kind}
+            title={`Attachment ${index + 1}`}
+            items={gallery}
+            initialIndex={Math.max(galleryIndex, 0)}
+          >
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={`Open attachment ${index + 1} of ${count}`}
+              className={`group/tile relative min-h-36 cursor-zoom-in overflow-hidden bg-black ${tallFirst ? 'row-span-2' : ''}`}
+            >
+              {kind === 'video' ? (
+                <video src={src} muted playsInline preload="metadata" className="h-full min-h-36 w-full object-cover" />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={src} alt={`Message attachment ${index + 1}`} className="h-full min-h-36 w-full object-cover" />
+              )}
+              {kind === 'video' ? (
+                <span className="absolute inset-0 grid place-items-center bg-black/10">
+                  <span className="grid size-10 place-items-center rounded-full bg-white/92 text-ink shadow"><Video className="size-4" /></span>
+                </span>
+              ) : null}
+              <IconButton
+                type="button"
+                size="icon-sm"
+                variant="secondary"
+                label={`Reply to attachment ${index + 1}`}
+                className="absolute right-2 top-2 z-10 opacity-0 shadow-md transition-opacity group-hover/tile:opacity-100 group-focus-within/tile:opacity-100"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onReply(message)
+                }}
+              >
+                <Reply />
+              </IconButton>
+              {extra > 0 ? (
+                <span className="absolute inset-0 grid place-items-center bg-black/58 text-xl font-bold text-white">+{extra}</span>
+              ) : null}
+            </div>
+          </MediaViewerDialog>
+        )
+      })}
     </div>
   )
 }
@@ -12844,7 +13241,11 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
             Start the real provider checkout from web. If this is an extra delivery or shipping fee, Drapeon uses the existing fulfillment payment request.
           </p>
           <div className="mt-5">
-            <CheckoutAction order={order} onRefresh={onRefresh} />
+            <CheckoutAction
+              order={order}
+              activeQuote={activeQuoteForOrder(data.quotes, order.id)}
+              onRefresh={onRefresh}
+            />
           </div>
         </section>
       ) : null}
@@ -12864,6 +13265,21 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
           {briefDossier.sections.map((section) => <BriefDossierSectionCard key={section.id} section={section} />)}
         </div>
       </Surface>
+
+      {data.orderEvents.length > 0 ? (
+        <Surface className="p-6">
+          <SurfaceHeader
+            eyebrow="Formal record"
+            title="Quote and order decisions"
+            description="Versioned decisions are preserved here even when later quotes supersede earlier ones."
+          />
+          <div className="mt-5 grid gap-3">
+            {data.orderEvents.map((event) => (
+              <OrderConversationEventCard key={event.id} event={event} />
+            ))}
+          </div>
+        </Surface>
+      ) : null}
 
       <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
         <h2 className="text-2xl font-semibold text-ink">Timeline</h2>
@@ -13119,9 +13535,84 @@ function readArchivedMessageOrderIds(storageKey: string | null) {
   }
 }
 
+function OrderConversationEventCard({ event }: { event: AccountOrderEvent }) {
+  const label = ORDER_EVENT_LABELS[event.event_type] ?? formatDatabaseEnumLabel(event.event_type)
+  return (
+    <div className="mx-auto my-2 w-[min(92%,38rem)] rounded-[8px] border border-needle/18 bg-needle/6 px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <StatusChip status={event.event_type} fallback={label} />
+        <time className="text-xs text-ink/44">{formatMessageRelative(event.created_at)}</time>
+      </div>
+      <p className="mt-2 text-sm font-semibold text-ink">{safeUserText(event.title, label)}</p>
+      {event.summary ? (
+        <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(event.summary, '')}</p>
+      ) : null}
+      <p className="mt-2 text-xs text-ink/44">
+        {formatDatabaseEnumLabel(event.actor_role, 'Drapeon')}
+        {typeof event.quote_version === 'number' ? ` · Quote v${event.quote_version}` : ''}
+      </p>
+    </div>
+  )
+}
+
+function ConversationActionBar({
+  primary,
+  overflow,
+  revisionRoundsUsed,
+  revisionRoundLimit,
+  busy,
+  onAction,
+}: {
+  primary: OrderConversationAction
+  overflow: OrderConversationAction[]
+  revisionRoundsUsed: number
+  revisionRoundLimit: number
+  busy: boolean
+  onAction: (action: OrderConversationAction) => void
+}) {
+  return (
+    <div className="flex flex-col gap-3 border-t border-needle/14 bg-needle/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle/75">Order action</p>
+        <p className="mt-1 text-xs text-ink/52">Revision {revisionRoundsUsed} of {revisionRoundLimit}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant={primary.emphasis === 'DESTRUCTIVE' ? 'destructive' : 'primary'}
+          disabled={busy}
+          onClick={() => onAction(primary)}
+        >
+          {primary.label}
+        </Button>
+        {overflow.length > 0 ? (
+          <details className="relative">
+            <summary className="grid size-9 cursor-pointer list-none place-items-center rounded-[8px] border border-ui-border bg-white text-lg font-semibold text-ink shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-drape-green/45" aria-label="More order actions">···</summary>
+            <div className="absolute bottom-11 right-0 z-30 grid min-w-56 gap-1 rounded-[8px] border border-ui-border bg-white p-2 shadow-xl">
+              {overflow.map((action) => (
+                <button
+                  key={action.kind}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onAction(action)}
+                  className={`rounded-[6px] px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-ui-muted disabled:opacity-45 ${action.emphasis === 'DESTRUCTIVE' ? 'text-rust' : 'text-ink'}`}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefresh: () => void }) {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const requestedOrderId = searchParams.get('orderId')
+  const requestedEventId = searchParams.get('eventId')
   const [realtimeMessages, setRealtimeMessages] = useState<AccountMessage[]>([])
   const [reactionPatchState, setReactionPatchState] = useState<{
     upserts: AccountMessageReaction[]
@@ -13143,6 +13634,13 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set())
   const [counterpartyIsTyping, setCounterpartyIsTyping] = useState(false)
   const [counterpartyPresence, setCounterpartyPresence] = useState<{ online: boolean; lastSeen: Date | null }>({ online: false, lastSeen: null })
+  const [conversationActionBusy, setConversationActionBusy] = useState(false)
+  const [conversationActionError, setConversationActionError] = useState<string | null>(null)
+  const [revisionDialogOpen, setRevisionDialogOpen] = useState(false)
+  const [revisionReasons, setRevisionReasons] = useState<string[]>(['PRICE'])
+  const [revisionNote, setRevisionNote] = useState('')
+  const [revisionTargetAmount, setRevisionTargetAmount] = useState('')
+  const [editingRevision, setEditingRevision] = useState(false)
   const notificationPermissionRef = useRef<NotificationPermission | 'unsupported'>('unsupported')
   const markedReadRef = useRef<Set<string>>(new Set())
   const orderChannelRef = useRef<RealtimeChannel | null>(null)
@@ -13401,29 +13899,113 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   })()
 
   const selectedThread = threads.find((thread) => thread.order.id === selectedOrderId) ?? null
-  const selectedMessages = selectedThread
-    ? [...selectedThread.messages].sort((a, b) => timestampMs(a.created_at) - timestampMs(b.created_at))
-    : []
+  const selectedActiveQuote = selectedThread
+    ? activeQuoteForOrder(data.quotes, selectedThread.order.id)
+    : null
+  const selectedOpenRevision = selectedThread
+    ? data.quoteRevisions.find((revision) => (
+        revision.order_id === selectedThread.order.id && revision.status === 'OPEN'
+      )) ?? null
+    : null
+  const selectedNegotiationRoundsUsed = selectedThread
+    ? Math.max(
+        0,
+        ...data.quoteRevisions
+          .filter((revision) => revision.order_id === selectedThread.order.id)
+          .map((revision) => revision.round_number),
+      )
+    : 0
+  const selectedConversationActions = useMemo(() => {
+    if (!QUOTE_NEGOTIATION_UI_ENABLED || !selectedThread || selectedThread.order.order_kind !== 'CUSTOM') {
+      return null
+    }
+    const role = selectedThread.order.customer_id === data.userId ? 'CUSTOMER' : 'TAILOR'
+    return deriveOrderConversationActions({
+      role,
+      orderKind: 'CUSTOM',
+      stage: (selectedThread.order.stage ?? 'PENDING_QUOTE') as OrderStage,
+      activeQuote: selectedActiveQuote ? {
+        id: selectedActiveQuote.id,
+        version: selectedActiveQuote.version,
+        status: selectedActiveQuote.status,
+      } : null,
+      openRevision: selectedOpenRevision ? {
+        id: selectedOpenRevision.id,
+        status: selectedOpenRevision.status,
+        roundNumber: selectedOpenRevision.round_number,
+      } : null,
+      negotiationRoundsUsed: selectedNegotiationRoundsUsed,
+      negotiationRoundLimit: 3,
+      paymentStarted: ['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(selectedThread.order.stage ?? ''),
+    })
+  }, [data.userId, selectedActiveQuote, selectedNegotiationRoundsUsed, selectedOpenRevision, selectedThread])
+  const selectedMessages = useMemo(
+    () => selectedThread
+      ? [...selectedThread.messages].sort((a, b) => timestampMs(a.created_at) - timestampMs(b.created_at))
+      : [],
+    [selectedThread],
+  )
+  const selectedMessageGroups = useMemo(
+    () => groupMessageMediaClusters(selectedMessages.map((message) => ({
+      ...message,
+      sender_id: message.sender_id ?? '',
+    }))),
+    [selectedMessages],
+  )
+  const selectedOrderEvents = useMemo(
+    () => selectedThread
+      ? data.orderEvents.filter((event) => event.order_id === selectedThread.order.id)
+      : [],
+    [data.orderEvents, selectedThread],
+  )
+  const conversationItems = useMemo(() => {
+    const messageItems = selectedMessageGroups.map((group) => ({
+      kind: 'messages' as const,
+      key: group.map((message) => message.id).join(':'),
+      createdAt: group.at(-1)?.created_at ?? null,
+      group,
+    }))
+    const eventItems = selectedOrderEvents.map((event) => ({
+      kind: 'event' as const,
+      key: `event:${event.id}`,
+      createdAt: event.created_at,
+      event,
+    }))
+    return [...messageItems, ...eventItems].sort(
+      (left, right) => timestampMs(left.createdAt) - timestampMs(right.createdAt),
+    )
+  }, [selectedMessageGroups, selectedOrderEvents])
   const messageVirtualizer = useVirtualizer({
-    count: selectedMessages.length,
+    count: conversationItems.length,
     getScrollElement: () => messageListRef.current,
     estimateSize: (index) => {
-      const message = selectedMessages[index]
+      const item = conversationItems[index]
+      if (!item) return 86
+      if (item.kind === 'event') return 122
+      const group = item.group
+      const message = group.at(-1)
+      if (group.length > 1) return 390
       if (message?.voice_url) return 112
       if (message?.photo_url) return 300
       return 86
     },
-    getItemKey: (index) => selectedMessages[index]?.id ?? index,
+    getItemKey: (index) => conversationItems[index]?.key ?? index,
     overscan: 8,
   })
 
   useEffect(() => {
-    if (!selectedOrderId || selectedMessages.length === 0) return
+    if (!selectedOrderId || conversationItems.length === 0) return
     const frame = window.requestAnimationFrame(() => {
-      messageVirtualizer.scrollToIndex(selectedMessages.length - 1, { align: 'end' })
+      const requestedIndex = requestedEventId
+        ? conversationItems.findIndex((item) => item.kind === 'event' && item.event.id === requestedEventId)
+        : -1
+      messageVirtualizer.scrollToIndex(
+        requestedIndex >= 0 ? requestedIndex : conversationItems.length - 1,
+        { align: requestedIndex >= 0 ? 'center' : 'end' },
+      )
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [messageVirtualizer, selectedMessages.length, selectedOrderId])
+  }, [conversationItems, messageVirtualizer, requestedEventId, selectedOrderId])
   const selectedUnreadIds = selectedMessages
     .filter((message) => data.userId && message.sender_id !== data.userId && !message.read_at && !localReadIds.has(message.id))
     .map((message) => message.id)
@@ -13486,6 +14068,122 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     } finally {
       setMarkingAllRead(false)
     }
+  }
+
+  function openQuoteRevisionDialog(editing: boolean) {
+    setConversationActionError(null)
+    setEditingRevision(editing)
+    setRevisionReasons(editing && selectedOpenRevision?.reason_codes.length
+      ? selectedOpenRevision.reason_codes
+      : ['PRICE'])
+    setRevisionNote(editing ? selectedOpenRevision?.note ?? '' : '')
+    setRevisionTargetAmount(
+      editing && selectedOpenRevision?.target_amount
+        ? String(selectedOpenRevision.target_amount / 100)
+        : '',
+    )
+    setRevisionDialogOpen(true)
+  }
+
+  async function submitQuoteRevision() {
+    if (!selectedThread || !selectedActiveQuote) return
+    if (revisionNote.trim().length < 10) {
+      setConversationActionError('Add at least 10 characters explaining what should change.')
+      return
+    }
+    const targetAmount = revisionTargetAmount.trim()
+      ? parseMinorUnits(revisionTargetAmount)
+      : null
+    if (revisionTargetAmount.trim() && targetAmount === null) {
+      setConversationActionError('Enter a valid target amount or leave it blank.')
+      return
+    }
+
+    setConversationActionBusy(true)
+    setConversationActionError(null)
+    try {
+      await invokeAccountFunction('customer-order-action', {
+        action: editingRevision ? 'edit-quote-revision' : 'request-quote-revision',
+        orderId: selectedThread.order.id,
+        quoteId: selectedActiveQuote.id,
+        expectedQuoteVersion: selectedActiveQuote.version,
+        ...(editingRevision && selectedOpenRevision
+          ? { revisionRequestId: selectedOpenRevision.id }
+          : {}),
+        quoteRevisionReasons: revisionReasons,
+        quoteRevisionNote: revisionNote.trim(),
+        quoteTargetAmount: targetAmount,
+      })
+      setRevisionDialogOpen(false)
+      onRefresh()
+    } catch (actionError) {
+      setConversationActionError(friendlyActionError(
+        actionError,
+        'The quote change request could not be saved. Refresh the conversation and try again.',
+      ))
+    } finally {
+      setConversationActionBusy(false)
+    }
+  }
+
+  async function handleConversationAction(action: OrderConversationAction) {
+    if (!selectedThread) return
+    setConversationActionError(null)
+
+    if (action.kind === 'REQUEST_QUOTE_CHANGES') {
+      openQuoteRevisionDialog(false)
+      return
+    }
+    if (action.kind === 'EDIT_QUOTE_CHANGE_REQUEST') {
+      openQuoteRevisionDialog(true)
+      return
+    }
+    if (action.kind === 'ACCEPT_AND_PAY') {
+      router.push(accountRoute(`/account/checkout?orderId=${selectedThread.order.id}`))
+      return
+    }
+    if (action.kind === 'VIEW_QUOTE') {
+      router.push(accountRoute(`/account/orders/${selectedThread.order.id}`))
+      return
+    }
+
+    if (
+      action.kind === 'WITHDRAW_QUOTE_CHANGE_REQUEST' ||
+      action.kind === 'KEEP_CURRENT_QUOTE'
+    ) {
+      if (!selectedActiveQuote || !selectedOpenRevision) {
+        setConversationActionError('The quote changed. Refresh this conversation before taking that action.')
+        return
+      }
+      setConversationActionBusy(true)
+      try {
+        await invokeAccountFunction(
+          action.kind === 'WITHDRAW_QUOTE_CHANGE_REQUEST'
+            ? 'customer-order-action'
+            : 'tailor-order-action',
+          {
+            action: action.kind === 'WITHDRAW_QUOTE_CHANGE_REQUEST'
+              ? 'withdraw-quote-revision'
+              : 'keep-current-quote',
+            orderId: selectedThread.order.id,
+            quoteId: selectedActiveQuote.id,
+            expectedQuoteVersion: selectedActiveQuote.version,
+            revisionRequestId: selectedOpenRevision.id,
+          },
+        )
+        onRefresh()
+      } catch (actionError) {
+        setConversationActionError(friendlyActionError(
+          actionError,
+          'The order action could not be completed. Refresh the conversation and try again.',
+        ))
+      } finally {
+        setConversationActionBusy(false)
+      }
+      return
+    }
+
+    router.push(accountRoute(`/account/orders/${selectedThread.order.id}`))
   }
 
   async function toggleMessageReaction(message: AccountMessage, emoji: string) {
@@ -13584,7 +14282,7 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     }
   }
 
-  function renderMessageBubble(message: AccountMessage) {
+  function renderMessageBubble(message: AccountMessage, mediaCluster: AccountMessage[] = [message]) {
     const mine = message.sender_id === data.userId
     const isDeleted = Boolean(message.is_deleted)
     const replyTarget = message.reply_to_id
@@ -13647,7 +14345,11 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             <p className={`text-sm italic leading-6 ${mine ? 'text-white/64' : 'text-ui-subtle'}`}>This message was unsent.</p>
           ) : (
             <div className={mine ? '[&_p]:text-white/92 [&_a]:text-white [&_audio]:opacity-90' : ''}>
-              <MessageContent message={message} />
+              {mediaCluster.length > 1 ? (
+                <MessageMediaMosaic messages={mediaCluster} onReply={setReplyingTo} />
+              ) : (
+                <MessageContent message={message} />
+              )}
             </div>
           )}
 
@@ -13898,24 +14600,29 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
 
           {/* Messages area */}
           <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto bg-ui-canvas/70 py-3">
-            {selectedMessages.length === 0 ? (
+            {conversationItems.length === 0 ? (
               <div className="flex flex-1 items-center justify-center">
                 <p className="rounded-[8px] border border-ui-border bg-white px-5 py-4 text-sm leading-6 text-ui-subtle">No messages yet.</p>
               </div>
             ) : (
               <div className="relative w-full" style={{ height: messageVirtualizer.getTotalSize() }}>
                 {messageVirtualizer.getVirtualItems().map((virtualRow) => {
-                  const message = selectedMessages[virtualRow.index]
-                  if (!message) return null
+                  const item = conversationItems[virtualRow.index]
+                  if (!item) return null
                   return (
                     <div
-                      key={message.id}
+                      key={item.key}
                       ref={messageVirtualizer.measureElement}
                       data-index={virtualRow.index}
                       className="absolute left-0 top-0 w-full"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      {renderMessageBubble(message)}
+                      {item.kind === 'event'
+                        ? <OrderConversationEventCard event={item.event} />
+                        : (() => {
+                            const message = item.group.at(-1)
+                            return message ? renderMessageBubble(message, item.group) : null
+                          })()}
                     </div>
                   )
                 })}
@@ -13927,6 +14634,22 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
           {counterpartyIsTyping ? (
             <div className="border-t border-ink/8 px-4 py-1.5">
               <p className="text-xs italic text-ink/44">{partyName(selectedThread.order, data.userId)} is typing…</p>
+            </div>
+          ) : null}
+
+          {selectedConversationActions?.primary ? (
+            <ConversationActionBar
+              primary={selectedConversationActions.primary}
+              overflow={selectedConversationActions.overflow}
+              revisionRoundsUsed={selectedConversationActions.revisionRoundsUsed}
+              revisionRoundLimit={selectedConversationActions.revisionRoundLimit}
+              busy={conversationActionBusy}
+              onAction={(action) => { void handleConversationAction(action) }}
+            />
+          ) : null}
+          {conversationActionError && !revisionDialogOpen ? (
+            <div className="border-t border-rust/18 bg-rust/6 px-4 py-2 text-sm text-rust">
+              {conversationActionError}
             </div>
           ) : null}
 
@@ -13977,6 +14700,67 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
               onClearEdit={() => setEditingMessage(null)}
             />
           </div>
+          <Dialog open={revisionDialogOpen} onOpenChange={setRevisionDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editingRevision ? 'Edit quote change request' : 'Request quote changes'}</DialogTitle>
+                <DialogDescription>
+                  This is a formal revision round. Ordinary questions in chat do not use a round.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <fieldset className="grid gap-2">
+                  <legend className="text-sm font-semibold text-ink">What should change?</legend>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {Object.entries(QUOTE_REVISION_REASON_LABELS).map(([value, label]) => {
+                      const checked = revisionReasons.includes(value)
+                      return (
+                        <label key={value} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-[8px] border border-ui-border px-3 py-2 text-sm text-ink">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setRevisionReasons((current) => (
+                              checked
+                                ? current.filter((reason) => reason !== value)
+                                : current.length < 4 ? [...current, value] : current
+                            ))}
+                          />
+                          {label}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </fieldset>
+                <Field label="Change request" hint="Be specific about price, scope, timing, fabric, fulfillment, or fit.">
+                  <Textarea
+                    value={revisionNote}
+                    onChange={(event) => setRevisionNote(event.target.value)}
+                    rows={5}
+                    maxLength={1200}
+                  />
+                </Field>
+                <Field label="Target budget (optional)" hint={`Uses the locked quote currency ${selectedActiveQuote?.currency ?? ''}.`}>
+                  <Input
+                    inputMode="decimal"
+                    value={revisionTargetAmount}
+                    onChange={(event) => setRevisionTargetAmount(event.target.value)}
+                    placeholder="e.g. 85000"
+                  />
+                </Field>
+                {conversationActionError ? (
+                  <p className="rounded-[8px] border border-rust/18 bg-rust/6 px-3 py-2 text-sm text-rust">
+                    {conversationActionError}
+                  </p>
+                ) : null}
+              </div>
+              <DialogFooter>
+                <Button variant="secondary" onClick={() => setRevisionDialogOpen(false)} disabled={conversationActionBusy}>Cancel</Button>
+                <Button onClick={() => { void submitQuoteRevision() }} disabled={conversationActionBusy || revisionReasons.length === 0}>
+                  {conversationActionBusy ? 'Saving...' : editingRevision ? 'Save request' : 'Send request'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       )}
     </section>
@@ -14543,7 +15327,11 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
         </div>
         <div className="mt-6">
           {viewerIsCustomer ? (
-            <CheckoutAction order={order} onRefresh={onRefresh} />
+            <CheckoutAction
+              order={order}
+              activeQuote={activeQuoteForOrder(data.quotes, order.id)}
+              onRefresh={onRefresh}
+            />
           ) : (
             <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
               You are viewing this as the tailor, so payment collection stays locked to the customer account.

@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } fr
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/auth'
-import { Button, FeatureStateCard, StateCard } from '@/components/ui'
+import { Button, DrapeStatusChip, FeatureStateCard, StateCard } from '@/components/ui'
+import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { customerOrderHint } from '@/lib/order-flow'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
@@ -11,31 +12,6 @@ import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
-
-const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
-  PENDING_QUOTE: Colors.warning,
-  CONSULTATION: Colors.warning,
-  QUOTE_SENT: Colors.warning,
-  PAYMENT_PENDING: Colors.warning,
-  PAYMENT_FAILED: Colors.kanteRust,
-  CONFIRMED: Colors.needleGreen,
-  DESIGNING: Colors.needleGreen,
-  SOURCING: Colors.needleGreen,
-  CUTTING: Colors.needleGreen,
-  SEWING: Colors.needleGreen,
-  FINISHING: Colors.needleGreen,
-  OUT_FOR_DELIVERY: Colors.needleGreen,
-  SHIPPED: Colors.needleGreen,
-  READY_FOR_COLLECTION: Colors.needleGreen,
-  IN_DISPUTE: Colors.kanteRust,
-  COMPLETE: Colors.midGrey,
-  DELIVERED: Colors.needleGreen,
-  COLLECTED: Colors.needleGreen,
-  DECLINED: Colors.midGrey,
-  EXPIRED: Colors.midGrey,
-  CANCELLED: Colors.midGrey,
-  REFUNDED: Colors.midGrey,
-}
 
 type Tab = 'active' | 'completed'
 
@@ -66,6 +42,7 @@ function orderPriority(stage: OrderStage): number {
 
 export default function OrdersListScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
@@ -148,9 +125,13 @@ export default function OrdersListScreen() {
         </FeatureStateCard>
       ) : (
         <FlatList
+          {...capsuleNavScroll}
           data={sortedOrders}
           keyExtractor={(o) => o.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -192,18 +173,11 @@ export default function OrdersListScreen() {
                     <Text style={styles.garment}>{item.garmentType}</Text>
                     <Text style={styles.tailor}>{item.tailorName}</Text>
                   </View>
-                  <View
-                    style={[
-                      styles.stagePill,
-                      { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' },
-                    ]}
-                  >
-                    <Text
-                      style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}
-                    >
-                      {customerOrderStageLabel(item.stage, item.orderKind)}
-                    </Text>
-                  </View>
+                  <DrapeStatusChip
+                    value={item.stage}
+                    label={customerOrderStageLabel(item.stage, item.orderKind)}
+                    domain="order"
+                  />
                 </View>
 
                 <View style={styles.cardMeta}>
@@ -352,8 +326,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
   },
   tailor: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
-  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
-  stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   reviewNudge: {
     alignSelf: 'flex-start',

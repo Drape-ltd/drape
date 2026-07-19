@@ -148,6 +148,9 @@ function normalizeAvailability(value: z.infer<typeof AVAILABILITY> | undefined) 
 
 const BaseProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
+  legalName: z.string().trim().min(2).max(120)
+    .regex(/^[\p{L}\p{M}](?:[\p{L}\p{M}' -]*[\p{L}\p{M}])?$/u, 'Enter your legal name exactly as shown on your ID. Numbers, handles, emojis, and business symbols are not permitted.')
+    .optional(),
   avatarUrl: z.string().url().optional().nullable(),
   bio: z.string().trim().max(1200).optional().nullable(),
   location: z.string().trim().min(2).max(120),
@@ -391,59 +394,8 @@ Deno.serve(async (req) => {
         : []
       const existingPhotoSet = new Set(existingPhotoUrls)
       const existingVideoSet = new Set(existingVideoUrls)
-      const introducesNewMedia = nextPhotoUrls.some((url) => !existingPhotoSet.has(url))
-        || nextVideoUrls.some((url) => !existingVideoSet.has(url))
-
-      if (isApprovedTailorProfile(existingProfile) && introducesNewMedia) {
-        const request = await stageProfileChangeRequest(supabase, {
-          tailorUserId: caller.id,
-          tailorProfileId: existingProfile.id,
-          changes: {
-            portfolio_photo_urls: nextPhotoUrls,
-            portfolio_video_urls: nextVideoUrls,
-          },
-          metadata: { action: body.action, surface: 'portfolio.public' },
-        })
-
-        await createOrRefreshOpsIssue(supabase, {
-          issueType: 'TAILOR_VERIFICATION',
-          severity: 'HIGH',
-          source: FN,
-          actorId: caller.id,
-          actorRole: 'TAILOR',
-          userId: caller.id,
-          tailorProfileId: existingProfile.id,
-          relatedEntityType: 'profile_change_request',
-          relatedEntityId: request?.id ?? null,
-          title: 'Tailor portfolio media change needs review',
-          description: `${existingProfile.display_name ?? 'A tailor'} added or replaced public portfolio media after approval. Existing approved media stays live until ops reviews the change.`,
-          recommendedAction: 'Review the requested portfolio media for quality, stolen work, watermarks, and off-platform contact before approving.',
-          dedupeKey: `profile-change:${caller.id}`,
-          metadata: { request_id: request?.id ?? null, photo_count: nextPhotoUrls.length, video_count: nextVideoUrls.length },
-        })
-
-        await queueMediaSafetyReview(supabase, {
-          fn: FN,
-          actorId: caller.id,
-          actorRole: 'TAILOR',
-          surface: 'portfolio.public.pending',
-          publicUrls: [...nextPhotoUrls, ...nextVideoUrls].filter((url) => !existingPhotoSet.has(url) && !existingVideoSet.has(url)),
-          purpose: 'PORTFOLIO',
-          tailorProfileId: existingProfile.id,
-          relatedEntityType: 'profile_change_request',
-          relatedEntityId: request?.id ?? existingProfile.id,
-          metadata: { action: body.action, pendingReview: true },
-        })
-
-        await audit(supabase, {
-          event: 'tailor_profile.portfolio_media_change_requested',
-          actor_id: caller.id,
-          actor_role: 'TAILOR',
-          payload: { function: FN, request_id: request?.id ?? null, photo_count: nextPhotoUrls.length, video_count: nextVideoUrls.length },
-        })
-
-        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
-      }
+      const addedMediaUrls = [...nextPhotoUrls, ...nextVideoUrls]
+        .filter((url) => !existingPhotoSet.has(url) && !existingVideoSet.has(url))
 
       const { error } = await supabase
         .from('tailor_profiles')
@@ -466,6 +418,21 @@ Deno.serve(async (req) => {
         payload: { function: FN, photo_count: nextPhotoUrls.length, video_count: nextVideoUrls.length },
       })
 
+      if (addedMediaUrls.length > 0) {
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: 'portfolio.public',
+          publicUrls: addedMediaUrls,
+          purpose: 'PORTFOLIO',
+          tailorProfileId: existingProfile.id,
+          relatedEntityType: 'tailor_profile',
+          relatedEntityId: existingProfile.id,
+          metadata: { action: body.action, mediaCount: addedMediaUrls.length },
+        })
+      }
+
       return jsonResponse({ ok: true }, 200, cors)
     }
     if (body.action === 'update-portfolio-videos') {
@@ -478,55 +445,7 @@ Deno.serve(async (req) => {
         ? existingProfile.portfolio_video_urls.filter((url): url is string => typeof url === 'string')
         : []
       const existingVideoSet = new Set(existingVideoUrls)
-      const introducesNewVideo = nextVideoUrls.some((url) => !existingVideoSet.has(url))
-
-      if (isApprovedTailorProfile(existingProfile) && introducesNewVideo) {
-        const request = await stageProfileChangeRequest(supabase, {
-          tailorUserId: caller.id,
-          tailorProfileId: existingProfile.id,
-          changes: { portfolio_video_urls: nextVideoUrls },
-          metadata: { action: body.action, surface: 'portfolio.public' },
-        })
-
-        await createOrRefreshOpsIssue(supabase, {
-          issueType: 'TAILOR_VERIFICATION',
-          severity: 'HIGH',
-          source: FN,
-          actorId: caller.id,
-          actorRole: 'TAILOR',
-          userId: caller.id,
-          tailorProfileId: existingProfile.id,
-          relatedEntityType: 'profile_change_request',
-          relatedEntityId: request?.id ?? null,
-          title: 'Tailor portfolio video change needs review',
-          description: `${existingProfile.display_name ?? 'A tailor'} added or replaced public portfolio videos after approval. Existing approved media stays live until ops reviews the change.`,
-          recommendedAction: 'Review the requested videos for quality, stolen work, watermarks, and off-platform contact before approving.',
-          dedupeKey: `profile-change:${caller.id}`,
-          metadata: { request_id: request?.id ?? null, video_count: nextVideoUrls.length },
-        })
-
-        await queueMediaSafetyReview(supabase, {
-          fn: FN,
-          actorId: caller.id,
-          actorRole: 'TAILOR',
-          surface: 'portfolio.public.pending',
-          publicUrls: nextVideoUrls.filter((url) => !existingVideoSet.has(url)),
-          purpose: 'PORTFOLIO',
-          tailorProfileId: existingProfile.id,
-          relatedEntityType: 'profile_change_request',
-          relatedEntityId: request?.id ?? existingProfile.id,
-          metadata: { action: body.action, pendingReview: true },
-        })
-
-        await audit(supabase, {
-          event: 'tailor_profile.portfolio_video_change_requested',
-          actor_id: caller.id,
-          actor_role: 'TAILOR',
-          payload: { function: FN, request_id: request?.id ?? null, video_count: nextVideoUrls.length },
-        })
-
-        return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
-      }
+      const addedVideoUrls = nextVideoUrls.filter((url) => !existingVideoSet.has(url))
 
       const { error } = await supabase
         .from('tailor_profiles')
@@ -545,18 +464,20 @@ Deno.serve(async (req) => {
         payload: { function: FN, video_count: nextVideoUrls.length },
       })
 
-      await queueMediaSafetyReview(supabase, {
-        fn: FN,
-        actorId: caller.id,
-        actorRole: 'TAILOR',
-        surface: 'portfolio.public',
-        publicUrls: nextVideoUrls,
-        purpose: 'PORTFOLIO',
-        tailorProfileId: existingProfile.id,
-        relatedEntityType: 'tailor_profile',
-        relatedEntityId: existingProfile.id,
-        metadata: { action: body.action, mediaCount: nextVideoUrls.length },
-      })
+      if (addedVideoUrls.length > 0) {
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: 'portfolio.public',
+          publicUrls: addedVideoUrls,
+          purpose: 'PORTFOLIO',
+          tailorProfileId: existingProfile.id,
+          relatedEntityType: 'tailor_profile',
+          relatedEntityId: existingProfile.id,
+          metadata: { action: body.action, mediaCount: addedVideoUrls.length },
+        })
+      }
 
       return jsonResponse({ ok: true }, 200, cors)
     }
@@ -685,6 +606,10 @@ Deno.serve(async (req) => {
       delivery_fee: 0,
       shipping_fee: 0,
       updated_at: new Date().toISOString(),
+    }
+
+    if (profile.legalName) {
+      payload.legal_name = profile.legalName
     }
 
     if (submittedAvatarUrl.length > 0) {

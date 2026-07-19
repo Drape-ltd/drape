@@ -1,4 +1,5 @@
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { type OrderStage } from '@drape/shared/order-machine'
+import { formatOrderStageLabel } from '@drape/shared/status-display'
 
 export type MobileOrderKind = 'CUSTOM' | 'READY_MADE'
 
@@ -86,33 +87,11 @@ export function isReadyMadeInquiryOrder(input: {
 }
 
 export function customerOrderStageLabel(stage: OrderStage, orderKind: MobileOrderKind) {
-  if (orderKind === 'READY_MADE') {
-    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
-    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
-    if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
-    if (stage === 'CONFIRMED') return 'Order placed'
-    if (isReadyMadePreparationStage(stage)) return 'Preparing order'
-    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Awaiting Drapeon dispatch'
-    if (stage === 'OUT_FOR_DELIVERY') return 'Out for delivery'
-    if (stage === 'SHIPPED') return 'Shipped'
-  }
-
-  return STAGE_LABELS[stage] ?? stage
+  return formatOrderStageLabel(stage, { orderKind, audience: 'customer' })
 }
 
 export function tailorOrderStageLabel(stage: OrderStage, orderKind: MobileOrderKind) {
-  if (orderKind === 'READY_MADE') {
-    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
-    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
-    if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
-    if (stage === 'CONFIRMED') return 'Paid order'
-    if (isReadyMadePreparationStage(stage)) return 'Preparing order'
-    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drapeon dispatch'
-    if (stage === 'OUT_FOR_DELIVERY') return 'Out for delivery'
-    if (stage === 'SHIPPED') return 'Shipped'
-  }
-
-  return STAGE_LABELS[stage] ?? stage
+  return formatOrderStageLabel(stage, { orderKind, audience: 'tailor' })
 }
 
 export function customerOrderHint(stage: OrderStage, orderKind: MobileOrderKind): string | null {

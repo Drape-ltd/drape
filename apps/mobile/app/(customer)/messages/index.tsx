@@ -21,6 +21,7 @@ import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { appendToHistory } from '@/lib/navigation'
 import { AvatarImage, SkeletonBlock, StateCard } from '@/components/ui'
+import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import type { OrderStage } from '@drape/shared/order-machine'
@@ -128,6 +129,7 @@ function orderPreview(
 
 export default function MessagesInboxScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id
   const [conversations, setConversations] = useState<ConversationItem[]>([])
@@ -489,6 +491,7 @@ export default function MessagesInboxScreen() {
       ) : (
         filter === 'archive' ? (
         <FlatList
+          {...capsuleNavScroll}
           data={archiveDirectoryOpen ? archiveGroups : []}
           keyExtractor={(group) => group.tailorName}
           showsVerticalScrollIndicator={false}
@@ -562,6 +565,7 @@ export default function MessagesInboxScreen() {
         />
         ) : (
         <FlatList
+          {...capsuleNavScroll}
           data={openGroups}
           keyExtractor={(group) => group.tailorName}
           showsVerticalScrollIndicator={false}
@@ -631,6 +635,7 @@ export default function MessagesInboxScreen() {
 }
 
 function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const SUPPORT_EMAIL = CONTACTS.support
   type SupportTopicKey = 'order' | 'payments' | 'report'
   type QuickAnswerKey = 'late' | 'refund' | 'no_response'
@@ -759,6 +764,7 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
 
   return (
     <ScrollView
+      {...capsuleNavScroll}
       style={styles.supportScroll}
       contentContainerStyle={styles.supportContent}
       showsVerticalScrollIndicator={false}
@@ -1121,7 +1127,7 @@ const styles = StyleSheet.create({
   },
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
-  listContent: { paddingBottom: Spacing.xxxl },
+  listContent: { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE },
 
   row: {
     flexDirection: 'row',
@@ -1180,7 +1186,7 @@ const styles = StyleSheet.create({
 
   // Support tab
   supportScroll: { flex: 1 },
-  supportContent: { paddingBottom: Spacing.xxxl, gap: Spacing.sm },
+  supportContent: { paddingBottom: DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, gap: Spacing.sm },
   supportHeader: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.lg,

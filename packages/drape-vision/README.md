@@ -8,6 +8,10 @@ The source of truth for Drape Vision product scope, confidence labels, field dic
 
 - `docs/measurement-capture-plan.md`
 
+The source of truth for mobile scan state, native lifecycle, retakes, failure diagnosis, and real-device regression checks is:
+
+- `docs/drapeon-vision-design-and-regression-runbook.md`
+
 The native package should not expand measurement fields beyond that document without trial evidence and confirmed tailor definitions.
 
 ## Native Contract

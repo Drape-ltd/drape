@@ -10,7 +10,6 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
@@ -511,34 +510,18 @@ Deno.serve(async (req) => {
         data: {
           orderId: body.orderId,
           target: 'messages',
+          destination: 'messages',
+          messageId: insertedMessageId,
         },
       }
-      runBackgroundTask((async () => {
-        const delivery = await sendPushToUser(supabase, recipientId, notification)
-        if (delivery.status === 'ERROR') {
-          await enqueuePushJob(supabase, {
-            userId: recipientId,
-            source: FN,
-            orderId: body.orderId,
-            idempotencyKey: `message-created:${insertedMessageId}`,
-            priority: 20,
-            notification,
-          })
-          log('warn', FN, 'notification.deferred', {
-            order_id: body.orderId,
-            recipient_id: recipientId,
-            reason: delivery.reason,
-          })
-          return
-        }
-
-        log('info', FN, 'notification.delivered', {
-          order_id: body.orderId,
-          recipient_id: recipientId,
-          status: delivery.status,
-          reason: delivery.status === 'SKIPPED' ? delivery.reason : null,
-        })
-      })(), 'notification.delivery_failed')
+      runBackgroundTask(enqueuePushJob(supabase, {
+        userId: recipientId,
+        source: FN,
+        orderId: body.orderId,
+        idempotencyKey: `message-created:${insertedMessageId}`,
+        priority: 20,
+        notification,
+      }), 'notification.enqueue_failed')
 
       const shouldEmailTailorBeforeQuote =
         actorRole === 'CUSTOMER' &&

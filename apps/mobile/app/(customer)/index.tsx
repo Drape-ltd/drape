@@ -33,7 +33,8 @@ import {
   saveRecentlyViewedTailor,
   type RecentlyViewedTailor,
 } from '@/lib/recently-viewed-tailors'
-import { RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
+import { DrapeStatusChip, RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { TierBadge } from '@/components/ui'
@@ -57,15 +58,6 @@ const CHARCOAL = Colors.ink
 const MUTED_GREY = Colors.midGrey
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const STAGE_PILL_COLOR: Partial<Record<OrderStage, { bg: string; text: string }>> = {
-  PENDING_QUOTE: { bg: Colors.boneDeep, text: PRIMARY_GREEN },
-  CONSULTATION: { bg: Colors.boneDeep, text: PRIMARY_GREEN },
-  QUOTE_SENT: { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
-  PAYMENT_PENDING: { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
-  PAYMENT_FAILED: { bg: Colors.kanteRustLight, text: Colors.kanteRust },
-  IN_DISPUTE: { bg: Colors.kanteRustLight, text: Colors.kanteRust },
-}
 
 const FILTER_SPECIALTIES = [
   'Agbada',
@@ -399,6 +391,7 @@ export default function CustomerHomeScreen() {
   const { user } = useAuth()
   const insets = useSafeAreaInsets()
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const userId = user?.id
 
   // Browse data
@@ -569,6 +562,7 @@ export default function CustomerHomeScreen() {
         setLastSearch(ls)
         setShowOnboarding(onboardingValue !== '1')
       })
+
     }, [user?.id])
   )
 
@@ -1020,6 +1014,7 @@ export default function CustomerHomeScreen() {
       {showSuggestions ? (
         <ScrollView
           style={styles.scroll}
+          {...capsuleNavScroll}
           contentContainerStyle={[
             styles.suggestionsContent,
             { paddingBottom: Math.max(insets.bottom + 104, 140) },
@@ -1088,6 +1083,7 @@ export default function CustomerHomeScreen() {
         // ── Search results — FlatList for lazy load ──
         <FlatList
           data={filteredResults}
+          {...capsuleNavScroll}
           keyExtractor={(t) => t.id}
           contentContainerStyle={[
             styles.resultsList,
@@ -1191,6 +1187,7 @@ export default function CustomerHomeScreen() {
         // ── Default browse ──
         <ScrollView
           style={styles.scroll}
+          {...capsuleNavScroll}
           contentContainerStyle={[
             styles.content,
             { paddingBottom: Math.max(insets.bottom + 104, 140) },
@@ -1236,7 +1233,6 @@ export default function CustomerHomeScreen() {
                 contentContainerStyle={styles.ordersRow}
               >
                 {activeOrders.map((order) => {
-                  const c = STAGE_PILL_COLOR[order.stage as OrderStage]
                   return (
                     <TouchableOpacity
                       key={order.id}
@@ -1252,21 +1248,11 @@ export default function CustomerHomeScreen() {
                         })
                       }
                     >
-                      <View
-                        style={[
-                          styles.orderStagePill,
-                          { backgroundColor: c?.bg ?? Colors.needleGreenLight },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.orderStageText,
-                            { color: c?.text ?? Colors.needleGreen },
-                          ]}
-                        >
-                          {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
-                        </Text>
-                      </View>
+                      <DrapeStatusChip
+                        value={order.stage}
+                        label={customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+                        domain="order"
+                      />
                       <Text style={styles.orderGarment} numberOfLines={1}>
                         {order.garmentType}
                       </Text>
@@ -2353,14 +2339,6 @@ const styles = StyleSheet.create({
     gap: 4,
     ...Shadow.sm,
   },
-  orderStagePill: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
-    borderRadius: Radius.full,
-    marginBottom: Spacing.xs,
-  },
-  orderStageText: { fontSize: 10, fontWeight: FontWeight.bold },
   orderGarment: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: 14,

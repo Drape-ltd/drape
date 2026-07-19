@@ -18,6 +18,7 @@ import { useAuth } from '@/lib/auth'
 import { shareTailorProfile, inviteCustomerFromTailor, sharePassportInvite } from '@/lib/invite'
 import { appendToHistory } from '@/lib/navigation'
 import { AvatarImage } from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const DIARY_BANNER_KEY = 'drape:diary_banner_dismissed'
@@ -97,6 +98,7 @@ function isEntryShareReady(item: DiaryRow): boolean {
 
 export default function TailorClientsScreen() {
   const router = useRouter()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const userId = user?.id
@@ -442,6 +444,7 @@ export default function TailorClientsScreen() {
         <>
         {diaryLoading && <ActivityIndicator style={{ marginTop: Spacing.xl }} color={Colors.needleGreen} />}
         <FlatList
+          {...capsuleNavScroll}
           data={filteredDiary}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom + 112, 148) }]}
@@ -613,6 +616,7 @@ export default function TailorClientsScreen() {
         </>
       ) : (
       <FlatList
+        {...capsuleNavScroll}
         data={filtered}
         keyExtractor={(item) => item.customerId}
         contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom + 112, 148) }]}
