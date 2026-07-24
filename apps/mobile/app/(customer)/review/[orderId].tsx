@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, Image as RNImage,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -13,7 +13,16 @@ import { promptProductFeedback } from '@/lib/productFeedback'
 import { Sentry } from '@/lib/sentry'
 import { referToTailor } from '@/lib/invite'
 import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
-import { Button, Input, PortfolioVideoPreview } from '@/components/ui'
+import {
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  Input,
+  PortfolioVideoPreview,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { stripExif } from '@/lib/stripExif'
@@ -103,7 +112,8 @@ export default function ReviewScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [orderSummary, setOrderSummary] = useState<{
@@ -607,7 +617,12 @@ export default function ReviewScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView
+          style={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.xl }}
+          {...actionDockScroll}
+        >
           <View style={styles.content}>
             {/* Header */}
             <View style={styles.header}>
@@ -728,24 +743,39 @@ export default function ReviewScreen() {
                 })()}
               </Text>
             </View>
+            {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
+            <TouchableOpacity style={styles.skipBtn} onPress={skip} disabled={submitting || skipping}>
+              <Text style={[styles.skipText, (submitting || skipping) && styles.skipTextDisabled]}>
+                {skipping ? 'Completing order...' : 'Skip and complete order without reviewing'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
 
-        {/* CTAs */}
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
-          {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
-          <Button
-            label="Submit review"
-            onPress={submit}
-            loading={submitting}
-            disabled={rating === 0 || skipping}
-          />
-          <TouchableOpacity style={styles.skipBtn} onPress={skip} disabled={submitting || skipping}>
-            <Text style={[styles.skipText, (submitting || skipping) && styles.skipTextDisabled]}>
-              {skipping ? 'Completing order...' : 'Skip and complete order without reviewing'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <DrapeFloatingActionDock
+          compactWidth={76}
+          forceCompact={keyboard.visible}
+          testID="customer-review-action-dock"
+        >
+          {(compact) => compact ? (
+            <DrapeIconButton
+              icon="send"
+              accessibilityLabel="Submit review"
+              tone="primary"
+              onPress={submit}
+              disabled={submitting || rating === 0 || skipping}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label="Submit review"
+              icon="send"
+              onPress={submit}
+              loading={submitting}
+              disabled={rating === 0 || skipping}
+              style={styles.actionDockPrimary}
+            />
+          )}
+        </DrapeFloatingActionDock>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -853,10 +883,7 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 
-  cta: {
-    padding: Spacing.xl, gap: Spacing.md, backgroundColor: Colors.white,
-    borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-  },
+  actionDockPrimary: { flex: 1 },
   submitError: { fontSize: FontSize.sm, color: Colors.error, textAlign: 'center' },
   skipBtn: { alignItems: 'center', paddingVertical: Spacing.sm },
   skipText: { fontSize: FontSize.sm, color: Colors.midGrey },

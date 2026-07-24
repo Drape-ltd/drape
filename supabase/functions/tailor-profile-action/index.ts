@@ -67,6 +67,38 @@ function sameStringArray(left: string[] | null | undefined, right: string[] | nu
   return a.length === b.length && a.every((item, index) => item === b[index])
 }
 
+async function seedSetupPortfolioItems(
+  supabase: any,
+  tailorProfileId: string,
+  photoUrls: string[] | null | undefined,
+) {
+  const nextUrls = Array.from(new Set(normalizeStringArray(photoUrls))).slice(0, 12)
+  if (nextUrls.length === 0) return 0
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('portfolio_items')
+    .select('id')
+    .eq('tailor_profile_id', tailorProfileId)
+    .limit(1)
+
+  if (existingError) throw existingError
+  if (Array.isArray(existingRows) && existingRows.length > 0) return 0
+
+  const { error: insertError } = await supabase
+    .from('portfolio_items')
+    .insert(nextUrls.map((url, index) => ({
+      tailor_profile_id: tailorProfileId,
+      image_url: url,
+      title: `Portfolio photo ${index + 1}`,
+      description: null,
+      category: null,
+      sort_order: index,
+    })))
+
+  if (insertError) throw insertError
+  return nextUrls.length
+}
+
 async function resubmitAvatarOnlyVerificationIfNeeded(
   supabase: any,
   callerId: string,
@@ -761,6 +793,37 @@ Deno.serve(async (req) => {
     if (savedProfileError) {
       log('error', FN, 'profile.saved_lookup_failed', { actor_id: caller.id, action: body.action, error: savedProfileError.message })
       return jsonResponse({ error: 'Your profile saved, but we could not reload it yet. Pull to refresh in a moment.' }, 500, cors)
+    }
+
+    if (savedProfile?.id && body.action === 'upsert-setup') {
+      try {
+        const seededPortfolioCount = await seedSetupPortfolioItems(
+          supabase,
+          savedProfile.id,
+          body.profile.portfolioPhotoUrls,
+        )
+        if (seededPortfolioCount > 0) {
+          await audit(supabase, {
+            event: 'tailor_profile.setup_portfolio_seeded',
+            actor_id: caller.id,
+            actor_role: 'TAILOR',
+            payload: {
+              function: FN,
+              tailor_profile_id: savedProfile.id,
+              photo_count: seededPortfolioCount,
+            },
+          })
+        }
+      } catch (portfolioSeedError) {
+        log('error', FN, 'setup.portfolio_seed_failed', {
+          actor_id: caller.id,
+          tailor_profile_id: savedProfile.id,
+          error: portfolioSeedError instanceof Error ? portfolioSeedError.message : String(portfolioSeedError),
+        })
+        return jsonResponse({
+          error: 'Your profile saved, but we could not attach your setup photos to your portfolio. Please submit setup again.',
+        }, 500, cors)
+      }
     }
 
     const pickupAddress = profile.pickupAddress?.trim() || null

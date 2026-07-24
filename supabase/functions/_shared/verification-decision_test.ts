@@ -10,6 +10,8 @@ type Call = {
   type: string
   table?: string
   fn?: string
+  column?: string
+  value?: unknown
   payload?: Record<string, unknown>
   args?: Record<string, unknown>
 }
@@ -28,6 +30,7 @@ function createFakeSupabase(options?: {
   profileStatus?: string
   userEmail?: string | null
   profileReady?: boolean
+  portfolioItems?: Array<{ image_url: string }>
 }) {
   const calls: Call[] = []
   const profileReady = options?.profileReady !== false
@@ -61,7 +64,7 @@ function createFakeSupabase(options?: {
     assigned_to: null,
     resolved_at: null,
   }
-  const portfolioItems = [
+  const portfolioItems = options?.portfolioItems ?? [
     { image_url: 'portfolio/tailor-1/look-a.jpg' },
     { image_url: 'portfolio/tailor-1/look-b.jpg' },
   ]
@@ -71,7 +74,8 @@ function createFakeSupabase(options?: {
       select(_columns: string) {
         return chain
       },
-      eq(_column: string, _value: unknown) {
+      eq(column: string, value: unknown) {
+        if (table === 'media_assets') calls.push({ type: 'eq', table, column, value })
         return chain
       },
       order(_column: string, _options?: Record<string, unknown>) {
@@ -91,7 +95,7 @@ function createFakeSupabase(options?: {
         return { data: null, error: null }
       },
       async insert(payload: Record<string, unknown>) {
-        calls.push({ type: 'insert', table, payload })
+        calls.push({ type: 'insert', table, payload: payload as Record<string, unknown> })
         return { data: null, error: null }
       },
       then(resolve: (value: { data: unknown; error: null }) => unknown, reject: (reason?: unknown) => unknown) {
@@ -178,6 +182,56 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
   expectEquals(pushes.length, 1, 'approval should send one tailor push notification')
   expectEquals(pushes[0]?.userId, 'tailor-1', 'approval push should target the tailor')
   expect(pushes[0]!.title.includes('live'), 'approval push should tell the tailor they are live')
+})
+
+Deno.test('performVerificationDecision recovers setup portfolio photos when normalized items are missing', async () => {
+  const fake = createFakeSupabase({ portfolioItems: [] })
+
+  const result = await performVerificationDecision(
+    fake.client,
+    {
+      tailorUserId: 'tailor-1',
+      decision: 'APPROVE',
+      performedBy: 'trust@drapeon.co',
+      performedRole: 'TRUST',
+      source: 'ops_dashboard',
+    },
+    {
+      sendEmail: async () => {},
+      now: () => new Date('2026-05-01T12:00:00.000Z'),
+    },
+  )
+
+  expect(result.ok, 'approval should recover a setup-origin portfolio')
+  const seedCall = fake.calls.find((call) => call.type === 'insert' && call.table === 'portfolio_items')
+  const seededRows = seedCall?.payload as unknown as Array<Record<string, unknown>>
+  expect(Array.isArray(seededRows), 'approval should seed normalized portfolio rows')
+  expectEquals(seededRows?.[0]?.image_url, 'portfolio/tailor-1/look.jpg', 'recovery should preserve the setup photo')
+  expect(
+    fake.calls.some((call) => (
+      call.type === 'update'
+      && call.table === 'tailor_profiles'
+      && JSON.stringify(call.payload?.portfolio_photo_urls) === JSON.stringify(['portfolio/tailor-1/look.jpg'])
+    )),
+    'approval should keep the recovered setup photo public',
+  )
+  expect(
+    fake.calls.some((call) => (
+      call.type === 'update'
+      && call.table === 'media_assets'
+      && call.payload?.moderation_status === 'AUTO_ALLOWED'
+    )),
+    'approval should release setup media after trust review',
+  )
+  expect(
+    fake.calls.some((call) => (
+      call.type === 'eq'
+      && call.table === 'media_assets'
+      && call.column === 'moderation_status'
+      && call.value === 'PENDING_REVIEW'
+    )),
+    'approval should match the canonical pending-review media status',
+  )
 })
 
 Deno.test('performVerificationDecision uses auth email fallback and records push status', async () => {

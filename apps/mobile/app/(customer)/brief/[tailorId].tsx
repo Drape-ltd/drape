@@ -48,16 +48,22 @@ import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/st
 import {
   Button,
   ChoiceSheet,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
   MeasurementModule,
   PortfolioVideoPreview,
   RemoteImage,
 } from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import {
   launchImagePickerSafely,
   preferCompatibleVideoRepresentation,
   preferCurrentAssetRepresentation,
 } from '@/lib/image-picker-safe'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import {
   pickerVideoContentType,
   pickerVideoExtension,
@@ -386,6 +392,8 @@ export default function OrderBriefScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id
 
@@ -2037,7 +2045,10 @@ export default function OrderBriefScreen() {
         <ScrollView
           style={styles.scroll}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: Math.max(180, insets.bottom + 152) }}
+          contentContainerStyle={{
+            paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.xxxl,
+          }}
+          {...actionDockScroll}
         >
           <View style={styles.content}>
             <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
@@ -3430,16 +3441,32 @@ export default function OrderBriefScreen() {
           </View>
         </ScrollView>
 
-        {/* Bottom CTA */}
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
-          <Button
-            label={step < STEP_TITLES.length - 1 ? 'Continue' : 'Submit order'}
-            onPress={next}
-            loading={submitting}
-            disabled={submitting || !canProceed()}
-            testID={step < STEP_TITLES.length - 1 ? 'brief-continue-btn' : 'brief-send-btn'}
-          />
-        </View>
+        <DrapeFloatingActionDock
+          compactWidth={76}
+          forceCompact={keyboard.visible}
+          testID="custom-brief-action-dock"
+        >
+          {(compact) => compact ? (
+            <DrapeIconButton
+              icon={step < STEP_TITLES.length - 1 ? 'arrow-right' : 'send'}
+              accessibilityLabel={step < STEP_TITLES.length - 1 ? 'Continue' : 'Submit order'}
+              tone="primary"
+              onPress={next}
+              disabled={submitting || !canProceed()}
+              testID={step < STEP_TITLES.length - 1 ? 'brief-continue-btn' : 'brief-send-btn'}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label={step < STEP_TITLES.length - 1 ? 'Continue' : 'Submit order'}
+              icon={step < STEP_TITLES.length - 1 ? 'arrow-right' : 'send'}
+              loading={submitting}
+              style={styles.actionDockPrimary}
+              onPress={next}
+              disabled={submitting || !canProceed()}
+              testID={step < STEP_TITLES.length - 1 ? 'brief-continue-btn' : 'brief-send-btn'}
+            />
+          )}
+        </DrapeFloatingActionDock>
       </KeyboardAvoidingView>
 
       {/* Garment type picker */}
@@ -4732,15 +4759,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
 
-  // CTA
-  cta: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 12,
-    paddingBottom: 8,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
+  actionDockPrimary: { flex: 1 },
 
   // Profile completeness prompt modal
   promptOverlay: {

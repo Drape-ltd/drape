@@ -60,6 +60,8 @@ supabase/functions/.cache
 *.orig.*
 google-services.json
 apps/mobile/android/app/google-services.json
+google-service-account.json
+apps/mobile/google-service-account.json
 web-build/
 android/
 ios/

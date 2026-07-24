@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Dimensions, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useRouter, useLocalSearchParams } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import {
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+} from '@/components/ui'
 
 const SEEN_KEY_BASE = 'drape_onboarding_seen_v1'
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
@@ -65,7 +71,6 @@ function SlideItem({ item }: { item: Slide }) {
 
 export default function OnboardingScreen() {
   const router = useRouter()
-  const insets = useSafeAreaInsets()
   const { role, userId } = useLocalSearchParams<{ role?: string; userId?: string }>()
   const [index, setIndex] = useState(0)
   const [ready, setReady] = useState(false)
@@ -162,30 +167,22 @@ export default function OnboardingScreen() {
         ))}
       </View>
 
-      {/* Bottom nav */}
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
-        <TouchableOpacity
-          style={[styles.backBtn, index === 0 && styles.backBtnHidden]}
-          onPress={goBack}
-          disabled={index === 0}
-          accessibilityRole="button"
-          accessibilityLabel="Previous slide"
-          activeOpacity={0.72}
-        >
-          <Feather name="arrow-left" size={20} color={Colors.inkLight} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.nextBtn}
+      <DrapeFloatingActionDock compactOnScroll={false} testID="onboarding-action-dock">
+        {index > 0 ? (
+          <DrapeIconButton
+            icon="arrow-left"
+            accessibilityLabel="Previous slide"
+            tone="secondary"
+            onPress={goBack}
+          />
+        ) : null}
+        <DrapeCapsuleButton
+          label={isLast ? "Let's go" : 'Next'}
+          icon={isLast ? 'check' : 'arrow-right'}
           onPress={goNext}
-          accessibilityRole="button"
-          accessibilityLabel={isLast ? 'Get started' : 'Next slide'}
-          activeOpacity={0.82}
-        >
-          <Text style={styles.nextBtnText}>{isLast ? "Let's go" : 'Next'}</Text>
-          {!isLast && <Feather name="arrow-right" size={18} color={Colors.textInverse} />}
-        </TouchableOpacity>
-      </View>
+          style={styles.actionDockPrimary}
+        />
+      </DrapeFloatingActionDock>
     </SafeAreaView>
   )
 }
@@ -254,7 +251,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: Spacing.sm,
-    paddingVertical: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   },
   dot: {
     width: 8,
@@ -266,40 +264,5 @@ const styles = StyleSheet.create({
     width: 24,
     backgroundColor: Colors.needleGreen,
   },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.sm,
-    gap: Spacing.md,
-  },
-  backBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backBtnHidden: {
-    opacity: 0,
-  },
-  nextBtn: {
-    flex: 1,
-    minHeight: 56,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.needleGreen,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-  },
-  nextBtnText: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textInverse,
-  },
+  actionDockPrimary: { flex: 1 },
 })

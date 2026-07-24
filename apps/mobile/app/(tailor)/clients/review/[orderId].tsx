@@ -3,12 +3,20 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
-import { Button, Input } from '@/components/ui'
+import {
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  Input,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
@@ -58,7 +66,8 @@ export default function TailorCustomerReviewScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [customerName, setCustomerName] = useState('Customer')
@@ -335,7 +344,11 @@ export default function TailorCustomerReviewScreen() {
         </TouchableOpacity>
       </View>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          {...actionDockScroll}
+        >
           <View style={styles.headerCard}>
             <Text style={styles.eyebrow}>Customer review</Text>
             <Text style={styles.title}>Rate how it was working with {customerName}.</Text>
@@ -383,12 +396,33 @@ export default function TailorCustomerReviewScreen() {
             filterContact
             hint="Optional. No contact details."
           />
+          {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
         </ScrollView>
 
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
-          {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
-          <Button label="Save review" onPress={submit} loading={submitting} disabled={submitting} />
-        </View>
+        <DrapeFloatingActionDock
+          compactWidth={76}
+          forceCompact={keyboard.visible}
+          testID="tailor-review-action-dock"
+        >
+          {(compact) => compact ? (
+            <DrapeIconButton
+              icon="save"
+              accessibilityLabel="Save review"
+              tone="primary"
+              onPress={submit}
+              disabled={submitting}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label="Save review"
+              icon="save"
+              onPress={submit}
+              loading={submitting}
+              disabled={submitting}
+              style={styles.actionDockPrimary}
+            />
+          )}
+        </DrapeFloatingActionDock>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -404,7 +438,12 @@ const styles = StyleSheet.create({
   },
   backLink: { alignSelf: 'flex-start', paddingVertical: Spacing.xs, paddingRight: Spacing.md },
   backLinkText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  content: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, gap: Spacing.xl, paddingBottom: 120 },
+  content: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.md,
+    gap: Spacing.xl,
+    paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.xl,
+  },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
@@ -438,13 +477,7 @@ const styles = StyleSheet.create({
   tagActive: { backgroundColor: Colors.needleGreenLight },
   tagText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   tagTextActive: { fontWeight: FontWeight.semibold },
-  cta: {
-    padding: Spacing.xl,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-    gap: Spacing.md,
-  },
+  actionDockPrimary: { flex: 1 },
   submitError: { fontSize: FontSize.sm, color: Colors.error, textAlign: 'center' },
   retryBtn: {
     backgroundColor: Colors.needleGreen,

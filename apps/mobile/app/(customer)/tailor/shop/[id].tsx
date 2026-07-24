@@ -4,7 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
-import { Button, RemoteImage } from '@/components/ui'
+import { DrapeCapsuleButton, RemoteImage } from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
@@ -24,6 +25,7 @@ export default function TailorShopScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { data, isLoading, refetch } = useTailorShop(id)
   const { currency: accountCurrency, rates } = useCurrency()
   const [refreshing, setRefreshing] = useState(false)
@@ -58,6 +60,7 @@ export default function TailorShopScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} colors={[Colors.needleGreen]} />}
+        {...capsuleNavScroll}
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack}>
@@ -95,8 +98,9 @@ export default function TailorShopScreen() {
             </View>
             <Text style={styles.emptyTitle}>No ready-made pieces yet</Text>
             <Text style={styles.emptyHint}>This seller has not listed any live ready-made items yet.</Text>
-            <Button
+            <DrapeCapsuleButton
               label={customOrdersAvailable ? 'Start custom order' : 'Custom orders unavailable'}
+              icon="scissors"
               disabled={!customOrdersAvailable}
               onPress={() => router.push({
                 pathname: '/(customer)/brief/[tailorId]',

@@ -79,6 +79,10 @@
     "testflight": {
       "ios": {
         "ascAppId": "6784264202"
+      },
+      "android": {
+        "track": "internal",
+        "releaseStatus": "completed"
       }
     },
     "production": {
@@ -86,8 +90,8 @@
         "ascAppId": "6784264202"
       },
       "android": {
-        "serviceAccountKeyPath": "./google-service-account.json",
-        "track": "internal"
+        "track": "internal",
+        "releaseStatus": "completed"
       }
     }
   }

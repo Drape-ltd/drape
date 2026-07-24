@@ -155,30 +155,34 @@ export function DrapeFloatingActionDock({
   testID,
   compactOnScroll = true,
   compactWidth,
+  forceCompact = false,
 }: {
-  children: ReactNode
+  children: ReactNode | ((compact: boolean) => ReactNode)
   style?: StyleProp<ViewStyle>
   testID?: string
   compactOnScroll?: boolean
   compactWidth?: number
+  forceCompact?: boolean
 }) {
   const insets = useSafeAreaInsets()
   const { width: windowWidth } = useWindowDimensions()
   const { compact } = useDrapeCapsuleNavMotion()
-  const compactProgress = useSharedValue(compactOnScroll && compact ? 1 : 0)
+  const effectiveCompact = forceCompact || (compactOnScroll && compact)
+  const compactProgress = useSharedValue(effectiveCompact ? 1 : 0)
   const compactSideInset = compactWidth
     ? Math.max(Spacing.xxxl, (windowWidth - compactWidth) / 2)
     : Spacing.xxxl
 
   useEffect(() => {
-    compactProgress.value = withTiming(compactOnScroll && compact ? 1 : 0, { duration: 180 })
-  }, [compact, compactOnScroll, compactProgress])
+    compactProgress.value = withTiming(effectiveCompact ? 1 : 0, { duration: 180 })
+  }, [compactProgress, effectiveCompact])
 
   const motionStyle = useAnimatedStyle(() => ({
     left: interpolate(compactProgress.value, [0, 1], [Spacing.xl, compactSideInset]),
     right: interpolate(compactProgress.value, [0, 1], [Spacing.xl, compactSideInset]),
     transform: [{ scale: interpolate(compactProgress.value, [0, 1], [1, 0.94]) }],
   }), [compactSideInset])
+  const content = typeof children === 'function' ? children(effectiveCompact) : children
 
   return (
     <View pointerEvents="box-none" style={styles.floatingActionLayer}>
@@ -195,7 +199,7 @@ export function DrapeFloatingActionDock({
           style,
         ]}
       >
-        {children}
+        {content}
       </Animated.View>
     </View>
   )

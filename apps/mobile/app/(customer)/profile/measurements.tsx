@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
@@ -26,7 +26,18 @@ import {
   MEASUREMENT_SOURCE_LABELS,
   type MeasurementSource,
 } from '@/lib/order-support'
-import { Button, ChoiceSheet, DisclosureSection, Input, type ChoiceSheetOption } from '@/components/ui'
+import {
+  ChoiceSheet,
+  DisclosureSection,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  Input,
+  type ChoiceSheetOption,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import {
@@ -576,7 +587,8 @@ function normalizeBodyShape(value: unknown): BodyShape | null {
 export default function MeasurementsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const sanitizedReturnTo = sanitizeReturnTo(pickSafeReturnTo(historyChain, returnTo))
   const safeReturnTo = sanitizedReturnTo && sanitizedReturnTo !== '/(customer)/profile/measurements'
@@ -1742,6 +1754,7 @@ export default function MeasurementsScreen() {
           style={styles.scroll}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
+          {...actionDockScroll}
         >
           <View style={styles.content}>
             {showGuide && (
@@ -2131,20 +2144,40 @@ export default function MeasurementsScreen() {
           </View>
         </ScrollView>
 
-        {/* Bottom CTA */}
-        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 12) }]}>
-          <Button
-            label={
-              editingMeasurements
-                ? step < 3 ? 'Continue' : 'Save measurements'
-                : hasSavedMeasurementValues ? 'Edit measurements' : 'Add measurements'
-            }
-            size="md"
-            onPress={editingMeasurements ? next : confirmEditMeasurements}
-            loading={saving}
-            disabled={saving}
-          />
-        </View>
+        <DrapeFloatingActionDock
+          compactWidth={76}
+          forceCompact={keyboard.visible}
+          testID="measurement-action-dock"
+        >
+          {(compact) => {
+            const label = editingMeasurements
+              ? step < 3 ? 'Continue' : 'Save measurements'
+              : hasSavedMeasurementValues ? 'Edit measurements' : 'Add measurements'
+            const icon = editingMeasurements
+              ? step < 3 ? 'arrow-right' : 'save'
+              : hasSavedMeasurementValues ? 'edit-3' : 'plus'
+            const onPress = editingMeasurements ? next : confirmEditMeasurements
+
+            return compact ? (
+              <DrapeIconButton
+                icon={icon}
+                accessibilityLabel={label}
+                tone="primary"
+                onPress={onPress}
+                disabled={saving}
+              />
+            ) : (
+              <DrapeCapsuleButton
+                label={label}
+                icon={icon}
+                onPress={onPress}
+                loading={saving}
+                disabled={saving}
+                style={styles.actionDockPrimary}
+              />
+            )
+          }}
+        </DrapeFloatingActionDock>
       </KeyboardAvoidingView>
       <ChoiceSheet
         visible={profileSheetOpen}
@@ -2286,7 +2319,7 @@ const styles = StyleSheet.create({
   },
 
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 80 },
+  scrollContent: { paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.lg },
   content: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
   guideCard: {
     backgroundColor: Colors.white,
@@ -2786,13 +2819,5 @@ const styles = StyleSheet.create({
   flagHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
 
   // CTA
-  cta: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 8,
-    paddingBottom: 8,
-    gap: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
+  actionDockPrimary: { flex: 1 },
 })

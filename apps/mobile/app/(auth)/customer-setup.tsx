@@ -16,7 +16,7 @@ import {
   UIManager,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -45,6 +45,16 @@ import {
 } from '@/lib/currency'
 import { Button, ChoiceSheet, Input } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import {
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+} from '@/components/ui/DrapePrimitives'
+import {
+  useDrapeCapsuleNavMotion,
+  useDrapeCapsuleNavScroll,
+} from '@/components/ui/DrapeCapsuleNav'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import {
   normalizePhoneForStorage,
@@ -116,9 +126,10 @@ function customerSetupSaveMessage(error: unknown) {
 
 export default function CustomerSetupScreen() {
   const router = useRouter()
-  const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const keyboard = useKeyboardState()
+  const { compact: actionDockCompact } = useDrapeCapsuleNavMotion()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const scrollRef = useRef<ScrollView | null>(null)
   const fieldYRef = useRef<Record<'displayName' | 'phone' | 'garmentContext', number>>({
     displayName: 0,
@@ -610,10 +621,8 @@ export default function CustomerSetupScreen() {
   }
 
   const editingLayoutActive = keyboard.visible || focusedTextField !== null
-  const ctaBottomPadding = editingLayoutActive
-    ? Math.max(insets.bottom + Spacing.xs, Spacing.sm)
-    : Math.max(insets.bottom + Spacing.sm, Spacing.xl)
-  const scrollBottomPadding = editingLayoutActive ? 96 : 144
+  const scrollBottomPadding =
+    DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + (editingLayoutActive ? Spacing.lg : Spacing.xxxl)
 
   const animateEditingLayout = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
@@ -641,6 +650,8 @@ export default function CustomerSetupScreen() {
           contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          onScroll={actionDockScroll.onScroll}
+          scrollEventThrottle={actionDockScroll.scrollEventThrottle}
         >
           <View style={styles.content}>
             {!editingLayoutActive ? (
@@ -830,25 +841,50 @@ export default function CustomerSetupScreen() {
                 <Feather name="chevron-down" size={18} color={Colors.midGrey} />
               </TouchableOpacity>
             </View>
+
+            {saveError && !editingLayoutActive ? <Text style={styles.saveError}>{saveError}</Text> : null}
+            {validationNotice ? <Text style={styles.saveError}>{validationNotice}</Text> : null}
           </View>
         </ScrollView>
 
-        <View style={[styles.cta, editingLayoutActive && styles.ctaCompact, { paddingBottom: ctaBottomPadding }]}>
-          {saveError && !editingLayoutActive ? <Text style={styles.saveError}>{saveError}</Text> : null}
-          {validationNotice ? <Text style={styles.saveError}>{validationNotice}</Text> : null}
-          <Button
-            label="Continue to Drapeon"
-            onPress={save}
-            loading={saving || phoneOtpSending || phoneOtpVerifying}
-            disabled={
-              saving ||
-              uploadingAvatar ||
-              phoneAvailabilityChecking ||
-              phoneOtpSending ||
-              phoneOtpVerifying
-            }
-          />
-        </View>
+        <DrapeFloatingActionDock
+          compactWidth={76}
+          forceCompact={editingLayoutActive}
+          style={styles.actionDock}
+          testID="customer-setup-action-dock"
+        >
+          {actionDockCompact || editingLayoutActive ? (
+            <DrapeIconButton
+              icon="arrow-right"
+              accessibilityLabel="Continue to Drapeon"
+              tone="primary"
+              style={styles.actionDockIcon}
+              onPress={() => { void save() }}
+              disabled={
+                saving ||
+                uploadingAvatar ||
+                phoneAvailabilityChecking ||
+                phoneOtpSending ||
+                phoneOtpVerifying
+              }
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label="Continue to Drapeon"
+              icon="arrow-right"
+              style={styles.actionDockButton}
+              onPress={() => { void save() }}
+              loading={saving || phoneOtpSending || phoneOtpVerifying}
+              disabled={
+                saving ||
+                uploadingAvatar ||
+                phoneAvailabilityChecking ||
+                phoneOtpSending ||
+                phoneOtpVerifying
+              }
+            />
+          )}
+        </DrapeFloatingActionDock>
         <PhoneOtpModal
           visible={phoneOtpVisible}
           phone={normalizePhoneForStorage(phone)}
@@ -1280,17 +1316,10 @@ const styles = StyleSheet.create({
   optionLabelActive: { color: Colors.needleGreen },
   optionTextWrap: { flex: 1 },
   optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },
+  actionDock: { justifyContent: 'center' },
+  actionDockButton: { flex: 1 },
+  actionDockIcon: { alignSelf: 'center' },
 
-  cta: {
-    padding: Spacing.xl,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
-  ctaCompact: {
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.xs,
-  },
   nextCard: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,

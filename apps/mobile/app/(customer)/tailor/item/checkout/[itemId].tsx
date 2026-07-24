@@ -25,9 +25,20 @@ import {
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Button, ChoiceSheet, DisclosureSection, PaymentTrustCard } from '@/components/ui'
+import {
+  Button,
+  ChoiceSheet,
+  DisclosureSection,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  PaymentTrustCard,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import {
   ORDER_CANCELLATION_ACK_COPY,
@@ -121,7 +132,8 @@ export default function ReadyMadeCheckoutScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const [saving, setSaving] = useState(false)
   const [cancellationPolicyAcknowledged, setCancellationPolicyAcknowledged] = useState(false)
@@ -651,6 +663,7 @@ export default function ReadyMadeCheckoutScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          {...actionDockScroll}
         >
           <View style={styles.header}>
             <TouchableOpacity onPress={goBack} style={styles.headerBackButton}>
@@ -1172,24 +1185,50 @@ export default function ReadyMadeCheckoutScreen() {
         </ScrollView>
 
         {activeItem ? (
-          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
-            <Button
-              label={saving ? 'Preparing payment…' : 'Buy now'}
-              size="md"
-              onPress={createOrder}
-              disabled={
-                saving ||
-                pricingLoading ||
-                !checkoutPricing ||
-                !!pricingError ||
-                !fulfillment ||
-                sellerUnavailable ||
-                !cancellationPolicyAcknowledged ||
-                (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
-                (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
-              }
-            />
-          </View>
+          <DrapeFloatingActionDock
+            compactWidth={76}
+            forceCompact={keyboard.visible}
+            testID="ready-made-checkout-action"
+          >
+            {(compact) => compact ? (
+              <DrapeIconButton
+                icon="shopping-bag"
+                accessibilityLabel={saving ? 'Preparing payment' : 'Buy now'}
+                tone="primary"
+                onPress={createOrder}
+                disabled={
+                  saving ||
+                  pricingLoading ||
+                  !checkoutPricing ||
+                  !!pricingError ||
+                  !fulfillment ||
+                  sellerUnavailable ||
+                  !cancellationPolicyAcknowledged ||
+                  (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
+                  (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
+                }
+              />
+            ) : (
+              <DrapeCapsuleButton
+                label={saving ? 'Preparing payment…' : 'Buy now'}
+                icon="shopping-bag"
+                loading={saving}
+                style={styles.actionDockPrimary}
+                onPress={createOrder}
+                disabled={
+                  saving ||
+                  pricingLoading ||
+                  !checkoutPricing ||
+                  !!pricingError ||
+                  !fulfillment ||
+                  sellerUnavailable ||
+                  !cancellationPolicyAcknowledged ||
+                  (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
+                  (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
+                }
+              />
+            )}
+          </DrapeFloatingActionDock>
         ) : null}
         {activeItem ? (
           <SizeChoiceSheet
@@ -1337,7 +1376,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
     gap: Spacing.sm,
-    paddingBottom: Spacing.lg,
+    paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.lg,
   },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minHeight: 44 },
   headerBackButton: {
@@ -1688,12 +1727,5 @@ const styles = StyleSheet.create({
   policyCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
   policyCheckText: { fontSize: 13, color: Colors.textInverse, fontWeight: FontWeight.bold },
   policyAckText: { flex: 1, fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  footer: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 8,
-    paddingBottom: 8,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
+  actionDockPrimary: { flex: 1 },
 })

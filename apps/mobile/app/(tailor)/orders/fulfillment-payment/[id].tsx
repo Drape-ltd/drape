@@ -7,7 +7,15 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Button } from '@/components/ui'
+import {
+  Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import { useKeyboardState } from '@/lib/useKeyboardState'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
@@ -81,6 +89,8 @@ export default function FulfillmentPaymentRequestScreen() {
   const { id, returnTo, historyChain } = useLocalSearchParams<{ id: string; returnTo?: string; historyChain?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const keyboard = useKeyboardState()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -299,7 +309,11 @@ export default function FulfillmentPaymentRequestScreen() {
         <View style={{ width: 52 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        {...actionDockScroll}
+      >
         <View style={styles.summaryCard}>
           <Text style={styles.eyebrow}>Order</Text>
           <Text style={styles.title}>{order.garmentType}</Text>
@@ -370,9 +384,30 @@ export default function FulfillmentPaymentRequestScreen() {
         </View>
       </ScrollView>
 
-      <View style={styles.footer}>
-        <Button label={saving ? 'Sending request…' : actionLabel} onPress={submit} disabled={saving} />
-      </View>
+      <DrapeFloatingActionDock
+        compactWidth={76}
+        forceCompact={keyboard.visible}
+        testID="fulfillment-payment-action-dock"
+      >
+        {(compact) => compact ? (
+          <DrapeIconButton
+            icon="send"
+            accessibilityLabel={actionLabel}
+            tone="primary"
+            onPress={submit}
+            disabled={saving}
+          />
+        ) : (
+          <DrapeCapsuleButton
+            label={saving ? 'Sending request…' : actionLabel}
+            icon="send"
+            onPress={submit}
+            loading={saving}
+            disabled={saving}
+            style={styles.actionDockPrimary}
+          />
+        )}
+      </DrapeFloatingActionDock>
     </SafeAreaView>
   )
 }
@@ -397,7 +432,11 @@ const styles = StyleSheet.create({
   },
   backText: { fontSize: FontSize.lg, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   headerTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold },
-  content: { padding: Spacing.xl, gap: Spacing.lg, paddingBottom: 120 },
+  content: {
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.lg,
+  },
   summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.xl, gap: Spacing.sm, ...Shadow.sm },
   eyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 1 },
   title: { fontSize: FontSize.xxl, color: Colors.ink, fontWeight: FontWeight.bold },
@@ -420,12 +459,7 @@ const styles = StyleSheet.create({
   },
   noteInput: { minHeight: 110, textAlignVertical: 'top' },
   errorText: { fontSize: FontSize.xs, color: Colors.error },
-  footer: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xl,
-    backgroundColor: Colors.bone,
-  },
+  actionDockPrimary: { flex: 1 },
   stateCard: {
     margin: Spacing.xl,
     backgroundColor: Colors.white,

@@ -20,6 +20,7 @@ import {
   Button,
   DrapeCapsuleButton,
   DrapeFloatingActionDock,
+  DrapeIconButton,
   SkeletonBlock,
   SaveToWishlistSheet,
   PortfolioVideoPreview,
@@ -637,13 +638,56 @@ export default function TailorProfileScreen() {
         </View>
       </ScrollView>
 
-      <DrapeFloatingActionDock testID="tailor-profile-actions">
-        {profile.userId && user?.id && profile.userId === user.id ? (
+      <DrapeFloatingActionDock
+        compactWidth={profile.supportsReadyMade && profile.supportsCustomOrders ? 132 : 76}
+        compactOnScroll={!(profile.userId && user?.id && profile.userId === user.id)}
+        testID="tailor-profile-actions"
+      >
+        {(compact) => profile.userId && user?.id && profile.userId === user.id ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 }}>
             <Text style={{ fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', fontFamily: Fonts.body }}>
               This is your tailor profile
             </Text>
           </View>
+        ) : compact ? (
+          <>
+            {profile.supportsReadyMade ? (
+              <DrapeIconButton
+                icon="shopping-bag"
+                accessibilityLabel="Shop now"
+                tone="secondary"
+                onPress={() =>
+                  router.push({
+                    pathname: '/(customer)/tailor/shop/[id]',
+                    params: {
+                      id: profile.id,
+                      returnTo: `/(customer)/tailor/${profile.id}`,
+                      historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
+                    },
+                  })
+                }
+              />
+            ) : null}
+            {profile.supportsCustomOrders ? (
+              <DrapeIconButton
+                icon="scissors"
+                accessibilityLabel={customOrdersPaused ? 'Custom orders paused' : 'Start custom order'}
+                tone="primary"
+                onPress={() => router.push({
+                  pathname: '/(customer)/brief/[tailorId]',
+                  params: {
+                    tailorId: profile.id,
+                    returnTo: `/(customer)/tailor/${profile.id}`,
+                    historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
+                    draftSession: createDraftSessionId(),
+                    freshStart: '1',
+                  },
+                })}
+                disabled={customOrdersPaused}
+                testID="book-tailor-btn-compact"
+              />
+            ) : null}
+          </>
         ) : (
           <>
             {profile.supportsReadyMade ? (

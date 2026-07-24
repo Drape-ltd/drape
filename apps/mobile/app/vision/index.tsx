@@ -3,15 +3,17 @@ import {
   BackHandler,
   NativeModules,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
+import {
+  VisionDockIconButton,
+  VisionPrimaryButton,
+  VisionShell,
+} from '@/components/drapeVision/DrapeVisionPrimitives'
 import {
   DRAPE_VISION_COLORS,
   DRAPE_VISION_MODE_META,
@@ -294,88 +296,79 @@ export default function DrapeVisionRoute() {
 
   if (NativeVisionScreen) return <NativeVisionScreen />
 
+  const hasExplicitReturn = !!pickSafeReturnTo(params.historyChain, params.returnTo)
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        <View style={styles.hero}>
-          <View style={styles.heroIcon}>
-            <Feather name="aperture" size={28} color={Colors.needleGreen} />
-          </View>
-          <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-          <Text style={styles.title}>
-            {deferred
-              ? `${meta.eyebrow} is planned for a future release`
-              : androidPaused
-                ? 'Use manual measurements on Android'
-                : 'Drapeon Vision is not available in this build'}
-          </Text>
-          <Text style={styles.body}>
-            {deferred
-              ? 'This workflow is not part of the launch build because it has not completed product and real-device validation. The existing manual workflow remains available.'
-              : androidPaused
-                ? 'The Android live scanner is paused for launch while we finish device validation. You can keep the order moving with manual measurements.'
-                : "Live scanning needs Drapeon's camera-enabled build. You can keep going with the manual measurement path for now."}
-          </Text>
-        </View>
-
-        <View style={styles.noticeBand}>
-          <Feather name="tool" size={18} color={Colors.needleGreen} />
-          <View style={styles.noticeCopy}>
-            <Text style={styles.noticeTitle}>{deferred ? 'Use the established workflow' : 'Manual path is still available'}</Text>
-            <Text style={styles.noticeText}>
-              {deferred
-                ? mode === 'tailor_client_scan'
-                  ? 'Record and review client measurements directly in Diary. Every value remains editable before a passport invite is sent.'
-                  : mode === 'size_guide_scan'
-                    ? 'Build size ranges and buyer guidance directly in the listing editor. The manual fit guide remains available.'
-                    : 'Use production stage updates and order evidence photos for the final quality and handoff record.'
-                : androidPaused
-                  ? 'Manual measurements feed the same fit profile, tailor brief, ready-made fit check, and order flow without risking a camera crash.'
-                  : 'Add or review measurements manually, then return to Drapeon Vision when the camera build is installed.'}
-            </Text>
-          </View>
-        </View>
-      </ScrollView>
-
-      <View style={styles.ctaBar}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityState={{ disabled: visionExitPending }}
-          disabled={visionExitPending}
-          onPress={openPrimaryFallback}
-          style={[styles.primaryButton, visionExitPending && styles.primaryButtonDisabled]}
-        >
-          <Text style={styles.primaryText}>{primaryFallbackLabel}</Text>
-          <Feather name="arrow-right" size={18} color={Colors.textInverse} />
-        </TouchableOpacity>
-        {pickSafeReturnTo(params.historyChain, params.returnTo) ? (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityState={{ disabled: visionExitPending }}
+    <VisionShell
+      testID="vision-fallback-screen"
+      contentContainerStyle={styles.content}
+      footer={(compact) => (
+        <View style={styles.floatingActions}>
+          {!compact && hasExplicitReturn ? (
+            <VisionDockIconButton
+              icon="arrow-left"
+              label="Back to previous screen"
+              onPress={openReturnRoute}
+              disabled={visionExitPending}
+            />
+          ) : null}
+          <VisionPrimaryButton
+            label={primaryFallbackLabel}
+            icon="arrow-right"
+            onPress={openPrimaryFallback}
             disabled={visionExitPending}
-            onPress={openReturnRoute}
-            style={[styles.secondaryButton, visionExitPending && styles.secondaryButtonDisabled]}
-          >
-            <Text style={styles.secondaryText}>Back to previous screen</Text>
-          </TouchableOpacity>
-        ) : null}
+            loading={visionExitPending}
+            compact={compact}
+            style={compact ? undefined : styles.floatingPrimaryAction}
+          />
+        </View>
+      )}
+    >
+      <View style={styles.hero}>
+        <View style={styles.heroIcon}>
+          <Feather name="aperture" size={28} color={Colors.needleGreen} />
+        </View>
+        <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
+        <Text style={styles.title}>
+          {deferred
+            ? `${meta.eyebrow} is planned for a future release`
+            : androidPaused
+              ? 'Use manual measurements on Android'
+              : 'Drapeon Vision is not available in this build'}
+        </Text>
+        <Text style={styles.body}>
+          {deferred
+            ? 'This workflow is not part of the launch build because it has not completed product and real-device validation. The existing manual workflow remains available.'
+            : androidPaused
+              ? 'The Android live scanner is paused for launch while we finish device validation. You can keep the order moving with manual measurements.'
+              : "Live scanning needs Drapeon's camera-enabled build. You can keep going with the manual measurement path for now."}
+        </Text>
       </View>
-    </SafeAreaView>
+
+      <View style={styles.noticeBand}>
+        <Feather name="tool" size={18} color={Colors.needleGreen} />
+        <View style={styles.noticeCopy}>
+          <Text style={styles.noticeTitle}>{deferred ? 'Use the established workflow' : 'Manual path is still available'}</Text>
+          <Text style={styles.noticeText}>
+            {deferred
+              ? mode === 'tailor_client_scan'
+                ? 'Record and review client measurements directly in Diary. Every value remains editable before a passport invite is sent.'
+                : mode === 'size_guide_scan'
+                  ? 'Build size ranges and buyer guidance directly in the listing editor. The manual fit guide remains available.'
+                  : 'Use production stage updates and order evidence photos for the final quality and handoff record.'
+              : androidPaused
+                ? 'Manual measurements feed the same fit profile, tailor brief, ready-made fit check, and order flow without risking a camera crash.'
+                : 'Add or review measurements manually, then return to Drapeon Vision when the camera build is installed.'}
+          </Text>
+        </View>
+      </View>
+    </VisionShell>
   )
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: DRAPE_VISION_COLORS.screen,
-  },
-  scroll: {
-    flex: 1,
-  },
   content: {
-    paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.xl,
-    paddingBottom: Spacing.xxxl,
     gap: Spacing.lg,
   },
   hero: {
@@ -434,47 +427,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: DRAPE_VISION_COLORS.textMuted,
   },
-  ctaBar: {
-    gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: DRAPE_VISION_COLORS.line,
-    backgroundColor: DRAPE_VISION_COLORS.screen,
-  },
-  primaryButton: {
-    minHeight: 54,
-    borderRadius: Radius.md,
+  floatingActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: Spacing.sm,
-    backgroundColor: Colors.needleGreen,
   },
-  primaryButtonDisabled: {
-    opacity: 0.68,
-  },
-  primaryText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.bold,
-  },
-  secondaryButton: {
-    minHeight: 50,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: DRAPE_VISION_COLORS.line,
-    backgroundColor: DRAPE_VISION_COLORS.panel,
-  },
-  secondaryButtonDisabled: {
-    opacity: 0.58,
-  },
-  secondaryText: {
-    color: DRAPE_VISION_COLORS.text,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
+  floatingPrimaryAction: {
+    flex: 1,
   },
 })

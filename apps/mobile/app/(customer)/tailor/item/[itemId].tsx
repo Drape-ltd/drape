@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useCustomerMeasurements, useRefreshOnFocus, useSellerItem, useWishlistCollections } from '@/lib/queries'
@@ -18,7 +18,17 @@ import {
   READY_MADE_FIT_FIELDS,
   recommendReadyMadeSize,
 } from '@/lib/ready-made-fit'
-import { Button, PortfolioVideoPreview, RemoteImage, SaveToWishlistSheet } from '@/components/ui'
+import {
+  Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  PortfolioVideoPreview,
+  RemoteImage,
+  SaveToWishlistSheet,
+} from '@/components/ui'
+import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { hapticLight } from '@/lib/haptics'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
@@ -41,7 +51,7 @@ export default function SellerItemDetailScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const { currency: accountCurrency, rates } = useCurrency()
   const [startingInquiry, setStartingInquiry] = useState(false)
@@ -202,7 +212,12 @@ export default function SellerItemDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        {...actionDockScroll}
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack} style={styles.headerBackButton}>
             <Feather name="arrow-left" size={20} color={CHARCOAL} />
@@ -455,50 +470,82 @@ export default function SellerItemDetailScreen() {
       </ScrollView>
 
       {item ? (
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
-          <View style={styles.footerRow}>
-            <Button
-              label={startingInquiry ? 'Opening chat...' : 'Ask a question'}
-              variant="secondary"
-              size="md"
-              fullWidth={false}
-              style={styles.footerHalfButton}
-              onPress={() => { void startSellerInquiry() }}
-              disabled={startingInquiry}
-            />
-            <Button
-              label={sellerUnavailable ? 'Seller unavailable' : canBuy && item.inventoryQuantity === 1 ? 'Buy last one' : canBuy ? 'Buy now' : 'Unavailable'}
-              size="md"
-              fullWidth={false}
-              style={styles.footerHalfButton}
-              disabled={!canBuy}
-              onPress={() => router.push({
-                pathname: '/(customer)/tailor/item/checkout/[itemId]',
-                params: {
-                  itemId: item.id,
-                  returnTo: `/(customer)/tailor/item/${item.id}`,
-                  historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
-                },
-              })}
-            />
-          </View>
-          <Button
-            label={sellerUnavailable ? 'Custom orders unavailable' : 'Custom order instead'}
-            variant="ghost"
-            size="sm"
-            disabled={sellerUnavailable}
-            onPress={() => router.push({
-              pathname: '/(customer)/brief/[tailorId]',
-              params: {
-                tailorId: item.tailorProfileId,
-                returnTo: `/(customer)/tailor/${item.tailorProfileId}`,
-                historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
-                draftSession: createDraftSessionId(),
-                freshStart: '1',
-              },
-            })}
-          />
-        </View>
+        <DrapeFloatingActionDock compactWidth={168} testID="ready-made-item-actions">
+          {(compact) => (
+            <>
+              <DrapeIconButton
+                icon="message-circle"
+                accessibilityLabel={startingInquiry ? 'Opening chat' : 'Ask a question'}
+                tone="secondary"
+                onPress={() => { void startSellerInquiry() }}
+                disabled={startingInquiry}
+              />
+              {compact ? (
+                <DrapeIconButton
+                  icon="shopping-bag"
+                  accessibilityLabel={
+                    sellerUnavailable
+                      ? 'Seller unavailable'
+                      : canBuy && item.inventoryQuantity === 1
+                        ? 'Buy last one'
+                        : canBuy
+                          ? 'Buy now'
+                          : 'Unavailable'
+                  }
+                  tone="primary"
+                  disabled={!canBuy}
+                  onPress={() => router.push({
+                    pathname: '/(customer)/tailor/item/checkout/[itemId]',
+                    params: {
+                      itemId: item.id,
+                      returnTo: `/(customer)/tailor/item/${item.id}`,
+                      historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
+                    },
+                  })}
+                />
+              ) : (
+                <DrapeCapsuleButton
+                  label={
+                    sellerUnavailable
+                      ? 'Seller unavailable'
+                      : canBuy && item.inventoryQuantity === 1
+                        ? 'Buy last one'
+                        : canBuy
+                          ? 'Buy now'
+                          : 'Unavailable'
+                  }
+                  icon="shopping-bag"
+                  style={styles.actionDockPrimary}
+                  disabled={!canBuy}
+                  onPress={() => router.push({
+                    pathname: '/(customer)/tailor/item/checkout/[itemId]',
+                    params: {
+                      itemId: item.id,
+                      returnTo: `/(customer)/tailor/item/${item.id}`,
+                      historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
+                    },
+                  })}
+                />
+              )}
+              <DrapeIconButton
+                icon="scissors"
+                accessibilityLabel={sellerUnavailable ? 'Custom orders unavailable' : 'Custom order instead'}
+                tone="secondary"
+                disabled={sellerUnavailable}
+                onPress={() => router.push({
+                  pathname: '/(customer)/brief/[tailorId]',
+                  params: {
+                    tailorId: item.tailorProfileId,
+                    returnTo: `/(customer)/tailor/${item.tailorProfileId}`,
+                    historyChain: appendToHistory(historyChain, `/(customer)/tailor/item/${item.id}`),
+                    draftSession: createDraftSessionId(),
+                    freshStart: '1',
+                  },
+                })}
+              />
+            </>
+          )}
+        </DrapeFloatingActionDock>
       ) : null}
       <ReadyMadeWishlistModal
         visible={wishlistPickerOpen}
@@ -594,7 +641,12 @@ function StockPill({ signal }: { signal: ReturnType<typeof buildCustomerStockSig
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: HOME_BG },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.sm, paddingBottom: Spacing.lg },
+  content: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    gap: Spacing.sm,
+    paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.lg,
+  },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minHeight: 44 },
   headerBackButton: {
     width: 44,
@@ -721,15 +773,5 @@ const styles = StyleSheet.create({
   policyRow: { gap: 4 },
   policyTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },
   policyBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  footer: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 10,
-    paddingBottom: 8,
-    gap: 8,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
-  footerRow: { flexDirection: 'row', gap: 8 },
-  footerHalfButton: { flex: 1, minHeight: 44 },
+  actionDockPrimary: { flex: 1 },
 })

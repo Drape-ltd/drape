@@ -257,9 +257,46 @@ async function syncApprovedPortfolioPhotoUrls(
 
     if (error) return error.message ?? 'Portfolio item lookup failed.'
 
-    const nextUrls = ((data ?? []) as Array<{ image_url?: string | null }>)
+    let nextUrls = ((data ?? []) as Array<{ image_url?: string | null }>)
       .map((row) => row.image_url)
       .filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+      .map((url) => url.trim())
+
+    nextUrls = Array.from(new Set(nextUrls))
+
+    if (nextUrls.length === 0) {
+      const { data: profile, error: profileError } = await supabase
+        .from('tailor_profiles')
+        .select('portfolio_photo_urls')
+        .eq('id', tailorProfileId)
+        .maybeSingle()
+
+      if (profileError) return profileError.message ?? 'Legacy portfolio lookup failed.'
+
+      const setupUrls: string[] = Array.isArray(profile?.portfolio_photo_urls)
+        ? Array.from(new Set<string>(
+            (profile.portfolio_photo_urls as unknown[])
+              .filter((url: unknown): url is string => typeof url === 'string' && url.trim().length > 0)
+              .map((url: string) => url.trim()),
+          )).slice(0, 12)
+        : []
+
+      if (setupUrls.length > 0) {
+        const { error: seedError } = await supabase
+          .from('portfolio_items')
+          .insert(setupUrls.map((url, index) => ({
+            tailor_profile_id: tailorProfileId,
+            image_url: url,
+            title: `Portfolio photo ${index + 1}`,
+            description: null,
+            category: null,
+            sort_order: index,
+          })))
+
+        if (seedError) return seedError.message ?? 'Legacy portfolio recovery failed.'
+        nextUrls = setupUrls
+      }
+    }
 
     const { error: updateError } = await supabase
       .from('tailor_profiles')
@@ -411,7 +448,7 @@ export async function performVerificationDecision(
       .from('media_assets')
       .update({ moderation_status: 'AUTO_ALLOWED', status: 'ACTIVE' })
       .eq('owner_user_id', tailorUserId)
-      .eq('moderation_status', 'PENDING')
+      .eq('moderation_status', 'PENDING_REVIEW')
     portfolioSyncError = await syncApprovedPortfolioPhotoUrls(supabase, profileId)
   }
 
