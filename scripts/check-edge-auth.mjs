@@ -60,6 +60,7 @@ const manifest = {
   'paystack-webhook': ['paystackWebhook'],
   'portfolio-item-action': ['user'],
   'process-job-queue': ['cron'],
+  'process-push-receipts': ['cron'],
   'read-gateway': ['publicReadGateway'],
   'ready-made-order-action': ['user'],
   'reauth-proof-action': ['user'],

@@ -5,6 +5,7 @@ export type JobType =
   | 'SEND_SMS'
   | 'SEND_ORDER_EVENT_EMAIL'
   | 'SEND_ORDER_CONFIRMATION_EMAILS'
+  | 'SEND_OPS_VERIFICATION_EMAIL'
   | 'CREATE_OPS_ISSUE'
 
 export type JobRow = {

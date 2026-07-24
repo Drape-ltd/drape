@@ -2,13 +2,13 @@ const RESEND_API = 'https://api.resend.com/emails'
 const OPS_EMAIL = 'ops@drapeon.co'
 const NOREPLY_EMAIL = 'noreply@drapeon.co'
 
-function parseEmailList(value: string | null | undefined) {
+export function parseEmailList(value: string | null | undefined) {
   if (!value) return []
 
   const seen = new Set<string>()
   const emails: string[] = []
 
-  for (const raw of value.split(',')) {
+  for (const raw of value.split(/[,;\n]/u)) {
     const email = raw.trim().toLowerCase()
     if (!email || seen.has(email)) continue
     seen.add(email)
@@ -18,13 +18,13 @@ function parseEmailList(value: string | null | undefined) {
   return emails
 }
 
-function getOpsRecipients() {
+export function getOpsRecipients() {
   const configured = parseEmailList(Deno.env.get('OPS_NOTIFICATION_EMAILS'))
   if (configured.length > 0) return configured
   return [Deno.env.get('OPS_EMAIL') ?? OPS_EMAIL]
 }
 
-function getOpsNotificationFrom() {
+export function getOpsNotificationFrom() {
   return Deno.env.get('RESEND_FROM') ?? `Drape Ops <${NOREPLY_EMAIL}>`
 }
 

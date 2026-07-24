@@ -1,8 +1,10 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { enqueueBackgroundJob } from '../_shared/jobs.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { sendSmsDirect } from '../_shared/sms.ts'
 import { parseBody, z } from '../_shared/validate.ts'
@@ -14,10 +16,6 @@ const TOKEN_TTL_MS = 15 * 60 * 1000
 const SIGNED_UPLOAD_EXPIRES_SECONDS = 10 * 60
 const TRUST_VIDEO_BUCKET = 'trust-verification'
 const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEMENT') === 'true'
-
-declare const EdgeRuntime: {
-  waitUntil(promise: Promise<unknown>): void
-}
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -84,6 +82,25 @@ function getResendFrom() {
 
 function getResendApiKey() {
   return Deno.env.get('RESEND_API_KEY')?.trim() ?? ''
+}
+
+async function notifyOpsVerification(
+  supabase: SupabaseClient,
+  tailorId: string,
+  deliveryKey: string,
+) {
+  const serviceRoleKey = getServiceRoleKey()
+  const { data, error } = await supabase.functions.invoke('notify-ops-verification', {
+    body: { tailorId, deliveryKey },
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+    },
+  })
+  if (error) throw new Error(error.message)
+  if (!data || typeof data !== 'object' || Array.isArray(data) || data.ok !== true) {
+    throw new Error('Verification notification returned an invalid response.')
+  }
 }
 
 function base64Url(bytes: Uint8Array) {
@@ -491,6 +508,9 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: error.message }, 409, cors)
       }
 
+      const result = Array.isArray(data) ? data[0] : data
+      const profileId = typeof result?.profile_id === 'string' ? result.profile_id : null
+
       await audit(supabase, {
         event: 'trust_video_handoff.submitted',
         actor_id: row.tailor_user_id,
@@ -506,27 +526,93 @@ Deno.serve(async (req) => {
         },
       })
 
-      const serviceRoleKey = getServiceRoleKey()
-      EdgeRuntime.waitUntil(
-        supabase.functions.invoke('notify-ops-verification', {
-          body: { tailorId: row.tailor_user_id },
-          headers: {
-            Authorization: `Bearer ${serviceRoleKey}`,
-            apikey: serviceRoleKey,
-          },
-        }).catch((notifyError) => {
-          log('warn', FN, 'notify_ops.failed', {
-            tailor_user_id: row.tailor_user_id,
-            error: notifyError instanceof Error ? notifyError.message : String(notifyError),
-          })
-        }),
-      )
+      const reviewIssue = await createOrRefreshOpsIssue(supabase, {
+        issueType: 'TAILOR_VERIFICATION',
+        severity: 'HIGH',
+        source: FN,
+        actorId: row.tailor_user_id,
+        actorRole: 'TAILOR',
+        userId: row.tailor_user_id,
+        tailorProfileId: profileId,
+        relatedEntityType: 'identity_verification_handoff',
+        relatedEntityId: row.id,
+        stage: 'PENDING_REVIEW',
+        title: 'A tailor trust verification is ready for review',
+        description: 'A tailor submitted the required private challenge video and completed marketplace setup.',
+        recommendedAction: 'Review the challenge video, profile photo, portfolio evidence, and onboarding proof item before approving or rejecting the tailor.',
+        dedupeKey: `tailor-verification:${profileId ?? row.tailor_user_id}`,
+        metadata: {
+          handoff_id: row.id,
+          challenge_id: row.challenge_id,
+          evidence_type: 'CHALLENGE_VIDEO',
+          submission_status: 'PENDING',
+        },
+      })
 
-      const result = Array.isArray(data) ? data[0] : data
+      if (!reviewIssue) {
+        log('error', FN, 'ops_issue.create_failed', {
+          handoff_id: row.id,
+          tailor_user_id: row.tailor_user_id,
+          tailor_profile_id: profileId,
+        })
+      }
+
+      let notificationQueued = false
+      try {
+        await enqueueBackgroundJob(supabase, {
+          jobType: 'SEND_OPS_VERIFICATION_EMAIL',
+          eventType: 'tailor.verification_submitted',
+          aggregateType: 'tailor_profile',
+          aggregateId: profileId ?? row.tailor_user_id,
+          actorId: row.tailor_user_id,
+          actorRole: 'TAILOR',
+          idempotencyKey: `tailor-verification-email:${row.id}`,
+          payload: {
+            tailorId: row.tailor_user_id,
+            profileId,
+            handoffId: row.id,
+            deliveryKey: `verification-${row.id}`,
+          },
+          metadata: {
+            source: FN,
+            opsIssueId: reviewIssue?.id ?? null,
+          },
+          priority: 10,
+          maxAttempts: 8,
+        })
+        notificationQueued = true
+      } catch (enqueueError) {
+        log('error', FN, 'notify_ops.enqueue_failed', {
+          handoff_id: row.id,
+          tailor_user_id: row.tailor_user_id,
+          error: enqueueError instanceof Error ? enqueueError.message : String(enqueueError),
+        })
+      }
+
+      let opsEmailAccepted = false
+      try {
+        await notifyOpsVerification(
+          supabase,
+          row.tailor_user_id,
+          `verification-${row.id}`,
+        )
+        opsEmailAccepted = true
+      } catch (notifyError) {
+        log('error', FN, 'notify_ops.immediate_failed', {
+          handoff_id: row.id,
+          tailor_user_id: row.tailor_user_id,
+          notification_queued: notificationQueued,
+          error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+        })
+      }
+
       return jsonResponse({
         ok: true,
         status: 'PENDING',
-        profileId: result?.profile_id ?? null,
+        profileId,
+        reviewQueued: Boolean(reviewIssue),
+        notificationQueued,
+        opsEmailAccepted,
         message: 'Trust video submitted for review.',
       }, 200, cors)
     }

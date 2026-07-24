@@ -27,6 +27,7 @@ const ALLOWED_JOB_TYPES = new Set<JobType>([
   'SEND_SMS',
   'SEND_ORDER_EVENT_EMAIL',
   'SEND_ORDER_CONFIRMATION_EMAILS',
+  'SEND_OPS_VERIFICATION_EMAIL',
   'CREATE_OPS_ISSUE',
 ])
 
@@ -167,6 +168,29 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         asRecord(payload.order) as never,
         ensurePaymentPhase(asString(payload.phase)) as never,
       )
+      return
+    }
+
+    case 'SEND_OPS_VERIFICATION_EMAIL': {
+      const tailorId = requireString(payload, 'tailorId')
+      const deliveryKey = requireString(payload, 'deliveryKey')
+      const serviceRoleKey = getServiceRoleKey()
+      const { data, error } = await supabase.functions.invoke('notify-ops-verification', {
+        body: { tailorId, deliveryKey },
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          apikey: serviceRoleKey,
+        },
+      })
+      if (error) {
+        throw new Error(`Ops verification email failed: ${error.message}`)
+      }
+      const response = asRecord(data)
+      if (response.ok !== true) {
+        throw new Error(
+          `Ops verification email returned an invalid response: ${asString(response.error) ?? 'unknown error'}`,
+        )
+      }
       return
     }
 

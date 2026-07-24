@@ -682,20 +682,10 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: true, pendingReview: true, requestId: request?.id ?? null }, 200, cors)
       }
 
-      const { error: currencyUpdateError } = await supabase
-        .from('tailor_profiles')
-        .update({
-          payout_currency: body.payoutCurrency,
-        })
-        .eq('id', profile.id)
-
-      if (currencyUpdateError) {
-        throw currencyUpdateError
-      }
-
       const { error: verificationUpdateError } = await supabase
         .from('tailor_profiles')
         .update({
+          payout_currency: body.payoutCurrency,
           payout_provider: 'PAYSTACK',
           payout_account_type: 'PAYSTACK',
           payout_account_verified: true,

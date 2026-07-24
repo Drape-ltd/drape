@@ -8,7 +8,8 @@
  * Required env vars (set in Supabase Dashboard → Edge Functions → Secrets):
  *   RESEND_API_KEY   – Resend API key
  *   RESEND_FROM      – optional verified sender (e.g. Drape Verification <verify@drapeon.co>)
- *   OPS_EMAIL        – email address that receives verification requests (e.g. ops@drapeon.co)
+ *   OPS_NOTIFICATION_EMAILS – comma-separated review recipients
+ *   OPS_EMAIL        – fallback review recipient (e.g. ops@drapeon.co)
  *   SUPABASE_URL     – injected automatically by Supabase runtime
  *   SUPABASE_ANON_KEY – injected automatically by Supabase runtime
  *   SUPABASE_SERVICE_ROLE_KEY – injected automatically
@@ -22,6 +23,8 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { signPayload, escapeHtml } from '../_shared/hmac.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { audit } from '../_shared/logger.ts'
+import { getOpsNotificationFrom, getOpsRecipients } from '../_shared/ops-notifications.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { currencySymbol, normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
 import {
@@ -221,10 +224,12 @@ function isServiceRoleRequest(req: Request) {
   )
 }
 
-async function readNotifyBody(req: Request): Promise<{ tailorId?: unknown }> {
+async function readNotifyBody(req: Request): Promise<{ tailorId?: unknown; deliveryKey?: unknown }> {
   try {
     const raw = await req.json()
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as { tailorId?: unknown } : {}
+    return raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw as { tailorId?: unknown; deliveryKey?: unknown }
+      : {}
   } catch {
     return {}
   }
@@ -259,10 +264,13 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
-    // Rate limit: 3 emails per hour per tailor (prevents ops inbox spam)
-    const allowed = await checkRateLimit(supabase, `notify-ops-verification:${tailorId}`, 3600, 3)
-    if (!allowed) {
-      return rateLimitExceededResponse(corsHeaders)
+    // User-triggered retries remain rate-limited. Internal delivery is already
+    // deduplicated and retried by the durable job queue.
+    if (!internalServiceCall) {
+      const allowed = await checkRateLimit(supabase, `notify-ops-verification:${tailorId}`, 3600, 3)
+      if (!allowed) {
+        return rateLimitExceededResponse(corsHeaders)
+      }
     }
 
     // Fetch tailor profile
@@ -494,16 +502,24 @@ Deno.serve(async (req) => {
 <p style="color:#999;font-size:12px;margin-top:24px">Expires: ${new Date(exp * 1000).toUTCString()}</p>
 `
 
+    const recipients = getOpsRecipients()
+    const requestedDeliveryKey = typeof body.deliveryKey === 'string'
+      ? body.deliveryKey.trim()
+      : ''
+    const deliveryKey = requestedDeliveryKey.length > 0
+      ? requestedDeliveryKey.slice(0, 180)
+      : `tailor-verification-${tailorId}-${profile.trust_verification_challenge_id ?? 'review'}`
     const resendRes = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`,
         'Content-Type': 'application/json',
         'User-Agent': 'drape-notify-ops-verification/1.0',
+        'Idempotency-Key': `drape-${deliveryKey}`,
       },
       body: JSON.stringify({
-        from: Deno.env.get('RESEND_FROM') ?? 'Drape Verification <verify@drapeon.co>',
-        to: [Deno.env.get('OPS_EMAIL') ?? 'ops@drapeon.co'],
+        from: getOpsNotificationFrom(),
+        to: recipients,
         subject: `Verification request: ${profile.display_name}`,
         html,
       }),
@@ -517,7 +533,27 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'We could not notify the review team right now. Please try again.' }, 502, corsHeaders)
     }
 
-    return jsonResponse({ ok: true }, 200, corsHeaders)
+    const resendPayload = await resendRes.json().catch(() => ({})) as { id?: unknown }
+    const deliveryId = typeof resendPayload.id === 'string' ? resendPayload.id : null
+    await audit(supabase, {
+      event: 'ops.verification_notification_sent',
+      actor_id: actorId,
+      actor_role: actorRole,
+      severity: 'info',
+      payload: {
+        tailor_user_id: tailorId,
+        tailor_profile_id: profile.id,
+        delivery_id: deliveryId,
+        delivery_key: deliveryKey,
+        recipient_count: recipients.length,
+      },
+    })
+
+    return jsonResponse({
+      ok: true,
+      deliveryId,
+      recipientCount: recipients.length,
+    }, 200, corsHeaders)
   } catch (err) {
     console.error('[notify-ops-verification]', err)
     return jsonResponse({ error: 'We could not submit verification for review right now. Please try again.' }, 500, corsHeaders)
