@@ -96,6 +96,7 @@ const NOTICE_COPY: Record<string, string> = {
   'profile-change-rejected': 'Profile change rejected.',
   'payout-change-approved': 'Payout destination change approved.',
   'payout-change-rejected': 'Payout destination change rejected.',
+  'payout-change-already-decided': 'This payout destination request was already decided. Its review card has been closed.',
   'deletion-saved': 'Deletion request status updated.',
   'dispatch-saved': 'Dispatch stage updated.',
   'review-published': 'Review is public now.',

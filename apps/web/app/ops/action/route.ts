@@ -1179,17 +1179,60 @@ export async function POST(request: Request) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
       }
 
+      const performedBy = session.email ?? session.role
+      const performedRole = session.role.toUpperCase()
+      const { data: payoutRequest, error: payoutRequestError } = await client
+        .from('payout_change_requests')
+        .select('id, status')
+        .eq('id', requestId)
+        .maybeSingle()
+
+      if (payoutRequestError) {
+        return redirectWithMessage(request, redirectTo, 'error', 'save-failed', payoutRequestError.message)
+      }
+
+      if (!payoutRequest?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'conflict', 'Payout change request was not found.')
+      }
+
+      if (payoutRequest.status !== 'PENDING') {
+        await syncEntityOpsIssue({
+          client,
+          issueType: 'PAYOUT_BLOCKED',
+          relatedEntityType: 'payout_change_request',
+          relatedEntityId: requestId,
+          status: 'RESOLVED',
+          performedBy,
+          performedRole,
+          actionTaken: 'PAYOUT_CHANGE_ALREADY_DECIDED',
+          reason: `Request status was already ${payoutRequest.status}.`,
+        })
+        return redirectWithMessage(request, redirectTo, 'notice', 'payout-change-already-decided')
+      }
+
       const { error } = await client.rpc('ops_decide_payout_change_request', {
         p_request_id: requestId,
         p_decision: decision,
         p_rejection_code: rejectionCode.length > 0 ? rejectionCode : null,
         p_reason: reason.length > 0 ? reason : null,
-        p_reviewed_by: session.email ?? session.role,
+        p_reviewed_by: performedBy,
       })
 
       if (error) {
         return redirectWithMessage(request, redirectTo, 'error', isConflictError(error) ? 'conflict' : 'save-failed', error.message)
       }
+
+      await syncEntityOpsIssue({
+        client,
+        issueType: 'PAYOUT_BLOCKED',
+        relatedEntityType: 'payout_change_request',
+        relatedEntityId: requestId,
+        status: 'RESOLVED',
+        performedBy,
+        performedRole,
+        actionTaken: decision === 'APPROVE' ? 'PAYOUT_CHANGE_APPROVED' : 'PAYOUT_CHANGE_REJECTED',
+        reason: reason.length > 0 ? reason : null,
+      })
 
       return redirectWithMessage(request, redirectTo, 'notice', decision === 'APPROVE' ? 'payout-change-approved' : 'payout-change-rejected')
     }

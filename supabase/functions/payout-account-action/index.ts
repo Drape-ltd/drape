@@ -7,7 +7,10 @@ import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { createPaystackTransferRecipient, fallbackPaystackBanks, listPaystackBanks, resolvePaystackAccountNumber } from '../_shared/paystack.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { createStripeAccountLink, createStripeConnectAccount, retrieveStripeConnectAccount } from '../_shared/stripe.ts'
-import { isApprovedTailorProfile, stagePayoutChangeRequest } from '../_shared/verification-review.ts'
+import {
+  requiresOpsPayoutDestinationReview,
+  stagePayoutChangeRequest,
+} from '../_shared/verification-review.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
 import {
@@ -263,6 +266,14 @@ function hasVerifiedPayoutDestination(profile: TailorProfileRow) {
     && currentPayoutDestinationKey(profile) !== null
 }
 
+function isPayoutDestinationChange(profile: TailorProfileRow, nextDestinationKey: string | null) {
+  return requiresOpsPayoutDestinationReview(
+    profile,
+    currentPayoutDestinationKey(profile),
+    nextDestinationKey,
+  )
+}
+
 function currentDestinationPayload(profile: TailorProfileRow) {
   return {
     payout_currency: profile.payout_currency ?? null,
@@ -329,10 +340,7 @@ async function createPayoutChangeReviewIssue(
 }
 
 function payoutChangeGuardResponse(profile: TailorProfileRow, nextDestinationKey: string, nowIso: string, headers: HeadersInit) {
-  const currentDestinationKey = currentPayoutDestinationKey(profile)
-  const isDestinationChange = hasVerifiedPayoutDestination(profile)
-    && currentDestinationKey !== null
-    && currentDestinationKey !== nextDestinationKey
+  const isDestinationChange = isPayoutDestinationChange(profile, nextDestinationKey)
 
   if (!isDestinationChange || !isFutureIso(profile.payout_account_change_locked_until, nowIso)) {
     return null
@@ -352,10 +360,7 @@ function payoutChangeGuardResponse(profile: TailorProfileRow, nextDestinationKey
 }
 
 function payoutChangePatch(profile: TailorProfileRow, nextDestinationKey: string, nowIso: string) {
-  const currentDestinationKey = currentPayoutDestinationKey(profile)
-  const isDestinationChange = hasVerifiedPayoutDestination(profile)
-    && currentDestinationKey !== null
-    && currentDestinationKey !== nextDestinationKey
+  const isDestinationChange = isPayoutDestinationChange(profile, nextDestinationKey)
 
   if (!isDestinationChange) {
     return {
@@ -646,7 +651,7 @@ Deno.serve(async (req) => {
         ...manualBankResetPatch(),
       }
 
-      if (isApprovedTailorProfile(profile)) {
+      if (isPayoutDestinationChange(profile, nextDestinationKey)) {
         const request = await stagePayoutChangeRequest(supabase, {
           tailorUserId: caller.id,
           tailorProfileId: profile.id,
@@ -759,14 +764,14 @@ Deno.serve(async (req) => {
           manualBankSubmittedAt: null,
           paystackRecipientCode: recipient.recipient_code,
           stripeConnectAccountId: null,
-          payoutAccountChangeCount: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+          payoutAccountChangeCount: isPayoutDestinationChange(profile, nextDestinationKey)
             ? (profile.payout_account_change_count ?? 0) + 1
             : profile.payout_account_change_count ?? 0,
           payoutAccountLastChangedAt: now,
-          payoutAccountChangeLockedUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+          payoutAccountChangeLockedUntil: isPayoutDestinationChange(profile, nextDestinationKey)
             ? addMsIso(now, PAYOUT_CHANGE_COOLDOWN_MS)
             : profile.payout_account_change_locked_until ?? null,
-          payoutDestinationHoldUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+          payoutDestinationHoldUntil: isPayoutDestinationChange(profile, nextDestinationKey)
             ? addMsIso(now, PAYOUT_DESTINATION_HOLD_MS)
             : profile.payout_destination_hold_until ?? null,
         },
@@ -830,7 +835,7 @@ Deno.serve(async (req) => {
         manual_bank_verification_status: 'PENDING',
       }
 
-      if (isApprovedTailorProfile(profile)) {
+      if (isPayoutDestinationChange(profile, nextDestinationKey)) {
         const request = await stagePayoutChangeRequest(supabase, {
           tailorUserId: caller.id,
           tailorProfileId: profile.id,
@@ -1027,7 +1032,7 @@ Deno.serve(async (req) => {
         ...manualBankResetPatch(),
       }
 
-      if (isApprovedTailorProfile(profile)) {
+      if (isPayoutDestinationChange(profile, nextDestinationKey)) {
         const request = await stagePayoutChangeRequest(supabase, {
           tailorUserId: caller.id,
           tailorProfileId: profile.id,
@@ -1074,6 +1079,7 @@ Deno.serve(async (req) => {
         .from('tailor_profiles')
         .update({
           payout_currency: body.payoutCurrency,
+          payout_provider: 'STRIPE',
           payout_account_type: 'STRIPE_CONNECT',
           payout_account_verified: false,
           payout_reverification_required: true,
@@ -1136,8 +1142,12 @@ Deno.serve(async (req) => {
       const account = await retrieveStripeConnectAccount(accountId)
       const verified = account.charges_enabled === true && account.payouts_enabled === true
       const now = new Date().toISOString()
+      const pendingCurrency = typeof pendingPayoutRequest?.requested_destination?.payout_currency === 'string'
+        ? pendingPayoutRequest.requested_destination.payout_currency
+        : profile.payout_currency ?? ''
+      const nextDestinationKey = ['STRIPE_CONNECT', pendingCurrency, account.id].join(':')
 
-      if (isApprovedTailorProfile(profile)) {
+      if (isPayoutDestinationChange(profile, nextDestinationKey)) {
         const requestedDestination = {
           ...(pendingPayoutRequest?.requested_destination ?? {}),
           payout_provider: 'STRIPE',
@@ -1210,6 +1220,7 @@ Deno.serve(async (req) => {
       const { error: updateError } = await supabase
         .from('tailor_profiles')
         .update({
+          payout_provider: 'STRIPE',
           payout_account_type: 'STRIPE_CONNECT',
           payout_account_verified: verified,
           payout_reverification_required: verified ? false : true,

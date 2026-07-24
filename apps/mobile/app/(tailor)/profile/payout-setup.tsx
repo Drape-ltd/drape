@@ -72,6 +72,14 @@ type StripeRefreshAccount = {
   payoutCountryCode: string | null
 }
 
+type PayoutReviewSummary = {
+  payoutCurrency: PayoutSetupCurrency
+  payoutProvider: PayoutSetupProvider
+  payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  payoutBankName: string | null
+  payoutAccountMasked: string | null
+}
+
 type CurrencyOption = {
   code: PayoutSetupCurrency
   name: string
@@ -229,6 +237,7 @@ export default function TailorPayoutSetupScreen() {
   const [loadError, setLoadError] = useState('')
   const [status, setStatus] = useState<TailorPayoutStatus | null>(null)
   const [payoutReviewPending, setPayoutReviewPending] = useState(false)
+  const [payoutReviewSummary, setPayoutReviewSummary] = useState<PayoutReviewSummary | null>(null)
   const [activeStep, setActiveStep] = useState<SetupStep>('INTRO')
   const [editingVerifiedAccount, setEditingVerifiedAccount] = useState(false)
   const [selectedCurrency, setSelectedCurrency] = useState<PayoutSetupCurrency>('USD')
@@ -412,6 +421,8 @@ export default function TailorPayoutSetupScreen() {
       return
     }
     setEditingVerifiedAccount(true)
+    setPayoutReviewPending(false)
+    setPayoutReviewSummary(null)
     setActiveStep('CURRENCY')
     setFieldError('')
   }
@@ -510,12 +521,20 @@ export default function TailorPayoutSetupScreen() {
 
     if (result.pendingReview) {
       setPayoutReviewPending(true)
+      setPayoutReviewSummary({
+        payoutCurrency: selectedCurrency,
+        payoutProvider: providerForCurrency(selectedCurrency),
+        payoutAccountType: null,
+        payoutBankName: manualBankName.trim() || null,
+        payoutAccountMasked: manualAccountNumber,
+      })
       setEditingVerifiedAccount(false)
       setActiveStep('SUCCESS')
       return
     }
 
     setPayoutReviewPending(false)
+    setPayoutReviewSummary(null)
     setStatus(result.account)
     await load()
     setEditingVerifiedAccount(false)
@@ -547,12 +566,20 @@ export default function TailorPayoutSetupScreen() {
 
     if (result.pendingReview) {
       setPayoutReviewPending(true)
+      setPayoutReviewSummary({
+        payoutCurrency: selectedCurrency,
+        payoutProvider: 'PAYSTACK',
+        payoutAccountType: 'PAYSTACK',
+        payoutBankName: selectedBank.name,
+        payoutAccountMasked: verification.maskedAccountNumber,
+      })
       setEditingVerifiedAccount(false)
       setActiveStep('SUCCESS')
       return
     }
 
     setPayoutReviewPending(false)
+    setPayoutReviewSummary(null)
     setStatus(result.account)
     setEditingVerifiedAccount(false)
     setActiveStep('SUCCESS')
@@ -592,6 +619,13 @@ export default function TailorPayoutSetupScreen() {
 
     if (refresh.pendingReview) {
       setPayoutReviewPending(true)
+      setPayoutReviewSummary({
+        payoutCurrency: selectedCurrency,
+        payoutProvider: 'STRIPE',
+        payoutAccountType: 'STRIPE_CONNECT',
+        payoutBankName: null,
+        payoutAccountMasked: null,
+      })
       setEditingVerifiedAccount(false)
       setActiveStep('SUCCESS')
       return
@@ -604,6 +638,7 @@ export default function TailorPayoutSetupScreen() {
     }
 
     setPayoutReviewPending(false)
+    setPayoutReviewSummary(null)
     setStripeStatus(refreshedAccount as StripeRefreshAccount)
     await load()
     if (refreshedAccount.payoutAccountVerified) {
@@ -698,6 +733,22 @@ export default function TailorPayoutSetupScreen() {
   }
 
   if (activeStep === 'SUCCESS' && status) {
+    const successSummary = payoutReviewSummary ?? {
+      payoutCurrency: status.payoutCurrency,
+      payoutProvider: status.payoutProvider ?? providerForCurrency(status.payoutCurrency),
+      payoutAccountType: status.payoutAccountType,
+      payoutBankName: status.payoutBankName,
+      payoutAccountMasked: status.payoutAccountMasked,
+    }
+    const summaryCurrency = successSummary.payoutCurrency
+    const summaryProvider = successSummary.payoutProvider
+    const summaryAccountType = successSummary.payoutAccountType
+    const summaryBankName = successSummary.payoutBankName
+    const summaryAccountMasked = successSummary.payoutAccountMasked
+    const summaryMethod = summaryBankName
+      ? `${summaryBankName} · ${formatMaskedAccount(summaryAccountMasked)}`
+      : providerLabel(summaryAccountType ?? summaryProvider)
+
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
@@ -712,7 +763,15 @@ export default function TailorPayoutSetupScreen() {
           <StepChip number={3} label={connectStepLabel} active={false} complete />
           <StepChip number={4} label="Done" active complete={false} />
         </View>
-        <View style={styles.successWrap}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          onScroll={actionDockScroll.onScroll}
+          scrollEventThrottle={actionDockScroll.scrollEventThrottle}
+          contentContainerStyle={[
+            styles.successWrap,
+            { paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.xl },
+          ]}
+        >
           <Animated.View style={[
             styles.successOrb,
             (successIsManualPending || successIsReviewPending) && styles.successOrbPending,
@@ -729,7 +788,7 @@ export default function TailorPayoutSetupScreen() {
           </Text>
           <Text style={styles.successBody}>
             {successIsReviewPending
-              ? 'Your current payout destination stays active while ops reviews the new destination. Earnings release pauses during the review for account safety.'
+              ? 'Your verified payout destination stays active while Drapeon reviews this replacement for account safety.'
               : successIsManualPending
                 ? MANUAL_BANK_ENTRY_NOTE
                 : 'Your payout account is verified. Earnings from completed orders will be sent automatically after the 72-hour delivery window closes.'}
@@ -738,14 +797,14 @@ export default function TailorPayoutSetupScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>
               {successIsReviewPending
-                ? 'Submitted for payout review'
+                ? 'Submitted replacement'
                 : successIsManualPending
                   ? 'Pending verification summary'
                   : 'Verified account summary'}
             </Text>
-            <SummaryRow label="Payout method" value={status.payoutBankName ? `${status.payoutBankName} · ${formatMaskedAccount(status.payoutAccountMasked)}` : providerLabel(status.payoutAccountType)} />
-            <SummaryRow label="Payout currency" value={status.payoutCurrency} />
-            <SummaryRow label="Provider" value={successIsManualPending ? 'Ops verification' : providerLabel(status.payoutAccountType)} />
+            <SummaryRow label="Payout method" value={summaryMethod} />
+            <SummaryRow label="Payout currency" value={summaryCurrency} />
+            <SummaryRow label="Provider" value={successIsManualPending ? 'Ops verification' : providerLabel(summaryProvider)} />
             {successIsReviewPending ? <SummaryRow label="Status" value="Pending ops review" /> : null}
             {successIsManualPending ? <SummaryRow label="Status" value="Pending review" /> : null}
             {!successIsManualPending && payoutDestinationHoldActive ? (
@@ -765,9 +824,23 @@ export default function TailorPayoutSetupScreen() {
               </View>
             </View>
           ) : null}
-
-          <Button label="Go back" onPress={goBack} />
-        </View>
+        </ScrollView>
+        <DrapeFloatingActionDock compactWidth={76} testID="payout-success-action-dock">
+          {actionDockCompact ? (
+            <DrapeIconButton
+              icon="arrow-left"
+              accessibilityLabel="Go back"
+              tone="primary"
+              onPress={goBack}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label="Go back"
+              icon="arrow-left"
+              onPress={goBack}
+            />
+          )}
+        </DrapeFloatingActionDock>
       </SafeAreaView>
     )
   }
@@ -1874,7 +1947,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bone,
   },
   successWrap: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     padding: Spacing.xl,
     gap: Spacing.md,

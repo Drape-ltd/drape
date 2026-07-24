@@ -5,6 +5,21 @@ export function isApprovedTailorProfile(profile: { id_verification_status?: stri
   return profile?.is_live === true || isLiveTailorVerificationStatus(profile?.id_verification_status)
 }
 
+export function requiresOpsPayoutDestinationReview(
+  profile: {
+    payout_account_verified?: boolean | null
+    payout_reverification_required?: boolean | null
+  } | null | undefined,
+  currentDestinationKey: string | null,
+  nextDestinationKey: string | null,
+) {
+  return profile?.payout_account_verified === true
+    && profile.payout_reverification_required !== true
+    && currentDestinationKey !== null
+    && nextDestinationKey !== null
+    && currentDestinationKey !== nextDestinationKey
+}
+
 function cleanObject(input: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined),
