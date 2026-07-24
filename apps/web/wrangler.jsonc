@@ -4,7 +4,20 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2025-09-27",
   "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
-  "keep_vars": true,
+  "routes": [
+    {
+      "pattern": "drapeon.co/*",
+      "zone_name": "drapeon.co"
+    },
+    {
+      "pattern": "www.drapeon.co/*",
+      "zone_name": "drapeon.co"
+    },
+    {
+      "pattern": "ops.drapeon.co/*",
+      "zone_name": "drapeon.co"
+    }
+  ],
   "vars": {
     "DRAPE_WEB_ENV": "production",
     "DRAPE_EXPECTED_SUPABASE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",

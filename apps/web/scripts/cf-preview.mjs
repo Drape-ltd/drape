@@ -176,10 +176,20 @@ if (cloudflareDeployEnv) {
 }
 
 function runOpenNext(openNextMode) {
+  const childEnv = { ...process.env }
+
+  if (mode === 'deploy') {
+    for (const [key, value] of Object.entries(readWranglerVars())) {
+      if (typeof value === 'string') {
+        childEnv[key] = value
+      }
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(command, ['dlx', '@opennextjs/cloudflare@latest', openNextMode], {
       stdio: 'inherit',
-      env: process.env,
+      env: childEnv,
     })
 
     child.on('error', (error) => {
