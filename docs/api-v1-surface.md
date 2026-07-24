@@ -42,7 +42,7 @@ Mobile callers generally use `supabase.functions.invoke('<function-name>')`, whi
 | `/saved-tailor-action` | POST | User JWT | `{ action: 'save' \| 'unsave-by-profile' \| 'unsave-by-id', tailorProfileId? savedId? }` | Saved tailor result |
 | `/seller-access-review-request` | POST | User JWT | Seller access review payload | Review request result |
 | `/seller-item-action` | POST | User JWT | `{ action: 'create-item' \| 'update-item' \| 'publish-item' \| 'hide-item' \| 'mark-sold' \| 'relist-item' \| 'delete-item', ... }` | Seller item result |
-| `/service-health` | GET/POST | Public for `check=live`; `DRAPE_HEALTHCHECK_SECRET` for `check=ready` | Query `?check=live \| ready` | Liveness/readiness JSON |
+| `/service-health` | GET/POST | Public for `check=live`; `DRAPE_HEALTHCHECK_SECRET` for `check=ready` | Query `?check=live \| ready`; readiness accepts `tier=launch \| beta` and defaults to strict `launch` | Liveness/readiness JSON |
 | `/tailor-order-action` | POST | User JWT | `{ action, orderId, ... }` for tailor order transitions | `{ ok: true, ... }` |
 | `/tailor-profile-action` | POST | User JWT | `{ action: 'update-avatar' \| 'upsert-setup' \| 'update-profile', ... }` | Tailor profile result |
 | `/auto-release` | POST | Service role | Optional batch controls | Auto-release batch summary |

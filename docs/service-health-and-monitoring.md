@@ -50,6 +50,11 @@ GET https://<project-ref>.supabase.co/functions/v1/service-health?check=ready
 Authorization: Bearer <DRAPE_HEALTHCHECK_SECRET>
 ```
 
+Strict launch readiness is the default. Tester environments may request
+`?check=ready&tier=beta`; this keeps missing live-only providers visible as
+warnings when an explicit beta fallback exists, without weakening the default
+launch gate.
+
 The readiness check verifies:
 
 - Edge runtime is reachable

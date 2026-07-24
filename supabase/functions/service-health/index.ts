@@ -21,6 +21,8 @@ type Check = {
   details?: Record<string, unknown>
 }
 
+type ReadinessTier = 'beta' | 'launch'
+
 const REQUIRED_CRON_JOBS = [
   'expire-pending-payments',
   'expire-quotes',
@@ -486,7 +488,7 @@ async function pushReceiptCheck(supabase: any): Promise<Check> {
   }
 }
 
-function providerSecretChecks() {
+function providerSecretChecks(readinessTier: ReadinessTier) {
   return {
     stripeSecret: anyEnvCheck(['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'], 'STRIPE_SECRET_KEY'),
     stripeMode: secretModeCheck(
@@ -502,7 +504,15 @@ function providerSecretChecks() {
       { sk_test_: 'test', sk_live_: 'live' },
     ),
     smsProvider: smsSecretCheck(),
-    ziptaxSecret: envCheck('ZIPTAX_API_KEY'),
+    ziptaxSecret: Deno.env.get('ZIPTAX_API_KEY')
+      ? { ok: true, status: 'ok', message: 'Configured' }
+      : readinessTier === 'beta'
+        ? {
+            ok: true,
+            status: 'warn',
+            message: 'ZIPTAX_API_KEY is not configured. Beta checkout can use the explicit static tax fallback, but public US/Canada checkout is not launch-ready.',
+          }
+        : envCheck('ZIPTAX_API_KEY'),
     authSmsHookSecret: anyEnvCheck(['AUTH_SMS_HOOK_SECRET', 'SUPABASE_AUTH_HOOK_SECRET'], 'AUTH_SMS_HOOK_SECRET', false),
     reauthProofSecret: anyEnvCheck(['REAUTH_PROOF_SECRET', 'DRAPE_REAUTH_PROOF_SECRET'], 'REAUTH_PROOF_SECRET'),
     healthcheckSecret: anyEnvCheck(['DRAPE_HEALTHCHECK_SECRET', 'HEALTHCHECK_SECRET'], 'DRAPE_HEALTHCHECK_SECRET'),
@@ -520,6 +530,7 @@ Deno.serve(async (req) => {
 
   const url = new URL(req.url)
   const check = url.searchParams.get('check') ?? 'live'
+  const readinessTierParam = url.searchParams.get('tier') ?? 'launch'
   const checkedAt = new Date().toISOString()
 
   if (check === 'live') {
@@ -540,6 +551,14 @@ Deno.serve(async (req) => {
     }, 400, cors)
   }
 
+  if (readinessTierParam !== 'beta' && readinessTierParam !== 'launch') {
+    return jsonResponse({
+      ok: false,
+      error: 'Unsupported readiness tier',
+      supportedTiers: ['beta', 'launch'],
+    }, 400, cors)
+  }
+
   if (!(await authorizeReadiness(req))) {
     log('warn', FN, 'auth.unauthorized')
     return jsonResponse({
@@ -549,6 +568,7 @@ Deno.serve(async (req) => {
     }, 401, cors)
   }
 
+  const readinessTier = readinessTierParam as ReadinessTier
   const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
   const checks: Record<string, Check> = {
     edge: { ok: true, status: 'ok', message: 'Edge runtime reachable' },
@@ -560,7 +580,7 @@ Deno.serve(async (req) => {
         ? 'Configured'
         : 'Missing required service role environment variable',
     },
-    ...providerSecretChecks(),
+    ...providerSecretChecks(readinessTier),
     database: await databaseCheck(supabase),
     cron: await cronCheck(supabase),
     jobQueue: await jobQueueCheck(supabase),
@@ -579,6 +599,7 @@ Deno.serve(async (req) => {
     status: ok ? (warnings.length > 0 ? 'degraded' : 'ok') : 'fail',
     service: 'drape-edge',
     check: 'ready',
+    readinessTier,
     checkedAt,
     checks,
   }, ok ? 200 : 503, cors)

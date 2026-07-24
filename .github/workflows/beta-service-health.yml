@@ -50,7 +50,7 @@ jobs:
               --output /tmp/drape-ready.json \
               --write-out "%{http_code}" \
               --header "Authorization: Bearer $HEALTH_SECRET" \
-              "$HEALTH_URL?check=ready"
+              "$HEALTH_URL?check=ready&tier=beta"
           )"
           jq . /tmp/drape-ready.json
           test "$status" = "200"
