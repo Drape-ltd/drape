@@ -24,6 +24,7 @@ import {
 } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   buildOrderFitProfile,
   COVERAGE_PREFERENCE_LABELS,
@@ -87,6 +88,7 @@ import {
   isCustomOrderBriefLongEnough,
   measurementCoreCompleteness,
   normalizeAccountCurrency,
+  parseMajorCurrencyAmountToMinor,
   promoteSpecialistMeasurementsToProfileValues,
   stripDrapeVisionFit360DraftFields,
 } from '@drape/shared'
@@ -821,8 +823,7 @@ export default function OrderBriefScreen() {
   }
 
   function fabricBudgetAmountValue() {
-    const amount = Number.parseInt(fabricBudgetAmount, 10)
-    return Number.isFinite(amount) && amount > 0 ? amount : null
+    return parseMajorCurrencyAmountToMinor(fabricBudgetAmount)
   }
 
   function fabricBulkRecipientCount() {
@@ -1777,6 +1778,8 @@ export default function OrderBriefScreen() {
     if (step > 0) setStep(step - 1)
     else goBack()
   }
+
+  useContextualBackHandler(back)
 
   async function dismissMeasPrompt(goToMeasurements: boolean) {
     await AsyncStorage.setItem(MEAS_PROMPT_KEY, '1')

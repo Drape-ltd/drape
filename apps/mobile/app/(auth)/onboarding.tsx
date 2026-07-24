@@ -45,9 +45,9 @@ const TAILOR_SLIDES: Slide[] = [
     body: 'Track every order through each stage, stay in touch with customers, and keep your availability current.',
   },
   {
-    icon: 'zap',
-    title: 'Go live faster',
-    body: "Your profile is submitted. We review within 24 hours — then you're live and visible to customers.",
+    icon: 'shield',
+    title: 'Private trust review',
+    body: 'Record the short challenge video in setup. Drapeon reviews it privately, then notifies you when your storefront can go live.',
   },
 ]
 
@@ -76,15 +76,32 @@ export default function OnboardingScreen() {
   const seenKey = userId ? `${SEEN_KEY_BASE}_${userId}` : SEEN_KEY_BASE
 
   useEffect(() => {
-    AsyncStorage.getItem(seenKey).then((seen) => {
-      if (seen === '1') { router.replace(destination); return }
-      setReady(true)
-    })
+    let active = true
+
+    void AsyncStorage.getItem(seenKey)
+      .then((seen) => {
+        if (!active) return
+        if (seen === '1') {
+          router.replace(destination)
+          return
+        }
+        setReady(true)
+      })
+      .catch(() => {
+        if (active) setReady(true)
+      })
+
+    return () => {
+      active = false
+    }
   }, [destination, router, seenKey])
 
-  function markSeenAndNavigate() {
-    void AsyncStorage.setItem(seenKey, '1')
-    router.replace(destination)
+  async function markSeenAndNavigate() {
+    try {
+      await AsyncStorage.setItem(seenKey, '1')
+    } finally {
+      router.replace(destination)
+    }
   }
 
   function goNext() {
@@ -93,7 +110,7 @@ export default function OnboardingScreen() {
       listRef.current?.scrollToIndex({ index: next, animated: true })
       setIndex(next)
     } else {
-      markSeenAndNavigate()
+      void markSeenAndNavigate()
     }
   }
 
@@ -116,7 +133,7 @@ export default function OnboardingScreen() {
         <View style={styles.topSpacer} />
         <TouchableOpacity
           style={styles.skipBtn}
-          onPress={markSeenAndNavigate}
+          onPress={() => { void markSeenAndNavigate() }}
           accessibilityRole="button"
           accessibilityLabel="Skip onboarding"
           activeOpacity={0.72}

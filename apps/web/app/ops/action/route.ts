@@ -175,6 +175,14 @@ function redirectWithMessage(
   if (detail?.trim()) {
     url.searchParams.set(`${key}Detail`, detail.trim().slice(0, 300))
   }
+  if (request.headers.get('accept')?.includes('application/json')) {
+    return opsJson({
+      ok: key === 'notice',
+      key,
+      detail: detail?.trim() || null,
+      redirectTo: `${url.pathname}${url.search}`,
+    })
+  }
   return NextResponse.redirect(url, { status: 303 })
 }
 

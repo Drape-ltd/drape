@@ -20,7 +20,16 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { log } from './logger.ts'
 import { sendWebPushToUser } from './web-push.ts'
+
+const PUSH_FN = 'notify'
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+
+type PushTokenRow = {
+  id: string
+  token: string
+}
 
 export interface PushPayload {
   title: string
@@ -29,7 +38,7 @@ export interface PushPayload {
   preferenceKey?: PushPreferenceKey
   channelId?: string
   sound?: string
-  interruptionLevel?: 'passive' | 'active' | 'timeSensitive' | 'critical'
+  interruptionLevel?: 'passive' | 'active' | 'time-sensitive' | 'critical'
 }
 
 export type PushPreferenceKey =
@@ -127,6 +136,59 @@ function resolvePreferenceKey(notification: PushPayload): PushPreferenceKey | un
   return undefined
 }
 
+function optionalUuid(value: unknown) {
+  return typeof value === 'string' && UUID_PATTERN.test(value.trim()) ? value.trim() : null
+}
+
+function notificationKind(notification: PushPayload, preferenceKey: PushPreferenceKey | undefined) {
+  const candidate =
+    notification.data?.type ??
+    notification.data?.kind ??
+    notification.data?.event ??
+    preferenceKey ??
+    'transactional'
+  return candidate.slice(0, 120)
+}
+
+async function recordPushAttempt(
+  supabase: SupabaseClient,
+  input: {
+    userId: string
+    pushTokenId: string
+    ticketId?: string | null
+    status: 'TICKET_ACCEPTED' | 'TICKET_ERROR'
+    notification: PushPayload
+    preferenceKey: PushPreferenceKey | undefined
+    errorCode?: string | null
+    errorMessage?: string | null
+  },
+) {
+  const nextCheckAt = input.status === 'TICKET_ACCEPTED'
+    ? new Date(Date.now() + 2 * 60 * 1000).toISOString()
+    : null
+  const { error } = await supabase.from('push_delivery_attempts').insert({
+    user_id: input.userId,
+    push_token_id: input.pushTokenId,
+    ticket_id: input.ticketId ?? null,
+    status: input.status,
+    notification_kind: notificationKind(input.notification, input.preferenceKey),
+    order_id: optionalUuid(input.notification.data?.orderId),
+    message_id: optionalUuid(input.notification.data?.messageId),
+    error_code: input.errorCode?.slice(0, 120) ?? null,
+    error_message: input.errorMessage?.slice(0, 500) ?? null,
+    next_check_at: nextCheckAt,
+  })
+
+  if (error) {
+    log('error', PUSH_FN, 'push.receipt_tracking_failed', {
+      user_id: input.userId,
+      push_token_id: input.pushTokenId,
+      ticket_id: input.ticketId ?? null,
+      error: error.message,
+    })
+  }
+}
+
 async function userAllowsPush(
   supabase: SupabaseClient,
   userId: string,
@@ -159,61 +221,176 @@ export async function sendPushToUser(
 
     const webPushResult = await sendWebPushToUser(supabase, userId)
 
-    const { data: row, error } = await supabase
+    const { data: rows, error } = await supabase
       .from('push_tokens')
-      .select('token')
+      .select('id, token')
       .eq('user_id', userId)
-      .maybeSingle()
 
     if (error) return { status: 'ERROR', reason: `push-token-lookup-failed:${error.message}` }
-    if (!row?.token) {
+    const tokenRows = Array.from(
+      new Map(
+        (Array.isArray(rows) ? rows : [])
+          .map((row) => ({
+            id: typeof row?.id === 'string' ? row.id : '',
+            token: typeof row?.token === 'string' ? row.token.trim() : '',
+          }))
+          .filter((row): row is PushTokenRow => row.id.length > 0 && row.token.length > 0)
+          .map((row) => [row.token, row]),
+      ).values(),
+    )
+    if (tokenRows.length === 0) {
       if (webPushResult.sent > 0) return { status: 'SENT' }
       if (webPushResult.failed > 0) return { status: 'ERROR', reason: 'web-push-failed' }
       return { status: 'SKIPPED', reason: 'NO_TOKEN' }
     }
 
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-      },
-      body: JSON.stringify({
-        to: row.token,
-        title: notification.title,
-        body: notification.body,
-        data: notification.data ?? {},
-        sound: notification.sound ?? 'default',
-        channelId: notification.channelId,
-        interruptionLevel: notification.interruptionLevel,
-        priority: 'high',
-      }),
-    })
+    const results = await Promise.all(tokenRows.map(async ({ id: pushTokenId, token }) => {
+      try {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
+          },
+          body: JSON.stringify({
+            to: token,
+            title: notification.title,
+            body: notification.body,
+            data: notification.data ?? {},
+            sound: notification.sound ?? 'default',
+            channelId: notification.channelId,
+            ...(notification.interruptionLevel
+              ? { interruptionLevel: notification.interruptionLevel }
+              : {}),
+            priority: 'high',
+          }),
+        })
 
-    if (!res.ok) {
-      if (webPushResult.sent > 0) return { status: 'SENT' }
-      return { status: 'ERROR', reason: `expo-push-http-${res.status}` }
-    }
+        if (!res.ok) {
+          let providerReason = ''
+          try {
+            const responseText = (await res.text()).trim()
+            if (responseText) {
+              const parsed = JSON.parse(responseText) as {
+                errors?: Array<{ message?: unknown; code?: unknown }>
+              }
+              const firstError = Array.isArray(parsed.errors) ? parsed.errors[0] : null
+              const message = typeof firstError?.message === 'string' ? firstError.message.trim() : ''
+              const code = typeof firstError?.code === 'string' ? firstError.code.trim() : ''
+              providerReason = [code, message].filter(Boolean).join(':')
+            }
+          } catch {
+            // Preserve the HTTP status when the provider body is not structured JSON.
+          }
 
-    const json = await res.json()
-    const result = json?.data
+          const reason = `expo-push-http-${res.status}${providerReason ? `:${providerReason}` : ''}`
+          await recordPushAttempt(supabase, {
+            userId,
+            pushTokenId,
+            status: 'TICKET_ERROR',
+            notification,
+            preferenceKey,
+            errorCode: `HTTP_${res.status}`,
+            errorMessage: providerReason || reason,
+          })
+          return {
+            status: 'ERROR' as const,
+            reason,
+          }
+        }
 
-    // Expo signals stale tokens via DeviceNotRegistered — clean up so we don't
-    // keep sending to dead tokens and wasting API quota.
-    if (result?.status === 'error' && result?.details?.error === 'DeviceNotRegistered') {
-      await supabase.from('push_tokens').delete().eq('user_id', userId)
-      if (webPushResult.sent > 0) return { status: 'SENT' }
-      return { status: 'SKIPPED', reason: 'DEVICE_NOT_REGISTERED' }
-    }
-    if (result?.status === 'error') {
-      if (webPushResult.sent > 0) return { status: 'SENT' }
-      return {
-        status: 'ERROR',
-        reason: String(result?.message ?? result?.details?.error ?? 'expo-push-error'),
+        const json = await res.json() as {
+          data?: {
+            id?: unknown
+            status?: unknown
+            message?: unknown
+            details?: { error?: unknown }
+          }
+        }
+        const result = json?.data
+        if (result?.status === 'error' && result?.details?.error === 'DeviceNotRegistered') {
+          await recordPushAttempt(supabase, {
+            userId,
+            pushTokenId,
+            status: 'TICKET_ERROR',
+            notification,
+            preferenceKey,
+            errorCode: 'DeviceNotRegistered',
+            errorMessage: typeof result.message === 'string' ? result.message : 'Device is not registered.',
+          })
+          await supabase.from('push_tokens').delete().eq('user_id', userId).eq('token', token)
+          return { status: 'DEVICE_NOT_REGISTERED' as const }
+        }
+        if (result?.status === 'error') {
+          const errorCode = typeof result?.details?.error === 'string'
+            ? result.details.error
+            : 'EXPO_TICKET_ERROR'
+          const errorMessage = typeof result?.message === 'string'
+            ? result.message
+            : errorCode
+          await recordPushAttempt(supabase, {
+            userId,
+            pushTokenId,
+            status: 'TICKET_ERROR',
+            notification,
+            preferenceKey,
+            errorCode,
+            errorMessage,
+          })
+          return {
+            status: 'ERROR' as const,
+            reason: errorMessage,
+          }
+        }
+        const ticketId = typeof result?.id === 'string' ? result.id.trim() : ''
+        if (!ticketId) {
+          await recordPushAttempt(supabase, {
+            userId,
+            pushTokenId,
+            status: 'TICKET_ERROR',
+            notification,
+            preferenceKey,
+            errorCode: 'MISSING_TICKET_ID',
+            errorMessage: 'Expo accepted the request without returning a ticket id.',
+          })
+          return { status: 'ERROR' as const, reason: 'expo-push-ticket-missing-id' }
+        }
+        await recordPushAttempt(supabase, {
+          userId,
+          pushTokenId,
+          ticketId,
+          status: 'TICKET_ACCEPTED',
+          notification,
+          preferenceKey,
+        })
+        return { status: 'SENT' as const }
+      } catch (error) {
+        await recordPushAttempt(supabase, {
+          userId,
+          pushTokenId,
+          status: 'TICKET_ERROR',
+          notification,
+          preferenceKey,
+          errorCode: 'SEND_EXCEPTION',
+          errorMessage: error instanceof Error ? error.message : 'Push send exception',
+        })
+        return { status: 'ERROR' as const, reason: 'push-send-exception' }
       }
+    }))
+
+    if (webPushResult.sent > 0 || results.some((result) => result.status === 'SENT')) {
+      return { status: 'SENT' }
     }
-    return { status: 'SENT' }
+
+    const errors = results
+      .filter((result): result is { status: 'ERROR'; reason: string } => result.status === 'ERROR')
+      .map((result) => result.reason)
+    if (errors.length > 0 || webPushResult.failed > 0) {
+      return { status: 'ERROR', reason: errors[0] ?? 'web-push-failed' }
+    }
+
+    return { status: 'SKIPPED', reason: 'DEVICE_NOT_REGISTERED' }
   } catch {
     return { status: 'ERROR', reason: 'push-send-exception' }
   }

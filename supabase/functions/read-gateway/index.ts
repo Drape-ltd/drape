@@ -3,6 +3,10 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
 import { filterBlockedMediaUrls, findBlockedMediaUrls } from '../_shared/media-safety.ts'
+import {
+  cacheControlForReadAction,
+  PUBLIC_READ_CACHE_CONTROL,
+} from '../_shared/read-cache-policy.ts'
 
 const FN = 'read-gateway'
 
@@ -56,7 +60,7 @@ function jsonResponse(
   body: unknown,
   status: number,
   cors: Record<string, string>,
-  cacheControl = 'public, s-maxage=30, stale-while-revalidate=120',
+  cacheControl = PUBLIC_READ_CACHE_CONTROL,
 ) {
   return new Response(JSON.stringify(body), {
     status,
@@ -588,7 +592,12 @@ Deno.serve(async (req) => {
     if (action === 'tailor-profile') {
       const tailorId = asString(payload.tailorId)
       if (!tailorId) return jsonResponse({ error: 'TAILOR_REQUIRED', message: 'Tailor id is required.' }, 400, cors)
-      return jsonResponse({ ok: true, data: await fetchTailorProfile(supabase, req, tailorId) }, 200, cors)
+      return jsonResponse(
+        { ok: true, data: await fetchTailorProfile(supabase, req, tailorId) },
+        200,
+        cors,
+        cacheControlForReadAction(action),
+      )
     }
 
     return jsonResponse({ error: 'UNKNOWN_READ_ACTION', message: 'This read action is not supported.' }, 400, cors)

@@ -136,8 +136,12 @@ function SheetFrame({
         </ScrollView>
       )
     : useNativeSheetBody && RuntimeBottomSheetView
-      ? <RuntimeBottomSheetView style={styles.body}>{children}</RuntimeBottomSheetView>
-      : <View style={styles.body}>{children}</View>
+      ? (
+        <RuntimeBottomSheetView style={[styles.body, { paddingBottom: bottomInset }]}>
+          {children}
+        </RuntimeBottomSheetView>
+      )
+      : <View style={[styles.body, { paddingBottom: bottomInset }]}>{children}</View>
 
   return (
     <>
@@ -284,6 +288,7 @@ export function BottomSheetScaffold({
     <RuntimeBottomSheetModal
       ref={modalRef}
       onDismiss={handleDismiss}
+      bottomInset={insets.bottom}
       enableDynamicSizing={shouldEnableDynamicSizing}
       snapPoints={shouldEnableDynamicSizing ? undefined : resolvedSnapPoints}
       backdropComponent={(props: unknown) => (
@@ -299,6 +304,8 @@ export function BottomSheetScaffold({
       handleIndicatorStyle={styles.handleIndicator}
       keyboardBehavior="interactive"
       keyboardBlurBehavior="restore"
+      android_keyboardInputMode="adjustResize"
+      enableBlurKeyboardOnGesture
       enablePanDownToClose={!scrollable}
     >
       {scrollable ? (

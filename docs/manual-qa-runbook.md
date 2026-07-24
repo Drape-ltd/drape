@@ -219,6 +219,21 @@ Run this on a fresh native development build, not only after a Metro reload.
 
 ## Notifications
 
+For every launch-critical cross-role action, record an acceptance row containing:
+
+- initiating device and role
+- order ID and action/event ID
+- persisted order stage plus audit/event row
+- counterpart state observed
+- push job terminal status and provider response
+- email job terminal status and provider response
+- notification received timestamp on a real backgrounded device
+- notification tap destination
+
+Do not count a foreground realtime update, a queued job, or a successful Edge response as notification delivery.
+
+Test at minimum: new brief, quote, quote revision, payment, fabric/style approval request, stage update, cancellation review, emergency support, consultation/call invitation, dispatch, delivery, refund, and ops resolution.
+
 Test at least:
 
 - new message

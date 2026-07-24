@@ -31,6 +31,7 @@ const REQUIRED_CRON_JOBS = [
   'finalize-account-deletions',
   'process-notification-jobs',
   'process-ops-jobs',
+  'process-push-receipts',
 ] as const
 
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
@@ -423,6 +424,68 @@ async function androidPushRegistrationCheck(supabase: any): Promise<Check> {
   }
 }
 
+async function pushReceiptCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now()
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const { data, error } = await supabase
+    .from('push_delivery_attempts')
+    .select('status, error_code, ticket_created_at')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1_000)
+
+  const latencyMs = Math.round(performance.now() - startedAt)
+  if (error) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `Push receipt ledger is not available yet: ${error.message}`,
+      latencyMs,
+    }
+  }
+
+  const rows = Array.isArray(data) ? data as Array<Record<string, unknown>> : []
+  const deliveryErrors = rows.filter((row) => row.status === 'DELIVERY_ERROR')
+  const expired = rows.filter((row) => row.status === 'RECEIPT_EXPIRED')
+  const pending = rows.filter((row) => row.status === 'TICKET_ACCEPTED' || row.status === 'RECEIPT_PENDING')
+  const oldestPendingAt = pending
+    .map((row) => typeof row.ticket_created_at === 'string' ? row.ticket_created_at : null)
+    .filter((value): value is string => !!value)
+    .sort()[0] ?? null
+  const oldestPendingAgeMs = oldestPendingAt ? Date.now() - new Date(oldestPendingAt).getTime() : 0
+  const credentialErrors = deliveryErrors.filter((row) => row.error_code === 'InvalidCredentials')
+
+  if (credentialErrors.length > 0) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `${credentialErrors.length} push receipt(s) report invalid APNs/FCM credentials`,
+      latencyMs,
+      details: { delivery_errors: deliveryErrors.length, expired: expired.length, pending: pending.length },
+    }
+  }
+
+  if (deliveryErrors.length > 0 || expired.length > 0 || oldestPendingAgeMs > 30 * 60 * 1000) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `${deliveryErrors.length} delivery error(s), ${expired.length} expired receipt(s), and ${pending.length} pending receipt(s) in the last 24 hours`,
+      latencyMs,
+      details: { delivery_errors: deliveryErrors.length, expired: expired.length, pending: pending.length },
+    }
+  }
+
+  return {
+    ok: true,
+    status: 'ok',
+    message: rows.length === 0
+      ? 'Push receipt ledger is ready; no beta deliveries recorded in the last 24 hours'
+      : `${rows.length} push delivery attempt(s) recorded in the last 24 hours`,
+    latencyMs,
+    details: { delivery_errors: 0, expired: 0, pending: pending.length },
+  }
+}
+
 function providerSecretChecks() {
   return {
     stripeSecret: anyEnvCheck(['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'], 'STRIPE_SECRET_KEY'),
@@ -503,6 +566,7 @@ Deno.serve(async (req) => {
     jobQueue: await jobQueueCheck(supabase),
     payoutWatchdog: await payoutWatchdogCheck(supabase),
     androidPushRegistration: await androidPushRegistrationCheck(supabase),
+    pushReceipts: await pushReceiptCheck(supabase),
     providers: await providerHealthCheck(supabase),
   }
 

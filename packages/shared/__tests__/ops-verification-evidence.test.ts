@@ -1,10 +1,10 @@
 import { buildOpsVerificationEvidenceSummary } from '../src/ops-verification-evidence'
 
 describe('ops verification evidence summary', () => {
-  it('summarizes public profile, portfolio, proof item, and private ID evidence for review', () => {
+  it('summarizes public profile, portfolio, proof item, and private trust evidence for review', () => {
     const summary = buildOpsVerificationEvidenceSummary({
       avatarUrl: 'https://cdn.drape.test/avatar.jpg',
-      idDocumentUrl: 'https://signed.drape.test/id-selfie.jpg',
+      trustVideoUrl: 'https://signed.drape.test/challenge.mp4',
       portfolioPhotoUrls: [
         'https://cdn.drape.test/portfolio-1.jpg',
         'https://cdn.drape.test/portfolio-2.jpg',
@@ -36,14 +36,14 @@ describe('ops verification evidence summary', () => {
       ['public_avatar', true],
       ['portfolio_media', true],
       ['proof_item', true],
-      ['live_id', true],
+      ['trust_video', true],
     ])
   })
 
   it('names the missing evidence reviewers need before approval', () => {
     const summary = buildOpsVerificationEvidenceSummary({
       avatarUrl: null,
-      idDocumentUrl: null,
+      trustVideoUrl: null,
       portfolioPhotoUrls: [],
       portfolioVideoUrls: [],
       proofItems: [],
@@ -54,7 +54,7 @@ describe('ops verification evidence summary', () => {
       'Public avatar',
       'Portfolio media',
       'Onboarding proof item',
-      'Live selfie + ID',
+      'Challenge video',
     ])
   })
 })

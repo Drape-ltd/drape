@@ -8,11 +8,12 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { clearRecentReauth } from '@/lib/recent-reauth'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input } from '@/components/ui'
@@ -25,7 +26,6 @@ import {
 
 export default function ResetPasswordScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [saving, setSaving] = useState(false)
@@ -66,9 +66,10 @@ export default function ResetPasswordScreen() {
   }, [])
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(auth)/sign-in')
+    router.replace('/(auth)/sign-in')
   }
+
+  useContextualBackHandler(goBack)
 
   async function handleSave() {
     if (saving) return

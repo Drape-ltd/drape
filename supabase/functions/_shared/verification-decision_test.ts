@@ -36,14 +36,18 @@ function createFakeSupabase(options?: {
     user_id: 'tailor-1',
     display_name: 'Amara Atelier',
     id_verification_status: options?.profileStatus ?? 'PENDING',
-    id_selfie_document_url: profileReady ? 'id-verification/tailor-1/selfie_123.jpg' : null,
+    trust_verification_video_path: profileReady ? 'verification-video/tailor-1/challenge_profile-work-payments_123.mp4' : null,
+    trust_verification_challenge_id: profileReady ? 'profile-work-payments' : null,
+    trust_verification_challenge_text: profileReady
+      ? 'Say your name and confirm you created this Drapeon tailor profile.'
+      : null,
     avatar_url: profileReady ? 'avatars/tailor-1/avatar.jpg' : null,
     specialty_tags: profileReady ? ['Agbada'] : [],
     portfolio_photo_urls: profileReady ? ['portfolio/tailor-1/look.jpg'] : [],
     portfolio_video_urls: [],
-    payout_account_verified: profileReady,
+    payout_account_verified: false,
     payout_reverification_required: false,
-    paystack_recipient_code: profileReady ? 'RCP_test' : null,
+    paystack_recipient_code: null,
     stripe_connect_account_id: null,
   }
   const user = {
@@ -221,7 +225,7 @@ Deno.test('performVerificationDecision uses auth email fallback and records push
 Deno.test('performVerificationDecision rejects with a reason, resolves ops issue, audits, and sends reason email', async () => {
   const fake = createFakeSupabase()
   const messages: VerificationEmailMessage[] = []
-  const reason = 'The uploaded ID image is cropped and the name is not visible.'
+  const reason = 'The challenge phrase or movement is cut off. Record a complete short video and try again.'
 
   const result = await performVerificationDecision(
     fake.client,

@@ -30,8 +30,7 @@ type TailorAvatarReviewProfile = {
   location?: string | null
   specialty_tags?: string[] | null
   avatar_url?: string | null
-  id_document_url?: string | null
-  id_selfie_document_url?: string | null
+  trust_verification_video_path?: string | null
   id_verification_status?: string | null
   id_verification_metadata?: Record<string, unknown> | null
   payout_account_verified?: boolean | null
@@ -50,13 +49,11 @@ function readVerificationRejectionCode(metadata: Record<string, unknown> | null 
   return null
 }
 
-function hasLiveIdentitySelfie(profile: TailorAvatarReviewProfile) {
-  const path = typeof profile.id_selfie_document_url === 'string' && profile.id_selfie_document_url.trim().length > 0
-    ? profile.id_selfie_document_url.trim()
-    : typeof profile.id_document_url === 'string' && profile.id_document_url.trim().length > 0
-      ? profile.id_document_url.trim()
-      : ''
-  return path.includes('/selfie_') || path.includes('selfie_')
+function hasTrustVerificationVideo(profile: TailorAvatarReviewProfile) {
+  const path = typeof profile.trust_verification_video_path === 'string'
+    ? profile.trust_verification_video_path.trim()
+    : ''
+  return path.startsWith('verification-video/') && /challenge_.+\.(mp4|mov|webm)$/iu.test(path)
 }
 
 async function resubmitAvatarOnlyVerificationIfNeeded(
@@ -72,7 +69,7 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     profile.id_verification_status !== 'REJECTED' ||
     readVerificationRejectionCode(profile.id_verification_metadata) !== INVALID_PROFILE_IMAGE_REJECTION_CODE ||
     !avatarChanged ||
-    !hasLiveIdentitySelfie(profile)
+    !hasTrustVerificationVideo(profile)
   ) {
     return false
   }
@@ -102,14 +99,14 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     userId: callerId,
     tailorProfileId: profile.id,
     title: 'Tailor profile photo resubmitted',
-    description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. Existing live identity selfie is retained.`,
-    recommendedAction: 'Review the new public avatar against the retained live selfie ID evidence, then approve or reject with a structured reason.',
+    description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. Their private challenge video is retained.`,
+    recommendedAction: 'Review the new public avatar with the retained private challenge video, then approve or reject with a structured reason.',
     dedupeKey: `tailor-verification:${callerId}`,
     metadata: {
       display_name: profile.display_name ?? null,
       location: profile.location ?? null,
       specialty_tags: profile.specialty_tags ?? [],
-      id_document_url: profile.id_selfie_document_url ?? profile.id_document_url ?? null,
+      trust_verification_video_path: profile.trust_verification_video_path ?? null,
       avatar_url: nextAvatarUrl,
       rejection_code: INVALID_PROFILE_IMAGE_REJECTION_CODE,
       payout_account_verified: profile.payout_account_verified ?? false,
@@ -152,7 +149,7 @@ const BodySchema = z.discriminatedUnion('action', [
         tailor: z.object({
           location: z.string().trim().min(2).max(120),
           languages: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
-          specialties: z.array(z.string().trim().min(1).max(60)).min(1).max(20),
+          specialties: z.array(z.string().trim().min(1).max(60)).max(20),
           priceRangeMin: z.number().int().nonnegative().optional().nullable(),
           priceRangeMax: z.number().int().nonnegative().optional().nullable(),
           supportsCustomOrders: z.boolean().default(true),
@@ -1021,7 +1018,7 @@ Deno.serve(async (req) => {
       } else {
         const { data: tailorProfile, error: tailorLookupError } = await supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, specialty_tags, avatar_url, id_document_url, id_selfie_document_url, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency')
+          .select('id, display_name, location, specialty_tags, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency')
           .eq('user_id', caller.id)
           .maybeSingle()
 

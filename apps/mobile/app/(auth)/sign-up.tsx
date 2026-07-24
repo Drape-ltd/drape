@@ -9,11 +9,12 @@ import {
   KeyboardAvoidingView,
   ScrollView,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
@@ -69,7 +70,6 @@ function passwordChecklist(value: string) {
 
 export default function SignUpScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const params = useLocalSearchParams<{ intent?: string }>()
   const { signUp, signInWithGoogle, signInWithApple } = useAuth()
   const initialRole = normalizeRoleIntent(params.intent) ?? 'CUSTOMER'
@@ -117,9 +117,10 @@ export default function SignUpScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(auth)/welcome')
+    router.replace('/(auth)/welcome')
   }
+
+  useContextualBackHandler(goBack)
 
   async function handleSignUp() {
     if (loading || oauthLoading) return

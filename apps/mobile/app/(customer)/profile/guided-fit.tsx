@@ -17,6 +17,7 @@ import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { appendToHistory, goBackOrReturnToIfNeeded, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   BODY_PROFILE_FLAG_LABELS,
   buildMeasurementConfidenceByField,
@@ -357,6 +358,8 @@ export default function GuidedFitScreen() {
   function goBack() {
     goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
+
+  useContextualBackHandler(goBack)
 
   function finishAfterSave() {
     goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')

@@ -1,5 +1,6 @@
 import { createPagesBrowserClient } from '@supabase/auth-helpers-nextjs'
 import { getSupabasePublishableKey, getSupabaseUrl } from './supabase-config'
+import { assertSupabaseTarget, isProductionWebHostname } from './supabase-environment'
 
 type DrapeonPublicEnv = {
   supabaseUrl?: string | null
@@ -27,6 +28,10 @@ export function createClient() {
 
   if (!supabaseUrl || !supabaseKey) {
     throw new Error('Missing public Supabase configuration.')
+  }
+
+  if (typeof window !== 'undefined' && isProductionWebHostname(window.location.hostname)) {
+    assertSupabaseTarget(supabaseUrl, 'production', 'browser-supabase')
   }
 
   return createPagesBrowserClient(

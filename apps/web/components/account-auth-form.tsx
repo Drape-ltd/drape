@@ -26,7 +26,6 @@ import {
 } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import {
-  bootstrapWebOnboarding,
   type CustomerGarmentContext,
   type DrapeRole,
   type MeasurementUnit,
@@ -498,7 +497,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     setLoading(true)
     const normalizedEmail = email.trim().toLowerCase()
-    const redirectTo = buildAuthCallbackUrl('/account/orders')
+    const accountHome = accountHomeForRole(role)
+    const redirectTo = buildAuthCallbackUrl(accountHome)
 
     if (isSignUp) {
       const onboarding = buildOnboardingPayload(skipOverride)
@@ -536,14 +536,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         setMessage('Check your email to confirm your Drapeon account. The link opens your workspace after confirmation.')
         return
       }
-      await bootstrapWebOnboarding(supabase, {
-        userId: data.session.user.id,
-        onboarding,
-      })
       markWebSessionScope(true)
-      window.localStorage.removeItem('drapeon.web.auth.roleIntent')
-      window.localStorage.removeItem('drapeon.web.auth.onboarding')
-      router.replace(accountHomeForRole(role))
+      router.replace(`/auth/callback?next=${encodeURIComponent(accountHome)}`)
       return
     }
 

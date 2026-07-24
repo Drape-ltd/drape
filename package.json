@@ -33,6 +33,7 @@
     "launch:contracts": "node scripts/launch-contract-check.mjs",
     "launch:contracts:linked": "node scripts/launch-contract-check.mjs --with-supabase",
     "load:smoke": "node scripts/load-smoke.mjs",
+    "beta:logs": "node scripts/beta-logs.mjs",
     "seed:store-demo": "node scripts/seed-store-demo.mjs",
     "seed:launch-tailors": "node scripts/seed-launch-tailors.mjs",
     "seed:stripe-qa": "node scripts/seed-stripe-qa.mjs"

@@ -28,8 +28,7 @@ type AvatarReviewProfile = {
   location?: string | null
   specialty_tags?: string[] | null
   avatar_url?: string | null
-  id_document_url?: string | null
-  id_selfie_document_url?: string | null
+  trust_verification_video_path?: string | null
   id_verification_status?: string | null
   id_verification_metadata?: Record<string, unknown> | null
   payout_account_verified?: boolean | null
@@ -48,13 +47,9 @@ function readVerificationRejectionCode(metadata: Record<string, unknown> | null 
   return null
 }
 
-function hasLiveIdentitySelfie(profile: AvatarReviewProfile) {
-  const path = typeof profile.id_selfie_document_url === 'string' && profile.id_selfie_document_url.trim().length > 0
-    ? profile.id_selfie_document_url.trim()
-    : typeof profile.id_document_url === 'string' && profile.id_document_url.trim().length > 0
-      ? profile.id_document_url.trim()
-      : ''
-  return path.includes('/selfie_') || path.includes('selfie_')
+function hasTrustVerificationVideo(profile: AvatarReviewProfile) {
+  const path = profile.trust_verification_video_path?.trim() ?? ''
+  return path.startsWith('verification-video/') && /\/challenge_[^/]+\.(mp4|mov|webm)$/iu.test(path)
 }
 
 function trimOrNull(value: string | null | undefined) {
@@ -86,7 +81,7 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     profile.id_verification_status !== 'REJECTED' ||
     rejectionCode !== INVALID_PROFILE_IMAGE_REJECTION_CODE ||
     !avatarChanged ||
-    !hasLiveIdentitySelfie(profile)
+    !hasTrustVerificationVideo(profile)
   ) {
     return false
   }
@@ -116,14 +111,14 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     userId: callerId,
     tailorProfileId: profile.id,
     title: 'Tailor profile photo resubmitted',
-    description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. Existing live identity selfie is retained.`,
-    recommendedAction: 'Review the new public avatar against the retained live selfie ID evidence, then approve or reject with a structured reason.',
+    description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. The existing private challenge video is retained.`,
+    recommendedAction: 'Review the new public avatar against the retained private challenge video and public profile standards, then approve or reject with a structured reason.',
     dedupeKey: `tailor-verification:${callerId}`,
     metadata: {
       display_name: profile.display_name ?? null,
       location: profile.location ?? null,
       specialty_tags: profile.specialty_tags ?? [],
-      id_document_url: profile.id_selfie_document_url ?? profile.id_document_url ?? null,
+      trust_verification_video_path: profile.trust_verification_video_path ?? null,
       avatar_url: nextAvatarUrl,
       rejection_code: INVALID_PROFILE_IMAGE_REJECTION_CODE,
       payout_account_verified: profile.payout_account_verified ?? false,
@@ -148,9 +143,6 @@ function normalizeAvailability(value: z.infer<typeof AVAILABILITY> | undefined) 
 
 const BaseProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
-  legalName: z.string().trim().min(2).max(120)
-    .regex(/^[\p{L}\p{M}](?:[\p{L}\p{M}' -]*[\p{L}\p{M}])?$/u, 'Enter your legal name exactly as shown on your ID. Numbers, handles, emojis, and business symbols are not permitted.')
-    .optional(),
   avatarUrl: z.string().url().optional().nullable(),
   bio: z.string().trim().max(1200).optional().nullable(),
   location: z.string().trim().min(2).max(120),
@@ -240,7 +232,7 @@ Deno.serve(async (req) => {
 
     const { data: existingProfile, error: profileLookupError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, display_name, bio, location, languages, specialty_tags, avatar_url, id_document_url, id_selfie_document_url, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live')
+      .select('id, user_id, display_name, bio, location, languages, specialty_tags, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -309,7 +301,7 @@ Deno.serve(async (req) => {
           relatedEntityId: request?.id ?? null,
           title: 'Tailor profile photo change needs review',
           description: `${existingProfile.display_name ?? 'A tailor'} changed their public profile photo after approval. The approved storefront stays live until ops reviews the replacement.`,
-          recommendedAction: 'Compare the requested avatar with the retained live selfie ID and public profile standards, then approve or reject the profile change request.',
+          recommendedAction: 'Compare the requested avatar with the retained private challenge video and public profile standards, then approve or reject the profile change request.',
           dedupeKey: `profile-change:${caller.id}`,
           metadata: { avatar_url: body.avatarUrl, request_id: request?.id ?? null },
         })
@@ -545,7 +537,7 @@ Deno.serve(async (req) => {
     const existingValues = existingProfile?.id
       ? await supabase
           .from('tailor_profiles')
-          .select('languages, specialty_tags, currency, price_range_min, price_range_max, avatar_url, id_document_url, id_selfie_document_url, id_verification_status, id_verification_metadata, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id, manual_bank_entry, manual_bank_verification_status')
+          .select('languages, specialty_tags, currency, price_range_min, price_range_max, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id, manual_bank_entry, manual_bank_verification_status')
           .eq('user_id', caller.id)
           .maybeSingle()
       : { data: null, error: null }
@@ -562,8 +554,7 @@ Deno.serve(async (req) => {
       price_range_min?: number | null
       price_range_max?: number | null
       avatar_url?: string | null
-      id_document_url?: string | null
-      id_selfie_document_url?: string | null
+      trust_verification_video_path?: string | null
       id_verification_status?: string | null
       id_verification_metadata?: Record<string, unknown> | null
       payout_account_verified?: boolean | null
@@ -606,10 +597,6 @@ Deno.serve(async (req) => {
       delivery_fee: 0,
       shipping_fee: 0,
       updated_at: new Date().toISOString(),
-    }
-
-    if (profile.legalName) {
-      payload.legal_name = profile.legalName
     }
 
     if (submittedAvatarUrl.length > 0) {
@@ -767,7 +754,7 @@ Deno.serve(async (req) => {
 
     const { data: savedProfile, error: savedProfileError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, display_name, location, specialty_tags, id_document_url, id_verification_status, payout_account_verified, payout_provider, payout_currency')
+      .select('id, user_id, display_name, location, specialty_tags, trust_verification_video_path, id_verification_status, payout_account_verified, payout_provider, payout_currency')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -869,8 +856,8 @@ Deno.serve(async (req) => {
       body.action === 'upsert-setup'
       && savedProfile?.id
       && savedProfile.id_verification_status === 'PENDING'
-      && typeof savedProfile.id_document_url === 'string'
-      && savedProfile.id_document_url.trim().length > 0
+      && typeof savedProfile.trust_verification_video_path === 'string'
+      && savedProfile.trust_verification_video_path.trim().length > 0
     ) {
       const payoutCurrency = normalizeAccountCurrency(savedProfile.payout_currency ?? profile.currency)
       await createOrRefreshOpsIssue(supabase, {
@@ -882,14 +869,14 @@ Deno.serve(async (req) => {
         userId: caller.id,
         tailorProfileId: savedProfile.id,
         title: 'Tailor verification submitted',
-        description: `${savedProfile.display_name ?? profile.displayName} submitted identity verification and is waiting on trust review.`,
-        recommendedAction: 'Review the uploaded ID document, confirm the profile details, and approve, reject, or request a resubmission with specific feedback.',
+        description: `${savedProfile.display_name ?? profile.displayName} submitted a private challenge video and is waiting on trust review.`,
+        recommendedAction: 'Review the private challenge video and public profile, then approve, reject, or request a new recording with specific feedback.',
         dedupeKey: `tailor-verification:${caller.id}`,
         metadata: {
           display_name: savedProfile.display_name ?? profile.displayName,
           location: savedProfile.location ?? profile.location,
           specialty_tags: savedProfile.specialty_tags ?? specialties,
-          id_document_url: savedProfile.id_document_url,
+          trust_verification_video_path: savedProfile.trust_verification_video_path,
           payout_account_verified: savedProfile.payout_account_verified ?? false,
           payout_provider: payoutCurrency ? resolvePaymentProviderForCurrency(payoutCurrency) : null,
           payout_currency: payoutCurrency ?? profile.currency,

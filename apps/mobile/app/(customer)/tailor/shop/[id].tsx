@@ -7,6 +7,7 @@ import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
 import { Button, RemoteImage } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 import { isVideoMediaUrl } from '@drape/shared/media-policy'
@@ -47,6 +48,8 @@ export default function TailorShopScreen() {
       `/(customer)/tailor/${id}`,
     )
   }
+
+  useContextualBackHandler(goBack)
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

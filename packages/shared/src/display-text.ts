@@ -1,4 +1,6 @@
 const URL_ENCODED_TOKEN = /%[0-9a-f]{2}/i
+const ISO_DATE_TIME_TOKEN =
+  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})\b/gu
 
 export function decodeDisplayText(value: string): string {
   let current = value
@@ -31,4 +33,24 @@ export function formatDatabaseEnumLabel(
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+export function formatEmbeddedDateTimes(
+  value: string | null | undefined,
+  locale = 'en-US',
+): string {
+  if (!value) return ''
+
+  return decodeDisplayText(value).replace(ISO_DATE_TIME_TOKEN, (token) => {
+    const date = new Date(token)
+    if (Number.isNaN(date.getTime())) return token
+
+    return new Intl.DateTimeFormat(locale, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(date)
+  })
 }

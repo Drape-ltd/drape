@@ -37,8 +37,8 @@ const FAQ: Array<{ q: string; a: string }> = [
     a: "Before irreversible work or handoff starts, request cancellation review from the order so Drapeon can review the right refund or next-step path. Do not mark an order complete, delivered, or collected if you already know you cannot fulfil it.",
   },
   {
-    q: "How does ID verification work?",
-    a: "Upload a government-issued ID photo during profile setup. Our team manually reviews each submission, and this typically takes 1 to 2 business days. Once approved, your profile goes through a final review before going live.",
+    q: "How does trust verification work?",
+    a: "Record the short private challenge video shown during setup. Our team checks that the person presenting the profile is present, follows the live prompt, and stands behind the portfolio. Drapeon does not collect a government ID. Your payout provider handles its own regulated verification separately.",
   },
   {
     q: "Can I set my own availability?",

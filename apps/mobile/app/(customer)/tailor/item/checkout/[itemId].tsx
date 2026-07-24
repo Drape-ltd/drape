@@ -27,6 +27,7 @@ import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button, ChoiceSheet, DisclosureSection, PaymentTrustCard } from '@/components/ui'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import {
   ORDER_CANCELLATION_ACK_COPY,
@@ -170,6 +171,8 @@ export default function ReadyMadeCheckoutScreen() {
       `/(customer)/tailor/item/${itemId}`,
     )
   }
+
+  useContextualBackHandler(goBack)
 
   useEffect(() => {
     if (!item) return

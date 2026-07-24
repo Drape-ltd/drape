@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   KeyboardAvoidingView, Platform, Image as RNImage,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase, invokeFunction } from '@/lib/supabase'
@@ -18,6 +18,8 @@ import { filterContactInfo } from '@drape/shared/contact-filter'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { stripExif } from '@/lib/stripExif'
 import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   isVideoPickerAsset,
   pickerVideoContentType,
@@ -94,11 +96,13 @@ function validateReviewMediaAsset(asset: ImagePicker.ImagePickerAsset) {
 }
 
 export default function ReviewScreen() {
-  const { orderId, historyChain } = useLocalSearchParams<{
+  const { orderId, returnTo, historyChain } = useLocalSearchParams<{
     orderId: string
+    returnTo?: string
     historyChain?: string
   }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const userId = user?.id ?? null
@@ -123,11 +127,20 @@ export default function ReviewScreen() {
   const [submitError, setSubmitError] = useState('')
   const [reviewMedia, setReviewMedia] = useState<ReviewMediaDraft[]>([])
   const feedbackPromptedRef = useRef(false)
-  const historyReturnTarget = historyChain
-    ?.split(',')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .at(-1)
+
+  const goBack = useCallback(() => {
+    goBackOrReturnTo(
+      router,
+      navigation,
+      pickSafeReturnTo(historyChain, returnTo),
+      {
+        pathname: '/(customer)/orders/[id]',
+        params: { id: orderId },
+      },
+    )
+  }, [historyChain, navigation, orderId, returnTo, router])
+
+  useContextualBackHandler(goBack, !submitting && !skipping)
 
   function promptOrderCompletionFeedbackOnce(reason: 'review_submitted' | 'review_skipped') {
     if (userId && !feedbackPromptedRef.current) {
@@ -254,7 +267,7 @@ export default function ReviewScreen() {
         setOrderSummary(null)
         setLoadingOrder(false)
         Alert.alert('Review unavailable', 'This order is not ready for review yet.')
-        router.replace((historyReturnTarget ?? `/(customer)/orders/${orderId}`) as never)
+        goBack()
         return
       }
       if (reviewWindowClosed(order.stage_updated_at ?? null)) {
@@ -292,7 +305,7 @@ export default function ReviewScreen() {
     } finally {
       setLoadingOrder(false)
     }
-  }, [orderId, router, userId])
+  }, [goBack, orderId, userId])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -470,7 +483,7 @@ export default function ReviewScreen() {
           : 'Your review was saved, but we could not finalize the order yet. Please reopen the order and try again.'
         setSubmitError(completeMessage)
         Alert.alert('Review saved', completeMessage)
-        router.replace((historyReturnTarget ?? `/(customer)/orders/${orderId}`) as never)
+        goBack()
         return
       }
     }

@@ -28,6 +28,7 @@ import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { useKeyboardState } from '@/lib/useKeyboardState'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
@@ -145,6 +146,8 @@ export default function CustomerMessagesScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(customer)/messages')
   }
+
+  useContextualBackHandler(goBack)
 
   async function openCallUrl(url: string) {
     await openConsultationCallUrl(url, 'customer')

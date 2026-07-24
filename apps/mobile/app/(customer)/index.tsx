@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import {
-  Animated,
   View,
   Text,
   ScrollView,
@@ -15,7 +14,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  PanResponder,
   type StyleProp,
   type ViewStyle,
 } from 'react-native'
@@ -34,7 +32,10 @@ import {
   type RecentlyViewedTailor,
 } from '@/lib/recently-viewed-tailors'
 import { DrapeStatusChip, RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
-import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
+import {
+  useDrapeCapsuleNavMotion,
+  useDrapeCapsuleNavScroll,
+} from '@/components/ui/DrapeCapsuleNav'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { TierBadge } from '@/components/ui'
@@ -43,15 +44,10 @@ import type { StorageImageBucket } from '@/lib/image-url'
 
 const RECENT_SEARCHES_KEY = 'drape_recent_searches'
 const LAST_SEARCH_KEY = 'drape_last_search'
-const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
-const VISION_FAB_POSITION_KEY = 'drape_customer_vision_fab_position'
 const MAX_RECENT_SEARCHES = 5
 const PAGE_SIZE = 20
 const EXPLORE_FOCUS_REFRESH_MS = 0
 const EXPLORE_CARD_IMAGE_RATIO = 1.04
-const VISION_FAB_SIZE = 56
-const VISION_FAB_MARGIN = Spacing.md
-const VISION_FAB_DRAG_THRESHOLD = 6
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
@@ -73,7 +69,6 @@ const FILTER_SPECIALTIES = [
 
 type AvailFilter = 'ALL' | 'OPEN' | 'LIMITED'
 type MinRatingFilter = null | 4 | 4.5 | 5
-type VisionFabPosition = { x: number; y: number }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -250,17 +245,6 @@ function storageKey(base: string, userId: string | undefined) {
   return `${base}:${userId ?? 'guest'}`
 }
 
-function parseStoredVisionFabPosition(raw: string | null): VisionFabPosition | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as Partial<VisionFabPosition>
-    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return null
-    return { x: Number(parsed.x), y: Number(parsed.y) }
-  } catch {
-    return null
-  }
-}
-
 async function saveRecentSearch(userId: string | undefined, q: string) {
   try {
     const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
@@ -390,8 +374,8 @@ export default function CustomerHomeScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const insets = useSafeAreaInsets()
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions()
   const capsuleNavScroll = useDrapeCapsuleNavScroll()
+  const { compact: navigationCompact } = useDrapeCapsuleNavMotion()
   const userId = user?.id
 
   // Browse data
@@ -419,19 +403,12 @@ export default function CustomerHomeScreen() {
   const [priceMaxFilter, setPriceMaxFilter] = useState('')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [, setLastSearch] = useState<LastSearch | null>(null)
-  const [showOnboarding, setShowOnboarding] = useState(false)
-  const [onboardingStep, setOnboardingStep] = useState(0)
 
   // In-memory result cache: query key → first-page results
   const resultCacheRef = useRef<Map<string, TailorCard[]>>(new Map())
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<TextInput>(null)
   const lastBrowseFetchAtRef = useRef(0)
-  const visionFabPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current
-  const visionFabCurrentRef = useRef<VisionFabPosition>({ x: 0, y: 0 })
-  const visionFabDragStartRef = useRef<VisionFabPosition>({ x: 0, y: 0 })
-  const visionFabDraggedRef = useRef(false)
-  const [visionFabReady, setVisionFabReady] = useState(false)
 
   const isSearchActive = query.trim().length > 0
   const showSuggestions = searchFocused && !isSearchActive
@@ -442,81 +419,6 @@ export default function CustomerHomeScreen() {
     (locationFilter.trim() ? 1 : 0) +
     (minRatingFilter ? 1 : 0) +
     (priceMaxFilter.trim() ? 1 : 0)
-
-  const visionFabStorageKey = useMemo(() => storageKey(VISION_FAB_POSITION_KEY, userId), [userId])
-
-  const getVisionFabBounds = useCallback(() => {
-    const bottomClearance = Math.max(insets.bottom + 92, 112)
-    const minX = VISION_FAB_MARGIN
-    const maxX = Math.max(minX, windowWidth - VISION_FAB_SIZE - VISION_FAB_MARGIN)
-    const minY = VISION_FAB_MARGIN
-    const maxY = Math.max(
-      minY,
-      windowHeight - VISION_FAB_SIZE - bottomClearance
-    )
-
-    return { minX, maxX, minY, maxY }
-  }, [insets.bottom, windowHeight, windowWidth])
-
-  const clampVisionFabPosition = useCallback(
-    (position: VisionFabPosition): VisionFabPosition => {
-      const bounds = getVisionFabBounds()
-      return {
-        x: Math.min(Math.max(position.x, bounds.minX), bounds.maxX),
-        y: Math.min(Math.max(position.y, bounds.minY), bounds.maxY),
-      }
-    },
-    [getVisionFabBounds]
-  )
-
-  const getDefaultVisionFabPosition = useCallback((): VisionFabPosition => {
-    const bounds = getVisionFabBounds()
-    return { x: bounds.maxX, y: bounds.maxY }
-  }, [getVisionFabBounds])
-
-  const applyVisionFabPosition = useCallback(
-    (position: VisionFabPosition) => {
-      const nextPosition = clampVisionFabPosition(position)
-      visionFabCurrentRef.current = nextPosition
-      visionFabPosition.setValue(nextPosition)
-    },
-    [clampVisionFabPosition, visionFabPosition]
-  )
-
-  const persistVisionFabPosition = useCallback(
-    (position: VisionFabPosition) => {
-      AsyncStorage.setItem(visionFabStorageKey, JSON.stringify(position)).catch(() => {
-        // Local UI preference only; never block Explore if it cannot be saved.
-      })
-    },
-    [visionFabStorageKey]
-  )
-
-  useEffect(() => {
-    let cancelled = false
-
-    AsyncStorage.getItem(visionFabStorageKey)
-      .then((raw) => parseStoredVisionFabPosition(raw) ?? getDefaultVisionFabPosition())
-      .then((position) => {
-        if (cancelled) return
-        applyVisionFabPosition(position)
-        setVisionFabReady(true)
-      })
-      .catch(() => {
-        if (cancelled) return
-        applyVisionFabPosition(getDefaultVisionFabPosition())
-        setVisionFabReady(true)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [applyVisionFabPosition, getDefaultVisionFabPosition, visionFabStorageKey])
-
-  useEffect(() => {
-    if (!visionFabReady) return
-    applyVisionFabPosition(visionFabCurrentRef.current)
-  }, [applyVisionFabPosition, visionFabReady])
 
   // Filtered results by local UI filters (client-side, no extra round trip).
   const filteredResults = searchResults.filter((tailor) => {
@@ -555,26 +457,14 @@ export default function CustomerHomeScreen() {
         loadRecentlyViewedTailors<TailorCardWithRecent>(user?.id),
         loadRecentSearches(user?.id),
         loadLastSearch(user?.id),
-        AsyncStorage.getItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id)).catch(() => null),
-      ]).then(([rv, rs, ls, onboardingValue]) => {
+      ]).then(([rv, rs, ls]) => {
         setRecentlyViewed(rv)
         setRecentSearches(rs)
         setLastSearch(ls)
-        setShowOnboarding(onboardingValue !== '1')
       })
 
     }, [user?.id])
   )
-
-  async function dismissOnboarding() {
-    setShowOnboarding(false)
-    setOnboardingStep(0)
-    try {
-      await AsyncStorage.setItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id), '1')
-    } catch {
-      // Onboarding dismissal is local preference only.
-    }
-  }
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -860,80 +750,26 @@ export default function CustomerHomeScreen() {
     } as never)
   }, [router])
 
-  const visionFabPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => !showOnboarding,
-        onMoveShouldSetPanResponder: (_, gestureState) =>
-          Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
-        onPanResponderGrant: () => {
-          visionFabDragStartRef.current = visionFabCurrentRef.current
-          visionFabDraggedRef.current = false
-        },
-        onPanResponderMove: (_, gestureState) => {
-          const hasDragged =
-            Math.abs(gestureState.dx) > VISION_FAB_DRAG_THRESHOLD ||
-            Math.abs(gestureState.dy) > VISION_FAB_DRAG_THRESHOLD
-          visionFabDraggedRef.current = visionFabDraggedRef.current || hasDragged
-
-          if (!visionFabDraggedRef.current) return
-
-          applyVisionFabPosition({
-            x: visionFabDragStartRef.current.x + gestureState.dx,
-            y: visionFabDragStartRef.current.y + gestureState.dy,
-          })
-        },
-        onPanResponderRelease: (_, gestureState) => {
-          const wasDragged =
-            visionFabDraggedRef.current ||
-            Math.abs(gestureState.dx) > VISION_FAB_DRAG_THRESHOLD ||
-            Math.abs(gestureState.dy) > VISION_FAB_DRAG_THRESHOLD
-
-          if (!wasDragged) {
-            applyVisionFabPosition(visionFabDragStartRef.current)
-            openDrapeVision()
-            return
-          }
-
-          const nextPosition = clampVisionFabPosition({
-            x: visionFabDragStartRef.current.x + gestureState.dx,
-            y: visionFabDragStartRef.current.y + gestureState.dy,
-          })
-          applyVisionFabPosition(nextPosition)
-          persistVisionFabPosition(nextPosition)
-        },
-        onPanResponderTerminate: () => {
-          const nextPosition = clampVisionFabPosition(visionFabCurrentRef.current)
-          applyVisionFabPosition(nextPosition)
-          persistVisionFabPosition(nextPosition)
-        },
-        onPanResponderTerminationRequest: () => true,
-      }),
-    [
-      applyVisionFabPosition,
-      clampVisionFabPosition,
-      openDrapeVision,
-      persistVisionFabPosition,
-      showOnboarding,
-    ]
-  )
-
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <CustomerOnboardingModal
-        visible={showOnboarding}
-        step={onboardingStep}
-        onStepChange={setOnboardingStep}
-        onDone={() => void dismissOnboarding()}
-      />
-
       {/* ── Sticky header ── */}
       <View style={styles.stickyHeader}>
-        {!searchFocused && !isSearchActive ? (
+        {!searchFocused && !isSearchActive && !navigationCompact ? (
           <View style={styles.exploreHeader}>
             <Text style={styles.exploreTitle}>Find your tailor</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open Drapeon Vision"
+              accessibilityHint="Open Fit 360 and your saved measurement tools."
+              onPress={openDrapeVision}
+              activeOpacity={0.78}
+              style={styles.visionHeaderAction}
+            >
+              <Feather name="aperture" size={17} color={Colors.textInverse} />
+              <Text style={styles.visionHeaderActionText}>Drapeon Vision</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
         {/* Search row */}
@@ -985,6 +821,18 @@ export default function CustomerHomeScreen() {
               ) : null}
             </TouchableOpacity>
           )}
+          {navigationCompact && !searchFocused && !isSearchActive ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open Drapeon Vision"
+              accessibilityHint="Open Fit 360 and your saved measurement tools."
+              onPress={openDrapeVision}
+              activeOpacity={0.78}
+              style={styles.visionHeaderIcon}
+            >
+              <Feather name="aperture" size={20} color={Colors.textInverse} />
+            </TouchableOpacity>
+          ) : null}
           {(searchFocused || isSearchActive) && (
             <TouchableOpacity onPress={cancelSearch} style={styles.cancelBtn}>
               <Text style={styles.cancelText}>Cancel</Text>
@@ -1319,23 +1167,6 @@ export default function CustomerHomeScreen() {
 
         </ScrollView>
       )}
-      {!showOnboarding && visionFabReady ? (
-        <Animated.View
-          {...visionFabPanResponder.panHandlers}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="Open Drapeon Vision"
-          accessibilityHint="Double tap to open. Drag to move this shortcut."
-          style={[
-            styles.visionFloatingOrb,
-            { transform: visionFabPosition.getTranslateTransform() },
-          ]}
-        >
-          <View style={styles.visionFloatingOrbInner}>
-            <Feather name="aperture" size={24} color={Colors.textInverse} />
-          </View>
-        </Animated.View>
-      ) : null}
     </SafeAreaView>
   )
 }
@@ -1352,7 +1183,7 @@ function GridCard({
   recentlyViewed?: boolean
 }) {
   const { width: screenWidth } = useWindowDimensions()
-  const cardWidth = Math.min(156, Math.floor((screenWidth - Spacing.lg * 2 - 18) / 2))
+  const cardWidth = Math.floor((screenWidth - Spacing.lg * 2 - Spacing.xl) / 2)
   const cardImageHeight = Math.round(cardWidth * EXPLORE_CARD_IMAGE_RATIO)
   const specialty = tailor.specialtyTags[0]
   const metaParts = [
@@ -1708,102 +1539,6 @@ function SearchFilterSheet({
   )
 }
 
-const CUSTOMER_ONBOARDING_SLIDES = [
-  {
-    icon: 'search' as const,
-    title: 'Find your tailor',
-    body: 'Browse trusted tailors by style, location, rating, and availability.',
-  },
-  {
-    icon: 'user-check' as const,
-    title: 'Your measurements, stored once',
-    body: 'Save your fit profile once, then reuse it whenever you place an order.',
-  },
-  {
-    icon: 'scissors' as const,
-    title: 'Track every stitch',
-    body: 'Follow quotes, production stages, messages, delivery, and reviews in one place.',
-  },
-]
-
-function CustomerOnboardingModal({
-  visible,
-  step,
-  onStepChange,
-  onDone,
-}: {
-  visible: boolean
-  step: number
-  onStepChange: (step: number) => void
-  onDone: () => void
-}) {
-  const slide = CUSTOMER_ONBOARDING_SLIDES[step] ?? CUSTOMER_ONBOARDING_SLIDES[0]
-  const isLast = step === CUSTOMER_ONBOARDING_SLIDES.length - 1
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onDone}>
-      <View style={styles.onboardingOverlay}>
-        <View style={styles.onboardingCard}>
-          {/* Top bar: back + dots + skip */}
-          <View style={styles.onboardingTopBar}>
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Previous slide"
-              onPress={() => onStepChange(step - 1)}
-              style={[styles.onboardingNavBtn, step === 0 && styles.onboardingNavBtnHidden]}
-              disabled={step === 0}
-            >
-              <Feather name="arrow-left" size={18} color={Colors.inkLight} />
-            </TouchableOpacity>
-
-            <View style={styles.onboardingDots}>
-              {CUSTOMER_ONBOARDING_SLIDES.map((_, index) => (
-                <View
-                  key={index}
-                  style={[styles.onboardingDot, index === step && styles.onboardingDotActive]}
-                />
-              ))}
-            </View>
-
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Skip customer walkthrough"
-              onPress={onDone}
-              style={styles.onboardingSkip}
-            >
-              <Text style={styles.onboardingSkipText}>Skip</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Slide content */}
-          <View style={styles.onboardingContent}>
-            <View style={styles.onboardingIcon}>
-              <Feather name={slide.icon} size={34} color={PRIMARY_GREEN} />
-            </View>
-            <Text style={styles.onboardingTitle}>{slide.title}</Text>
-            <Text style={styles.onboardingBody}>{slide.body}</Text>
-          </View>
-
-          {/* CTA */}
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'}
-            onPress={() => {
-              if (isLast) { onDone(); return }
-              onStepChange(step + 1)
-            }}
-            style={styles.onboardingButton}
-            activeOpacity={0.82}
-          >
-            <Text style={styles.onboardingButtonText}>{isLast ? "Let's go" : 'Next'}</Text>
-            {!isLast && <Feather name="arrow-right" size={17} color={Colors.textInverse} />}
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  )
-}
-
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
@@ -1821,6 +1556,11 @@ const styles = StyleSheet.create({
   },
   exploreHeader: {
     marginTop: 0,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
   },
   exploreTitle: {
     fontFamily: Fonts.bodyBold,
@@ -1871,27 +1611,31 @@ const styles = StyleSheet.create({
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cancelBtn: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
   cancelText: { fontSize: 14, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
-  visionFloatingOrb: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: VISION_FAB_SIZE,
-    height: VISION_FAB_SIZE,
+  visionHeaderAction: {
+    minHeight: 44,
     borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 40,
-    ...Shadow.lg,
+    gap: Spacing.sm,
+    backgroundColor: Colors.needleGreen,
+    ...Shadow.sm,
   },
-  visionFloatingOrbInner: {
-    width: VISION_FAB_SIZE,
-    height: VISION_FAB_SIZE,
+  visionHeaderActionText: {
+    color: Colors.textInverse,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    lineHeight: 16,
+  },
+  visionHeaderIcon: {
+    width: 44,
+    height: 44,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreen,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.78)',
+    ...Shadow.sm,
   },
 
   // Scroll areas
@@ -2177,102 +1921,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.textInverse,
   },
-  onboardingOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(26,26,24,0.48)',
-    justifyContent: 'flex-end',
-  },
-  onboardingCard: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingTop: Spacing.lg,
-    paddingHorizontal: Spacing.xl,
-    paddingBottom: Spacing.xxxl,
-    gap: Spacing.xl,
-    ...Shadow.lg,
-  },
-  onboardingTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  onboardingNavBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  onboardingNavBtnHidden: { opacity: 0 },
-  onboardingSkip: {
-    minHeight: 40,
-    paddingHorizontal: Spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  onboardingSkipText: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-  },
-  onboardingContent: {
-    alignItems: 'center',
-    gap: Spacing.lg,
-    paddingVertical: Spacing.md,
-  },
-  onboardingIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  onboardingTitle: {
-    fontFamily: Fonts.display,
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    textAlign: 'center',
-  },
-  onboardingBody: {
-    fontFamily: Fonts.body,
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-    textAlign: 'center',
-    maxWidth: 300,
-  },
-  onboardingDots: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
-  onboardingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.lightGrey,
-  },
-  onboardingDotActive: { width: 24, backgroundColor: Colors.needleGreen },
-  onboardingButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    minHeight: 56,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.needleGreen,
-  },
-  onboardingButtonText: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textInverse,
-  },
-
   // Section
   section: { paddingTop: Spacing.md },
   tailorGridSection: { paddingTop: Spacing.lg },
@@ -2351,7 +1999,8 @@ const styles = StyleSheet.create({
   cardsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 18,
+    columnGap: Spacing.xl,
+    rowGap: Spacing.lg,
     paddingHorizontal: Spacing.lg,
   },
   gridCard: {

@@ -87,10 +87,12 @@ async function syncRoleMirror(role: 'CUSTOMER' | 'TAILOR') {
   const userId = data.user?.id
   if (!userId) return
 
-  await supabase
+  const { error } = await supabase
     .from('users')
     .update({ role, updated_at: new Date().toISOString() })
     .eq('id', userId)
+
+  if (error) throw error
 }
 
 function readStoredOnboarding() {
@@ -119,6 +121,50 @@ export function AuthCallbackClient(): React.JSX.Element {
 
       try {
         await applySessionFromUrl(supabase, searchParams)
+
+        const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
+        const { data, error: userError } = await supabase.auth.getUser()
+        if (userError || !data.user) {
+          throw userError ?? new Error('No authenticated account was found for this link.')
+        }
+
+        const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
+        const metadataRole = data.user.user_metadata?.role
+        const role =
+          onboarding?.role ??
+          (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR' ? roleIntent : null) ??
+          (metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR' ? metadataRole : null)
+
+        if (role) {
+          const { error: metadataError } = await supabase.auth.updateUser({
+            data: {
+              role,
+              display_name: onboarding?.displayName,
+              phone: onboarding?.phone,
+              web_onboarding: onboarding ?? undefined,
+            },
+          })
+          if (metadataError) throw metadataError
+
+          if (onboarding) {
+            await bootstrapWebOnboarding(supabase, {
+              userId: data.user.id,
+              onboarding,
+            })
+          } else {
+            await syncRoleMirror(role)
+          }
+        }
+
+        window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+        window.localStorage.removeItem('drapeon.web.auth.onboarding')
+        markWebSessionScope(true)
+
+        if (active) {
+          setFailed(false)
+          setMessage('Account link confirmed. Opening your Drapeon workspace...')
+          router.replace(next as Route)
+        }
       } catch (error) {
         if (active) {
           setFailed(true)
@@ -126,46 +172,6 @@ export function AuthCallbackClient(): React.JSX.Element {
         }
         return
       }
-
-      if (active) {
-        setFailed(false)
-        setMessage('Account link confirmed. Opening your Drapeon workspace...')
-      }
-      markWebSessionScope(true)
-
-      const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
-      const { data } = await supabase.auth.getUser()
-      const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
-      const metadataRole = data.user?.user_metadata?.role
-      const role =
-        onboarding?.role ??
-        (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR' ? roleIntent : null) ??
-        (metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR' ? metadataRole : null)
-
-      if (role) {
-        window.localStorage.removeItem('drapeon.web.auth.roleIntent')
-        window.localStorage.removeItem('drapeon.web.auth.onboarding')
-        await supabase.auth.updateUser({
-          data: {
-            role,
-            display_name: onboarding?.displayName,
-            phone: onboarding?.phone,
-            web_onboarding: onboarding ?? undefined,
-          },
-        }).catch(() => null)
-        await syncRoleMirror(role)
-      }
-
-      if (onboarding) {
-        if (data.user?.id) {
-          await bootstrapWebOnboarding(supabase, {
-            userId: data.user.id,
-            onboarding,
-          }).catch(() => null)
-        }
-      }
-
-      router.replace(next as Route)
     }
 
     void complete()
@@ -183,9 +189,18 @@ export function AuthCallbackClient(): React.JSX.Element {
           <h1 className="mt-3 text-4xl text-ink">Opening your account</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">{message}</p>
           {failed ? (
-            <Link href="/sign-in" className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white">
-              Return to sign in
-            </Link>
+            <div className="mt-5 flex flex-col items-center gap-3">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Try again
+              </button>
+              <Link href="/sign-in" className="text-sm font-semibold text-needle">
+                Return to sign in
+              </Link>
+            </div>
           ) : null}
         </div>
       </section>

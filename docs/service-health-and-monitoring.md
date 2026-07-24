@@ -58,6 +58,7 @@ The readiness check verifies:
 - reauth proof secret is present
 - database is reachable
 - scheduled job visibility, when the service-health RPC migration is installed
+- Expo push ticket/receipt health through `pushReceipts`
 - payout watchdog state: any order more than 30 minutes past its 72-hour release point must already have a payout row
 
 It does not call Stripe, Paystack, or delivery-provider APIs. The first real provider operation remains the correct provider health signal.
@@ -69,6 +70,13 @@ Set this in every deployed Supabase environment:
 ```text
 DRAPE_HEALTHCHECK_SECRET=<long random value>
 ```
+
+The scheduled GitHub probe lives at
+`.github/workflows/beta-service-health.yml`. Add the same
+`DRAPE_HEALTHCHECK_SECRET` as a GitHub repository secret to include protected
+readiness in the external five-minute monitor. See
+`docs/beta-observability-runbook.md` for beta log queries and push receipt
+interpretation.
 
 The readiness endpoint accepts only this dedicated health secret. Do not put the Supabase service role key in external uptime tools.
 

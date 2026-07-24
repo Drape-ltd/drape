@@ -5,13 +5,15 @@
  * so the tab bar icon reflects it without refetching.
  */
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import { supabase } from './supabase'
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { AppState } from 'react-native'
 import { useAuth } from './auth'
+import { fetchOwnTailorProfileGuard } from './tailor-profile-guard'
 
 interface TailorProfileContextValue {
   avatarUrl: string | null
   setAvatarUrl: (url: string | null) => void
+  refreshAvatar: () => Promise<void>
 }
 
 type TailorAvatarRow = {
@@ -21,6 +23,7 @@ type TailorAvatarRow = {
 const TailorProfileContext = createContext<TailorProfileContextValue>({
   avatarUrl: null,
   setAvatarUrl: () => {},
+  refreshAvatar: async () => {},
 })
 
 export function TailorProfileProvider({ children }: { children: React.ReactNode }) {
@@ -29,32 +32,32 @@ export function TailorProfileProvider({ children }: { children: React.ReactNode 
   const isTailor = !!user?.id && user.user_metadata?.role === 'TAILOR'
   const visibleAvatarUrl = isTailor ? avatarUrl : null
 
-  useEffect(() => {
+  const refreshAvatar = useCallback(async () => {
     if (!user?.id || !isTailor) return
-
-    let cancelled = false
-
-    supabase
-      .from('tailor_profiles')
-      .select('avatar_url')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (cancelled) return
-        if (error) {
-          return
-        }
-        const profile = data as TailorAvatarRow | null
-        setAvatarUrl(profile?.avatar_url ?? null)
-      })
-
-    return () => {
-      cancelled = true
-    }
+    const { data, error } = await fetchOwnTailorProfileGuard()
+    if (error) return
+    const profile = data as TailorAvatarRow | null
+    setAvatarUrl(profile?.avatar_url ?? null)
   }, [isTailor, user?.id])
 
+  useEffect(() => {
+    if (!user?.id || !isTailor) return
+    const initialRefresh = setTimeout(() => {
+      void refreshAvatar()
+    }, 0)
+
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refreshAvatar()
+    })
+
+    return () => {
+      clearTimeout(initialRefresh)
+      subscription.remove()
+    }
+  }, [isTailor, refreshAvatar, user?.id])
+
   return (
-    <TailorProfileContext.Provider value={{ avatarUrl: visibleAvatarUrl, setAvatarUrl }}>
+    <TailorProfileContext.Provider value={{ avatarUrl: visibleAvatarUrl, setAvatarUrl, refreshAvatar }}>
       {children}
     </TailorProfileContext.Provider>
   )

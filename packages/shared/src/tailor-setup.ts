@@ -1,7 +1,7 @@
 import type { AccountCurrencyCode } from './currency-config.ts'
 
 export const TAILOR_SETUP_VALIDATION = {
-  ID_DOCUMENT_REQUIRED_MESSAGE: 'Capture Identity Selfie & Link Payout Account to Go Live.',
+  ID_DOCUMENT_REQUIRED_MESSAGE: 'Record your private trust video before submitting setup.',
   DISPLAY_NAME_REQUIRED_MESSAGE: 'Add your public display name to continue',
   PHONE_REQUIRED_MESSAGE: 'Add a valid phone number for order updates and account recovery',
   PROFILE_PHOTO_REQUIRED_MESSAGE: 'Add a clear profile photo so customers know who they are booking',
@@ -41,7 +41,12 @@ export const TAILOR_PRICE_MINIMUMS_MAJOR: Record<AccountCurrencyCode, number> = 
   CAD: 10,
 } as const
 
-const ID_DOCUMENT_STORAGE_PATH_PATTERN =
+const TRUST_VIDEO_STORAGE_PATH_PATTERN =
+  /^verification-video\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/challenge_[a-z0-9_-]+_[0-9]+\.(?:mp4|mov|webm)$/iu
+
+// Retained only so an account with pre-migration evidence is not forced backward
+// through setup. New submissions are accepted only by the challenge-video RPC.
+const LEGACY_ID_DOCUMENT_STORAGE_PATH_PATTERN =
   /^id-verification\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/]+\.(?:jpe?g|png|webp)$/iu
 
 function normalizeTailorSetupCurrency(value: string | null | undefined): AccountCurrencyCode {
@@ -74,7 +79,10 @@ export function validateTailorSetupIdDocumentUrl(value: string | null | undefine
   const trimmed = typeof value === 'string' ? value.trim() : ''
   if (!trimmed) return TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE
 
-  if (ID_DOCUMENT_STORAGE_PATH_PATTERN.test(trimmed)) return null
+  if (
+    TRUST_VIDEO_STORAGE_PATH_PATTERN.test(trimmed)
+    || LEGACY_ID_DOCUMENT_STORAGE_PATH_PATTERN.test(trimmed)
+  ) return null
 
   try {
     const url = new URL(trimmed)

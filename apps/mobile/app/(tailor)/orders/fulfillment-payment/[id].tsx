@@ -11,6 +11,7 @@ import { Button } from '@/components/ui'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import type { OrderStage } from '@drape/shared/order-machine'
@@ -91,6 +92,8 @@ export default function FulfillmentPaymentRequestScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/orders')
   }
+
+  useContextualBackHandler(goBack, !saving)
 
   useEffect(() => {
     async function load() {

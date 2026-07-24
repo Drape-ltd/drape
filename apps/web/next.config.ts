@@ -1,4 +1,8 @@
 import type { NextConfig } from 'next'
+import {
+  PRODUCTION_SUPABASE_PROJECT_REF,
+  getSupabaseProjectRef,
+} from './lib/supabase-environment'
 
 function getPublicSupabaseUrl() {
   return (
@@ -39,6 +43,24 @@ const supabaseStorageHostname = getSupabaseStorageHostname()
 const publicSupabaseUrl = getPublicSupabaseUrl()
 const publicSupabaseKey = getPublicSupabaseKey()
 
+function assertConfiguredWebTarget() {
+  const declaredEnvironment = process.env.DRAPE_WEB_ENV?.trim().toLowerCase()
+  const expectedProjectRef =
+    process.env.DRAPE_EXPECTED_SUPABASE_PROJECT_REF?.trim() ||
+    (declaredEnvironment === 'production' ? PRODUCTION_SUPABASE_PROJECT_REF : null)
+
+  if (!expectedProjectRef || !publicSupabaseUrl) return
+
+  const actualProjectRef = getSupabaseProjectRef(publicSupabaseUrl)
+
+  if (actualProjectRef !== expectedProjectRef) {
+    throw new Error(
+      `[web env] Refusing build: expected Supabase project ${expectedProjectRef}, ` +
+        `received ${actualProjectRef ?? 'an invalid URL'}.`
+    )
+  }
+}
+
 function isCloudflareBuild() {
   return Boolean(
     process.env.CF_PAGES ||
@@ -61,6 +83,7 @@ function assertPublicSupabaseEnvForCloudflare() {
 }
 
 assertPublicSupabaseEnvForCloudflare()
+assertConfiguredWebTarget()
 
 const nextConfig: NextConfig = {
   typedRoutes: true,

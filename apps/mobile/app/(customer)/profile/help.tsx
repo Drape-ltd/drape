@@ -43,11 +43,11 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "How are tailors verified?",
-    a: "Every tailor on Drapeon submits a government-issued ID and a portfolio before going live. Our ops team manually reviews each application. Verified tailors display a badge on their profile.",
+    a: "Every tailor records a private live challenge video and submits a portfolio before going live. Our trust team manually reviews both. Drapeon does not collect government ID; payout providers run their own regulated checks separately.",
   },
   {
     q: "How do I become a tailor on Drapeon?",
-    a: "Visit drapeon.co/tailors to apply. You'll need to provide your portfolio, a valid ID, and details about your specialism. Once approved you can start receiving orders.",
+    a: "Visit drapeon.co/tailors to apply. You'll provide your portfolio, details about your specialism, and a short private challenge video. Once approved you can start receiving orders.",
   },
   {
     q: "Are my measurements safe?",

@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "env:verify": "node ./scripts/verify-environment.mjs",
     "cf:build": "pnpm dlx @opennextjs/cloudflare@latest build",
     "cf:preview": "node ./scripts/cf-preview.mjs",
     "cf:deploy": "node ./scripts/cf-preview.mjs deploy"

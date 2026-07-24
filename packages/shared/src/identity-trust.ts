@@ -1,7 +1,25 @@
-export const IDENTITY_CONSENT_POLICY_VERSION = 'identity-verification-v1' as const
+export const IDENTITY_CONSENT_POLICY_VERSION = 'tailor-trust-video-v1' as const
 
 export const IDENTITY_CONSENT_COPY =
-  'I consent to Drapeon processing my legal name and live identity selfie for account verification, marketplace safety, and fraud prevention. Identity media stays private, is limited to authorized trust review, and is retained or erased under Drapeon\'s published privacy and legal obligations.'
+  'I consent to Drapeon processing this short challenge video for marketplace trust review, account safety, and fraud prevention. The video stays private, is limited to authorized trust reviewers, and is retained or erased under Drapeon\'s published privacy obligations.'
+
+export const TAILOR_TRUST_VIDEO_MIN_SECONDS = 8
+export const TAILOR_TRUST_VIDEO_MAX_SECONDS = 15
+
+export const TAILOR_TRUST_VIDEO_CHALLENGES = [
+  {
+    id: 'profile-work-payments',
+    text: 'Say your name, then say: I created this Drapeon tailor profile, the work shown is mine, and I will keep orders and payments on Drapeon.',
+  },
+  {
+    id: 'profile-orders-safety',
+    text: 'Say your name, then say: I am the person running this Drapeon tailor profile, and I will manage customer orders safely through Drapeon.',
+  },
+  {
+    id: 'profile-craft-trust',
+    text: 'Say your name, then say: This is my Drapeon tailor profile, I stand behind the work I share, and I will communicate with customers inside Drapeon.',
+  },
+] as const
 
 export type IdentityRetentionState =
   | 'ACTIVE'
@@ -9,48 +27,3 @@ export type IdentityRetentionState =
   | 'LEGAL_HOLD'
   | 'ERASURE_DUE'
   | 'ERASED'
-
-export type PayoutNameMatchStatus =
-  | 'NOT_CHECKED'
-  | 'MATCH'
-  | 'REVIEW_REQUIRED'
-  | 'MISMATCH'
-
-function normalizedNameTokens(value: string | null | undefined): string[] {
-  return (value ?? '')
-    .normalize('NFKD')
-    .replace(/\p{M}+/gu, '')
-    .toUpperCase()
-    .replace(/[^\p{L}\s'-]+/gu, ' ')
-    .split(/\s+/u)
-    .map((token) => token.replace(/^[-']+|[-']+$/gu, ''))
-    .filter((token) => token.length > 0)
-    .sort()
-}
-
-export function classifyPayoutNameMatch(
-  legalName: string | null | undefined,
-  resolvedAccountName: string | null | undefined,
-): Exclude<PayoutNameMatchStatus, 'NOT_CHECKED'> {
-  const legalTokens = normalizedNameTokens(legalName)
-  const payoutTokens = normalizedNameTokens(resolvedAccountName)
-  if (legalTokens.length === 0 || payoutTokens.length === 0) return 'REVIEW_REQUIRED'
-  if (legalTokens.join(' ') === payoutTokens.join(' ')) return 'MATCH'
-
-  const payoutSet = new Set(payoutTokens)
-  const overlap = legalTokens.filter((token) => payoutSet.has(token)).length
-  return overlap === 0 ? 'MISMATCH' : 'REVIEW_REQUIRED'
-}
-
-export function isValidLegalName(value: string): boolean {
-  const normalized = value.normalize('NFC').trim().replace(/\s+/gu, ' ')
-  return (
-    normalized.length >= 2 &&
-    normalized.length <= 120 &&
-    /^[\p{L}\p{M}](?:[\p{L}\p{M}' -]*[\p{L}\p{M}])?$/u.test(normalized)
-  )
-}
-
-export function normalizeLegalName(value: string): string {
-  return value.normalize('NFC').trim().replace(/\s+/gu, ' ')
-}

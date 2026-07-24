@@ -205,7 +205,7 @@ async function sendReminder(
     body: bodyFor(kind),
     preferenceKey: "orderUpdates" as const,
     data,
-    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "timeSensitive" as const } : {}),
+    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "time-sensitive" as const } : {}),
   };
 
   const sends: Promise<unknown>[] = [];
@@ -266,7 +266,7 @@ async function sendOrderCallReminder(
     body: orderCallBodyFor(kind),
     preferenceKey: "messages" as const,
     data,
-    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "timeSensitive" as const } : {}),
+    ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "time-sensitive" as const } : {}),
   };
 
   const sends: Promise<unknown>[] = [];

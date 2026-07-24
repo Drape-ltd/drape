@@ -5,6 +5,8 @@ import { spawn } from 'node:child_process'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const envLocalPath = resolve(scriptDir, '..', '.env.local')
+const wranglerPath = resolve(scriptDir, '..', 'wrangler.jsonc')
+const productionProjectRef = 'wkfsrunetmgjdtcurmoj'
 
 function parseEnvFile(content) {
   const entries = {}
@@ -46,6 +48,15 @@ function readEnvLocal() {
   return parseEnvFile(readFileSync(envLocalPath, 'utf8'))
 }
 
+function readWranglerVars() {
+  if (!existsSync(wranglerPath)) {
+    return {}
+  }
+
+  const config = JSON.parse(readFileSync(wranglerPath, 'utf8'))
+  return config.vars ?? {}
+}
+
 function logSupabaseRef(mode, envLocal) {
   const shellUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? null
   const fileUrl = envLocal.NEXT_PUBLIC_SUPABASE_URL ?? null
@@ -60,33 +71,85 @@ function logSupabaseRef(mode, envLocal) {
 
 function assertSafeDeployEnv(mode) {
   const envLocal = readEnvLocal()
+  const wranglerVars = readWranglerVars()
   logSupabaseRef(mode, envLocal)
 
-  if (mode !== 'deploy' || process.env.ALLOW_LOCAL_WEB_ENV_DEPLOY === '1') {
+  if (mode !== 'deploy') {
     return
   }
 
-  const publicSupabaseKeys = [
+  const publicSupabaseUrlKeys = [
+    'DRAPEON_PUBLIC_SUPABASE_URL',
     'NEXT_PUBLIC_SUPABASE_URL',
+    'EXPO_PUBLIC_SUPABASE_URL',
+    'SUPABASE_URL',
+  ]
+  const publicSupabaseKeyKeys = [
+    'DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+    'EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+    'SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_ANON_KEY',
   ]
+  const publicSupabaseKeys = [...publicSupabaseUrlKeys, ...publicSupabaseKeyKeys]
   const presentKeys = publicSupabaseKeys.filter((key) => Boolean(envLocal[key]))
+  const localUrl = publicSupabaseUrlKeys
+    .map((key) => envLocal[key])
+    .find((value) => Boolean(value))
+  const localRef = getSupabaseProjectRef(localUrl)
+  const shellUrl =
+    process.env.DRAPEON_PUBLIC_SUPABASE_URL ??
+    process.env.NEXT_PUBLIC_SUPABASE_URL ??
+    process.env.EXPO_PUBLIC_SUPABASE_URL ??
+    process.env.SUPABASE_URL ??
+    null
+  const shellRef = getSupabaseProjectRef(shellUrl)
+  const wranglerRef = getSupabaseProjectRef(wranglerVars.NEXT_PUBLIC_SUPABASE_URL)
+  const expectedRef = wranglerVars.DRAPE_EXPECTED_SUPABASE_PROJECT_REF
+
+  if (
+    wranglerVars.DRAPE_WEB_ENV !== 'production' ||
+    expectedRef !== productionProjectRef ||
+    wranglerRef !== productionProjectRef
+  ) {
+    console.error(
+      `[web env] Refusing deploy because wrangler.jsonc is not locked to production project ${productionProjectRef}.`
+    )
+    process.exit(1)
+  }
+
+  if (shellUrl && shellRef !== productionProjectRef) {
+    console.error(
+      `[web env] Refusing deploy because the shell resolves public Supabase access to ` +
+        `${shellRef ?? 'an invalid URL'}, not production project ${productionProjectRef}.`
+    )
+    process.exit(1)
+  }
 
   if (!presentKeys.length) {
     return
   }
 
-  const ref = getSupabaseProjectRef(envLocal.NEXT_PUBLIC_SUPABASE_URL)
-  const projectLabel = ref ? ` for project ${ref}` : ''
+  const projectLabel = localRef ? ` for project ${localRef}` : ''
 
-  console.error(
-    `[web env] Refusing Cloudflare deploy because apps/web/.env.local defines ${presentKeys.join(', ')}${projectLabel}.`
+  if (
+    process.env.ALLOW_LOCAL_WEB_ENV_DEPLOY !== '1' ||
+    localRef !== productionProjectRef
+  ) {
+    console.error(
+      `[web env] Refusing Cloudflare deploy because apps/web/.env.local defines ${presentKeys.join(', ')}${projectLabel}.`
+    )
+    console.error(
+      `[web env] ALLOW_LOCAL_WEB_ENV_DEPLOY=1 may only permit a local file already locked to production project ${productionProjectRef}; it can never permit DEV.`
+    )
+    process.exit(1)
+  }
+
+  console.log(
+    `[web env] Local deploy override accepted only because apps/web/.env.local targets production project ${productionProjectRef}.`
   )
-  console.error(
-    '[web env] Next.js will inline those public values into the client bundle. Use Cloudflare/CI env vars for deploys, or rerun with ALLOW_LOCAL_WEB_ENV_DEPLOY=1 if this is intentional.'
-  )
-  process.exit(1)
 }
 
 const cloudflareDeployEnv = Boolean(

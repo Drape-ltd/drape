@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useRouter } from 'next/navigation'
 import { registerWebPushSubscription } from '../lib/web-push-client'
 
 const OPS_WEB_PUSH_SAVED_KEY = 'drapeon:ops:web-push-saved'
@@ -62,10 +63,6 @@ function forgetOpsWebPushSaved() {
   }
 }
 
-function initialWebPushStatus(): WebPushStatus {
-  return currentPermission() === 'granted' && hasSavedOpsWebPush() ? 'saved' : 'idle'
-}
-
 function issueCountCopy(openCount: number, criticalCount: number, latestTitle?: string | null) {
   return [
     `Watching ${openCount} active issue${openCount === 1 ? '' : 's'}`,
@@ -80,6 +77,7 @@ export function OpsPulseAlerts({
   initialLatestTitle,
   workflowHref,
 }: OpsPulseAlertsProps): ReactElement {
+  const router = useRouter()
   const initialFingerprint = useMemo(
     () => `${initialOpenCount}:${initialCriticalCount}:${initialLatestKey}`,
     [initialCriticalCount, initialLatestKey, initialOpenCount],
@@ -87,12 +85,24 @@ export function OpsPulseAlerts({
   const [openCount, setOpenCount] = useState(initialOpenCount)
   const [criticalCount, setCriticalCount] = useState(initialCriticalCount)
   const [status, setStatus] = useState(() => issueCountCopy(initialOpenCount, initialCriticalCount, initialLatestTitle))
-  const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() => currentPermission())
-  const [webPushStatus, setWebPushStatus] = useState<WebPushStatus>(() => initialWebPushStatus())
+  const [browserReady, setBrowserReady] = useState(false)
+  const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>('unsupported')
+  const [webPushStatus, setWebPushStatus] = useState<WebPushStatus>('idle')
   const initializedFromServerRef = useRef(Boolean(initialFingerprint))
   const originalTitleRef = useRef<string | null>(null)
   const webPushSaveAttemptedRef = useRef(false)
 
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextPermission = currentPermission()
+      setPermission(nextPermission)
+      setWebPushStatus(nextPermission === 'granted' && hasSavedOpsWebPush() ? 'saved' : 'idle')
+      setBrowserReady(true)
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     if (!window.sessionStorage.getItem('drapeon:ops:pulse:fingerprint') && initialFingerprint) {
@@ -163,8 +173,8 @@ export function OpsPulseAlerts({
         }
         if (changed) {
           window.sessionStorage.setItem('drapeon:ops:pulse:fingerprint', nextFingerprint)
-          setStatus('Ops issue state changed. Refreshing the dashboard...')
-          reloadTimer = window.setTimeout(() => window.location.reload(), 1400)
+          setStatus('Ops issue state changed. Updating the dashboard...')
+          reloadTimer = window.setTimeout(() => router.refresh(), 400)
         }
       } catch {
         if (active) setStatus('Live Ops pulse is temporarily offline. The dashboard still shows the last loaded state.')
@@ -179,7 +189,7 @@ export function OpsPulseAlerts({
       window.clearInterval(interval)
       if (reloadTimer) window.clearTimeout(reloadTimer)
     }
-  }, [initialFingerprint, workflowHref])
+  }, [initialFingerprint, router, workflowHref])
 
   useEffect(() => {
     if (typeof document === 'undefined') return
@@ -238,9 +248,8 @@ export function OpsPulseAlerts({
   }, [])
 
   useEffect(() => {
-    const nextPermission = currentPermission()
-
-    if (nextPermission !== 'granted' || webPushSaveAttemptedRef.current) return
+    if (!browserReady) return
+    if (permission !== 'granted' || webPushSaveAttemptedRef.current) return
     webPushSaveAttemptedRef.current = true
 
     const timer = window.setTimeout(() => {
@@ -253,7 +262,7 @@ export function OpsPulseAlerts({
     }, 0)
 
     return () => window.clearTimeout(timer)
-  }, [saveClosedBrowserAlerts])
+  }, [browserReady, permission, saveClosedBrowserAlerts])
 
   async function enableAlerts() {
     if (!('Notification' in window)) {
@@ -270,6 +279,7 @@ export function OpsPulseAlerts({
   }
 
   const buttonCopy = (() => {
+    if (!browserReady) return 'Checking desktop alerts...'
     if (webPushStatus === 'saving') return 'Saving alerts...'
     if (webPushStatus === 'saved') return 'Closed-browser alerts on'
     if (webPushStatus === 'unavailable') return 'Web push not configured'
@@ -280,6 +290,7 @@ export function OpsPulseAlerts({
     return 'Enable desktop alerts'
   })()
   const buttonDisabled =
+    !browserReady ||
     webPushStatus === 'saving' ||
     webPushStatus === 'saved' ||
     webPushStatus === 'unavailable' ||

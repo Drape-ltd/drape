@@ -18,6 +18,7 @@ import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { Button, FeatureStateCard } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 
 type NotifItem = {
@@ -379,9 +380,13 @@ export default function NotificationsScreen() {
                   </View>
                   <Text style={styles.metaLine} numberOfLines={1}>{metaParts}</Text>
                   {item.kind === 'message' && item.messagePreview ? (
-                    <Text style={styles.note} numberOfLines={2}>{item.messagePreview}</Text>
+                    <Text style={styles.note} numberOfLines={2}>
+                      {formatEmbeddedDateTimes(item.messagePreview)}
+                    </Text>
                   ) : item.note ? (
-                    <Text style={styles.note} numberOfLines={2}>{item.note}</Text>
+                    <Text style={styles.note} numberOfLines={2}>
+                      {formatEmbeddedDateTimes(item.note)}
+                    </Text>
                   ) : null}
                 </View>
               </TouchableOpacity>

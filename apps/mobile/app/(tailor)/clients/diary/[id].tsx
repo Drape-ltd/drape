@@ -17,6 +17,7 @@ import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/dat
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { sharePassportInvite } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
@@ -218,6 +219,8 @@ export default function DiaryEntryScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
   }
+
+  useContextualBackHandler(goBack)
 
   function toggleMeasurementModule(moduleKey: DiaryMeasurementModuleKey) {
     setVisibleMeasurementModules((previous) =>

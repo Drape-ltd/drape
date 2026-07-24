@@ -18,6 +18,7 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { appendToHistory, goBackOrReturnToIfNeeded, pickSafeReturnTo, sanitizeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   isMeasurementSource,
   isMeasurementMetadataKey,
@@ -1287,6 +1288,8 @@ export default function MeasurementsScreen() {
     if (editingMeasurements && step > 0) setStep(step - 1)
     else goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
+
+  useContextualBackHandler(back)
 
   const sourceLabel = MEASUREMENT_SOURCE_OPTIONS.find((option) => option.value === measurementSource)?.label
     ?? MEASUREMENT_SOURCE_LABELS[measurementSource]

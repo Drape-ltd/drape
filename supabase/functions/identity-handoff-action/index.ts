@@ -6,12 +6,13 @@ import { audit, log } from '../_shared/logger.ts'
 import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { sendSmsDirect } from '../_shared/sms.ts'
 import { parseBody, z } from '../_shared/validate.ts'
+import { TAILOR_TRUST_VIDEO_CHALLENGES } from '../../../packages/shared/src/identity-trust.ts'
 
 const FN = 'identity-handoff-action'
 const RESEND_API = 'https://api.resend.com/emails'
 const TOKEN_TTL_MS = 15 * 60 * 1000
 const SIGNED_UPLOAD_EXPIRES_SECONDS = 10 * 60
-const ID_BUCKET = 'id-documents'
+const TRUST_VIDEO_BUCKET = 'trust-verification'
 const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEMENT') === 'true'
 
 declare const EdgeRuntime: {
@@ -35,6 +36,7 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('create-upload-url'),
     token: z.string().trim().min(32).max(256),
+    contentType: z.enum(['video/mp4', 'video/quicktime', 'video/webm']),
   }),
   z.object({
     action: z.literal('submit'),
@@ -53,6 +55,8 @@ type HandoffRow = {
   status: 'CREATED' | 'OPENED' | 'CAPTURED' | 'SUBMITTED' | 'EXPIRED' | 'CANCELLED'
   expires_at: string
   storage_path?: string | null
+  challenge_id?: string | null
+  challenge_text?: string | null
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -154,12 +158,12 @@ async function sendHandoffEmail(input: { to: string; url: string }) {
     body: JSON.stringify({
       from: getResendFrom(),
       to: [input.to],
-      subject: 'Complete your Drapeon identity selfie',
+      subject: 'Complete your Drapeon trust video',
       html: `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">Verify identity on your phone</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Open this secure link on your smartphone and take a live selfie while holding your physical ID beside your face.</p>
-  <a href="${escapeHtml(input.url)}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">Open identity handoff</a>
+  <h1 style="font-size:24px;margin:0 0 12px">Record your trust video on your phone</h1>
+  <p style="line-height:1.6;margin:0 0 16px">Open this secure link on your smartphone, keep your face visible, and record the private phrase shown on screen. Drapeon does not ask for a government ID.</p>
+  <a href="${escapeHtml(input.url)}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">Open trust video</a>
   <p style="line-height:1.6;color:#6b7280;margin-top:20px">This link expires in 15 minutes and only works for this verification session.</p>
 </div>`,
     }),
@@ -173,13 +177,13 @@ async function sendHandoffEmail(input: { to: string; url: string }) {
 
 function assertActive(row: HandoffRow) {
   if (new Date(row.expires_at).getTime() <= Date.now()) {
-    throw new Error('Identity handoff session has expired. Start a new verification session.')
+    throw new Error('Verification handoff session has expired. Start a new verification session.')
   }
   if (row.status === 'SUBMITTED') {
-    throw new Error('Identity handoff session was already submitted.')
+    throw new Error('Verification handoff session was already submitted.')
   }
   if (row.status === 'EXPIRED' || row.status === 'CANCELLED') {
-    throw new Error('Identity handoff session is no longer active.')
+    throw new Error('Verification handoff session is no longer active.')
   }
 }
 
@@ -187,15 +191,15 @@ async function getHandoffByToken(supabase: any, token: string) {
   const tokenHash = await sha256Base64Url(token)
   const { data, error } = await supabase
     .from('identity_verification_handoffs')
-    .select('id, tailor_user_id, status, expires_at, storage_path')
+    .select('id, tailor_user_id, status, expires_at, storage_path, challenge_id, challenge_text')
     .eq('token_hash', tokenHash)
     .maybeSingle()
 
   if (error) {
     log('error', FN, 'handoff.lookup_failed', { error: error.message })
-    throw new Error('Identity handoff lookup failed. Try again.')
+    throw new Error('Verification handoff lookup failed. Try again.')
   }
-  if (!data) throw new Error('Identity handoff session was not found.')
+  if (!data) throw new Error('Verification handoff session was not found.')
 
   const row = data as HandoffRow
   assertActive(row)
@@ -211,8 +215,18 @@ async function expireIfNeeded(supabase: any, row: HandoffRow) {
   return true
 }
 
-function selfiePath(userId: string) {
-  return `id-verification/${userId}/selfie_${Date.now()}.jpg`
+function videoExtension(contentType: 'video/mp4' | 'video/quicktime' | 'video/webm') {
+  if (contentType === 'video/quicktime') return 'mov'
+  if (contentType === 'video/webm') return 'webm'
+  return 'mp4'
+}
+
+function challengeVideoPath(
+  userId: string,
+  challengeId: string,
+  contentType: 'video/mp4' | 'video/quicktime' | 'video/webm',
+) {
+  return `verification-video/${userId}/challenge_${challengeId}_${Date.now()}.${videoExtension(contentType)}`
 }
 
 function splitStoragePath(path: string) {
@@ -227,7 +241,7 @@ async function ensureStorageObjectExists(supabase: any, path: string) {
   const { folder, filename } = splitStoragePath(path)
   if (!folder || !filename) return false
   const { data, error } = await supabase.storage
-    .from(ID_BUCKET)
+    .from(TRUST_VIDEO_BUCKET)
     .list(folder, { search: filename, limit: 1 })
   if (error) {
     log('warn', FN, 'storage.lookup_failed', { path, error: error.message })
@@ -265,7 +279,7 @@ Deno.serve(async (req) => {
     if (!allowed.allowed) return rateLimitExceededResponse(cors, allowed.retryAfter)
 
     if (body.action === 'create') {
-      if (!caller?.id) return jsonResponse({ error: 'Sign in before starting identity verification.' }, 401, cors)
+      if (!caller?.id) return jsonResponse({ error: 'Sign in before starting trust verification.' }, 401, cors)
 
       const { data: profile, error: profileError } = await supabase
         .from('tailor_profiles')
@@ -275,10 +289,10 @@ Deno.serve(async (req) => {
 
       if (profileError) throw new Error('Could not load your tailor profile.')
       if (!profile?.id) {
-        return jsonResponse({ error: 'Complete your tailor profile before identity verification.' }, 409, cors)
+        return jsonResponse({ error: 'Complete your tailor profile before trust verification.' }, 409, cors)
       }
       if (['PENDING', 'VERIFIED', 'APPROVED'].includes(String(profile.id_verification_status ?? ''))) {
-        return jsonResponse({ error: 'Identity verification is already pending or approved.' }, 409, cors)
+        return jsonResponse({ error: 'Trust verification is already pending or approved.' }, 409, cors)
       }
 
       await supabase
@@ -290,6 +304,11 @@ Deno.serve(async (req) => {
       const token = createRawToken()
       const tokenHash = await sha256Base64Url(token)
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS).toISOString()
+      const randomBytes = new Uint32Array(1)
+      crypto.getRandomValues(randomBytes)
+      const challenge = TAILOR_TRUST_VIDEO_CHALLENGES[
+        randomBytes[0] % TAILOR_TRUST_VIDEO_CHALLENGES.length
+      ] ?? TAILOR_TRUST_VIDEO_CHALLENGES[0]
       const { data, error } = await supabase
         .from('identity_verification_handoffs')
         .insert({
@@ -298,12 +317,20 @@ Deno.serve(async (req) => {
           status: 'CREATED',
           channel: 'QR',
           expires_at: expiresAt,
-          metadata: { created_ip: ip, user_agent: req.headers.get('user-agent') ?? null },
+          challenge_id: challenge.id,
+          challenge_text: challenge.text,
+          metadata: {
+            created_ip: ip,
+            user_agent: req.headers.get('user-agent') ?? null,
+            evidence_type: 'CHALLENGE_VIDEO',
+            government_id_collected: false,
+            automated_biometrics: false,
+          },
         })
         .select('id')
         .single()
 
-      if (error) throw new Error('Could not start identity verification. Try again.')
+      if (error) throw new Error('Could not start trust verification. Try again.')
 
       await audit(supabase, {
         event: 'identity_handoff.created',
@@ -319,11 +346,13 @@ Deno.serve(async (req) => {
         path: handoffPath(token),
         url: handoffUrl(token),
         expiresAt,
+        challengeId: challenge.id,
+        challengeText: challenge.text,
       }, 200, cors)
     }
 
     if (body.action === 'send-link') {
-      if (!caller?.id) return jsonResponse({ error: 'Sign in before sending the identity link.' }, 401, cors)
+      if (!caller?.id) return jsonResponse({ error: 'Sign in before sending the trust video link.' }, 401, cors)
       const row = await getHandoffByToken(supabase, body.token)
       if (row.tailor_user_id !== caller.id) return jsonResponse({ error: 'This handoff does not belong to your account.' }, 403, cors)
 
@@ -336,7 +365,7 @@ Deno.serve(async (req) => {
       } else {
         const phone = normalizePhone(body.requestedDelivery)
         if (!phone) return jsonResponse({ error: 'Enter a valid phone number with country code.' }, 400, cors)
-        await sendSmsDirect(phone, `Drapeon identity check: open ${url} on your phone. The link expires in 15 minutes.`)
+        await sendSmsDirect(phone, `Drapeon trust video: open ${url} on your phone. The link expires in 15 minutes.`)
       }
 
       await supabase
@@ -348,12 +377,12 @@ Deno.serve(async (req) => {
         })
         .eq('id', row.id)
 
-      return jsonResponse({ ok: true, message: 'Identity handoff link sent.' }, 200, cors)
+      return jsonResponse({ ok: true, message: 'Trust video link sent.' }, 200, cors)
     }
 
     const row = await getHandoffByToken(supabase, body.token)
     if (await expireIfNeeded(supabase, row)) {
-      return jsonResponse({ error: 'Identity handoff session has expired. Start a new verification session.' }, 410, cors)
+      return jsonResponse({ error: 'Verification handoff session has expired. Start a new verification session.' }, 410, cors)
     }
 
     if (body.action === 'resolve-token') {
@@ -371,16 +400,21 @@ Deno.serve(async (req) => {
         handoffId: row.id,
         status: row.status === 'CREATED' ? 'OPENED' : row.status,
         expiresAt: row.expires_at,
+        challengeId: row.challenge_id ?? null,
+        challengeText: row.challenge_text ?? null,
       }, 200, cors)
     }
 
     if (body.action === 'create-upload-url') {
       if (!['CREATED', 'OPENED', 'CAPTURED'].includes(row.status)) {
-        return jsonResponse({ error: 'Open the identity handoff before capturing your selfie.' }, 409, cors)
+        return jsonResponse({ error: 'Open the verification handoff before recording your video.' }, 409, cors)
       }
-      const path = selfiePath(row.tailor_user_id)
+      if (!row.challenge_id || !row.challenge_text) {
+        return jsonResponse({ error: 'Verification challenge is missing. Start a new session.' }, 409, cors)
+      }
+      const path = challengeVideoPath(row.tailor_user_id, row.challenge_id, body.contentType)
       const { data, error } = await supabase.storage
-        .from(ID_BUCKET)
+        .from(TRUST_VIDEO_BUCKET)
         .createSignedUploadUrl(path)
       if (error || !data?.signedUrl || !data?.path || !data?.token) {
         log('error', FN, 'storage.signed_upload_failed', { handoff_id: row.id, error: error?.message })
@@ -392,10 +426,11 @@ Deno.serve(async (req) => {
           status: 'CAPTURED',
           opened_at: row.status === 'CREATED' ? new Date().toISOString() : undefined,
           storage_path: path,
+          media_content_type: body.contentType,
         })
         .eq('id', row.id)
       return jsonResponse({
-        bucket: ID_BUCKET,
+        bucket: TRUST_VIDEO_BUCKET,
         path,
         signedUrl: data.signedUrl,
         uploadToken: data.token,
@@ -412,20 +447,20 @@ Deno.serve(async (req) => {
       if (IDENTITY_RETENTION_ENFORCEMENT && !hasVersionedConsent) {
         return jsonResponse({
           code: 'IDENTITY_CONSENT_REQUIRED',
-          error: 'Review and accept the identity verification consent before submitting.',
+          error: 'Review and accept the trust verification consent before submitting.',
         }, 400, cors)
       }
 
-      const expectedPrefix = `id-verification/${row.tailor_user_id}/selfie_`
-      if (!body.storagePath.startsWith(expectedPrefix) || !/\.jpe?g$/iu.test(body.storagePath)) {
-        return jsonResponse({ error: 'Invalid identity selfie upload path.' }, 400, cors)
+      const expectedPrefix = `verification-video/${row.tailor_user_id}/challenge_${row.challenge_id}_`
+      if (!body.storagePath.startsWith(expectedPrefix) || !/\.(mp4|mov|webm)$/iu.test(body.storagePath)) {
+        return jsonResponse({ error: 'Invalid trust verification video path.' }, 400, cors)
       }
       if (row.storage_path && row.storage_path !== body.storagePath) {
-        return jsonResponse({ error: 'Identity selfie path does not match this handoff session.' }, 400, cors)
+        return jsonResponse({ error: 'Trust video path does not match this handoff session.' }, 400, cors)
       }
 
       const exists = await ensureStorageObjectExists(supabase, body.storagePath)
-      if (!exists) return jsonResponse({ error: 'Identity selfie upload was not found. Capture and upload again.' }, 409, cors)
+      if (!exists) return jsonResponse({ error: 'Trust video upload was not found. Record and upload again.' }, 409, cors)
 
       const submissionRpc = hasVersionedConsent
         ? 'submit_identity_verification_handoff_with_consent'
@@ -457,7 +492,7 @@ Deno.serve(async (req) => {
       }
 
       await audit(supabase, {
-        event: 'identity_handoff.submitted',
+        event: 'trust_video_handoff.submitted',
         actor_id: row.tailor_user_id,
         actor_role: 'TAILOR',
         severity: 'info',
@@ -466,6 +501,8 @@ Deno.serve(async (req) => {
           storage_path: body.storagePath,
           consent_version: hasVersionedConsent ? body.consentVersion : null,
           consent_source: hasVersionedConsent ? body.consentSource : null,
+          challenge_id: row.challenge_id,
+          evidence_type: 'CHALLENGE_VIDEO',
         },
       })
 
@@ -490,7 +527,7 @@ Deno.serve(async (req) => {
         ok: true,
         status: 'PENDING',
         profileId: result?.profile_id ?? null,
-        message: 'Identity selfie submitted for review.',
+        message: 'Trust video submitted for review.',
       }, 200, cors)
     }
 
@@ -500,7 +537,7 @@ Deno.serve(async (req) => {
       error: error instanceof Error ? error.message : String(error),
     })
     return jsonResponse({
-      error: error instanceof Error ? error.message : 'Identity handoff could not finish right now.',
+      error: error instanceof Error ? error.message : 'Verification handoff could not finish right now.',
     }, 500, cors)
   }
 })

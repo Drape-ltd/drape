@@ -28,7 +28,7 @@ const COMPLETE_SETUP: TailorSetupProgressInput = {
 }
 
 describe('validateTailorSetupIdDocumentUrl', () => {
-  it('requires an uploaded ID document before setup can submit', () => {
+  it('requires an uploaded trust video before setup can submit', () => {
     expect(validateTailorSetupIdDocumentUrl(null)).toBe(
       TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE,
     )
@@ -37,7 +37,7 @@ describe('validateTailorSetupIdDocumentUrl', () => {
     )
   })
 
-  it('rejects invalid ID document URLs with the customer-facing setup message', () => {
+  it('rejects invalid trust evidence URLs with the customer-facing setup message', () => {
     expect(validateTailorSetupIdDocumentUrl('not-a-url')).toBe(
       TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE,
     )
@@ -46,11 +46,19 @@ describe('validateTailorSetupIdDocumentUrl', () => {
     )
   })
 
-  it('accepts a stored ID document URL', () => {
-    expect(validateTailorSetupIdDocumentUrl('https://storage.example/id.jpg')).toBeNull()
+  it('accepts a stored trust video URL', () => {
+    expect(validateTailorSetupIdDocumentUrl('https://storage.example/challenge.mp4')).toBeNull()
   })
 
-  it('accepts a private ID document storage path', () => {
+  it('accepts a private challenge-video storage path', () => {
+    expect(
+      validateTailorSetupIdDocumentUrl(
+        'verification-video/99cea1b0-2b94-4aa7-a574-863ac10e80ac/challenge_prompt-7_1778301866356.mp4',
+      ),
+    ).toBeNull()
+  })
+
+  it('keeps legacy evidence paths valid for existing accounts', () => {
     expect(
       validateTailorSetupIdDocumentUrl(
         'id-verification/99cea1b0-2b94-4aa7-a574-863ac10e80ac/1778301866356.jpg',

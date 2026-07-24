@@ -2,7 +2,7 @@ export type OpsVerificationEvidenceChecklistKey =
   | 'public_avatar'
   | 'portfolio_media'
   | 'proof_item'
-  | 'live_id'
+  | 'trust_video'
 
 export type OpsVerificationEvidenceChecklistItem = {
   key: OpsVerificationEvidenceChecklistKey
@@ -27,7 +27,7 @@ export type OpsVerificationProofItemEvidence = {
 
 export type OpsVerificationEvidenceInput = {
   avatarUrl?: string | null
-  idDocumentUrl?: string | null
+  trustVideoUrl?: string | null
   portfolioPhotoUrls?: string[] | null
   portfolioVideoUrls?: string[] | null
   proofItems?: OpsVerificationProofItemEvidence[] | null
@@ -93,10 +93,10 @@ export function buildOpsVerificationEvidenceSummary(
       ready: proofItems.length > 0 && proofItemMediaCount > 0,
     },
     {
-      key: 'live_id',
-      label: 'Live selfie + ID',
-      detail: 'Private identity evidence has a signed review link.',
-      ready: hasText(input.idDocumentUrl),
+      key: 'trust_video',
+      label: 'Challenge video',
+      detail: 'Private marketplace trust evidence has a signed review link.',
+      ready: hasText(input.trustVideoUrl),
     },
   ]
 

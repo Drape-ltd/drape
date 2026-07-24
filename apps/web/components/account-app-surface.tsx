@@ -456,7 +456,9 @@ type TailorProfile = {
   avatar_url: string | null
   profile_completed?: boolean | null
   id_verification_status?: string | null
-  id_selfie_document_url?: string | null
+  trust_verification_video_path?: string | null
+  trust_verification_challenge_id?: string | null
+  trust_verification_challenge_text?: string | null
   id_verification_submitted_at?: string | null
   id_verification_rejection_reason?: string | null
   id_verification_rejected_at?: string | null
@@ -2361,7 +2363,7 @@ const publicTailorProfileSelect =
   'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, accepts_custom_orders_now, shop_paused, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, portfolio_video_urls, avatar_url'
 
 const ownTailorProfileSelect =
-  `${publicTailorProfileSelect}, profile_completed, id_verification_status, id_selfie_document_url, id_verification_submitted_at, id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
+  `${publicTailorProfileSelect}, profile_completed, id_verification_status, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, id_verification_submitted_at, id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
 
 const sellerItemSelect =
   'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location, availability, shop_paused, is_live)'
@@ -16452,7 +16454,7 @@ function identityRejectionMessage(profile: Pick<TailorProfile, 'id_verification_
     readStringField(metadata, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
     readStringField(nested, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note'])
 
-  return safeUserText(reason, 'Identity review needs a clearer retake. Capture a sharp live selfie with your face and physical ID fully visible.')
+  return safeUserText(reason, 'Trust review needs a clearer retake. Record the challenge again with your face, voice, and full private phrase clearly captured.')
 }
 
 type IdentityHandoffSession = {
@@ -16461,6 +16463,8 @@ type IdentityHandoffSession = {
   path?: string
   url?: string
   expiresAt?: string
+  challengeId?: string
+  challengeText?: string
 }
 
 function IdentityHandoffCard({
@@ -16486,10 +16490,10 @@ function IdentityHandoffCard({
   const profileImageRejected = isInvalidProfileImageRejected(profile)
   const rejectionMessage = rejected ? identityRejectionMessage(profile) : null
   const handoffStatusText = handoffState === 'opened'
-    ? '📱 Phone connected. Capturing selfie on your device...'
+    ? 'Phone connected. Recording the private challenge on your device...'
     : handoffState === 'submitted'
-      ? '🎉 Identity Submitted for Review! Our team completes audits within 24 hours.'
-      : '🔒 Waiting for secure mobile connection...'
+      ? 'Trust video submitted for review. Our team completes reviews within 24 hours.'
+      : 'Waiting for a secure mobile connection...'
   const payoutReady = isPayoutReady(profile)
 
   const checkLatestStatus = useCallback(async () => {
@@ -16502,7 +16506,7 @@ function IdentityHandoffCard({
       .maybeSingle()
     if (data?.id_verification_status === 'PENDING') {
       setHandoffState('submitted')
-      setSuccess('Identity selfie submitted. Review is now pending.')
+      setSuccess('Trust video submitted. Review is now pending.')
       onRefresh()
     }
   }, [onRefresh, userId])
@@ -16524,7 +16528,7 @@ function IdentityHandoffCard({
           const nextStatus = String((payload.new as { id_verification_status?: string | null })?.id_verification_status ?? '')
           if (nextStatus === 'PENDING') {
             setHandoffState('submitted')
-            setSuccess('Identity selfie submitted. Review is now pending.')
+            setSuccess('Trust video submitted. Review is now pending.')
             onRefresh()
           }
         },
@@ -16582,9 +16586,9 @@ function IdentityHandoffCard({
       })
       setSession(result)
       setHandoffState('waiting')
-      setSuccess('Scan or send the secure phone link to complete live capture.')
+      setSuccess('Scan or send the secure phone link to record the private challenge.')
     } catch (handoffError) {
-      setError(friendlyActionError(handoffError, 'Identity handoff could not start.'))
+      setError(friendlyActionError(handoffError, 'Trust-video handoff could not start.'))
     } finally {
       setBusy(null)
     }
@@ -16603,9 +16607,9 @@ function IdentityHandoffCard({
         channel,
         requestedDelivery: delivery,
       })
-      setSuccess('Identity handoff link sent.')
+      setSuccess('Trust-video handoff link sent.')
     } catch (handoffError) {
-      setError(friendlyActionError(handoffError, 'Identity handoff link could not send.'))
+      setError(friendlyActionError(handoffError, 'Trust-video handoff link could not send.'))
     } finally {
       setBusy(null)
     }
@@ -16614,10 +16618,10 @@ function IdentityHandoffCard({
   if (profileImageRejected) {
     return (
       <section className="rounded-[8px] border border-rust/20 bg-rust/8 p-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust">Identity verification</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust">Marketplace trust review</p>
         <h3 className="mt-2 text-xl font-semibold text-ink">Profile photo needs replacement</h3>
         <p className="mt-2 text-sm leading-6 text-rust/90">{PROFILE_IMAGE_REJECTION_MESSAGE}</p>
-        <p className="mt-2 text-sm leading-6 text-ink/64">Your live ID selfie remains on file. Upload a clearer avatar below, then submit setup again so ops can re-review the public photo.</p>
+        <p className="mt-2 text-sm leading-6 text-ink/64">Your private challenge video remains on file. Upload a clearer avatar below, then submit setup again so ops can re-review the public photo.</p>
         <a href="#profile-photo" className="mt-4 inline-flex rounded-full bg-rust px-4 py-2 text-sm font-semibold text-white">Upload replacement photo</a>
       </section>
     )
@@ -16626,10 +16630,10 @@ function IdentityHandoffCard({
   if (verified || pending) {
     return (
       <section className={`rounded-[8px] border p-5 shadow-sm transition-all duration-500 ${verified ? 'border-needle/14 bg-needle/6' : 'border-emerald-400/25 bg-emerald-400/10'}`}>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Identity verification</p>
-        <h3 className="mt-2 text-xl font-semibold text-ink">{verified ? 'Identity verified' : '🎉 Identity Submitted for Review!'}</h3>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Marketplace trust review</p>
+        <h3 className="mt-2 text-xl font-semibold text-ink">{verified ? 'Trust review approved' : 'Trust video submitted for review'}</h3>
         <p className="mt-2 text-sm leading-6 text-ink/64">
-          {verified ? 'Your live identity selfie has passed review.' : 'Our team completes audits within 24 hours. Keep your profile details accurate while Drapeon Trust reviews it.'}
+          {verified ? 'Your private challenge video and public profile have passed review.' : 'Our team completes reviews within 24 hours. Keep your profile details accurate while Drapeon Trust reviews them.'}
         </p>
       </section>
     )
@@ -16639,21 +16643,27 @@ function IdentityHandoffCard({
     <section className="rounded-[8px] border border-needle/12 bg-white/84 p-5 shadow-sm">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-xl">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Verify identity via smartphone</p>
-          <h3 className="mt-2 text-2xl text-ink">Capture Identity Selfie for Review.</h3>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Record trust video via smartphone</p>
+          <h3 className="mt-2 text-2xl text-ink">Record a Private Challenge Video.</h3>
           <p className="mt-2 text-sm leading-6 text-ink/64">
-            Use your phone camera to take one live selfie while holding your physical passport, licence, or national ID beside your face.
+            Keep your face visible and say the private challenge phrase shown on your phone. Drapeon does not collect a government ID or create a biometric template.
           </p>
+          {session?.challengeText ? (
+            <div className="mt-4 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle/70">Your private challenge</p>
+              <p className="mt-2 text-sm leading-6 text-ink/72">{session.challengeText}</p>
+            </div>
+          ) : null}
           {!payoutReady ? (
             <div className="mt-4 rounded-[8px] border border-amber-300/35 bg-amber-400/8 p-4">
               <p className="text-sm font-semibold text-ink">Payout setup comes next</p>
-              <p className="mt-1.5 text-sm leading-6 text-ink/62">Identity review can be submitted now. Paid quotes, live shop publishing, and earnings release stay paused until payout is verified.</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/62">Trust review can be submitted now. Paid quotes, live shop publishing, and earnings release stay paused until your payout provider verifies payout readiness.</p>
               <Link href="/account/payout" className="mt-3 inline-flex text-sm font-semibold text-needle">Review payout setup →</Link>
             </div>
           ) : null}
           {rejected ? (
             <div className="mt-4 rounded-[8px] border border-rust/20 bg-rust/8 p-4">
-              <p className="text-sm font-semibold text-rust">Identity retake needed</p>
+              <p className="text-sm font-semibold text-rust">Challenge-video retake needed</p>
               <p className="mt-1.5 text-sm leading-6 text-rust/90">{rejectionMessage}</p>
             </div>
           ) : null}
@@ -16663,13 +16673,13 @@ function IdentityHandoffCard({
         <div className="w-full max-w-sm rounded-[8px] border border-ink/8 bg-bone/70 p-4 transition-all duration-500">
           {handoffState === 'submitted' ? (
             <div className="mb-4 translate-y-0 rounded-[8px] border border-emerald-400/25 bg-emerald-400/10 p-4 opacity-100 transition-all duration-500">
-              <p className="text-sm font-semibold text-needle">🎉 Identity Submitted for Review!</p>
-              <p className="mt-1.5 text-sm leading-6 text-ink/64">Our team completes audits within 24 hours.</p>
+              <p className="text-sm font-semibold text-needle">Trust video submitted for review</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/64">Our team completes reviews within 24 hours.</p>
             </div>
           ) : null}
           {handoffUrl ? (
             <div className={`grid justify-items-center gap-4 transition-all duration-500 ${handoffState === 'submitted' ? 'max-h-0 -translate-y-2 overflow-hidden opacity-0' : 'max-h-[560px] translate-y-0 opacity-100'}`}>
-              <div className="rounded-[8px] border border-ink/8 bg-white p-3 shadow-inner" aria-label="Identity handoff QR code">
+              <div className="rounded-[8px] border border-ink/8 bg-white p-3 shadow-inner" aria-label="Trust-video handoff QR code">
                 <QRCodeSVG value={handoffUrl} size={180} includeMargin={true} />
               </div>
               <div className="flex items-center gap-2 rounded-full border border-ink/8 bg-white/80 px-3 py-2 text-xs font-semibold text-ink/68">
@@ -16698,7 +16708,7 @@ function IdentityHandoffCard({
             </div>
           ) : (
             <button type="button" onClick={() => { void startSession() }} disabled={busy === 'create'} className="flex w-full justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:bg-ink/20">
-              {busy === 'create' ? 'Starting...' : 'Start smartphone verification'}
+              {busy === 'create' ? 'Starting...' : 'Start private trust video'}
             </button>
           )}
         </div>
@@ -17434,7 +17444,7 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
     ['How do I change my availability?', 'Go to Profile, open Selling setup, and use "Edit setup on web." Availability can be set to Open, Limited, or Fully booked, and changes affect how you appear in customer search.'],
     ['How do I mark an order as dispatched?', 'Open the order in Orders, scroll to the Actions section, and select the dispatch stage. You will need to enter a fulfillment method and optionally a tracking number. Collection and self-delivery orders use different stage flows.'],
     ['How do I handle a scope change from a customer?', 'Customers can request scope changes on active briefs. Go to the order in Orders — an action card will appear asking you to approve or decline the change. You can adjust the price and timeline before accepting.'],
-    ['Why is my account or listing restricted?', 'Restrictions are triggered by unresolved disputes, payment failures, or identity verification requirements. Open a support request using "Account or security issue" below and ops will review within 1 business day.'],
+    ['Why is my account or listing restricted?', 'Restrictions are triggered by unresolved disputes, payment failures, or trust review requirements. Open a support request using "Account or security issue" below and ops will review within 1 business day.'],
   ]
 
   const customerFaqItems: Array<[string, string]> = [
@@ -17443,7 +17453,7 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
     ['How do I change my delivery address?', 'Delivery address changes must happen before a tailor marks the order dispatched. Open the order in Messages and ask the tailor directly, or open a support request so ops can update it.'],
     ['My item arrived with a fit issue — what do I do?', 'Message the tailor through the order thread first. Most fit issues are resolved with a free alteration. If the tailor is unresponsive, open a support request with "Fit or alteration issue" and attach the order. Drapeon ops will step in.'],
     ['How do I set up payout as a tailor?', 'Go to Payout in the account navigation. Stripe Connect handles GBP, USD, EUR, and CAD. Paystack handles NGN, GHS, and KES. Manual bank entry requires ops verification — email payouts@drapeon.co if your bank is not listed.'],
-    ['Why is my account restricted?', 'Accounts can be restricted for unresolved disputes, payment failures, or identity verification requirements. Open a support request with "Account or security issue" and ops will review within 1 business day.'],
+    ['Why is my account restricted?', 'Accounts can be restricted for unresolved disputes, payment failures, or trust review requirements. Open a support request with "Account or security issue" and ops will review within 1 business day.'],
     ['How do I update my measurements?', 'Use Measurements on web to add or edit manual profiles and custom tape points. Drapeon Vision body scans still run in the mobile app.'],
   ]
 

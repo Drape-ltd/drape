@@ -10,11 +10,12 @@ import {
   KeyboardAvoidingView,
   Linking,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
@@ -39,7 +40,6 @@ function normalizeRoleIntent(value: unknown): RoleIntent | null {
 
 export default function SignInScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const params = useLocalSearchParams<{ intent?: string }>()
   const { signIn, signInWithGoogle, signInWithApple } = useAuth()
   const roleIntent = normalizeRoleIntent(params.intent)
@@ -77,9 +77,10 @@ export default function SignInScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(auth)/welcome')
+    router.replace('/(auth)/welcome')
   }
+
+  useContextualBackHandler(goBack)
 
   async function handleSignIn() {
     if (loading || oauthLoading) return
@@ -170,7 +171,12 @@ export default function SignInScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        >
           <AuthEntryHeader
             eyebrow="Welcome back"
             title={intentTitle}
@@ -217,6 +223,8 @@ export default function SignInScreen() {
               secureTextEntry
               textContentType="password"
               autoComplete="current-password"
+              returnKeyType="done"
+              onSubmitEditing={() => { void handleSignIn() }}
               required
               testID="password-input"
             />

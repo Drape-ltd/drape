@@ -48,6 +48,7 @@ import {
   type OpsWorkflowIssue,
 } from '../../lib/ops-data'
 import { OpsPulseAlerts } from '../../components/ops-pulse-alerts'
+import { OpsActionBridge } from '../../components/ops-action-bridge'
 import { StatusChip } from '../../components/ui/status-chip'
 
 export const dynamic = 'force-dynamic'
@@ -1459,9 +1460,9 @@ function VerificationCard({
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Profile</p>
           <DetailList
             items={[
-              { label: 'Verified legal name', value: profile.legalName ?? 'Not captured' },
               { label: 'Location', value: profile.location },
               { label: 'Specialties', value: profile.specialtyTags.length > 0 ? profile.specialtyTags.join(', ') : '—' },
+              { label: 'Challenge', value: profile.trustChallengeText ?? 'Not captured' },
             ]}
           />
         </div>
@@ -1471,14 +1472,6 @@ function VerificationCard({
             items={[
               { label: 'Payout path', value: profile.payoutProvider ? `${profile.payoutProvider} · ${profile.payoutCurrency ?? '—'}` : 'Not set up yet' },
               { label: 'Payout verified', value: profile.payoutAccountVerified ? 'Yes' : 'No' },
-              {
-                label: 'Payout name match',
-                value: <StatusChip status={profile.payoutNameMatchStatus} fallback="Not checked" />,
-              },
-              {
-                label: 'Name checked',
-                value: profile.payoutNameMatchCheckedAt ? formatDateTime(profile.payoutNameMatchCheckedAt) : 'Not checked',
-              },
               { label: 'Submitted', value: formatDateTime(profile.idVerificationSubmittedAt ?? profile.createdAt) },
               { label: 'Last updated', value: formatDateTime(profile.updatedAt) },
             ]}
@@ -1506,21 +1499,21 @@ function VerificationCard({
           ) : null}
         </div>
         <div className="rounded-[8px] border border-ink/6 bg-bone/56 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Live selfie + ID</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Private challenge video</p>
           <p className="mt-3 text-sm leading-7 text-ink/66">
-            Private evidence remains behind a signed Supabase Storage URL.
+            Private evidence remains behind a short-lived signed Supabase Storage URL. Drapeon does not collect a government ID.
           </p>
-          {profile.idDocumentUrl ? (
+          {profile.trustVideoUrl ? (
             <a
-              href={profile.idDocumentUrl}
+              href={profile.trustVideoUrl}
               target="_blank"
               rel="noreferrer"
               className="mt-3 inline-flex items-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle/90"
             >
-              Open live selfie ID
+              Open challenge video
             </a>
           ) : (
-            <p className="mt-3 text-sm font-semibold text-rust-700">Signed ID link unavailable</p>
+            <p className="mt-3 text-sm font-semibold text-rust-700">Signed challenge-video link unavailable</p>
           )}
         </div>
       </div>
@@ -1541,10 +1534,10 @@ function VerificationCard({
               defaultValue=""
               className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
             >
-              <option value="">General ID / trust issue</option>
+              <option value="">General trust-video issue</option>
               <option value="INVALID_PROFILE_IMAGE">Invalid profile image</option>
             </select>
-            <span className="text-xs leading-5 text-ink/46">Use profile-image only when the live ID is usable but the public avatar is not.</span>
+            <span className="text-xs leading-5 text-ink/46">Use profile-image only when the challenge video is usable but the public avatar is not.</span>
           </label>
           <label className="grid gap-2 text-sm text-ink/72">
             Trust note / rejection reason
@@ -2345,7 +2338,7 @@ function WorkflowIssueCard({
             <select name="rejectionCode" defaultValue="PAYOUT_DESTINATION_MISMATCH" className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40">
               <option value="PAYOUT_DESTINATION_MISMATCH">Payout destination mismatch</option>
               <option value="BUSINESS_IDENTITY_MISMATCH">Business identity mismatch</option>
-              <option value="NEEDS_LIVE_SELFIE_RETAKE">Needs live selfie retake</option>
+              <option value="NEEDS_LIVE_SELFIE_RETAKE">Needs challenge-video retake</option>
               <option value="GENERAL_TRUST_REVIEW">General trust review</option>
             </select>
           </label>
@@ -4100,7 +4093,7 @@ function renderOpsSection(
           id="verification"
           eyebrow="Verification"
           title="Pending verification stays visible even before a fuller admin system exists."
-          description="This gives ops one place to spot pending tailor profiles and open the live selfie-ID submission quickly."
+          description="This gives ops one place to spot pending tailor profiles and open the private challenge-video submission quickly."
         >
           {data.pendingVerifications.length > 0 ? (
             <div className="grid gap-5">
@@ -4347,6 +4340,7 @@ export default async function OpsPage({
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(216,90,48,0.10),transparent_26%),linear-gradient(180deg,#f7f1e8_0%,#f1eadf_100%)]">
+      <OpsActionBridge />
       <div className="mx-auto max-w-[95rem] px-5 py-6 sm:px-8 lg:px-12">
         <header className="flex items-center justify-between gap-4 rounded-[8px] border border-white/72 bg-white/82 px-5 py-3 shadow-sm backdrop-blur sm:px-6">
           <div className="flex min-w-0 items-center gap-2.5">

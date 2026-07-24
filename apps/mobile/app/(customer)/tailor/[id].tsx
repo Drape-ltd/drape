@@ -29,6 +29,7 @@ import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { hapticLight } from '@/lib/haptics'
 import { getTailorPriceMinMajor } from '@drape/shared/tailor-setup'
 import { isVideoMediaUrl } from '@drape/shared/media-policy'
@@ -253,6 +254,8 @@ export default function TailorProfileScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(customer)')
   }
+
+  useContextualBackHandler(goBack)
 
   function openPortfolio() {
     setShowPortfolioModal(true)

@@ -1,4 +1,8 @@
-import { decodeDisplayText, formatDatabaseEnumLabel } from '../src/display-text'
+import {
+  decodeDisplayText,
+  formatDatabaseEnumLabel,
+  formatEmbeddedDateTimes,
+} from '../src/display-text'
 
 describe('decodeDisplayText', () => {
   it('decodes URL-encoded copy before display', () => {
@@ -22,5 +26,20 @@ describe('formatDatabaseEnumLabel', () => {
 
   it('uses the supplied fallback when the database value is empty', () => {
     expect(formatDatabaseEnumLabel(null, 'In progress')).toBe('In progress')
+  })
+})
+
+describe('formatEmbeddedDateTimes', () => {
+  it('replaces ISO timestamps embedded in user-facing event copy', () => {
+    const result = formatEmbeddedDateTimes(
+      'Consultation requested for 2026-07-20T21:00:00.000Z.',
+    )
+
+    expect(result).not.toContain('2026-07-20T21:00:00.000Z')
+    expect(result).toContain('2026')
+  })
+
+  it('preserves ordinary text', () => {
+    expect(formatEmbeddedDateTimes('Your quote is ready.')).toBe('Your quote is ready.')
   })
 })

@@ -9,6 +9,7 @@ import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import {
   formatFitRange,
@@ -101,6 +102,8 @@ export default function SellerItemDetailScreen() {
       item?.tailorProfileId ? `/(customer)/tailor/${item.tailorProfileId}` : '/(customer)',
     )
   }
+
+  useContextualBackHandler(goBack)
 
   async function startSellerInquiry() {
     if (!user?.id || !item || startingInquiry) return

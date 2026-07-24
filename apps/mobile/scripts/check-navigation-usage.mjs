@@ -10,6 +10,10 @@ const APP_ROOT = path.resolve(__dirname, '..', 'app')
 const ROUTE_ROOTS = [path.join(APP_ROOT, '(customer)'), path.join(APP_ROOT, '(tailor)')]
 const MESSAGE =
   'Do not use raw router navigation. Use resetTo(), goBackOrReturnTo(), or appendToHistory() from @drape/mobile/lib/navigation instead.'
+const CONTEXTUAL_BACK_MESSAGE =
+  'Contextual routes must register useContextualBackHandler() so Android Back follows the same returnTo/historyChain contract as the visible Back or X control.'
+const STACK_GESTURE_MESSAGE =
+  'Nested route stacks must set gestureEnabled: false so iOS swipe cannot bypass the contextual exit contract.'
 const DYNAMIC_PARAM_NAMES = new Set([
   'clientId',
   'diaryId',
@@ -113,11 +117,33 @@ function formatDiagnostic(sourceFile, node) {
   return `${relative}:${position.line + 1}:${position.character + 1} ${MESSAGE}`
 }
 
+function formatFileDiagnostic(file, message) {
+  const relative = path.relative(path.resolve(__dirname, '..'), file)
+  return `${relative}:1:1 ${message}`
+}
+
+function isNestedRouteLayout(file) {
+  if (path.basename(file) !== '_layout.tsx') return false
+  const relativeSegments = path.relative(APP_ROOT, file).split(path.sep)
+  return relativeSegments.length > 2
+}
+
 const diagnostics = []
 
 for (const file of ROUTE_ROOTS.flatMap(walk)) {
   const sourceText = fs.readFileSync(file, 'utf8')
   const sourceFile = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+
+  if (
+    /\bgoBackOrReturnTo(?:IfNeeded)?\s*\(/u.test(sourceText) &&
+    !/\buseContextualBackHandler\s*\(/u.test(sourceText)
+  ) {
+    diagnostics.push(formatFileDiagnostic(file, CONTEXTUAL_BACK_MESSAGE))
+  }
+
+  if (isNestedRouteLayout(file) && !/gestureEnabled\s*:\s*false/u.test(sourceText)) {
+    diagnostics.push(formatFileDiagnostic(file, STACK_GESTURE_MESSAGE))
+  }
 
   function visit(node) {
     if (isRouterCall(node, 'back')) {

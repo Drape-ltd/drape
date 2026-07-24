@@ -12,7 +12,7 @@ import {
   type JobType,
 } from '../_shared/jobs.ts'
 import { log } from '../_shared/logger.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
+import { sendPushToUser, type PushPayload } from '../_shared/notify.ts'
 import { sendOrderConfirmationEmails, sendOrderEventEmail } from '../_shared/order-email.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { createOverduePayoutIssues } from '../_shared/payout-watchdog.ts'
@@ -95,6 +95,16 @@ function ensurePaymentPhase(value: string | null) {
   throw new Error('Job payload phase must be INITIAL_ORDER, FULFILLMENT, or CONSULTATION')
 }
 
+function optionalInterruptionLevel(value: unknown): PushPayload['interruptionLevel'] | undefined {
+  const level = asString(value)
+  if (!level) return undefined
+  if (level === 'timeSensitive') return 'time-sensitive'
+  if (level === 'passive' || level === 'active' || level === 'time-sensitive' || level === 'critical') {
+    return level
+  }
+  throw new Error('Job payload interruptionLevel is invalid')
+}
+
 async function processJob(supabase: SupabaseClient, job: JobRow) {
   const payload = asRecord(job.payload)
 
@@ -109,7 +119,7 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         preferenceKey: asString(notification.preferenceKey) as never,
         channelId: asString(notification.channelId) ?? undefined,
         sound: asString(notification.sound) ?? undefined,
-        interruptionLevel: asString(notification.interruptionLevel) as never,
+        interruptionLevel: optionalInterruptionLevel(notification.interruptionLevel),
       })
       if (result.status === 'ERROR') {
         throw new Error(`Push delivery failed: ${result.reason}`)

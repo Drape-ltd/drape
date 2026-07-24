@@ -18,6 +18,8 @@ type DrapeCapsuleNavProps = Parameters<ExpoTabBarRenderer>[0] & { hidden?: boole
 type TabRootTarget = Parameters<Router['replace']>[0]
 
 export const DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE = 140
+const DRAPE_CAPSULE_NAV_COMPACT_ENTER_Y = 56
+const DRAPE_CAPSULE_NAV_COMPACT_EXIT_Y = 12
 
 type DrapeCapsuleNavMotion = {
   compact: boolean
@@ -81,30 +83,28 @@ export function useDrapeCapsuleNavMotion() {
 
 export function useDrapeCapsuleNavScroll() {
   const { setCompact } = useDrapeCapsuleNavMotion()
-  const lastScrollYRef = useRef(0)
+  const compactRef = useRef(false)
 
   useFocusEffect(
     useCallback(() => {
+      compactRef.current = false
       setCompact(false)
-      lastScrollYRef.current = 0
-      return () => setCompact(false)
+      return () => {
+        compactRef.current = false
+        setCompact(false)
+      }
     }, [setCompact]),
   )
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const nextY = Math.max(0, event.nativeEvent.contentOffset.y)
-    const delta = nextY - lastScrollYRef.current
 
-    if (nextY <= 16) {
+    if (compactRef.current && nextY <= DRAPE_CAPSULE_NAV_COMPACT_EXIT_Y) {
+      compactRef.current = false
       setCompact(false)
-    } else if (delta >= 8) {
+    } else if (!compactRef.current && nextY >= DRAPE_CAPSULE_NAV_COMPACT_ENTER_Y) {
+      compactRef.current = true
       setCompact(true)
-    } else if (delta <= -8) {
-      setCompact(false)
-    }
-
-    if (Math.abs(delta) >= 2) {
-      lastScrollYRef.current = nextY
     }
   }, [setCompact])
 
@@ -131,8 +131,8 @@ export function DrapeCapsuleNav({
   }, [compact, compactProgress])
 
   const capsuleMotionStyle = useAnimatedStyle(() => ({
-    left: interpolate(compactProgress.value, [0, 1], [Spacing.xl, Spacing.xxxl]),
-    right: interpolate(compactProgress.value, [0, 1], [Spacing.xl, Spacing.xxxl]),
+    left: interpolate(compactProgress.value, [0, 1], [Spacing.xl, Spacing.xxxl + Spacing.sm]),
+    right: interpolate(compactProgress.value, [0, 1], [Spacing.xl, Spacing.xxxl + Spacing.sm]),
     height: interpolate(compactProgress.value, [0, 1], [60, 52]),
   }))
 
@@ -151,6 +151,7 @@ export function DrapeCapsuleNav({
       <Animated.View
         style={[
           styles.capsule,
+          compact && styles.capsuleCompact,
           capsuleMotionStyle,
           { bottom: bottomInset, backgroundColor: dockBackgroundColor, borderColor: Colors.lightGrey },
         ]}
@@ -220,6 +221,7 @@ export function DrapeCapsuleNav({
               onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
               style={({ pressed }) => [
                 styles.destination,
+                compact && styles.destinationCompact,
                 focused && { backgroundColor: activeBackgroundColor },
                 pressed && styles.destinationPressed,
               ]}
@@ -263,6 +265,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     ...Shadow.lg,
   },
+  capsuleCompact: {
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: Spacing.xs,
+  },
   destination: {
     flex: 1,
     minWidth: 48,
@@ -270,6 +276,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  destinationCompact: {
+    minWidth: 44,
+    height: 44,
   },
   destinationPressed: { opacity: 0.72 },
   badge: {

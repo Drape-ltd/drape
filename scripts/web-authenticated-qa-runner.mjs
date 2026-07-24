@@ -50,6 +50,8 @@ const OPS_ACTION_KINDS = [
   'bypass-review',
   'application-status',
   'verification-decision',
+  'profile-change-decision',
+  'payout-change-decision',
   'deletion-status',
   'review-visibility',
   'conversation-access',
@@ -61,6 +63,10 @@ const OPS_ACTION_KINDS = [
   'payout-block-resolution',
   'ops-issue-status',
   'manual-issue-create',
+  'ops-issue-bulk-resolve',
+  'support-thread-mark-read',
+  'payout-bulk-release',
+  'bypass-bulk-review',
 ]
 
 const OPS_ROLE_ACTION_ACCESS = {
@@ -74,6 +80,8 @@ const OPS_ROLE_ACTION_ACCESS = {
     'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
+    'ops-issue-bulk-resolve',
+    'support-thread-mark-read',
   ],
   customer_success: [
     'dispute-status',
@@ -85,26 +93,35 @@ const OPS_ROLE_ACTION_ACCESS = {
     'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
+    'ops-issue-bulk-resolve',
+    'support-thread-mark-read',
   ],
   trust: [
     'seller-item-visibility',
     'bypass-review',
     'verification-decision',
+    'profile-change-decision',
     'deletion-status',
     'review-visibility',
     'conversation-access',
     'ops-issue-status',
     'manual-issue-create',
+    'ops-issue-bulk-resolve',
+    'support-thread-mark-read',
+    'bypass-bulk-review',
   ],
   finance: [
     'order-partial-refund',
     'payout-release',
+    'payout-change-decision',
     'material-advance-release',
     'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
+    'ops-issue-bulk-resolve',
+    'payout-bulk-release',
   ],
-  engineering: ['ops-issue-status', 'manual-issue-create'],
+  engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve'],
 }
 
 const OPS_ROLES = Object.keys(OPS_ROLE_ACTION_ACCESS)
@@ -698,6 +715,7 @@ async function createDisposableQaFixtures() {
     tailorAccessToken: null,
     tailorProfileId: null,
     sellerItemId: null,
+    portfolioItemIds: [],
     orderIds: [],
     readyMadeReservations: [],
     contactBypassLogIds: [],
@@ -706,6 +724,7 @@ async function createDisposableQaFixtures() {
     opsIssueIds: [],
     materialAdvanceIds: [],
     providerPaymentIds: [],
+    verificationTailors: [],
   }
 
   try {
@@ -755,7 +774,12 @@ async function createDisposableQaFixtures() {
       delivery_fee: 1200,
       shipping_fee: 1800,
       portfolio_photo_urls: [],
-      avatar_url: null,
+      portfolio_video_urls: [],
+      avatar_url: 'https://drapeon.co/logo.png',
+      trust_verification_video_path: `verification-video/${tailorUserId}/challenge_profile-work-payments_${stamp}.mp4`,
+      trust_verification_challenge_id: 'profile-work-payments',
+      trust_verification_challenge_text: 'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
+      id_verification_method: 'CHALLENGE_VIDEO',
       id_verification_status: 'VERIFIED',
       profile_completed: true,
       updated_at: now,
@@ -764,6 +788,24 @@ async function createDisposableQaFixtures() {
     const tailorProfileId = Array.isArray(profileRows) ? profileRows[0]?.id : null
     if (!tailorProfileId) throw new Error('Disposable tailor profile was not created.')
     fixture.tailorProfileId = tailorProfileId
+
+    const portfolioRows = await insertRest('portfolio_items', {
+      tailor_profile_id: tailorProfileId,
+      image_url: 'https://drapeon.co/logo.png',
+      title: 'Web QA portfolio proof',
+      description: 'Disposable portfolio proof for trust verification QA.',
+      category: null,
+      sort_order: 0,
+    }, 'Insert disposable portfolio proof')
+    const portfolioItemId = Array.isArray(portfolioRows) ? portfolioRows[0]?.id : null
+    if (!portfolioItemId) throw new Error('Disposable portfolio proof was not created.')
+    rememberFixtureId(fixture, 'portfolioItemIds', portfolioItemId)
+    await patchRest(
+      'tailor_profiles',
+      `id=eq.${encodeURIComponent(tailorProfileId)}`,
+      { portfolio_photo_urls: ['https://drapeon.co/logo.png'] },
+      'Seed disposable verification portfolio summary',
+    )
 
     await upsertRest('tailor_pickup_details', {
       user_id: tailorUserId,
@@ -807,6 +849,77 @@ async function createDisposableQaFixtures() {
     await cleanupDisposableQaFixtures(fixture).catch(() => null)
     throw error
   }
+}
+
+async function createDisposableVerificationTailor(fixture, decisionLabel) {
+  const email = `web.qa.verification.${decisionLabel}.${stamp}@drapeon.co`
+  const displayName = `Web QA Verification ${decisionLabel}`
+  const fixturePhone = `+1556${decisionLabel === 'approval' ? '1' : '2'}${String(stamp).slice(-6)}`
+  const { userId } = await createConfirmedAuthUser(email, displayName, 'TAILOR')
+  const now = new Date().toISOString()
+
+  await upsertRest('users', {
+    id: userId,
+    email,
+    phone: fixturePhone,
+    display_name: displayName,
+    role: 'TAILOR',
+    default_currency: 'USD',
+    currency_source: 'USER_SELECTED',
+    region_code: 'US',
+    currency_confirmed_at: now,
+    updated_at: now,
+  }, 'id')
+
+  const profileRows = await upsertRest('tailor_profiles', {
+    user_id: userId,
+    display_name: displayName,
+    business_name: `${displayName} Studio`,
+    bio: 'Disposable pending trust-review fixture.',
+    location: 'Chicago, IL',
+    languages: ['English'],
+    specialty_tags: ['Alterations'],
+    price_range_min: 5000,
+    price_range_max: 25000,
+    currency: 'USD',
+    tier: 'VERIFIED',
+    availability: 'OPEN',
+    is_verified: false,
+    is_live: false,
+    supports_custom_orders: true,
+    supports_ready_made: false,
+    pickup_available: true,
+    delivery_available: false,
+    shipping_available: false,
+    portfolio_photo_urls: ['https://drapeon.co/logo.png'],
+    portfolio_video_urls: [],
+    avatar_url: 'https://drapeon.co/logo.png',
+    trust_verification_video_path: `verification-video/${userId}/challenge_profile-work-payments_${stamp}.mp4`,
+    trust_verification_challenge_id: 'profile-work-payments',
+    trust_verification_challenge_text: 'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
+    id_verification_method: 'CHALLENGE_VIDEO',
+    id_verification_status: 'PENDING',
+    profile_completed: true,
+    updated_at: now,
+  }, 'user_id')
+
+  const profileId = Array.isArray(profileRows) ? profileRows[0]?.id : null
+  if (!profileId) throw new Error(`Disposable ${decisionLabel} verification profile was not created.`)
+
+  const portfolioRows = await insertRest('portfolio_items', {
+    tailor_profile_id: profileId,
+    image_url: 'https://drapeon.co/logo.png',
+    title: `${displayName} portfolio proof`,
+    description: 'Disposable portfolio proof for trust verification QA.',
+    category: null,
+    sort_order: 0,
+  }, `Insert disposable ${decisionLabel} verification portfolio proof`)
+  const portfolioItemId = Array.isArray(portfolioRows) ? portfolioRows[0]?.id : null
+  if (!portfolioItemId) throw new Error(`Disposable ${decisionLabel} verification portfolio proof was not created.`)
+
+  rememberFixtureId(fixture, 'portfolioItemIds', portfolioItemId)
+  fixture.verificationTailors.push({ userId, profileId, email })
+  return { userId, profileId, email }
 }
 
 function qaReference(prefix) {
@@ -1252,8 +1365,26 @@ async function cleanupDisposableQaFixtures(fixture) {
   if (fixture.sellerItemId) {
     await attempt('delete seller item', () => deleteRest('seller_items', `id=eq.${fixture.sellerItemId}`, 'Delete disposable seller item'))
   }
+  const portfolioItemIds = [...new Set(fixture.portfolioItemIds ?? [])]
+  if (portfolioItemIds.length > 0) {
+    await attempt('delete portfolio items', () => deleteRest('portfolio_items', `id=in.(${portfolioItemIds.join(',')})`, 'Delete disposable portfolio items'))
+  }
   if (fixture.tailorUserId) {
     await attempt('delete pickup details', () => deleteRest('tailor_pickup_details', `user_id=eq.${fixture.tailorUserId}`, 'Delete disposable pickup details'))
+  }
+  for (const verificationTailor of fixture.verificationTailors ?? []) {
+    await attempt(
+      `delete verification profile ${verificationTailor.profileId}`,
+      () => deleteRest('tailor_profiles', `id=eq.${verificationTailor.profileId}`, 'Delete disposable verification profile'),
+    )
+    await attempt(
+      `delete verification public user ${verificationTailor.userId}`,
+      () => deleteRest('users', `id=eq.${verificationTailor.userId}`, 'Delete disposable verification public user'),
+    )
+    await attempt(
+      `delete verification auth user ${verificationTailor.userId}`,
+      () => deleteAuthUser(verificationTailor.userId),
+    )
   }
   if (fixture.tailorProfileId) {
     await attempt('delete tailor profile', () => deleteRest('tailor_profiles', `id=eq.${fixture.tailorProfileId}`, 'Delete disposable tailor profile'))
@@ -1842,38 +1973,103 @@ async function main() {
       return { ...redirect, applicationId: application.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
     })
 
-    await runAllowedOpsAction('verification-decision', 'ops action: verification decision', async () => {
-      await patchRest(
-        'tailor_profiles',
-        `user_id=eq.${encodeURIComponent(disposableQa.tailorUserId)}`,
-        {
-          id_verification_status: 'PENDING',
-          is_live: false,
-          is_verified: false,
-          id_verified_at: null,
-          updated_at: new Date().toISOString(),
-        },
-        'Reset disposable tailor verification status',
-      )
-      const issue = await createDisposableOpsIssue(disposableQa, {
+    await runAllowedOpsAction('verification-decision', 'ops action: verification approval and rejection', async () => {
+      const approvalFixture = await createDisposableVerificationTailor(disposableQa, 'approval')
+      const approvalIssue = await createDisposableOpsIssue(disposableQa, {
         issue_type: 'TAILOR_VERIFICATION',
-        user_id: disposableQa.tailorUserId,
-        tailor_profile_id: disposableQa.tailorProfileId,
-        title: `Web QA tailor verification ${stamp}`,
+        user_id: approvalFixture.userId,
+        tailor_profile_id: approvalFixture.profileId,
+        title: `Web QA tailor verification approval ${stamp}`,
       })
-      const result = await postOpsAction('verification-decision', {
-        tailorUserId: disposableQa.tailorUserId,
+
+      const approvalResult = await postOpsAction('verification-decision', {
+        tailorUserId: approvalFixture.userId,
+        decision: 'APPROVE',
+      }, 'Ops verification approval')
+      const approvalRedirect = assertOpsRedirect(approvalResult, 'notice', ['verification-approved'])
+      const approvedProfile = await selectFirstRest(
+        'tailor_profiles',
+        `select=id,id_verification_status,is_live,is_verified&id=eq.${encodeURIComponent(approvalFixture.profileId)}`,
+        'Select approved verification profile',
+      )
+      const resolvedApprovalIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status,resolved_at&id=eq.${encodeURIComponent(approvalIssue.id)}`,
+        'Select approved verification issue',
+      )
+      if (
+        approvedProfile?.id_verification_status !== 'VERIFIED' ||
+        approvedProfile?.is_live !== true ||
+        approvedProfile?.is_verified !== true ||
+        resolvedApprovalIssue?.status !== 'RESOLVED' ||
+        !resolvedApprovalIssue?.resolved_at
+      ) {
+        throw new Error(`Verification approval state mismatch: ${JSON.stringify({ approvedProfile, resolvedApprovalIssue })}`)
+      }
+      const approvalIssueAudit = await requireIssueAudit(approvalIssue.id, 'VERIFICATION_APPROVED')
+      const approvalDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
+      const approvalPayload = approvalDecisionAudit.payload && typeof approvalDecisionAudit.payload === 'object'
+        ? approvalDecisionAudit.payload
+        : {}
+      if (
+        approvalPayload.decision !== 'APPROVE' ||
+        approvalPayload.email_sent !== true ||
+        !['SENT', 'SKIPPED', 'ERROR'].includes(approvalPayload.push_status)
+      ) {
+        throw new Error(`Verification approval side effects were not recorded: ${JSON.stringify(approvalPayload)}`)
+      }
+
+      const rejectionFixture = await createDisposableVerificationTailor(disposableQa, 'rejection')
+      const rejectionIssue = await createDisposableOpsIssue(disposableQa, {
+        issue_type: 'TAILOR_VERIFICATION',
+        user_id: rejectionFixture.userId,
+        tailor_profile_id: rejectionFixture.profileId,
+        title: `Web QA tailor verification rejection ${stamp}`,
+      })
+      const rejectionResult = await postOpsAction('verification-decision', {
+        tailorUserId: rejectionFixture.userId,
         decision: 'REJECT',
-        reason: 'Disposable web QA verification rejection.',
-      }, 'Ops verification decision')
-      const redirect = assertOpsRedirect(result, 'notice', ['verification-rejected'])
-      const profile = await selectFirstRest('tailor_profiles', `select=id,id_verification_status,is_live&id=eq.${encodeURIComponent(disposableQa.tailorProfileId)}`, 'Select verification profile')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,resolved_at&id=eq.${encodeURIComponent(issue.id)}`, 'Select verification issue')
+        reason: 'The disposable challenge video did not include the requested movement.',
+      }, 'Ops verification rejection')
+      const rejectionRedirect = assertOpsRedirect(rejectionResult, 'notice', ['verification-rejected'])
+      const profile = await selectFirstRest('tailor_profiles', `select=id,id_verification_status,is_live&id=eq.${encodeURIComponent(rejectionFixture.profileId)}`, 'Select verification profile')
+      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,resolved_at&id=eq.${encodeURIComponent(rejectionIssue.id)}`, 'Select verification issue')
       if (profile?.id_verification_status !== 'REJECTED' || profile?.is_live !== false || updatedIssue?.status !== 'RESOLVED') {
         throw new Error(`Verification decision mismatch: ${JSON.stringify({ profile, updatedIssue })}`)
       }
-      const issueAudit = await requireIssueAudit(issue.id, 'VERIFICATION_REJECTED')
-      return { ...redirect, profileId: profile.id, issueId: issue.id, issueAuditId: issueAudit.id }
+      const rejectionIssueAudit = await requireIssueAudit(rejectionIssue.id, 'VERIFICATION_REJECTED')
+      const rejectionDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
+      const rejectionPayload = rejectionDecisionAudit.payload && typeof rejectionDecisionAudit.payload === 'object'
+        ? rejectionDecisionAudit.payload
+        : {}
+      if (
+        rejectionPayload.decision !== 'REJECT' ||
+        rejectionPayload.email_sent !== true ||
+        !['SENT', 'SKIPPED', 'ERROR'].includes(rejectionPayload.push_status)
+      ) {
+        throw new Error(`Verification rejection side effects were not recorded: ${JSON.stringify(rejectionPayload)}`)
+      }
+
+      return {
+        approval: {
+          ...approvalRedirect,
+          profileId: approvedProfile.id,
+          issueId: approvalIssue.id,
+          issueAuditId: approvalIssueAudit.id,
+          decisionAuditId: approvalDecisionAudit.id,
+          emailSent: approvalPayload.email_sent,
+          pushStatus: approvalPayload.push_status,
+        },
+        rejection: {
+          ...rejectionRedirect,
+          profileId: profile.id,
+          issueId: rejectionIssue.id,
+          issueAuditId: rejectionIssueAudit.id,
+          decisionAuditId: rejectionDecisionAudit.id,
+          emailSent: rejectionPayload.email_sent,
+          pushStatus: rejectionPayload.push_status,
+        },
+      }
     })
 
     await runAllowedOpsAction('deletion-status', 'ops action: deletion status', async () => {

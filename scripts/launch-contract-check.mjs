@@ -32,7 +32,10 @@ const checks = [
 ]
 
 if (withSupabase) {
-  checks.push(['supabase', ['db', 'lint', '--linked', '--fail-on', 'error']])
+  checks.push([
+    'supabase',
+    ['db', 'lint', '--linked', '--schema', 'public,util', '--fail-on', 'error'],
+  ])
 }
 
 for (const [command, args] of checks) {

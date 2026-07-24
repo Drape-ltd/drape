@@ -55,3 +55,24 @@ Do not say a change is fixed merely because it compiles.
 4. For a regression, also exercise the adjacent path most likely to break.
 5. Report what was verified, on which platform, and what remains unverified.
 6. Keep required Metro, device-log, or server sessions running until the live pass is finished.
+
+## Cross-Role Workflow Proof
+
+A customer-to-tailor or tailor-to-customer workflow is not complete until all six layers are verified:
+
+1. The initiating device confirms the action without discarding the user's input.
+2. The authoritative database transition and audit/event row are persisted.
+3. The counterpart device receives the updated state without a forced full-screen reload.
+4. Every queued push, email, SMS, or ops side effect reaches a terminal recorded outcome.
+5. At least one real counterpart device receives the expected notification and opens the correct context.
+6. The same action is replayed from the counterpart role or an adjacent valid stage to catch asymmetric gates.
+
+Typechecks, HTTP 2xx responses, queued jobs, or a foreground realtime update are not delivery evidence on their own. Preserve the IDs and provider outcomes used to prove the pass.
+
+## Tailor Trust Verification Boundary
+
+- Drapeon marketplace trust review uses a private, randomized challenge video plus profile and portfolio evidence. Drapeon does not collect government identity documents or create biometric templates.
+- The payout provider owns regulated payout KYC. Drapeon may store provider account IDs, capability/status results, and operational failure reasons, but must not duplicate the provider's identity-document workflow.
+- Legacy `id_verification_*` database and API names are compatibility fields. They must map to `CHALLENGE_VIDEO` behavior and must never justify restoring an ID-document requirement in product copy or validation.
+- Trust approval and payout readiness are independent gates: trust approval controls marketplace visibility; provider capability controls paid orders and earnings release.
+- Changes to this boundary require an explicit product/security decision, migration compatibility review, and approval/rejection behavioral proof through Ops.

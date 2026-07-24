@@ -33,6 +33,15 @@ export function normalizeAccountCurrency(value: string | null | undefined): Acco
   return value.trim().toUpperCase() as AccountCurrencyCode
 }
 
+export function parseMajorCurrencyAmountToMinor(value: string | null | undefined): number | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.replace(/,/g, '').trim()
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null
+  const amount = Number.parseFloat(normalized)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return Math.round(amount * 100)
+}
+
 export function currencySymbol(currency: AccountCurrencyCode) {
   switch (currency) {
     case 'NGN':

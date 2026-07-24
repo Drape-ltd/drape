@@ -186,7 +186,7 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     eyebrow: 'Verification',
     title: 'Keep tailor identity review visible before it becomes back-office sprawl.',
     description:
-      'Pending tailor profiles, uploaded ID documents, and go-live decisions should stay in one place with direct trust ownership.',
+      'Pending tailor profiles, private challenge videos, and go-live decisions should stay in one place with direct trust ownership.',
     team: 'TRUST',
     status: 'live',
     anchor: 'verification',

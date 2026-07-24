@@ -53,6 +53,8 @@ type CriticalOpsIssueNotificationInput = {
 }
 
 export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNotificationInput) {
+  const severity = input.severity.trim().toUpperCase()
+  const priorityLabel = severity === 'CRITICAL' ? 'Critical ops issue' : 'Priority ops issue'
   const apiKey = Deno.env.get('RESEND_API_KEY')
   if (!apiKey) {
     console.warn('[ops notification] Missing RESEND_API_KEY; skipping critical issue email.', {
@@ -72,10 +74,10 @@ export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNo
   }
 
   const issueLabel = `#${String(input.issueNumber).padStart(4, '0')}`
-  const subject = `Critical ops issue ${issueLabel}: ${input.title}`
+  const subject = `${priorityLabel} ${issueLabel}: ${input.title}`
   const html = `
     <div style="font-family:Georgia,serif;max-width:640px;margin:0 auto;color:#2c2c2a">
-      <p style="margin:0 0 10px;color:#d85a30;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Critical ops issue</p>
+      <p style="margin:0 0 10px;color:#d85a30;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">${escapeHtml(priorityLabel)}</p>
       <h1 style="margin:0 0 14px;font-size:30px;line-height:1.1">${escapeHtml(input.title)}</h1>
       <p style="margin:0 0 20px;font:16px/1.7 Calibri,Arial,sans-serif;color:#4a4a47">${escapeHtml(input.description)}</p>
       <table style="width:100%;border-collapse:collapse;font:15px/1.6 Calibri,Arial,sans-serif">
@@ -108,7 +110,7 @@ export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNo
       subject,
       html,
       text: [
-        `Critical ops issue ${issueLabel}`,
+        `${priorityLabel} ${issueLabel}`,
         '',
         `Title: ${input.title}`,
         `Type: ${input.issueType}`,

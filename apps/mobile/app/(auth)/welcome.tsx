@@ -243,10 +243,13 @@ function makeStyles(palette: WelcomePalette) {
       borderWidth: 1,
     },
     roleTitle: {
+      flex: 1,
+      flexShrink: 1,
       color: palette.ink,
       fontFamily: Fonts.bodySemiBold,
       fontSize: FontSize.md,
       fontWeight: FontWeight.semibold,
+      marginRight: Spacing.sm,
     },
     roleTitlePrimary: {
       color: palette.ink,

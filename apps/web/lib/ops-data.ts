@@ -71,11 +71,11 @@ type TailorVerificationRow = {
   id: string
   user_id: string
   display_name: string
-  legal_name?: string | null
   location: string
   specialty_tags: string[] | null
-  id_document_url: string | null
-  id_selfie_document_url: string | null
+  trust_verification_video_path: string | null
+  trust_verification_challenge_id: string | null
+  trust_verification_challenge_text: string | null
   avatar_url: string | null
   portfolio_photo_urls: string[] | null
   portfolio_video_urls: string[] | null
@@ -84,8 +84,6 @@ type TailorVerificationRow = {
   payout_account_verified?: boolean | null
   payout_provider?: string | null
   payout_currency?: string | null
-  payout_name_match_status?: string | null
-  payout_name_match_checked_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -379,11 +377,12 @@ export type OpsVerification = {
   profileId: string
   userId: string
   displayName: string
-  legalName: string | null
   email: string | null
   location: string
   specialtyTags: string[]
-  idDocumentUrl: string | null
+  trustVideoUrl: string | null
+  trustChallengeId: string | null
+  trustChallengeText: string | null
   avatarUrl: string | null
   portfolioPhotoUrls: string[]
   portfolioVideoUrls: string[]
@@ -394,8 +393,6 @@ export type OpsVerification = {
   payoutAccountVerified: boolean
   payoutProvider: string | null
   payoutCurrency: string | null
-  payoutNameMatchStatus: string
-  payoutNameMatchCheckedAt: string | null
   createdAt: string
   updatedAt: string
   history: OpsIssueHistoryEntry[]
@@ -715,7 +712,7 @@ function metadataStringValue(metadata: Record<string, unknown> | null, key: stri
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-function idDocumentStoragePath(value: string | null | undefined): string | null {
+function trustVideoStoragePath(value: string | null | undefined): string | null {
   const trimmed = typeof value === 'string' ? value.trim() : ''
   if (!trimmed) return null
 
@@ -724,7 +721,7 @@ function idDocumentStoragePath(value: string | null | undefined): string | null 
     try {
       const url = new URL(trimmed)
       const decodedPath = decodeURIComponent(url.pathname)
-      const match = decodedPath.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?id-documents\/(.+)$/u)
+      const match = decodedPath.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?trust-verification\/(.+)$/u)
       if (!match?.[1]) return null
       path = match[1]
     } catch {
@@ -732,8 +729,8 @@ function idDocumentStoragePath(value: string | null | undefined): string | null 
     }
   }
 
-  path = path.replace(/^\/+/u, '').replace(/^id-documents\//u, '')
-  if (!path.startsWith('id-verification/')) return null
+  path = path.replace(/^\/+/u, '').replace(/^trust-verification\//u, '')
+  if (!path.startsWith('verification-video/')) return null
   return path
 }
 
@@ -1287,7 +1284,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .limit(24),
     client
       .from('tailor_profiles')
-      .select('id, user_id, display_name, legal_name, location, specialty_tags, id_document_url, id_selfie_document_url, avatar_url, portfolio_photo_urls, portfolio_video_urls, id_verification_status, id_verification_submitted_at, payout_account_verified, payout_provider, payout_currency, payout_name_match_status, payout_name_match_checked_at, created_at, updated_at')
+      .select('id, user_id, display_name, location, specialty_tags, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, avatar_url, portfolio_photo_urls, portfolio_video_urls, id_verification_status, id_verification_submitted_at, payout_account_verified, payout_provider, payout_currency, created_at, updated_at')
       .eq('id_verification_status', 'PENDING')
       .order('updated_at', { ascending: false })
       .limit(24),
@@ -1895,14 +1892,12 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     })
   }
 
-  const idDocumentUrlsByProfileId = new Map<string, string | null>()
+  const trustVideoUrlsByProfileId = new Map<string, string | null>()
   for (const profile of pendingVerifications) {
-    const verificationDocumentPath = idDocumentStoragePath(
-      profile.id_selfie_document_url ?? profile.id_document_url,
-    )
-    idDocumentUrlsByProfileId.set(
+    const verificationVideoPath = trustVideoStoragePath(profile.trust_verification_video_path)
+    trustVideoUrlsByProfileId.set(
       profile.id,
-      verificationDocumentPath
+      verificationVideoPath
         ? `/ops/identity-document/${encodeURIComponent(profile.id)}`
         : null,
     )
@@ -1991,13 +1986,13 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     pendingVerifications: pendingVerifications.map((profile) => {
       const user = usersById.get(profile.user_id)
       const verificationIssue = verificationIssuesByUserId.get(profile.user_id)
-      const idDocumentUrl = idDocumentUrlsByProfileId.get(profile.id) ?? null
+      const trustVideoUrl = trustVideoUrlsByProfileId.get(profile.id) ?? null
       const portfolioPhotoUrls = cleanMediaUrls(profile.portfolio_photo_urls)
       const portfolioVideoUrls = cleanMediaUrls(profile.portfolio_video_urls)
       const proofItems = verificationProofItemsByProfileId.get(profile.id) ?? []
       const evidenceSummary = buildOpsVerificationEvidenceSummary({
         avatarUrl: profile.avatar_url,
-        idDocumentUrl,
+        trustVideoUrl,
         portfolioPhotoUrls,
         portfolioVideoUrls,
         proofItems,
@@ -2009,11 +2004,12 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         profileId: profile.id,
         userId: profile.user_id,
         displayName: profile.display_name,
-        legalName: profile.legal_name?.trim() || null,
         email: user?.email ?? null,
         location: profile.location,
         specialtyTags: profile.specialty_tags ?? [],
-        idDocumentUrl,
+        trustVideoUrl,
+        trustChallengeId: profile.trust_verification_challenge_id?.trim() || null,
+        trustChallengeText: profile.trust_verification_challenge_text?.trim() || null,
         avatarUrl: profile.avatar_url ?? null,
         portfolioPhotoUrls,
         portfolioVideoUrls,
@@ -2024,8 +2020,6 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         payoutAccountVerified: profile.payout_account_verified === true,
         payoutProvider: derivePayoutProvider(profile.payout_currency),
         payoutCurrency: profile.payout_currency ?? null,
-        payoutNameMatchStatus: profile.payout_name_match_status ?? 'NOT_CHECKED',
-        payoutNameMatchCheckedAt: profile.payout_name_match_checked_at ?? null,
         createdAt: profile.created_at,
         updatedAt: profile.updated_at,
         history: verificationIssue?.id ? (issueHistoryByIssueId.get(verificationIssue.id) ?? []) : [],

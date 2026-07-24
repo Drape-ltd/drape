@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
@@ -85,15 +85,17 @@ export default function TailorProfileScreen() {
   const insets = useSafeAreaInsets()
   const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user, signOut, switchRole } = useAuth()
-  const { avatarUrl, setAvatarUrl } = useTailorProfile()
+  const { avatarUrl, setAvatarUrl, refreshAvatar } = useTailorProfile()
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [switchingRole, setSwitchingRole] = useState(false)
   const userId = user?.id
   const displayName = user?.user_metadata?.display_name ?? ''
   const dashboardQuery = useTailorDashboard(userId, displayName)
+  const refetchDashboard = dashboardQuery.refetch
   const dashboardStats = dashboardQuery.data?.stats ?? null
   const profileId = dashboardStats?.profileId ?? undefined
   const publicProfileQuery = useTailorPublic(profileId, userId)
+  const refetchPublicProfile = publicProfileQuery.refetch
   const publicProfile = publicProfileQuery.data?.profile ?? null
 
   const profile = useMemo<TailorProfile | null>(() => {
@@ -169,6 +171,14 @@ export default function TailorProfileScreen() {
   useEffect(() => {
     if (publicProfile?.avatarUrl) setAvatarUrl(publicProfile.avatarUrl)
   }, [publicProfile?.avatarUrl, setAvatarUrl])
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshAvatar()
+      void refetchDashboard()
+      if (profileId) void refetchPublicProfile()
+    }, [profileId, refetchDashboard, refetchPublicProfile, refreshAvatar]),
+  )
 
   // ── Avatar upload ────────────────────────────────────────────────────────────
 

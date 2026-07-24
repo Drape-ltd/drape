@@ -1,0 +1,34 @@
+name: Web Environment Contract
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/lib/supabase-environment.ts"
+      - "apps/web/next.config.ts"
+      - "apps/web/wrangler.jsonc"
+      - "apps/web/scripts/cf-preview.mjs"
+      - "apps/web/scripts/verify-environment.mjs"
+      - ".github/workflows/web-environment-contract.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "apps/web/lib/supabase-environment.ts"
+      - "apps/web/next.config.ts"
+      - "apps/web/wrangler.jsonc"
+      - "apps/web/scripts/cf-preview.mjs"
+      - "apps/web/scripts/verify-environment.mjs"
+      - ".github/workflows/web-environment-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify production web target
+        run: node apps/web/scripts/verify-environment.mjs

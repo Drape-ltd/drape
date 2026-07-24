@@ -2099,7 +2099,9 @@ export function useCustomerOrders(userId: string | undefined, tab: 'active' | 'c
     queryFn: () => fetchCustomerOrders(userId!, tab),
     enabled: !!userId,
     staleTime: 45_000,
-    refetchOnMount: false,
+    // Keep cached rows visible, but reconcile stages whenever the list remounts
+    // after an order action completed on another screen.
+    refetchOnMount: 'always',
     refetchOnReconnect: true,
   })
 }
@@ -2110,7 +2112,9 @@ export function useTailorOrders(userId: string | undefined, tab: 'active' | 'com
     queryFn: () => fetchTailorOrders(userId!, tab),
     enabled: !!userId,
     staleTime: 45_000,
-    refetchOnMount: false,
+    // Detail actions advance orders outside this list's lifetime. A background
+    // mount refresh prevents a warm cache from showing the previous stage.
+    refetchOnMount: 'always',
     refetchOnReconnect: true,
   })
 }

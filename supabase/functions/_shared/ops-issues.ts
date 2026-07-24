@@ -25,6 +25,7 @@ type CreateOpsIssueInput = {
   recommendedAction: string
   dedupeKey: string
   metadata?: Record<string, unknown>
+  notifyOps?: boolean
 }
 
 type OpsIssueRow = {
@@ -143,7 +144,7 @@ export async function createOrRefreshOpsIssue(
       },
     })
 
-    if (input.severity === 'CRITICAL' && existing.status === 'RESOLVED') {
+    if ((input.severity === 'CRITICAL' || input.notifyOps === true) && existing.status === 'RESOLVED') {
       await sendCriticalOpsIssueNotification({
         issueNumber: updateResponse.data.issue_number,
         issueType: input.issueType,
@@ -198,7 +199,7 @@ export async function createOrRefreshOpsIssue(
     },
   })
 
-  if (input.severity === 'CRITICAL') {
+  if (input.severity === 'CRITICAL' || input.notifyOps === true) {
     await sendCriticalOpsIssueNotification({
       issueNumber: insertResponse.data.issue_number,
       issueType: input.issueType,

@@ -3,7 +3,7 @@
  * Step 0: Identity (display name, phone, location, bio, languages)
  * Step 1: Specialties + pricing
  * Step 2: Portfolio (at least one work sample)
- * Step 3: Fulfillment + ID verification upload
+ * Step 3: Fulfillment + private trust-video verification
  */
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import {
@@ -32,6 +32,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter, type Href } from 'expo
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as ImagePicker from 'expo-image-picker'
+import { requestRecordingPermissionsAsync } from 'expo-audio'
 import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -39,9 +40,13 @@ import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { detectDeviceCurrencyPreference, fetchCurrencyPreferenceContext } from '@/lib/currency'
 import { isDuplicatePhoneError, isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
-import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { stripExif } from '@/lib/stripExif'
 import { appendToHistory, resetTo } from '@/lib/navigation'
+import {
+  fetchOwnTailorProfileGuard,
+  fetchOwnTailorSetupProfile,
+} from '@/lib/tailor-profile-guard'
 import {
   checkAccountPhoneAvailability,
   DUPLICATE_PHONE_MESSAGE,
@@ -58,6 +63,7 @@ import {
 } from '@/lib/image-picker-safe'
 import {
   pickerVideoContentType as portfolioVideoContentType,
+  pickerVideoDurationSeconds,
   pickerVideoExtension as portfolioVideoExtension,
   validateVideoPickerAsset,
 } from '@/lib/video-asset'
@@ -66,6 +72,10 @@ import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import {
   AddressAutocompleteInput,
   Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
   RemoteImage,
   AvatarImage,
@@ -74,6 +84,10 @@ import {
   ProgressStepper,
 } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
+import {
+  useDrapeCapsuleNavMotion,
+  useDrapeCapsuleNavScroll,
+} from '@/components/ui/DrapeCapsuleNav'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
   normalizePhoneForStorage,
@@ -99,8 +113,8 @@ import {
 import {
   IDENTITY_CONSENT_COPY,
   IDENTITY_CONSENT_POLICY_VERSION,
-  isValidLegalName,
-  normalizeLegalName,
+  TAILOR_TRUST_VIDEO_MAX_SECONDS,
+  TAILOR_TRUST_VIDEO_MIN_SECONDS,
 } from '@drape/shared/identity-trust'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
@@ -108,18 +122,19 @@ import type { Availability } from '@/lib/shared-types'
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
 type ProfilePhotoSource = AvatarImageSource
 type PortfolioMediaSource = 'camera-photo' | 'camera-video' | 'library'
-type IdDocumentSource = 'camera'
+type TrustVideoSource = 'camera'
 type PortfolioItem = { type: 'photo' | 'video'; url: string }
 type PortfolioGridEntry = { item: PortfolioItem; originalIndex: number }
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
-type MediaSheetMode = 'profile-photo' | 'portfolio-media' | 'id-document' | null
+type MediaSheetMode = 'profile-photo' | 'portfolio-media' | 'trust-video' | null
 type SetupChoiceSheetMode = 'seller-type' | 'capacity' | 'shop-status' | 'fulfillment' | 'currency' | null
 type SetupView = 'hub' | 'section'
 type SetupToast = { type: 'success' | 'error'; message: string }
 
 type TailorSetupProfileRow = {
+  id: string
+  profile_completed: boolean | null
   display_name: string | null
-  legal_name?: string | null
   avatar_url: string | null
   bio: string | null
   location: string | null
@@ -130,7 +145,9 @@ type TailorSetupProfileRow = {
   currency: string | null
   seller_type: string | null
   id_verification_status: string | null
-  id_selfie_document_url?: string | null
+  trust_verification_video_path?: string | null
+  trust_verification_challenge_id?: string | null
+  trust_verification_challenge_text?: string | null
   id_verification_rejection_reason?: string | null
   id_verification_rejected_at?: string | null
   id_verification_metadata?: Record<string, unknown> | null
@@ -146,6 +163,7 @@ type TailorSetupProfileRow = {
   portfolio_photo_urls: unknown
   portfolio_video_urls: unknown
   availability: string | null
+  ready_made_item_count: number | null
 }
 
 type UserCurrencyRow = {
@@ -194,7 +212,7 @@ const STEP_SUBS = [
   'This is your public tailor profile. No contact details here. Buyers find you through Drapeon.',
   'Tell people what you make, your business type, and what to expect on price.',
   'Add at least one real work sample. More photos help buyers trust your profile faster.',
-  'Confirm handoff options, order status, and submit your identity selfie for review.',
+  'Confirm handoff options, order status, and record a private trust video for review.',
 ]
 const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
 const PROFILE_IMAGE_REJECTION_MESSAGE =
@@ -417,7 +435,7 @@ function readIdentityRejectionMessage(row: {
   return (
     readStringField(metadata, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
     readStringField(nested, ['rejection_reason', 'rejectionReason', 'moderation_note', 'moderationMessage', 'reason', 'note']) ??
-    'Identity review needs a clearer retake. Capture a sharp live selfie with your face and physical ID fully visible.'
+    'Trust review needs a clearer retake. Record the challenge again with your face, voice, and full private phrase clearly captured.'
   )
 }
 
@@ -467,6 +485,8 @@ export default function TailorSetupScreen() {
   const insets = useSafeAreaInsets()
   const { user, signOut, switchRole } = useAuth()
   const keyboard = useKeyboardState()
+  const { compact: actionDockCompact } = useDrapeCapsuleNavMotion()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const handoffToken = useMemo(() => firstParam(routeParams.handoffToken)?.trim() || null, [routeParams.handoffToken])
   const routeRequestedStep = useMemo<TailorSetupStep | null>(() => {
     if (firstParam(routeParams.view) !== 'section') return null
@@ -485,8 +505,6 @@ export default function TailorSetupScreen() {
     user?.user_metadata?.name ??
     ''
   const oauthPhone = typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : ''
-  const oauthLegalName =
-    typeof user?.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : ''
   const oauthVerifiedPhone =
     typeof user?.user_metadata?.verified_phone === 'string'
       ? user.user_metadata.verified_phone
@@ -499,12 +517,7 @@ export default function TailorSetupScreen() {
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
-    supabase
-      .from('tailor_profiles')
-      .select('profile_completed, id_verification_status')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
+    fetchOwnTailorProfileGuard().then(({ data, error }) => {
         if (cancelled) return
         if (error || !data) return
         if (
@@ -514,7 +527,7 @@ export default function TailorSetupScreen() {
         ) {
           router.replace('/(tailor)/profile')
         }
-      })
+    })
     return () => {
       cancelled = true
     }
@@ -580,8 +593,6 @@ export default function TailorSetupScreen() {
 
   // Step 0
   const [displayName, setDisplayName] = useState(oauthName)
-  const [legalName, setLegalName] = useState(oauthLegalName)
-  const [legalNameError, setLegalNameError] = useState('')
   const [identityConsentGranted, setIdentityConsentGranted] = useState(false)
   const [identityConsentError, setIdentityConsentError] = useState('')
   const [nameError, setNameError] = useState('')
@@ -658,8 +669,13 @@ export default function TailorSetupScreen() {
   const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
-  const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
-  const [savedIdSelfieUrl, setSavedIdSelfieUrl] = useState('')
+  const [trustVideoUri, setTrustVideoUri] = useState<string | null>(null)
+  const [savedTrustVideoPath, setSavedTrustVideoPath] = useState('')
+  const [trustHandoffToken, setTrustHandoffToken] = useState(handoffToken)
+  const [trustChallengeId, setTrustChallengeId] = useState('')
+  const [trustChallengeText, setTrustChallengeText] = useState('')
+  const [trustChallengeLoading, setTrustChallengeLoading] = useState(false)
+  const [trustVideoContentType, setTrustVideoContentType] = useState<'video/mp4' | 'video/quicktime'>('video/mp4')
   const [idVerificationStatus, setIdVerificationStatus] =
     useState<VerificationStatus>('NOT_SUBMITTED')
   const [idError, setIdError] = useState('')
@@ -679,23 +695,7 @@ export default function TailorSetupScreen() {
       setRegionCode(resolved.regionCode)
     })
 
-    supabase
-      .from('tailor_profiles')
-      .select(
-        `
-        display_name, legal_name, avatar_url, bio, location, languages, specialty_tags,
-        price_range_min, price_range_max, currency, seller_type,
-        id_verification_status, id_selfie_document_url,
-        id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata,
-        supports_custom_orders, supports_ready_made,
-        pickup_available, delivery_available, shipping_available,
-        delivery_fee, shipping_fee, accepts_custom_orders_now, shop_paused,
-        portfolio_photo_urls, portfolio_video_urls, availability
-      `
-      )
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
+    fetchOwnTailorSetupProfile<TailorSetupProfileRow>().then(({ data, error }) => {
         if (cancelled) return
         if (error || !data) {
           setProfileHydrated(true)
@@ -704,7 +704,6 @@ export default function TailorSetupScreen() {
 
         const row = data as TailorSetupProfileRow
         const nextDisplayName = row.display_name ?? oauthName
-        const nextLegalName = row.legal_name?.trim() || oauthLegalName
         const nextAvatarUrl = row.avatar_url ?? null
         const nextBio = row.bio ?? ''
         const nextLocation = row.location ?? ''
@@ -726,7 +725,9 @@ export default function TailorSetupScreen() {
               )
               .map((url: string) => ({ type: 'photo' as const, url }))
           : []
-        const nextIdSelfieUrl = typeof row.id_selfie_document_url === 'string' ? row.id_selfie_document_url.trim() : ''
+        const nextTrustVideoPath = typeof row.trust_verification_video_path === 'string'
+          ? row.trust_verification_video_path.trim()
+          : ''
         const nextVideos = Array.isArray(row.portfolio_video_urls)
           ? row.portfolio_video_urls
               .filter(
@@ -738,9 +739,6 @@ export default function TailorSetupScreen() {
 
         if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
           setDisplayName(nextDisplayName)
-        }
-        if (nextLegalName) {
-          setLegalName(nextLegalName)
         }
         if (typeof nextAvatarUrl === 'string' && nextAvatarUrl.trim().length > 0) {
           setAvatarUrl(nextAvatarUrl)
@@ -769,7 +767,9 @@ export default function TailorSetupScreen() {
         ) {
           setCurrency(row.currency as typeof currency)
         }
-        setSavedIdSelfieUrl(nextIdSelfieUrl)
+        setSavedTrustVideoPath(nextTrustVideoPath)
+        setTrustChallengeId(row.trust_verification_challenge_id?.trim() ?? '')
+        setTrustChallengeText(row.trust_verification_challenge_text?.trim() ?? '')
         if (nextPhotos.length > 0 || nextVideos.length > 0) {
           setPortfolioItems([...nextPhotos, ...nextVideos])
         }
@@ -797,6 +797,7 @@ export default function TailorSetupScreen() {
           setDeliveryAvailable(row.delivery_available)
         if (typeof row.shipping_available === 'boolean')
           setShippingAvailable(row.shipping_available)
+        setReadyMadeItemCount(row.ready_made_item_count ?? 0)
         if (
           typeof row.id_verification_status === 'string' &&
           ['NOT_SUBMITTED', 'PENDING', 'VERIFIED', 'APPROVED', 'REJECTED'].includes(
@@ -819,21 +820,7 @@ export default function TailorSetupScreen() {
           }
         }
         setProfileHydrated(true)
-      })
-
-    supabase
-      .from('tailor_profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(async ({ data }) => {
-        if (cancelled || !data?.id) return
-        const { count } = await supabase
-          .from('seller_items')
-          .select('id', { count: 'exact', head: true })
-          .eq('tailor_profile_id', data.id)
-        if (!cancelled) setReadyMadeItemCount(count ?? 0)
-      })
+    })
 
     supabase
       .from('users')
@@ -907,24 +894,10 @@ export default function TailorSetupScreen() {
       let cancelled = false
 
       async function refreshReadyMadeItemCount() {
-        const { data } = await supabase
-          .from('tailor_profiles')
-          .select('id')
-          .eq('user_id', user!.id)
-          .maybeSingle()
+        const { data } = await fetchOwnTailorSetupProfile<TailorSetupProfileRow>()
 
         if (cancelled) return
-        if (!data?.id) {
-          setReadyMadeItemCount(0)
-          return
-        }
-
-        const { count } = await supabase
-          .from('seller_items')
-          .select('id', { count: 'exact', head: true })
-          .eq('tailor_profile_id', data.id)
-
-        if (!cancelled) setReadyMadeItemCount(count ?? 0)
+        setReadyMadeItemCount(data?.ready_made_item_count ?? 0)
       }
 
       void refreshReadyMadeItemCount()
@@ -1238,11 +1211,11 @@ export default function TailorSetupScreen() {
     isProfileImageRejectionCode(idRejectionCode) &&
     !avatarRejectionCleared
 
-  const hasIdDocumentForSetup = useCallback(() => {
-    if (idPhotoUri) return true
-    if (isProfileImageRejectionCode(idRejectionCode) && savedIdSelfieUrl) return true
+  const hasTrustVideoForSetup = useCallback(() => {
+    if (trustVideoUri) return true
+    if (isProfileImageRejectionCode(idRejectionCode) && savedTrustVideoPath) return true
     return idVerificationStatus !== 'NOT_SUBMITTED' && idVerificationStatus !== 'REJECTED'
-  }, [idPhotoUri, idRejectionCode, idVerificationStatus, savedIdSelfieUrl])
+  }, [idRejectionCode, idVerificationStatus, savedTrustVideoPath, trustVideoUri])
 
   const getSetupProgress = useCallback((overrides?: {
     nameError?: string
@@ -1274,7 +1247,7 @@ export default function TailorSetupScreen() {
       deliveryAvailable,
       shippingAvailable,
       pickupAddress,
-      idDocumentPresent: overrides?.idDocumentPresent ?? hasIdDocumentForSetup(),
+      idDocumentPresent: overrides?.idDocumentPresent ?? hasTrustVideoForSetup(),
     })
   }, [
     displayName,
@@ -1300,7 +1273,7 @@ export default function TailorSetupScreen() {
     deliveryAvailable,
     shippingAvailable,
     pickupAddress,
-    hasIdDocumentForSetup,
+    hasTrustVideoForSetup,
   ])
 
   function applySellerType(nextType: SellerType) {
@@ -1394,7 +1367,7 @@ export default function TailorSetupScreen() {
     initialStepResolved.current = true
     if (openIdentityFromHandoff) {
       openSetupSection(3)
-      showSetupToast('Secure handoff opened. Capture your live identity selfie.', 'success')
+      showSetupToast('Secure handoff opened. Record your short trust video.', 'success')
       return
     }
     const progress = getSetupProgress()
@@ -1800,89 +1773,156 @@ export default function TailorSetupScreen() {
     }
   }
 
-  function openIdPhotoPicker() {
-    setMediaSheetMode('id-document')
+  async function openTrustVideoPicker() {
+    if (trustChallengeLoading) return
+    setTrustChallengeLoading(true)
+    try {
+      await ensureTrustVideoSession()
+      setMediaSheetMode('trust-video')
+    } catch (sessionError) {
+      Alert.alert(
+        'Trust video unavailable',
+        await readFunctionErrorMessage(sessionError, 'Could not load your private challenge. Please try again.')
+      )
+    } finally {
+      setTrustChallengeLoading(false)
+    }
   }
 
-  async function pickIdPhoto(_source: IdDocumentSource) {
+  async function ensureTrustVideoSession() {
+    if (trustHandoffToken) {
+      const resolved = await invokeFunction<{
+        handoffId?: string
+        challengeId?: string | null
+        challengeText?: string | null
+      }>('identity-handoff-action', {
+        body: { action: 'resolve-token', token: trustHandoffToken },
+      })
+      if (resolved.error) throw resolved.error
+      if (!resolved.data?.handoffId || !resolved.data.challengeId || !resolved.data.challengeText) {
+        throw new Error('Trust-video challenge could not be loaded. Start a new session and try again.')
+      }
+      setTrustChallengeId(resolved.data.challengeId)
+      setTrustChallengeText(resolved.data.challengeText)
+      return trustHandoffToken
+    }
+
+    const created = await invokeFunction<{
+      token?: string
+      challengeId?: string
+      challengeText?: string
+    }>('identity-handoff-action', {
+      body: { action: 'create' },
+    })
+    if (created.error) throw created.error
+    const token = created.data?.token?.trim() || ''
+    const challengeId = created.data?.challengeId?.trim() || ''
+    const challengeText = created.data?.challengeText?.trim() || ''
+    if (!token || !challengeId || !challengeText) {
+      throw new Error('Could not start trust verification. Try again.')
+    }
+    setTrustHandoffToken(token)
+    setTrustChallengeId(challengeId)
+    setTrustChallengeText(challengeText)
+    return token
+  }
+
+  async function pickTrustVideo(_source: TrustVideoSource) {
     const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted) {
       Alert.alert(
         'Permission needed',
-        'Allow camera access to capture a live selfie while holding your ID beside your face.'
+        'Allow camera access to record your short Drapeon trust video.'
+      )
+      return
+    }
+
+    const microphonePermission = await requestRecordingPermissionsAsync()
+    if (!microphonePermission.granted) {
+      Alert.alert('Microphone needed', 'Allow microphone access so reviewers can hear the challenge phrase.')
+      return
+    }
+
+    try {
+      await ensureTrustVideoSession()
+    } catch (sessionError) {
+      Alert.alert(
+        'Trust video unavailable',
+        await readFunctionErrorMessage(sessionError, 'Could not load your private challenge. Please try again.')
       )
       return
     }
 
     const res = await launchImagePickerSafely(
       () =>
-        ImagePicker.launchCameraAsync({
-          mediaTypes: 'images',
-          quality: 0.9,
+        ImagePicker.launchCameraAsync(preferCompatibleVideoRepresentation({
+          mediaTypes: 'videos',
+          videoMaxDuration: TAILOR_TRUST_VIDEO_MAX_SECONDS,
+          videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
           allowsEditing: false,
-        }),
+        })),
       {
-        context: 'tailor_setup_id_document_picker',
-        mediaLabel: 'identity selfie image',
+        context: 'tailor_setup_trust_video_picker',
+        mediaLabel: 'trust video',
         extra: { source: 'camera', userId: user?.id },
       }
     )
     if (!res) return
     if (res.canceled || !res.assets[0]) return
-    setIdPhotoUri(res.assets[0].uri)
+    const asset = res.assets[0]
+    const durationSeconds = pickerVideoDurationSeconds(asset)
+    if (durationSeconds != null && durationSeconds < TAILOR_TRUST_VIDEO_MIN_SECONDS) {
+      Alert.alert(
+        'Video is too short',
+        `Record for at least ${TAILOR_TRUST_VIDEO_MIN_SECONDS} seconds so your face, voice, and challenge phrase are clear.`
+      )
+      return
+    }
+    if (durationSeconds != null && durationSeconds > TAILOR_TRUST_VIDEO_MAX_SECONDS + 0.5) {
+      Alert.alert('Video is too long', `Keep the challenge video under ${TAILOR_TRUST_VIDEO_MAX_SECONDS} seconds.`)
+      return
+    }
+    const contentType = portfolioVideoContentType(asset)
+    if (contentType !== 'video/mp4' && contentType !== 'video/quicktime') {
+      Alert.alert('Video format unsupported', 'Record the challenge again using your phone camera.')
+      return
+    }
+    setTrustVideoContentType(contentType)
+    setTrustVideoUri(asset.uri)
     clearVisibleError('idDocument')
     setIdError('')
   }
 
-  async function submitIdentitySelfieForReview(): Promise<boolean> {
-    if (!idPhotoUri || !user?.id) return false
-    const normalizedLegalName = normalizeLegalName(legalName)
-    if (!isValidLegalName(normalizedLegalName)) {
-      setLegalNameError('Enter your legal name exactly as shown on your ID. Numbers, emojis, handles, and business symbols are not permitted.')
-      return false
-    }
+  async function submitTrustVideoForReview(): Promise<boolean> {
+    if (!trustVideoUri || !user?.id) return false
     if (!identityConsentGranted) {
-      setIdentityConsentError('Consent is required before identity review can begin.')
+      setIdentityConsentError('Consent is required before trust review can begin.')
       return false
     }
     setUploadingId(true)
     try {
-      let token = handoffToken
-      if (token) {
-        const resolved = await invokeFunction<{
-          handoffId?: string
-        }>('identity-handoff-action', {
-          body: { action: 'resolve-token', token },
-        })
-        if (resolved.error) throw resolved.error
-        if (!resolved.data?.handoffId) throw new Error('Identity handoff could not be found. Start a new session and try again.')
-      } else {
-        const created = await invokeFunction<{
-          token?: string
-        }>('identity-handoff-action', {
-          body: { action: 'create' },
-        })
-        if (created.error) throw created.error
-        token = created.data?.token?.trim() || null
-      }
-      if (!token) throw new Error('Could not start identity verification. Try again.')
+      const token = await ensureTrustVideoSession()
 
       const upload = await invokeFunction<{
         path?: string
         uploadToken?: string
       }>('identity-handoff-action', {
-        body: { action: 'create-upload-url', token },
+        body: { action: 'create-upload-url', token, contentType: trustVideoContentType },
       })
       if (upload.error) throw upload.error
       const path = upload.data?.path
       const uploadToken = upload.data?.uploadToken
-      if (!path || !uploadToken) throw new Error('Could not prepare secure identity upload. Try again.')
+      if (!path || !uploadToken) throw new Error('Could not prepare secure video upload. Try again.')
 
-      const cleanUri = await stripExif(idPhotoUri)
-      const payload = await createValidatedUploadPayload(cleanUri, 20 * 1024 * 1024)
+      const payload = await createValidatedUploadPayload(trustVideoUri, {
+        maxBytes: 50 * 1024 * 1024,
+        contentType: trustVideoContentType,
+        allowedContentTypes: ['video/mp4', 'video/quicktime'],
+        purpose: 'TRUST_VERIFICATION',
+      })
       const { error: uploadError } = await supabase.storage
-        .from('id-documents')
-        .uploadToSignedUrl(path, uploadToken, payload.data, { contentType: 'image/jpeg' })
+        .from('trust-verification')
+        .uploadToSignedUrl(path, uploadToken, payload.data, { contentType: trustVideoContentType })
       if (uploadError) throw uploadError
 
       const submitted = await invokeFunction<{
@@ -1910,10 +1950,10 @@ export default function TailorSetupScreen() {
       })
       setUploadingId(false)
       Alert.alert(
-        'Identity review not submitted',
+        'Trust review not submitted',
         await readFunctionErrorMessage(
           error,
-          'We saved your profile, but identity review still needs your live selfie before review can start.'
+          'We saved your profile, but the private challenge video still needs to upload before review can start.'
         )
       )
       return false
@@ -1945,7 +1985,7 @@ export default function TailorSetupScreen() {
       return
     }
 
-    if (!hasIdDocumentForSetup()) {
+    if (!hasTrustVideoForSetup()) {
       setStep(3)
       setSetupView('section')
       setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
@@ -1954,17 +1994,10 @@ export default function TailorSetupScreen() {
       return
     }
 
-    if (idPhotoUri && !isValidLegalName(legalName)) {
+    if (trustVideoUri && !identityConsentGranted) {
       setStep(3)
       setSetupView('section')
-      setLegalNameError('Enter your legal name exactly as shown on your ID. Numbers, emojis, handles, and business symbols are not permitted.')
-      return
-    }
-
-    if (idPhotoUri && !identityConsentGranted) {
-      setStep(3)
-      setSetupView('section')
-      setIdentityConsentError('Consent is required before identity review can begin.')
+      setIdentityConsentError('Consent is required before trust review can begin.')
       return
     }
 
@@ -1983,7 +2016,6 @@ export default function TailorSetupScreen() {
         action: 'upsert-setup',
         profile: {
           displayName: displayName.trim(),
-          ...(legalName.trim() ? { legalName: normalizeLegalName(legalName) } : {}),
           avatarUrl,
           bio: bio.trim() || null,
           location: location.trim(),
@@ -2085,15 +2117,15 @@ export default function TailorSetupScreen() {
       return
     }
 
-    if (!idPhotoUri && isProfileImageRejectionCode(idRejectionCode) && avatarRejectionCleared) {
+    if (!trustVideoUri && isProfileImageRejectionCode(idRejectionCode) && avatarRejectionCleared) {
       setIdVerificationStatus('PENDING')
       setIdRejectionReason('')
       setIdRejectionCode('')
     }
 
-    if (idPhotoUri) {
-      const identitySubmitted = await submitIdentitySelfieForReview()
-      if (!identitySubmitted) {
+    if (trustVideoUri) {
+      const trustVideoSubmitted = await submitTrustVideoForReview()
+      if (!trustVideoSubmitted) {
         setStep(3)
         setSetupView('section')
         return
@@ -2102,9 +2134,9 @@ export default function TailorSetupScreen() {
 
     Alert.alert(
       'Profile submitted',
-      idPhotoUri
-        ? "We'll review your live identity selfie within 24 hours. You'll be notified when your profile goes live."
-        : 'Your profile is saved. Capture your identity selfie to submit for review. Payout setup can be completed after your account is created.',
+      trustVideoUri
+        ? "We'll review your private trust video within 24 hours. You'll be notified when your profile goes live."
+        : 'Your profile is saved. Record your private trust video to submit for review. Your payout provider handles payout verification separately.',
       [{ text: 'OK', onPress: () => resetTo(router, { pathname: '/(auth)/onboarding', params: { role: 'TAILOR', userId: user.id } }) }]
     )
   }
@@ -2152,7 +2184,7 @@ export default function TailorSetupScreen() {
     })
 
     if (setupView === 'hub') {
-      if (SETUP_STEP_IDS.every((stepId) => progress.stepValid[stepId]) && hasIdDocumentForSetup()) {
+      if (SETUP_STEP_IDS.every((stepId) => progress.stepValid[stepId]) && hasTrustVideoForSetup()) {
         setVisibleErrors({})
         void finish()
         return
@@ -2177,7 +2209,7 @@ export default function TailorSetupScreen() {
     }
 
     setVisibleErrors({})
-    if (step === 3 && !hasIdDocumentForSetup()) {
+    if (step === 3 && !hasTrustVideoForSetup()) {
       setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
       setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
       focusFirstSetupError({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE }, 3)
@@ -2250,14 +2282,14 @@ export default function TailorSetupScreen() {
       targetStep: 2 as TailorSetupStep,
     },
     {
-      label: 'Identity & handoff',
-      detail: 'Capture your live ID selfie and add customer handoff details. Payout setup comes after account creation.',
+      label: 'Trust & handoff',
+      detail: 'Record a private challenge video and add customer handoff details. Payout verification stays with your payout provider.',
       complete: setupProgress.stepValid[3],
       targetStep: 3 as TailorSetupStep,
     },
   ]
   const checklistRemaining = setupChecklist.filter((item) => !item.complete).length
-  const setupReadyToSubmit = SETUP_STEP_IDS.every((stepId) => setupProgress.stepValid[stepId]) && hasIdDocumentForSetup()
+  const setupReadyToSubmit = SETUP_STEP_IDS.every((stepId) => setupProgress.stepValid[stepId]) && hasTrustVideoForSetup()
   const selectedSellerType = SELLER_TYPE_OPTIONS.find((item) => item.value === sellerType) ?? SELLER_TYPE_OPTIONS[0]
   const proofStepTitle = sellerType === 'BOUTIQUE' ? 'Shop proof' : sellerType === 'TAILOR_SHOP' ? 'Public proof' : 'Portfolio'
   const proofStepBody = sellerType === 'BOUTIQUE'
@@ -2307,7 +2339,7 @@ export default function TailorSetupScreen() {
           ? 'Choose at least one way customers can order from you'
           : step === 3 && !(pickupAvailable || deliveryAvailable || shippingAvailable)
             ? 'Choose at least one way customers receive orders'
-            : step === 3 && !hasIdDocumentForSetup()
+            : step === 3 && !hasTrustVideoForSetup()
               ? TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE
             : ''
   const primaryCtaLabel = uploadingMedia
@@ -2324,10 +2356,9 @@ export default function TailorSetupScreen() {
           ? 'Submit for review'
           : 'Save and continue'
   const editingLayoutActive = keyboard.visible || focusedTextField !== null
-  const ctaBottomPadding = editingLayoutActive
-    ? Math.max(insets.bottom + Spacing.xs, Spacing.sm)
-    : Math.max(insets.bottom + Spacing.sm, Spacing.xl)
-  const scrollBottomPadding = editingLayoutActive ? 96 : 160
+  const scrollBottomPadding =
+    DRAPE_FLOATING_ACTION_DOCK_CLEARANCE +
+    (setupView === 'hub' && !editingLayoutActive ? 112 : 40)
   const portfolioGridEntries = useMemo(
     () => previewPortfolioGridEntries(portfolioItems, portfolioDragIndex, portfolioHoverIndex),
     [portfolioDragIndex, portfolioHoverIndex, portfolioItems]
@@ -2406,6 +2437,8 @@ export default function TailorSetupScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           scrollEnabled={portfolioDragIndex === null}
+          onScroll={actionDockScroll.onScroll}
+          scrollEventThrottle={actionDockScroll.scrollEventThrottle}
           contentContainerStyle={{ paddingBottom: scrollBottomPadding }}
         >
           <View style={styles.content}>
@@ -3026,25 +3059,15 @@ export default function TailorSetupScreen() {
                   </View>
 
                   <View onLayout={rememberSetupFieldY('idDocument')}>
-                    <Text style={styles.fieldLabel}>Identity verification</Text>
+                    <Text style={styles.fieldLabel}>Marketplace trust video</Text>
                     <Text style={styles.fieldHint}>
-                      Capture a live selfie while holding your physical passport, national ID, or
-                      driver's licence beside your face. Payout setup can be completed after your account is created.
+                      Record the private challenge below so Drapeon can confirm a real person stands behind this profile and its work. No government ID is collected. Your payout provider verifies payouts separately.
                     </Text>
-                    {!hasIdDocumentForSetup() || idPhotoUri ? (
-                      <Input
-                        label="Legal name"
-                        placeholder="Exactly as shown on your ID"
-                        value={legalName}
-                        onChangeText={(value) => {
-                          setLegalName(value)
-                          setLegalNameError('')
-                        }}
-                        autoCapitalize="words"
-                        autoCorrect={false}
-                        hint="This stays private and is separate from your public display or business name."
-                        error={legalNameError || undefined}
-                      />
+                    {trustChallengeText ? (
+                      <View style={styles.identityRejectedCardCompact}>
+                        <Text style={styles.identityRejectedTitle}>Your private challenge</Text>
+                        <Text style={styles.identityRejectedText}>{trustChallengeText}</Text>
+                      </View>
                     ) : null}
                     {idVerificationStatus === 'REJECTED' ? (
                       <View style={styles.identityRejectedCardCompact}>
@@ -3054,133 +3077,148 @@ export default function TailorSetupScreen() {
                         <Text style={styles.identityRejectedText}>{idRejectionReason || readIdentityRejectionMessage({})}</Text>
                       </View>
                     ) : null}
-                    {idPhotoUri ? (
+                    {trustVideoUri ? (
                       <View style={styles.idPreviewWrap}>
-                        <RemoteImage
-                          uri={idPhotoUri}
+                        <PortfolioVideoPreview
+                          uri={trustVideoUri}
                           style={styles.idPreview}
                           contentFit="cover"
-                          transition={120}
-                          surface="tailor_setup_id_preview"
+                          nativeControls
+                          autoplay={false}
                         />
                         <TouchableOpacity
                           onPress={() => {
-                            setIdPhotoUri(null)
+                            setTrustVideoUri(null)
                             setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
                           }}
                         >
-                          <Text style={styles.idRemove}>Remove and re-upload</Text>
+                          <Text style={styles.idRemove}>Remove and record again</Text>
                         </TouchableOpacity>
                       </View>
-                    ) : hasIdDocumentForSetup() ? (
+                    ) : hasTrustVideoForSetup() ? (
                       <View style={styles.idExistingRow}>
                         <View style={styles.idExistingIcon}>
-                          <Feather name="file-text" size={14} color={Colors.needleGreen} />
+                          <Feather name="video" size={14} color={Colors.needleGreen} />
                         </View>
                         <View style={styles.idExistingCopy}>
-                          <Text style={styles.idExistingTitle}>Identity selfie submitted</Text>
-                          <Text style={styles.idExistingHint}>Identity review is already in progress or complete for this profile.</Text>
+                          <Text style={styles.idExistingTitle}>Trust video submitted</Text>
+                          <Text style={styles.idExistingHint}>Trust review is already in progress or complete for this profile.</Text>
                         </View>
-                        <TouchableOpacity onPress={openIdPhotoPicker} hitSlop={8}>
-                          <Text style={styles.idExistingAction}>Retake live photo</Text>
+                        <TouchableOpacity onPress={() => { void openTrustVideoPicker() }} hitSlop={8}>
+                          <Text style={styles.idExistingAction}>Retake video</Text>
                         </TouchableOpacity>
                       </View>
                     ) : (
                       <TouchableOpacity
                         style={[styles.idPickBtn, !!idError && styles.idPickBtnError]}
-                        onPress={openIdPhotoPicker}
+                        onPress={() => { void openTrustVideoPicker() }}
+                        disabled={trustChallengeLoading}
                         accessibilityRole="button"
-                        accessibilityLabel="Take live identity selfie"
+                        accessibilityLabel="Record private trust video"
                       >
                         <View style={styles.idPickIconWrap}>
-                          <Feather name="credit-card" size={22} color={Colors.needleGreen} />
+                          {trustChallengeLoading ? (
+                            <ActivityIndicator size="small" color={Colors.needleGreen} />
+                          ) : (
+                            <Feather name="video" size={22} color={Colors.needleGreen} />
+                          )}
                         </View>
-                        <Text style={styles.idPickLabel}>Take live ID selfie</Text>
+                        <Text style={styles.idPickLabel}>
+                          {trustChallengeLoading ? 'Loading private challenge…' : 'Record trust video'}
+                        </Text>
                         <Text style={styles.idPickHint}>
-                          Face + physical ID in one live camera photo
+                          {TAILOR_TRUST_VIDEO_MIN_SECONDS}–{TAILOR_TRUST_VIDEO_MAX_SECONDS} seconds · face, voice, and private phrase
                         </Text>
                       </TouchableOpacity>
                     )}
                     {!!(idError || visibleErrors.idDocument) && (
                       <Text style={styles.helperError}>{idError || visibleErrors.idDocument}</Text>
                     )}
-                    {idPhotoUri ? (
-                      <>
-                        <TouchableOpacity
-                          style={styles.identityConsentRow}
-                          onPress={() => {
-                            setIdentityConsentGranted((current) => !current)
-                            setIdentityConsentError('')
-                          }}
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked: identityConsentGranted }}
-                          accessibilityLabel="Consent to identity verification processing"
-                        >
-                          <View style={[
-                            styles.identityConsentBox,
-                            identityConsentGranted && styles.identityConsentBoxChecked,
-                          ]}>
-                            {identityConsentGranted ? (
-                              <Feather name="check" size={15} color={Colors.white} />
-                            ) : null}
-                          </View>
-                          <Text style={styles.identityConsentCopy}>{IDENTITY_CONSENT_COPY}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => { void Linking.openURL('https://drapeon.co/privacy') }}
-                          accessibilityRole="link"
-                          accessibilityLabel="Read Drapeon privacy policy"
-                        >
-                          <Text style={styles.identityPrivacyLink}>Read the Privacy Policy</Text>
-                        </TouchableOpacity>
-                        {identityConsentError ? (
-                          <Text style={styles.helperError}>{identityConsentError}</Text>
+                    <TouchableOpacity
+                      style={styles.identityConsentRow}
+                      onPress={() => {
+                        setIdentityConsentGranted((current) => !current)
+                        setIdentityConsentError('')
+                      }}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: identityConsentGranted }}
+                      accessibilityLabel="Consent to trust verification video processing"
+                    >
+                      <View style={[
+                        styles.identityConsentBox,
+                        identityConsentGranted && styles.identityConsentBoxChecked,
+                      ]}>
+                        {identityConsentGranted ? (
+                          <Feather name="check" size={15} color={Colors.white} />
                         ) : null}
-                      </>
+                      </View>
+                      <Text style={styles.identityConsentCopy}>{IDENTITY_CONSENT_COPY}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => { void Linking.openURL('https://drapeon.co/privacy') }}
+                      accessibilityRole="link"
+                      accessibilityLabel="Read Drapeon privacy policy"
+                    >
+                      <Text style={styles.identityPrivacyLink}>Read the Privacy Policy</Text>
+                    </TouchableOpacity>
+                    {identityConsentError ? (
+                      <Text style={styles.helperError}>{identityConsentError}</Text>
                     ) : null}
                   </View>
                 </View>
               </View>
             )}
+
+            {setupView === 'hub' && !editingLayoutActive ? (
+              <View style={styles.setupFooterLinks}>
+                <TouchableOpacity
+                  onPress={switchBackToCustomer}
+                  style={styles.modeSwitchLink}
+                  disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+                >
+                  {switchingToCustomer ? (
+                    <ActivityIndicator size="small" color={Colors.needleGreen} />
+                  ) : (
+                    <Text style={styles.modeSwitchText}>Use Drapeon as customer instead</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleSignOut}
+                  style={styles.signOutLink}
+                  disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+                >
+                  <Text style={styles.signOutText}>Sign out</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {setupView === 'section' && stepBlockingNote && !editingLayoutActive ? (
+              <Text style={styles.minNote}>{stepBlockingNote}</Text>
+            ) : null}
           </View>
         </ScrollView>
 
-        {/* CTA */}
-        <View style={[styles.cta, editingLayoutActive && styles.ctaCompact, { paddingBottom: ctaBottomPadding }]}>
-          <Button
-            label={primaryCtaLabel}
-            onPress={next}
-            loading={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
-            disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
-          />
-          {setupView === 'hub' && !editingLayoutActive && (
-            <>
-              <TouchableOpacity
-                onPress={switchBackToCustomer}
-                style={styles.modeSwitchLink}
-                disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
-              >
-                {switchingToCustomer ? (
-                  <ActivityIndicator size="small" color={Colors.needleGreen} />
-                ) : (
-                  <Text style={styles.modeSwitchText}>Use Drapeon as customer instead</Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleSignOut}
-                style={styles.signOutLink}
-                disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
-              >
-                <Text style={styles.signOutText}>Sign out</Text>
-              </TouchableOpacity>
-            </>
+        <DrapeFloatingActionDock compactWidth={76} testID="tailor-setup-action-dock">
+          {actionDockCompact ? (
+            <DrapeIconButton
+              icon={step === 3 || setupView === 'hub' ? 'check' : 'arrow-right'}
+              accessibilityLabel={primaryCtaLabel}
+              tone="primary"
+              onPress={() => { void next() }}
+              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+            />
+          ) : (
+            <DrapeCapsuleButton
+              label={primaryCtaLabel}
+              icon={step === 3 || setupView === 'hub' ? 'check' : 'arrow-right'}
+              onPress={() => { void next() }}
+              loading={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+            />
           )}
-          {setupView === 'section' && stepBlockingNote && !editingLayoutActive ? (
-            <Text style={styles.minNote}>{stepBlockingNote}</Text>
-          ) : null}
-        </View>
+        </DrapeFloatingActionDock>
         <MediaChoiceSheet
           mode={mediaSheetMode}
+          trustChallengeText={trustChallengeText}
           onClose={() => {
             setMediaSheetMode(null)
             setPortfolioReplaceIndex(null)
@@ -3193,9 +3231,9 @@ export default function TailorSetupScreen() {
             setMediaSheetMode(null)
             void pickPortfolioMedia(source)
           }}
-          onIdDocument={(source) => {
+          onTrustVideo={(source) => {
             setMediaSheetMode(null)
-            void pickIdPhoto(source)
+            void pickTrustVideo(source)
           }}
           videoLimitReached={portfolioVideoLimitReached}
         />
@@ -3857,15 +3895,17 @@ function MediaChoiceSheet({
   onClose,
   onProfilePhoto,
   onPortfolioMedia,
-  onIdDocument,
+  onTrustVideo,
   videoLimitReached,
+  trustChallengeText,
 }: {
   mode: MediaSheetMode
   onClose: () => void
   onProfilePhoto: (source: ProfilePhotoSource) => void
   onPortfolioMedia: (source: PortfolioMediaSource) => void
-  onIdDocument: (source: IdDocumentSource) => void
+  onTrustVideo: (source: TrustVideoSource) => void
   videoLimitReached: boolean
+  trustChallengeText: string
 }) {
   const insets = useSafeAreaInsets()
   const visible = mode !== null
@@ -3875,13 +3915,13 @@ function MediaChoiceSheet({
       ? 'Profile photo'
       : mode === 'portfolio-media'
         ? 'Add portfolio media'
-        : 'Identity selfie'
+        : 'Private trust video'
   const body =
     mode === 'profile-photo'
       ? 'Use a clear face photo customers can recognize before they book you.'
       : mode === 'portfolio-media'
         ? 'Add real work samples. Photos build trust fastest; short videos help with movement and finish.'
-        : 'Take one live selfie while holding your passport, national ID, or driver’s licence beside your face.'
+        : `Record a ${TAILOR_TRUST_VIDEO_MIN_SECONDS}–${TAILOR_TRUST_VIDEO_MAX_SECONDS} second private challenge video. No government ID is needed.`
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -3925,9 +3965,20 @@ function MediaChoiceSheet({
             </>
           ) : null}
 
-          {mode === 'id-document' ? (
+          {mode === 'trust-video' ? (
             <>
-              <SheetOption title="Capture live selfie + ID" body="Camera only. Hold the physical ID beside your face." onPress={() => onIdDocument('camera')} />
+              <View style={styles.identityRejectedCardCompact}>
+                <Text style={styles.identityRejectedTitle}>Your one-time phrase</Text>
+                <Text style={styles.identityRejectedText}>{trustChallengeText}</Text>
+              </View>
+              <Text style={styles.sheetPrivacyCopy}>
+                This clip stays private and is reviewed only for marketplace trust and account safety. Drapeon does not collect a government ID or create a biometric template.
+              </Text>
+              <SheetOption
+                title="Open camera"
+                body="Keep your face visible and say the full phrase clearly in one take."
+                onPress={() => onTrustVideo('camera')}
+              />
             </>
           ) : null}
         </View>
@@ -4806,6 +4857,11 @@ const styles = StyleSheet.create({
   },
   idExistingHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   idExistingAction: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  setupFooterLinks: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingTop: Spacing.lg,
+  },
 
   infoBox: {
     backgroundColor: Colors.boneDeep,
@@ -4906,6 +4962,11 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 21,
+  },
+  sheetPrivacyCopy: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 19,
   },
   sheetChoicesScroll: {
     flexGrow: 0,

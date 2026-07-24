@@ -75,6 +75,7 @@ export type MediaPurpose =
   | 'MESSAGE_MEDIA'
   | 'REVIEW_MEDIA'
   | 'VISION_PROOF'
+  | 'TRUST_VERIFICATION'
   | 'ID_DOCUMENT'
   | 'UNKNOWN'
 
@@ -104,6 +105,8 @@ export function allowedContentTypesForPurpose(purpose: MediaPurpose | undefined)
     case 'AVATAR':
     case 'VISION_PROOF':
       return ALLOWED_IMAGE_CONTENT_TYPES
+    case 'TRUST_VERIFICATION':
+      return ALLOWED_VIDEO_CONTENT_TYPES
     case 'READY_MADE_ITEM':
       return ALLOWED_READY_MADE_ITEM_CONTENT_TYPES
     case 'ORDER_REFERENCE':

@@ -13,6 +13,7 @@ import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
@@ -942,7 +943,10 @@ export default function TailorOrderDetailScreen() {
     )
   }
 
+  useContextualBackHandler(goBack)
+
   const [order, setOrder] = useState<OrderDetail | null>(null)
+  const loadedOrderIdRef = useRef<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [showQuoteModal, setShowQuoteModal] = useState(false)
@@ -1012,7 +1016,8 @@ export default function TailorOrderDetailScreen() {
       }
       return
     }
-    if (!silent) {
+    const shouldReplaceSurface = !silent && loadedOrderIdRef.current !== id
+    if (shouldReplaceSurface) {
       setLoading(true)
       setOrder(null)
       setHasCustomerReview(false)
@@ -1164,6 +1169,7 @@ export default function TailorOrderDetailScreen() {
             createdAt: update.created_at,
           })),
         })
+        loadedOrderIdRef.current = d.id
         setHandoffIssue(openHandoffIssue)
 
         const { count: customerReviewCount } = await supabase
@@ -1201,7 +1207,7 @@ export default function TailorOrderDetailScreen() {
           tags,
         })
       } else {
-        if (!silent) {
+        if (shouldReplaceSurface) {
           setHandoffIssue(null)
           setOrder(null)
           setHasCustomerReview(false)
@@ -1212,6 +1218,12 @@ export default function TailorOrderDetailScreen() {
     } catch (error) {
       if (silent) {
         Sentry.captureException(error, { extra: { context: 'tailor_order_realtime_refresh', orderId: id } })
+        return
+      }
+      if (!shouldReplaceSurface && loadedOrderIdRef.current === id) {
+        Sentry.captureException(error, {
+          extra: { context: 'tailor_order_background_refresh', orderId: id },
+        })
         return
       }
       setFetchErrorMessage(
@@ -1225,7 +1237,7 @@ export default function TailorOrderDetailScreen() {
       setCustomerReviewSummary(null)
       setMaterialAdvances([])
     }
-    if (!silent) setLoading(false)
+    if (shouldReplaceSurface) setLoading(false)
   }, [id, setOrder, userId])
 
   useEffect(() => {
@@ -1259,6 +1271,8 @@ export default function TailorOrderDetailScreen() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'custom_order_details', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_quotes', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'quote_revision_requests', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
       .subscribe()
 
     return () => {
@@ -2915,6 +2929,19 @@ export default function TailorOrderDetailScreen() {
                       reference when color accuracy matters.
                     </Text>
                   ) : null}
+                  {order.fabricSource === 'TAILOR_SOURCES' &&
+                  PRE_CUTTING_STAGES.includes(order.stage) &&
+                  (order.customDetail?.fabricApprovalStatus === 'PENDING_TAILOR_UPLOAD' ||
+                    order.customDetail?.fabricApprovalStatus === 'CHANGES_REQUESTED') ? (
+                    <Button
+                      label={
+                        order.customDetail.fabricApprovalStatus === 'CHANGES_REQUESTED'
+                          ? 'Upload replacement fabric'
+                          : 'Upload sourced fabric'
+                      }
+                      onPress={() => openStageModal('SOURCING')}
+                    />
+                  ) : null}
                   {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
                     <Text style={styles.supportHint}>Tailor can reject before cutting for: {fabricPolicy.rejectionReasons.join(' · ')}</Text>
                   ) : null}
@@ -3350,7 +3377,7 @@ export default function TailorOrderDetailScreen() {
           quoteId={order.activeQuoteId}
           expectedQuoteVersion={order.activeQuoteVersion}
           revisionRequestId={openQuoteRevision?.id ?? null}
-          initialAmount={quoteModalMode === 'revise' ? order.quotedAmount : null}
+          initialAmount={quoteModalMode === 'revise' ? baseAmount(order) : null}
           initialCompletionDate={quoteModalMode === 'revise' ? order.quotedCompletionDate : null}
           defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
           deliveryMethod={order.deliveryMethod}
@@ -3367,7 +3394,9 @@ export default function TailorOrderDetailScreen() {
           ? `Revision ${openQuoteRevision.roundNumber} of ${order.negotiationRoundLimit}`
           : undefined}
         onDismiss={() => setShowRevisionResponseSheet(false)}
-        enableDynamicSizing
+        scrollable
+        snapPoints={['48%']}
+        enableDynamicSizing={false}
       >
         <View style={styles.stageChoiceList}>
           <Text style={styles.supportHint}>

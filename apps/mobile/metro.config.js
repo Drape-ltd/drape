@@ -1,10 +1,13 @@
-const { getDefaultConfig } = require('expo/metro-config')
+const { getSentryExpoConfig } = require('@sentry/react-native/metro')
 const path = require('path')
 
 const projectRoot = __dirname
 const workspaceRoot = path.resolve(projectRoot, '../..')
 
-const config = getDefaultConfig(projectRoot)
+const config = getSentryExpoConfig(projectRoot, {
+  annotateReactComponents: false,
+  includeWebReplay: false,
+})
 
 // Watch the monorepo root so Metro can resolve workspace packages
 config.watchFolders = [workspaceRoot]

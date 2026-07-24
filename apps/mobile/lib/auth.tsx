@@ -10,6 +10,7 @@ import { supabase } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
 import { clearPersistedQueryCache } from './queryPersistence'
+import { unregisterPushInstallation } from './push-registration'
 import { syncUserRow } from './syncUserRow'
 import { reset as resetAnalytics } from './analytics'
 
@@ -49,11 +50,11 @@ function isDrapeRole(value: unknown): value is DrapeRole {
   return value === 'CUSTOMER' || value === 'TAILOR'
 }
 
-function getHostedAuthCallbackUrl(nextPath = '/account/dashboard') {
-  const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
-  const url = new URL('/auth/callback', siteUrl)
-  url.searchParams.set('next', nextPath)
-  return url.toString()
+function getMobileAuthCallbackUrl() {
+  // The PKCE verifier lives on the device that initiated sign-up. Returning
+  // through the app lets that same Supabase client exchange the confirmation
+  // code, and avoids crossing DEV/production web environments.
+  return ExpoLinking.createURL('/callback')
 }
 
 function displayNameFromMetadata(metadata: User['user_metadata']) {
@@ -555,7 +556,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: normalizedEmail,
       password,
       options: {
-        emailRedirectTo: getHostedAuthCallbackUrl('/account/dashboard'),
+        emailRedirectTo: getMobileAuthCallbackUrl(),
         data: { display_name: displayName, role },
       },
     })
@@ -732,7 +733,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const currentUserId = session?.user?.id ?? null
     if (currentUserId) {
       try {
-        await supabase.from('push_tokens').delete().eq('user_id', currentUserId)
+        await unregisterPushInstallation()
       } catch {
         // Sign-out should still clear local state if push-token cleanup cannot reach Supabase.
       }

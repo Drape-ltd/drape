@@ -1,4 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import {
+  isProductionWebHostname,
+  validateSupabaseTarget,
+} from './lib/supabase-environment'
 
 function getPublicSupabaseUrl() {
   return (
@@ -84,6 +88,20 @@ function notFoundResponse() {
   })
 }
 
+function invalidEnvironmentResponse() {
+  return new Response('Service configuration unavailable.', {
+    status: 503,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Robots-Tag': 'noindex, nofollow',
+    },
+  })
+}
+
 function contentSecurityPolicy(nonce: string) {
   const isDevelopment = process.env.NODE_ENV !== 'production'
   const imgSrc = ["'self'", 'data:', 'blob:', getSupabaseStorageOrigin(), 'https://*.supabase.co', 'https://images.unsplash.com', 'https://*.stripe.com']
@@ -139,6 +157,18 @@ function contentSecurityPolicy(nonce: string) {
 }
 
 export function middleware(request: NextRequest) {
+  if (isProductionWebHostname(getHostname(request))) {
+    const target = validateSupabaseTarget(getPublicSupabaseUrl(), 'production')
+
+    if (!target.isValid) {
+      console.error(
+        `[web env] Blocked production request because Supabase project ` +
+          `${target.actualProjectRef ?? '(missing)'} did not match ${target.expectedProjectRef}.`
+      )
+      return invalidEnvironmentResponse()
+    }
+  }
+
   if (isPublicProductionOpsRequest(request)) {
     return notFoundResponse()
   }

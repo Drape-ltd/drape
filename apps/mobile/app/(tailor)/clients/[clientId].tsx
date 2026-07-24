@@ -14,6 +14,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AvatarImage, DrapeStatusChip } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
@@ -179,6 +180,12 @@ export default function ClientDetailScreen() {
   const [contactWarning, setContactWarning] = useState(false)
 
   const notesRef = useRef<TextInput>(null)
+
+  function goBack() {
+    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
+  }
+
+  useContextualBackHandler(goBack)
 
   const fetchData = useCallback(async () => {
     if (!userId) {
@@ -490,10 +497,6 @@ export default function ClientDetailScreen() {
   const latestReviewableOrder = orders.find(
     (row) => ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(row.stage) && !reviewedOrderIds.has(row.id),
   )
-
-  function goBack() {
-    goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
-  }
 
   return (
     <KeyboardAvoidingView

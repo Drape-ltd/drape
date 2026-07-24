@@ -122,6 +122,7 @@ type ThreadEntry =
   | { kind: 'event'; key: string; createdAt: string; event: OrderEvent }
 
 type NegotiationState = {
+  stage: OrderStage | null
   activeQuote: { id: string; version: number; status: 'ACTIVE' } | null
   openRevision: Pick<QuoteRevisionRequest, 'id' | 'status' | 'roundNumber'> | null
   roundsUsed: number
@@ -555,6 +556,7 @@ export function MessageThread({
   const [mediaPreview, setMediaPreview] = useState<MessageMediaPreview | null>(null)
   const [orderEvents, setOrderEvents] = useState<OrderEvent[]>([])
   const [negotiationState, setNegotiationState] = useState<NegotiationState>({
+    stage: orderStage ?? null,
     activeQuote: null,
     openRevision: null,
     roundsUsed: 0,
@@ -659,11 +661,12 @@ export function MessageThread({
   }, [messageGroups, orderEvents])
 
   const conversationActions = useMemo(() => {
-    if (!CHAT_ORDER_ACTIONS_ENABLED || !orderStage) return null
+    const currentStage = negotiationState.stage ?? orderStage
+    if (!CHAT_ORDER_ACTIONS_ENABLED || !currentStage) return null
     return deriveOrderConversationActions({
       role: currentUserRole,
       orderKind,
-      stage: orderStage,
+      stage: currentStage,
       activeQuote: negotiationState.activeQuote,
       openRevision: negotiationState.openRevision,
       negotiationRoundsUsed: negotiationState.roundsUsed,
@@ -743,14 +746,20 @@ export function MessageThread({
   const fetchOrderConversationState = useCallback(async () => {
     if (!CHAT_ORDER_ACTIONS_ENABLED || orderKind !== 'CUSTOM') {
       setOrderEvents([])
-      setNegotiationState({ activeQuote: null, openRevision: null, roundsUsed: 0, roundLimit: 3 })
+      setNegotiationState({
+        stage: orderStage ?? null,
+        activeQuote: null,
+        openRevision: null,
+        roundsUsed: 0,
+        roundLimit: 3,
+      })
       return
     }
 
     const [orderResult, revisionResult, eventResult] = await Promise.all([
       supabase
         .from('orders')
-        .select('active_quote_id, active_quote_version, negotiation_rounds_used, negotiation_round_limit')
+        .select('stage, active_quote_id, active_quote_version, negotiation_rounds_used, negotiation_round_limit')
         .eq('id', orderId)
         .maybeSingle(),
       supabase
@@ -777,6 +786,7 @@ export function MessageThread({
     }
 
     const orderRow = orderResult.data as {
+      stage?: OrderStage | null
       active_quote_id?: string | null
       active_quote_version?: number | null
       negotiation_rounds_used?: number | null
@@ -803,6 +813,7 @@ export function MessageThread({
     }>
 
     setNegotiationState({
+      stage: orderRow?.stage ?? orderStage ?? null,
       activeQuote: orderRow?.active_quote_id && orderRow.active_quote_version
         ? { id: orderRow.active_quote_id, version: orderRow.active_quote_version, status: 'ACTIVE' }
         : null,
@@ -826,7 +837,7 @@ export function MessageThread({
       metadata: row.metadata ?? {},
       createdAt: row.created_at,
     })))
-  }, [orderId, orderKind])
+  }, [orderId, orderKind, orderStage])
 
   async function loadEarlier() {
     if (!hasEarlier || loadingEarlierRef.current || messages.length === 0) return
@@ -938,12 +949,15 @@ export function MessageThread({
 
     channelRef.current = channel
 
-    // Untrack when app backgrounds, re-track when it returns
+    // Reconcile from Postgres on every foreground. Mobile realtime sockets can
+    // suspend without delivering every change while the app is backgrounded.
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current === 'active' && nextState !== 'active') {
         void channel.untrack()
-      } else if (appStateRef.current !== 'active' && nextState === 'active') {
+      }
+      if (nextState === 'active') {
         void channel.track({ userId: currentUserId, threadStatus: 'open' })
+        void fetchMessages({ silent: true })
       }
       appStateRef.current = nextState
     })
@@ -964,6 +978,12 @@ export function MessageThread({
     const initialLoad = setTimeout(() => {
       void fetchOrderConversationState()
     }, 0)
+    const pollTimer = setInterval(() => {
+      void fetchOrderConversationState()
+    }, 15_000)
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void fetchOrderConversationState()
+    })
     const channel = supabase
       .channel(`order-conversation:${orderId}`)
       .on(
@@ -985,6 +1005,8 @@ export function MessageThread({
 
     return () => {
       clearTimeout(initialLoad)
+      clearInterval(pollTimer)
+      appStateSub.remove()
       void supabase.removeChannel(channel)
     }
   }, [fetchOrderConversationState, orderId, orderKind])

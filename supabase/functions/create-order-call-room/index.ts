@@ -424,7 +424,7 @@ Deno.serve(async (req) => {
             preferenceKey: 'messages',
             channelId: 'calls',
             sound: 'default',
-            interruptionLevel: 'timeSensitive',
+            interruptionLevel: 'time-sensitive',
             data: {
               orderId,
               target: 'call-join',

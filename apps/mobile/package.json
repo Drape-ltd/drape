@@ -11,7 +11,8 @@
     "build:android": "node ./scripts/run-with-env-guard.mjs preview eas build --platform android --profile preview",
     "build:ios:prod": "node ./scripts/run-with-env-guard.mjs production eas build --platform ios --profile production",
     "build:android:prod": "node ./scripts/run-with-env-guard.mjs production eas build --platform android --profile production",
-    "eas-build-post-install": "node ./scripts/prepare-google-services.mjs",
+    "prepare:native-dependencies": "node ./scripts/materialize-native-dependencies.mjs",
+    "eas-build-post-install": "node ./scripts/prepare-google-services.mjs && node ./scripts/materialize-native-dependencies.mjs",
     "qa:android": "node ./scripts/android-qa-runner.mjs",
     "lint": "eslint app components lib constants --max-warnings=999 && node scripts/check-navigation-usage.mjs",
     "typecheck": "tsc --noEmit"

@@ -35,6 +35,7 @@ import {
 } from '@/lib/video-asset'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
@@ -416,6 +417,8 @@ export default function PortfolioScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(params.historyChain, params.returnTo), '/(tailor)/profile')
   }
+
+  useContextualBackHandler(goBack)
 
   async function handleSave() {
     if (!editModal) return

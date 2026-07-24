@@ -83,7 +83,7 @@ function normalizePayload(value: unknown): WebOnboardingPayload | null {
   const fulfillment = Array.isArray(tailor?.fulfillment)
     ? tailor.fulfillment.filter((entry): entry is TailorFulfillment => entry === 'PICKUP' || entry === 'DELIVERY' || entry === 'SHIPPING')
     : []
-  if (!location || languages.length === 0 || specialties.length === 0 || fulfillment.length === 0) return null
+  if (!location || languages.length === 0 || fulfillment.length === 0) return null
 
   return {
     source: 'web',

@@ -8,11 +8,12 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input } from '@/components/ui'
@@ -33,7 +34,6 @@ function getPasswordRecoveryRedirectUrl() {
 
 export default function ForgotPasswordScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const { email: emailParam } = useLocalSearchParams<{ email?: string }>()
   const [email, setEmail] = useState(emailParam ?? '')
   const [loading, setLoading] = useState(false)
@@ -66,9 +66,10 @@ export default function ForgotPasswordScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(auth)/sign-in')
+    router.replace('/(auth)/sign-in')
   }
+
+  useContextualBackHandler(goBack)
 
   return (
     <SafeAreaView style={styles.container}>

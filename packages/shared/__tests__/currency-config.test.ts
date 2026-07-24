@@ -3,10 +3,25 @@ import {
   detectCurrencyPreference,
   extractRegionCodeFromLocale,
   hasSellerPayoutCurrencyMismatch,
+  parseMajorCurrencyAmountToMinor,
   resolvePaymentProviderForCurrency,
   resolveSellerPayoutCurrency,
   resolveSellerOrderCurrency,
 } from '../src/currency-config'
+
+describe('parseMajorCurrencyAmountToMinor', () => {
+  it('converts customer-entered major amounts into stored minor units', () => {
+    expect(parseMajorCurrencyAmountToMinor('120')).toBe(12000)
+    expect(parseMajorCurrencyAmountToMinor('75,000')).toBe(7500000)
+    expect(parseMajorCurrencyAmountToMinor('12.34')).toBe(1234)
+  })
+
+  it('rejects missing, non-positive, and over-precision amounts', () => {
+    expect(parseMajorCurrencyAmountToMinor(null)).toBeNull()
+    expect(parseMajorCurrencyAmountToMinor('0')).toBeNull()
+    expect(parseMajorCurrencyAmountToMinor('12.345')).toBeNull()
+  })
+})
 
 describe('extractRegionCodeFromLocale', () => {
   it('reads dash-delimited locales', () => {

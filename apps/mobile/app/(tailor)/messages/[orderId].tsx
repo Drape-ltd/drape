@@ -27,6 +27,7 @@ import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { useKeyboardState } from '@/lib/useKeyboardState'
 import { parseOrderSupportMeta, type OrderCallMeta, type OrderSupportMeta } from '@/lib/order-support'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -146,6 +147,8 @@ export default function TailorMessagesScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/orders')
   }
+
+  useContextualBackHandler(goBack)
 
   const openConsultationOrderDetails = useCallback(() => {
     router.push({

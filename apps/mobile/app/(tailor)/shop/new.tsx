@@ -8,6 +8,7 @@ import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import {
   Button,
@@ -398,6 +399,8 @@ export default function NewShopItemScreen() {
       },
     )
   }
+
+  useContextualBackHandler(goBack)
 
   useEffect(() => {
     const timer = setTimeout(() => {

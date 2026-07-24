@@ -12,13 +12,26 @@ import {
   View,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
-import { Button, Input, RemoteImage } from '@/components/ui'
+import {
+  Button,
+  DrapeCapsuleButton,
+  DrapeFloatingActionDock,
+  DrapeIconButton,
+  DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  Input,
+  RemoteImage,
+} from '@/components/ui'
+import {
+  useDrapeCapsuleNavMotion,
+  useDrapeCapsuleNavScroll,
+} from '@/components/ui/DrapeCapsuleNav'
 import { useAuth } from '@/lib/auth'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   MANUAL_BANK_COUNTRIES,
   MANUAL_BANK_ENTRY_NOTE,
@@ -205,7 +218,8 @@ function BenefitRow({ icon, title, body }: { icon: React.ComponentProps<typeof F
 export default function TailorPayoutSetupScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
+  const { compact: actionDockCompact } = useDrapeCapsuleNavMotion()
+  const actionDockScroll = useDrapeCapsuleNavScroll()
   const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const { user } = useAuth()
   const userId = user?.id ?? null
@@ -386,6 +400,8 @@ export default function TailorPayoutSetupScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/profile' as never)
   }
+
+  useContextualBackHandler(goBack)
 
   function startSetupFlow() {
     if (payoutChangeLocked) {
@@ -833,7 +849,12 @@ export default function TailorPayoutSetupScreen() {
             showsVerticalScrollIndicator={false}
             nestedScrollEnabled
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.body}
+            onScroll={actionDockScroll.onScroll}
+            scrollEventThrottle={actionDockScroll.scrollEventThrottle}
+            contentContainerStyle={[
+              styles.body,
+              { paddingBottom: DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + Spacing.xl },
+            ]}
           >
             {activeStep === 'INTRO' ? (
               <>
@@ -1261,7 +1282,11 @@ export default function TailorPayoutSetupScreen() {
                       <Text style={styles.sectionTitle}>What you’ll need</Text>
                       <Text style={styles.sectionCopy}>Stripe handles the compliance checks for you. Most tailors finish this in about 2 minutes.</Text>
                       <BenefitRow icon="credit-card" title="Your bank account details" body="Stripe will ask where payouts should land." />
-                      <BenefitRow icon="file-text" title="Government-issued ID" body="Stripe uses this to verify the account holder securely." />
+                      <BenefitRow
+                        icon="file-text"
+                        title="Identity check with Stripe"
+                        body="Stripe may request government ID directly. Drapeon does not receive or store that document."
+                      />
                       <BenefitRow icon="calendar" title="Your date of birth" body="Stripe may ask for this to complete onboarding." />
                     </View>
 
@@ -1296,16 +1321,23 @@ export default function TailorPayoutSetupScreen() {
             ) : null}
           </ScrollView>
 
-          {activeStep === 'INTRO' ? (
-            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 84) }]}>
-              <Button label="Set up payout account" onPress={() => setActiveStep('CURRENCY')} />
-            </View>
-          ) : null}
-
-          {activeStep === 'CURRENCY' ? (
-            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 84) }]}>
-              <Button label="Continue" onPress={() => setActiveStep('CONNECT')} />
-            </View>
+          {activeStep === 'INTRO' || activeStep === 'CURRENCY' ? (
+            <DrapeFloatingActionDock compactWidth={76} testID="payout-setup-action-dock">
+              {actionDockCompact ? (
+                <DrapeIconButton
+                  icon="arrow-right"
+                  accessibilityLabel={activeStep === 'INTRO' ? 'Set up payout account' : 'Continue'}
+                  tone="primary"
+                  onPress={() => setActiveStep(activeStep === 'INTRO' ? 'CURRENCY' : 'CONNECT')}
+                />
+              ) : (
+                <DrapeCapsuleButton
+                  label={activeStep === 'INTRO' ? 'Set up payout account' : 'Continue'}
+                  icon="arrow-right"
+                  onPress={() => setActiveStep(activeStep === 'INTRO' ? 'CURRENCY' : 'CONNECT')}
+                />
+              )}
+            </DrapeFloatingActionDock>
           ) : null}
         </>
       )}

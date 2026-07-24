@@ -3,7 +3,7 @@
  * Registers the device for Expo push notifications and stores the token
  * in the user's profile row. Also handles foreground notification display.
  */
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppState, Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as Notifications from 'expo-notifications'
@@ -11,13 +11,21 @@ import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
 import type { Href } from 'expo-router'
 import { useUserRole } from './auth'
+import { registerPushInstallation } from './push-registration'
 import { Sentry } from './sentry'
 import { supabase } from './supabase'
 
-// How foreground notifications look
+function isCallJoinData(data: Record<string, unknown>) {
+  return isUuid(data.orderId) && data.target === 'call-join'
+}
+
+// How foreground notifications look. Calls use the in-app invitation surface
+// below while still remaining visible in the notification list.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
+  handleNotification: async (notification) => ({
+    shouldShowBanner: !isCallJoinData(
+      (notification.request.content.data ?? {}) as Record<string, unknown>,
+    ),
     shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
@@ -41,9 +49,92 @@ const EXPO_PROJECT_ID =
 type NotificationSubscription = ReturnType<typeof Notifications.addNotificationReceivedListener>
 const pushRegistrationByUser = new Map<string, Promise<void>>()
 
+export type ForegroundCallInvite = {
+  notificationId: string
+  orderId: string
+  callKind: 'consultation' | 'ready-made'
+  callType: 'audio' | 'video'
+  title: string
+  body: string
+}
+
+export type ForegroundNotificationNotice = {
+  notificationId: string
+  title: string
+  body: string
+  path: string | null
+}
+
+let currentForegroundCallInvite: ForegroundCallInvite | null = null
+const foregroundCallInviteListeners = new Set<(invite: ForegroundCallInvite | null) => void>()
+let currentForegroundNotificationNotice: ForegroundNotificationNotice | null = null
+const foregroundNotificationListeners =
+  new Set<(notice: ForegroundNotificationNotice | null) => void>()
+
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+}
+
+function readForegroundCallInvite(
+  notification: Notifications.Notification,
+): ForegroundCallInvite | null {
+  const content = notification.request.content
+  const data = (content.data ?? {}) as Record<string, unknown>
+  if (!isCallJoinData(data)) return null
+
+  return {
+    notificationId: notification.request.identifier,
+    orderId: data.orderId as string,
+    callKind: data.callKind === 'consultation' ? 'consultation' : 'ready-made',
+    callType: data.callType === 'audio' ? 'audio' : 'video',
+    title: content.title?.trim() || 'Drapeon call ready',
+    body: content.body?.trim() || 'Your protected order call is ready. Join when you are available.',
+  }
+}
+
+function publishForegroundCallInvite(invite: ForegroundCallInvite | null) {
+  currentForegroundCallInvite = invite
+  foregroundCallInviteListeners.forEach((listener) => listener(invite))
+}
+
+export function useForegroundCallInvite() {
+  const [invite, setInvite] = useState(currentForegroundCallInvite)
+
+  useEffect(() => {
+    foregroundCallInviteListeners.add(setInvite)
+    return () => {
+      foregroundCallInviteListeners.delete(setInvite)
+    }
+  }, [])
+
+  const dismiss = useCallback(() => {
+    publishForegroundCallInvite(null)
+  }, [])
+
+  return { invite, dismiss }
+}
+
+function publishForegroundNotificationNotice(notice: ForegroundNotificationNotice | null) {
+  currentForegroundNotificationNotice = notice
+  foregroundNotificationListeners.forEach((listener) => listener(notice))
+}
+
+export function useForegroundNotificationNotice() {
+  const [notice, setNotice] = useState(currentForegroundNotificationNotice)
+
+  useEffect(() => {
+    foregroundNotificationListeners.add(setNotice)
+    return () => {
+      foregroundNotificationListeners.delete(setNotice)
+    }
+  }, [])
+
+  const dismiss = useCallback(() => {
+    publishForegroundNotificationNotice(null)
+  }, [])
+
+  return { notice, dismiss }
 }
 
 function resolveNotificationPath(
@@ -61,6 +152,7 @@ function resolveNotificationPath(
   const rawCallType = typeof data.callType === 'string' ? data.callType : null
   const callKind = rawCallKind === 'consultation' || rawCallKind === 'ready-made' ? rawCallKind : null
   const callType = rawCallType === 'audio' ? 'audio' : 'video'
+  const notificationType = typeof data.type === 'string' ? data.type : null
 
   if (orderId && target === 'call-join') {
     const params = new URLSearchParams({
@@ -81,6 +173,10 @@ function resolveNotificationPath(
 
   if (orderId) {
     return `${base}/orders/${orderId}`
+  }
+
+  if (role === 'TAILOR' && notificationType === 'tailor_verification_decision') {
+    return '/(tailor)/profile'
   }
 
   if (screen && ALLOWED_SCREENS.has(screen)) {
@@ -121,8 +217,21 @@ export function usePushNotifications(userId: string | null) {
     const activeRole = role
 
     // Foreground: show notification
-    notificationListener.current = Notifications.addNotificationReceivedListener(() => {
-      // Already displayed by setNotificationHandler above
+    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
+      const callInvite = readForegroundCallInvite(notification)
+      if (callInvite) {
+        publishForegroundCallInvite(callInvite)
+        return
+      }
+
+      const content = notification.request.content
+      const data = (content.data ?? {}) as Record<string, unknown>
+      publishForegroundNotificationNotice({
+        notificationId: notification.request.identifier,
+        title: content.title?.trim() || 'Drapeon update',
+        body: content.body?.trim() || 'There is a new update waiting for you.',
+        path: resolveNotificationPath(activeRole, data),
+      })
     })
 
     function handleNotificationResponse(response: NotificationResponse | null) {
@@ -229,15 +338,7 @@ async function registerAndStore(userId: string) {
       return
     }
 
-    // Store token in Supabase — upsert so re-installs update cleanly
-    const { error } = await supabase.from('push_tokens').upsert(
-      { user_id: userId, token, platform: Platform.OS, updated_at: new Date().toISOString() },
-      { onConflict: 'user_id' }
-    )
-
-    if (error) {
-      throw new Error(`Could not save push token: ${error.message}`)
-    }
+    await registerPushInstallation(token)
 
     Sentry.addBreadcrumb({
       category: 'push',

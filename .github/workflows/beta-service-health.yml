@@ -1,0 +1,62 @@
+name: Beta Service Health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-service-health
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      HEALTH_URL: https://pqptfuqogvrajozfsqzi.supabase.co/functions/v1/service-health
+      HEALTH_SECRET: ${{ secrets.DRAPE_HEALTHCHECK_SECRET }}
+    steps:
+      - name: Check public Edge liveness
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --max-time 20 \
+            "$HEALTH_URL?check=live" |
+            tee /tmp/drape-live.json
+          jq -e '.ok == true and .status == "ok"' /tmp/drape-live.json
+
+      - name: Check protected beta readiness
+        if: ${{ env.HEALTH_SECRET != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(
+            curl \
+              --silent \
+              --show-error \
+              --retry 2 \
+              --retry-all-errors \
+              --max-time 45 \
+              --output /tmp/drape-ready.json \
+              --write-out "%{http_code}" \
+              --header "Authorization: Bearer $HEALTH_SECRET" \
+              "$HEALTH_URL?check=ready"
+          )"
+          jq . /tmp/drape-ready.json
+          test "$status" = "200"
+          jq -e '.ok == true' /tmp/drape-ready.json
+
+      - name: Report missing readiness secret
+        if: ${{ env.HEALTH_SECRET == '' }}
+        run: |
+          echo "::warning::Add the repository secret DRAPE_HEALTHCHECK_SECRET to enable protected readiness checks."

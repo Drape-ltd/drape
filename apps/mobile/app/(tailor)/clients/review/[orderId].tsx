@@ -12,6 +12,7 @@ import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 
 const REVIEW_TAGS = [
   'Clear communication',
@@ -75,6 +76,8 @@ export default function TailorCustomerReviewScreen() {
   const goBack = useCallback(() => {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/clients')
   }, [historyChain, navigation, returnTo, router])
+
+  useContextualBackHandler(goBack, !submitting)
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {
     const value = payload?.[key]

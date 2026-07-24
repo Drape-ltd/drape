@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams } from 'expo-router'
 import {
   View,
   Text,
@@ -129,6 +129,11 @@ function orderPreview(
 
 export default function MessagesInboxScreen() {
   const router = useRouter()
+  const { view, directory, tailor } = useLocalSearchParams<{
+    view?: string
+    directory?: string
+    tailor?: string
+  }>()
   const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id
@@ -136,10 +141,14 @@ export default function MessagesInboxScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [fetchErrorMessage, setFetchErrorMessage] = useState('')
-  const [filter, setFilter] = useState<FilterTab>('open')
+  const startsInArchive = view === 'archive'
+  const startsInArchiveDirectory = startsInArchive && directory === '1'
+  const [filter, setFilter] = useState<FilterTab>(startsInArchive ? 'archive' : 'open')
   const [expandedOpenTailor, setExpandedOpenTailor] = useState<string | null>(null)
-  const [expandedArchiveTailor, setExpandedArchiveTailor] = useState<string | null>(null)
-  const [archiveDirectoryOpen, setArchiveDirectoryOpen] = useState(false)
+  const [expandedArchiveTailor, setExpandedArchiveTailor] = useState<string | null>(
+    startsInArchiveDirectory && tailor ? tailor : null
+  )
+  const [archiveDirectoryOpen, setArchiveDirectoryOpen] = useState(startsInArchiveDirectory)
 
   const fetchConversations = useCallback(async () => {
     setFetchErrorMessage('')
@@ -274,14 +283,21 @@ export default function MessagesInboxScreen() {
     })
   const archiveGroups = groupConversationsByTailor(archivedConversations)
 
-  function renderConversationRow(item: ConversationItem, labelMode: 'tailor' | 'order' = 'tailor') {
+  function renderConversationRow(
+    item: ConversationItem,
+    labelMode: 'tailor' | 'order' = 'tailor',
+    returnPath = '/(customer)/messages',
+  ) {
     return (
       <TouchableOpacity
         style={styles.row}
         onPress={() =>
           router.push({
             pathname: '/(customer)/messages/[orderId]',
-            params: { orderId: item.orderId, historyChain: appendToHistory(undefined, '/(customer)/messages') },
+            params: {
+              orderId: item.orderId,
+              historyChain: appendToHistory(undefined, returnPath),
+            },
           })
         }
         activeOpacity={0.7}
@@ -335,6 +351,9 @@ export default function MessagesInboxScreen() {
     if (!latest) return null
     const singleThread = item.threads.length === 1
     const threadLabel = mode === 'open' ? 'active order' : 'past thread'
+    const returnPath = mode === 'archive'
+      ? `/(customer)/messages?view=archive&directory=1&tailor=${encodeURIComponent(item.tailorName)}`
+      : '/(customer)/messages'
     const preview = singleThread
       ? orderPreview(latest.stage, latest.garmentType, latest.orderKind)
       : `${item.threads.length} ${threadLabel}${item.threads.length === 1 ? '' : 's'}`
@@ -348,7 +367,10 @@ export default function MessagesInboxScreen() {
             if (singleThread && latest) {
               router.push({
                 pathname: '/(customer)/messages/[orderId]',
-                params: { orderId: latest.orderId, historyChain: appendToHistory(undefined, '/(customer)/messages') },
+                params: {
+                  orderId: latest.orderId,
+                  historyChain: appendToHistory(undefined, returnPath),
+                },
               })
               return
             }
@@ -393,7 +415,7 @@ export default function MessagesInboxScreen() {
           <View style={styles.archiveThreadList}>
             {item.threads.map((thread) => (
               <View key={thread.orderId} style={styles.archiveThreadItem}>
-                {renderConversationRow(thread, 'order')}
+                {renderConversationRow(thread, 'order', returnPath)}
               </View>
             ))}
           </View>

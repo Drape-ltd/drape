@@ -25,9 +25,12 @@ import { AuthProvider, useAuth, useUserRole } from '@/lib/auth'
 import { CustomerProfileProvider } from '@/lib/customerProfile'
 import { TailorProfileProvider } from '@/lib/tailorProfile'
 import { usePushNotifications } from '@/lib/notifications'
+import { ForegroundCallInviteSurface } from '@/components/ui/ForegroundCallInvite'
+import { ForegroundNotificationBanner } from '@/components/ui/ForegroundNotificationBanner'
 import { getStripePublishableKey } from '@/lib/payments'
 import { OptionalStripeProvider } from '@/lib/stripe-runtime'
 import { supabase } from '@/lib/supabase'
+import { fetchOwnTailorProfileGuard } from '@/lib/tailor-profile-guard'
 import { initSentry, Sentry } from '@/lib/sentry'
 import { capture, identify, setAnalyticsConsent } from '@/lib/analytics'
 import { isBiometricEnabled, authenticate } from '@/lib/biometric'
@@ -466,11 +469,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
       setTailorProfileChecking(true)
       setTailorProfileChecked(false)
       withRouteGuardTimeout(
-        supabase
-          .from('tailor_profiles')
-          .select('id, profile_completed, display_name, location, id_verification_status')
-          .eq('user_id', userId)
-          .maybeSingle(),
+        fetchOwnTailorProfileGuard(),
         'Tailor profile guard lookup'
       )
         .then(({ data, error }) => {
@@ -722,6 +721,8 @@ export default function RootLayout() {
               <CustomerProfileProvider>
                 <TailorProfileProvider>
                   <RouteGuard appReady={appReady} />
+                  <ForegroundCallInviteSurface />
+                  <ForegroundNotificationBanner />
                   <ScreenAnalytics />
                   <BiometricGate />
                   <StatusBar style={statusBarStyle} />

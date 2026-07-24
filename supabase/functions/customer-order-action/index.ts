@@ -318,6 +318,7 @@ function queueTailorOrderEmail(
   order: OrderRow,
   subject: string,
   body: string,
+  eventKey = subject,
 ) {
   if (!order.tailor_id) return
   EdgeRuntime.waitUntil(
@@ -328,7 +329,28 @@ function queueTailorOrderEmail(
       subject,
       body,
       source: FN,
-      idempotencyKey: `${FN}:${order.id}:tailor-email:${subject}`,
+      idempotencyKey: `${FN}:${order.id}:tailor-email:${eventKey}`,
+    }),
+  )
+}
+
+function queueCustomerOrderEmail(
+  supabase: any,
+  order: OrderRow,
+  subject: string,
+  body: string,
+  eventKey = subject,
+) {
+  if (!order.customer_id) return
+  EdgeRuntime.waitUntil(
+    enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.customer_id.toString(),
+      audience: 'CUSTOMER',
+      subject,
+      body,
+      source: FN,
+      idempotencyKey: `${FN}:${order.id}:customer-email:${eventKey}`,
     }),
   )
 }
@@ -1716,6 +1738,7 @@ Deno.serve(async (req) => {
           reason: cancellationReason,
           from_stage: order.stage,
         },
+        notifyOps: true,
       })
 
       if (order.tailor_id) {
@@ -1726,6 +1749,22 @@ Deno.serve(async (req) => {
           })
         )
       }
+
+      const tailorNotification = TAILOR_NOTIFICATION['request-cancellation-review']!
+      queueTailorOrderEmail(
+        supabase,
+        order,
+        tailorNotification.title,
+        `${tailorNotification.body} Drapeon support will review the order timeline before any refund or closure decision.`,
+        `cancellation-review:${nextMeta.cancellationReview.requestedAt}`,
+      )
+      queueCustomerOrderEmail(
+        supabase,
+        order,
+        'Cancellation review received',
+        'Drapeon received your cancellation request. The order remains under review until support confirms the outcome, and we will notify you when a decision is recorded.',
+        `cancellation-review:${nextMeta.cancellationReview.requestedAt}`,
+      )
 
       return jsonResponse({ ok: true }, 200, cors)
     }

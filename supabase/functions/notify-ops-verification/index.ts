@@ -29,7 +29,7 @@ import {
   type OpsVerificationProofItemEvidence,
 } from '../../../packages/shared/src/ops-verification-evidence.ts'
 
-const ID_DOCUMENT_BUCKET = 'id-documents'
+const TRUST_VIDEO_BUCKET = 'trust-verification'
 
 type SupabaseStorageSigner = {
   storage: {
@@ -42,7 +42,7 @@ type SupabaseStorageSigner = {
   }
 }
 
-function idDocumentStoragePath(value: string | null | undefined): string | null {
+function trustVideoStoragePath(value: string | null | undefined): string | null {
   const trimmed = typeof value === 'string' ? value.trim() : ''
   if (!trimmed) return null
 
@@ -51,7 +51,7 @@ function idDocumentStoragePath(value: string | null | undefined): string | null 
     try {
       const url = new URL(trimmed)
       const decodedPath = decodeURIComponent(url.pathname)
-      const match = decodedPath.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?id-documents\/(.+)$/u)
+      const match = decodedPath.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?trust-verification\/(.+)$/u)
       if (!match?.[1]) return null
       path = match[1]
     } catch {
@@ -59,25 +59,25 @@ function idDocumentStoragePath(value: string | null | undefined): string | null 
     }
   }
 
-  path = path.replace(/^\/+/u, '').replace(/^id-documents\//u, '')
-  if (!path.startsWith('id-verification/')) return null
+  path = path.replace(/^\/+/u, '').replace(/^trust-verification\//u, '')
+  if (!path.startsWith('verification-video/')) return null
   return path
 }
 
-async function createIdDocumentReviewUrl(
+async function createTrustVideoReviewUrl(
   supabase: SupabaseStorageSigner,
   value: string | null | undefined,
 ) {
-  const path = idDocumentStoragePath(value)
+  const path = trustVideoStoragePath(value)
   if (!path) return null
 
   const { data, error } = await supabase
     .storage
-    .from(ID_DOCUMENT_BUCKET)
+    .from(TRUST_VIDEO_BUCKET)
     .createSignedUrl(path, 7 * 24 * 60 * 60)
 
   if (error) {
-    console.error('[notify-ops-verification] ID signed URL failed:', error.message)
+    console.error('[notify-ops-verification] trust video signed URL failed:', error.message)
     return null
   }
   return data?.signedUrl ?? null
@@ -268,7 +268,7 @@ Deno.serve(async (req) => {
     // Fetch tailor profile
     const { data: profile, error } = await supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, bio, specialty_tags, portfolio_photo_urls, portfolio_video_urls, avatar_url, price_range_min, price_range_max, currency, id_document_url, id_selfie_document_url, id_verification_status, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id, manual_bank_entry, manual_bank_verification_status')
+      .select('id, display_name, location, bio, specialty_tags, portfolio_photo_urls, portfolio_video_urls, avatar_url, price_range_min, price_range_max, currency, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, id_verification_status, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id, manual_bank_entry, manual_bank_verification_status')
       .eq('user_id', tailorId)
       .single()
 
@@ -361,14 +361,20 @@ Deno.serve(async (req) => {
         actual: { portfolioPhotoCount, portfolioVideoCount },
       },
       {
-        name: 'id_selfie_document_path_valid',
-        condition: !!idDocumentStoragePath(profile.id_selfie_document_url ?? profile.id_document_url)
-          && (profile.id_selfie_document_url ?? profile.id_document_url ?? '').includes('/selfie_'),
-        errorCode: 'ID_DOCUMENT_REQUIRED',
-        message: 'Capture a live identity selfie while holding your ID before sending verification for review.',
-        field: 'id_selfie_document_url',
+        name: 'trust_challenge_video_path_valid',
+        condition: !!trustVideoStoragePath(profile.trust_verification_video_path)
+          && typeof profile.trust_verification_challenge_id === 'string'
+          && profile.trust_verification_challenge_id.trim().length > 0
+          && typeof profile.trust_verification_challenge_text === 'string'
+          && profile.trust_verification_challenge_text.trim().length > 0,
+        errorCode: 'TRUST_VIDEO_REQUIRED',
+        message: 'Record the short private challenge video before sending trust verification for review.',
+        field: 'trust_verification_video_path',
         severity: 'BLOCKING',
-        actual: { hasIdSelfie: typeof profile.id_selfie_document_url === 'string' && profile.id_selfie_document_url.trim().length > 0 },
+        actual: {
+          hasTrustVideo: typeof profile.trust_verification_video_path === 'string' && profile.trust_verification_video_path.trim().length > 0,
+          hasChallenge: typeof profile.trust_verification_challenge_id === 'string' && profile.trust_verification_challenge_id.trim().length > 0,
+        },
       },
       {
         name: 'payout_ready_before_paid_work',
@@ -426,15 +432,15 @@ Deno.serve(async (req) => {
     const priceMin = formatPrice(profile.price_range_min, profile.currency)
     const priceMax = formatPrice(profile.price_range_max, profile.currency)
     const tags = (profile.specialty_tags ?? []).join(', ') || '—'
-    const idDocumentPath = profile.id_selfie_document_url ?? profile.id_document_url
-    const idDocumentReviewUrl = await createIdDocumentReviewUrl(supabase, idDocumentPath)
+    const trustVideoPath = profile.trust_verification_video_path
+    const trustVideoReviewUrl = await createTrustVideoReviewUrl(supabase, trustVideoPath)
     const avatarReviewUrl = safePublicReviewUrl(profile.avatar_url)
     const portfolioReviewUrls = publicReviewUrls([...portfolioPhotoUrls, ...portfolioVideoUrls])
     const proofMediaReviewUrls = publicReviewUrls(proofItems.flatMap((item) => item.mediaUrls))
     const opsDashboardUrl = getOpsDashboardUrl()
     const evidenceSummary = buildOpsVerificationEvidenceSummary({
       avatarUrl: avatarReviewUrl,
-      idDocumentUrl: idDocumentReviewUrl,
+      trustVideoUrl: trustVideoReviewUrl,
       portfolioPhotoUrls,
       portfolioVideoUrls,
       proofItems,
@@ -449,7 +455,8 @@ Deno.serve(async (req) => {
   <tr><td style="padding:6px 12px;color:#666">Specialties</td><td style="padding:6px 12px">${escapeHtml(tags)}</td></tr>
   <tr><td style="padding:6px 12px;color:#666">Price range</td><td style="padding:6px 12px">${priceMin} – ${priceMax}</td></tr>
   <tr><td style="padding:6px 12px;color:#666">Bio</td><td style="padding:6px 12px">${escapeHtml(profile.bio ?? '—')}</td></tr>
-  ${idDocumentPath ? `<tr><td style="padding:6px 12px;color:#666">Live selfie + ID</td><td style="padding:6px 12px">${idDocumentReviewUrl ? `<a href="${escapeHtml(idDocumentReviewUrl)}">View live selfie holding ID</a>` : 'Uploaded, but review link could not be generated'}</td></tr>` : ''}
+  ${trustVideoPath ? `<tr><td style="padding:6px 12px;color:#666">Private challenge video</td><td style="padding:6px 12px">${trustVideoReviewUrl ? `<a href="${escapeHtml(trustVideoReviewUrl)}">Review challenge video</a>` : 'Uploaded, but review link could not be generated'}</td></tr>` : ''}
+  <tr><td style="padding:6px 12px;color:#666">Challenge</td><td style="padding:6px 12px">${escapeHtml(profile.trust_verification_challenge_text ?? '—')}</td></tr>
 </table>
 
 <div style="display:flex;gap:16px;align-items:flex-start;margin-top:18px;font-family:sans-serif">
@@ -458,9 +465,11 @@ Deno.serve(async (req) => {
     ${avatarReviewUrl ? `<a href="${escapeHtml(avatarReviewUrl)}"><img src="${escapeHtml(avatarReviewUrl)}" alt="Public avatar" width="160" height="160" style="display:block;border-radius:16px;object-fit:cover;border:1px solid #ddd" /></a><p style="margin:8px 0 0;font-size:12px"><a href="${escapeHtml(avatarReviewUrl)}">Open public avatar</a></p>` : '<div style="width:160px;height:160px;border-radius:16px;border:1px solid #ddd;background:#f5f1eb;display:flex;align-items:center;justify-content:center;color:#777;font-size:12px;text-align:center">No avatar URL</div>'}
   </div>
   <div style="width:220px">
-    <p style="margin:0 0 8px;color:#666;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em">Live selfie + ID</p>
+    <p style="margin:0 0 8px;color:#666;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em">Private challenge video</p>
     <div style="border-radius:16px;border:1px solid #ddd;background:#f5f1eb;padding:16px;color:#555;font-size:13px;line-height:1.5">
-      ${idDocumentReviewUrl ? `<a href="${escapeHtml(idDocumentReviewUrl)}">Open signed private ID review link</a>` : 'Uploaded, but signed review link could not be generated.'}
+      ${trustVideoReviewUrl ? `<a href="${escapeHtml(trustVideoReviewUrl)}">Open signed private video</a>` : 'Uploaded, but signed review link could not be generated.'}
+      <p style="margin:10px 0 0"><strong>Prompt:</strong> ${escapeHtml(profile.trust_verification_challenge_text ?? 'Unavailable')}</p>
+      <p style="margin:10px 0 0;color:#777">Drapeon does not collect a government ID for this review.</p>
     </div>
   </div>
 </div>

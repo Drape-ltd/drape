@@ -2319,6 +2319,24 @@ Deno.serve(async (req) => {
       log('info', FN, action === 'revise-quote' ? 'quote.revised' : 'quote.sent', { actor_id: caller.id, order_id: orderId })
 
       if (order.customer_id) {
+        let notificationOrder = order
+        const { data: currentOrder, error: currentOrderError } = await supabase
+          .from('orders')
+          .select(orderSelect)
+          .eq('id', orderId)
+          .maybeSingle()
+
+        if (currentOrder) {
+          notificationOrder = currentOrder as unknown as OrderRow
+        } else if (currentOrderError) {
+          log('warn', FN, 'quote.notification_snapshot_failed', {
+            actor_id: caller.id,
+            order_id: orderId,
+            action,
+            error: currentOrderError.message,
+          })
+        }
+
         const notification = CUSTOMER_NOTIFICATION[action]
         const eventId = typeof quoteResult.eventId === 'string' ? quoteResult.eventId : ''
         const quoteId = typeof quoteResult.quoteId === 'string' ? quoteResult.quoteId : ''
@@ -2336,7 +2354,7 @@ Deno.serve(async (req) => {
         )
         EdgeRuntime.waitUntil(
           enqueueOrderEventEmailJob(supabase, {
-            order,
+            order: notificationOrder,
             recipientUserId: order.customer_id.toString(),
             audience: 'CUSTOMER',
             subject: notification.title,
@@ -2573,7 +2591,7 @@ Deno.serve(async (req) => {
         order_id: orderId,
         stage: 'CONSULTATION',
         note: body.note?.trim()
-          || `Tailor scheduled a consultation for ${scheduledStartAt}. Customer must pay first if a fee is required.`,
+          || 'Tailor scheduled a consultation. Review the agreed time below. Customer must pay first if a fee is required.',
       })
 
       await audit(supabase, {
@@ -2733,7 +2751,7 @@ Deno.serve(async (req) => {
         order_id: orderId,
         stage: 'CONSULTATION',
         note: body.note?.trim()
-          || `Tailor approved and scheduled the consultation for ${scheduledStartAt}. Customer must pay first if a fee is required.`,
+          || 'Tailor approved and scheduled the consultation. Review the agreed time below. Customer must pay first if a fee is required.',
       })
 
       await audit(supabase, {

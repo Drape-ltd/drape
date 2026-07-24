@@ -200,6 +200,9 @@ verify_jwt = false
 [functions.process-job-queue]
 verify_jwt = false
 
+[functions.process-push-receipts]
+verify_jwt = false
+
 [functions.read-gateway]
 verify_jwt = false
 

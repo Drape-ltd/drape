@@ -10,7 +10,7 @@ export const VERIFICATION_STATUSES = {
 
 export const VERIFICATION_REJECTION_REASON_REQUIRED = 'REJECTION_REASON_REQUIRED'
 export const DEFAULT_VERIFICATION_REJECTION_REASON =
-  'We could not verify the submitted ID document. Please upload a clear photo of a valid government-issued ID and submit again.'
+  'We could not verify the submitted challenge video. Please record a clear retake with your face, voice, and full private phrase clearly captured.'
 export const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
 export const PROFILE_IMAGE_REJECTION_REASON =
   'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
@@ -45,7 +45,7 @@ export type VerificationPushMessage = {
   data?: Record<string, string>
   sound?: string
   channelId?: string
-  interruptionLevel?: 'passive' | 'active' | 'timeSensitive' | 'critical'
+  interruptionLevel?: 'passive' | 'active' | 'time-sensitive' | 'critical'
 }
 
 export type VerificationPushResult = {
@@ -132,18 +132,19 @@ export function buildVerificationDecisionEmail(input: {
   const displayName = escapeHtml(input.displayName || 'there')
   const reason = trim(input.reason) || DEFAULT_VERIFICATION_REJECTION_REASON
   const recoveryCopy = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
-    ? 'Please upload a replacement profile photo. You do not need to retake your live ID selfie unless the review team asks for it.'
-    : 'Please update your ID document and submit your profile again when you are ready.'
+    ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
+    : 'Please record the challenge again in good light and submit your profile when you are ready.'
 
   if (input.approved) {
     return {
-      subject: 'Your ID has been verified - Drape',
+      subject: 'Your Drapeon profile has been verified',
       html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
   <img src="${escapeHtml(appUrl)}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
-  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">ID verification approved</h1>
+  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust review approved</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
-  <p style="color:#555;line-height:1.6">Your ID has been verified. Your tailor account is now active on Drape.</p>
+  <p style="color:#555;line-height:1.6">Your challenge video and tailor profile have been approved. Your storefront is now active on Drapeon.</p>
+  <p style="color:#555;line-height:1.6">Paid orders and earnings release still require payout verification with the payment provider.</p>
   <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
 </div>`,
@@ -151,13 +152,13 @@ export function buildVerificationDecisionEmail(input: {
   }
 
   return {
-    subject: 'ID verification - action needed',
+    subject: 'Drapeon trust review - action needed',
     html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
   <img src="${escapeHtml(appUrl)}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
-  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">ID verification needs another look</h1>
+  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust video needs another look</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
-  <p style="color:#555;line-height:1.6">We could not approve your ID verification yet.</p>
+  <p style="color:#555;line-height:1.6">We could not approve your Drapeon trust review yet.</p>
   <p style="color:#555;line-height:1.6"><strong>Reason:</strong> ${escapeHtml(reason)}</p>
   <p style="color:#555;line-height:1.6">${escapeHtml(recoveryCopy)}</p>
   <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
@@ -176,8 +177,8 @@ export function buildVerificationDecisionPush(input: {
 
   if (input.approved) {
     return {
-      title: 'You are live on Drape',
-      body: displayName + ' has been verified. Customers can now discover your work.',
+      title: 'You are live on Drapeon',
+      body: displayName + ' passed trust review. Customers can now discover your work.',
       data: {
         type: 'tailor_verification_decision',
         decision: 'APPROVE',
@@ -191,8 +192,8 @@ export function buildVerificationDecisionPush(input: {
   }
 
   return {
-    title: 'Verification update',
-    body: 'Your verification needs one more update before your tailor profile can go live.',
+    title: 'Trust review update',
+    body: 'Your challenge video needs one more update before your tailor profile can go live.',
     data: {
       type: 'tailor_verification_decision',
       decision: 'REJECT',
@@ -310,7 +311,7 @@ export async function performVerificationDecision(
 
   const { data: profile, error: profileError } = await supabase
     .from('tailor_profiles')
-    .select('id, user_id, display_name, id_verification_status, id_selfie_document_url, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id')
+    .select('id, user_id, display_name, id_verification_status, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls')
     .eq('user_id', tailorUserId)
     .maybeSingle()
 
@@ -361,12 +362,11 @@ export async function performVerificationDecision(
     if (!trim(profile.display_name)) missing.push('display_name')
     if (!trim(user?.phone)) missing.push('phone')
     if (!trim(profile.avatar_url)) missing.push('profile_photo')
-    if (!trim(profile.id_selfie_document_url) || !trim(profile.id_selfie_document_url).includes('/selfie_')) missing.push('live_identity_selfie')
+    if (!trim(profile.trust_verification_video_path) || !trim(profile.trust_verification_video_path).startsWith('verification-video/')) missing.push('challenge_video')
+    if (!trim(profile.trust_verification_challenge_id)) missing.push('challenge_id')
+    if (!trim(profile.trust_verification_challenge_text)) missing.push('challenge_prompt')
     if (arrayCount(profile.specialty_tags) < 1) missing.push('specialties')
     if (arrayCount(profile.portfolio_photo_urls) + arrayCount(profile.portfolio_video_urls) < 1) missing.push('portfolio')
-    if (profile.payout_account_verified !== true || profile.payout_reverification_required === true) missing.push('verified_payout_account')
-    if (!trim(profile.paystack_recipient_code) && !trim(profile.stripe_connect_account_id)) missing.push('payout_destination')
-
     if (missing.length > 0) {
       return {
         ok: false,
