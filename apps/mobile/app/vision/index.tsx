@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
+  ActivityIndicator,
   BackHandler,
+  InteractionManager,
   NativeModules,
   Platform,
   StyleSheet,
@@ -48,6 +50,7 @@ type NativeVisionScreenModule = {
 }
 
 const VISION_ROUTE_EXIT_DELAY_MS = 100
+const VISION_NATIVE_MOUNT_SETTLE_MS = 180
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value
@@ -175,6 +178,7 @@ export default function DrapeVisionRoute() {
   const primaryFallbackLabel = useMemo(() => primaryFallbackLabelForParams(mode, params), [mode, params])
   const androidPaused = isAndroidLiveScanPausedForLaunch(mode, androidVisionEnabled)
   const [visionExitPending, setVisionExitPending] = useState(false)
+  const [nativeMountReady, setNativeMountReady] = useState(false)
   const resolveVisionExitReturnRoute = useCallback(() => {
     const cachedParams = readPreservedVisionNavigationContextSync()
     return pickSafeReturnTo(
@@ -242,6 +246,49 @@ export default function DrapeVisionRoute() {
     })
   }, [NativeVisionScreen, androidPaused, deferred, mode])
 
+  useEffect(() => {
+    if (!NativeVisionScreen) {
+      setNativeMountReady(false)
+      return undefined
+    }
+
+    let active = true
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      settleTimer = setTimeout(() => {
+        if (!active) return
+        setNativeMountReady(true)
+        Sentry.addBreadcrumb({
+          category: 'drape_vision',
+          level: 'info',
+          message: 'vision_native_mount_ready',
+          data: {
+            mode,
+            returnTo: params.returnTo ?? 'none',
+            platform: Platform.OS,
+          },
+        })
+      }, VISION_NATIVE_MOUNT_SETTLE_MS)
+    })
+
+    Sentry.addBreadcrumb({
+      category: 'drape_vision',
+      level: 'info',
+      message: 'vision_native_mount_deferred',
+      data: {
+        mode,
+        returnTo: params.returnTo ?? 'none',
+        platform: Platform.OS,
+      },
+    })
+
+    return () => {
+      active = false
+      interactionTask.cancel()
+      if (settleTimer) clearTimeout(settleTimer)
+    }
+  }, [NativeVisionScreen, mode, params.returnTo])
+
   useEffect(() => (
     () => {
       if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
@@ -294,7 +341,16 @@ export default function DrapeVisionRoute() {
     }
   }, [openReturnRoute])
 
-  if (NativeVisionScreen) return <NativeVisionScreen />
+  if (NativeVisionScreen && nativeMountReady) return <NativeVisionScreen />
+
+  if (NativeVisionScreen) {
+    return (
+      <View style={styles.nativeMountLoading}>
+        <ActivityIndicator color={Colors.needleGreen} size="large" />
+        <Text style={styles.nativeMountLoadingText}>Starting Drapeon Vision</Text>
+      </View>
+    )
+  }
 
   const hasExplicitReturn = !!pickSafeReturnTo(params.historyChain, params.returnTo)
 
@@ -434,5 +490,17 @@ const styles = StyleSheet.create({
   },
   floatingPrimaryAction: {
     flex: 1,
+  },
+  nativeMountLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+    backgroundColor: DRAPE_VISION_COLORS.screen,
+  },
+  nativeMountLoadingText: {
+    fontSize: FontSize.sm,
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontWeight: FontWeight.medium,
   },
 })

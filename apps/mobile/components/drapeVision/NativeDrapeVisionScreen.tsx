@@ -3183,8 +3183,13 @@ export default function DrapeVisionScreen() {
   const [captureArmed, setCaptureArmed] = useState(false)
   const [scanCountdown, setScanCountdown] = useState<number | null>(null)
   const [cameraRestarting, setCameraRestarting] = useState(false)
+  const [cameraHostArmed, setCameraHostArmed] = useState(false)
+  const [cameraPreviewReady, setCameraPreviewReady] = useState(false)
   const cameraRestartingRef = useRef(false)
   const cameraSessionRunningRef = useRef(false)
+  const cameraPreviewReadyRef = useRef(false)
+  const cameraPreviewRecoveryCountRef = useRef(0)
+  const cameraPreviewRemountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cameraStopWaitersRef = useRef<Array<() => void>>([])
   const [liveTraceTick, setLiveTraceTick] = useState(0)
   const [bodyWorkletActiveTrace, setBodyWorkletActiveTrace] = useState(false)
@@ -3383,8 +3388,20 @@ export default function DrapeVisionScreen() {
     cameraSessionRunningRef.current = true
   }, [])
 
+  const handleVisionCameraPreviewStarted = useCallback(() => {
+    cameraPreviewReadyRef.current = true
+    setCameraPreviewReady(true)
+    addVisionBreadcrumb('native_vision_preview_ready', {
+      mode,
+      phase: phaseRef.current,
+      recoveryCount: cameraPreviewRecoveryCountRef.current,
+    })
+  }, [mode])
+
   const handleVisionCameraStopped = useCallback(() => {
     cameraSessionRunningRef.current = false
+    cameraPreviewReadyRef.current = false
+    setCameraPreviewReady(false)
     const waiters = cameraStopWaitersRef.current.splice(0)
     for (const resolve of waiters) resolve()
   }, [])
@@ -8816,8 +8833,8 @@ export default function DrapeVisionScreen() {
     !cameraRestarting
   const cameraPreviewVisible = phase === 'scan' || phase === 'specialist_scan'
   const cameraOutputs = useMemo(
-    () => frameOutputReady ? [frameOutput] : [],
-    [frameOutput, frameOutputReady],
+    () => cameraHostArmed && frameOutputReady ? [frameOutput] : [],
+    [cameraHostArmed, frameOutput, frameOutputReady],
   )
   const frameOutputSupportLabel = useMemo(() => {
     if (!frontCamera) return 'no camera'
@@ -8845,6 +8862,8 @@ export default function DrapeVisionScreen() {
       phase,
       engineStatus,
       cameraActive,
+      cameraHostArmed,
+      cameraPreviewReady,
       frameOutputReady,
       outputs: cameraOutputs.length,
       support: frameOutputSupportLabel,
@@ -8853,6 +8872,8 @@ export default function DrapeVisionScreen() {
     })
   }, [
     cameraActive,
+    cameraHostArmed,
+    cameraPreviewReady,
     cameraOutputs.length,
     captureArmed,
     engineStatus,
@@ -8862,6 +8883,56 @@ export default function DrapeVisionScreen() {
     phase,
     scanCountdown,
   ])
+
+  useEffect(() => {
+    if (!cameraHostArmed || !cameraActive || cameraPreviewReady) return undefined
+
+    const timer = setTimeout(() => {
+      if (cameraPreviewReadyRef.current) return
+
+      if (cameraPreviewRecoveryCountRef.current >= 1) {
+        addVisionBreadcrumb('native_vision_preview_recovery_exhausted', {
+          mode,
+          phase: phaseRef.current,
+          support: frameOutputSupportLabel,
+        }, 'error')
+        setEngineError('The camera preview did not start. Close Drapeon Vision and try again.')
+        return
+      }
+
+      cameraPreviewRecoveryCountRef.current += 1
+      addVisionBreadcrumb('native_vision_preview_recovery_started', {
+        mode,
+        phase: phaseRef.current,
+        support: frameOutputSupportLabel,
+      }, 'warning')
+      setCameraHostArmed(false)
+      if (cameraPreviewRemountTimerRef.current) clearTimeout(cameraPreviewRemountTimerRef.current)
+      cameraPreviewRemountTimerRef.current = setTimeout(() => {
+        if (phaseRef.current === 'scan' || phaseRef.current === 'specialist_scan') {
+          setCameraHostArmed(true)
+        }
+        cameraPreviewRemountTimerRef.current = null
+      }, 240)
+    }, 4_000)
+
+    return () => clearTimeout(timer)
+  }, [
+    cameraActive,
+    cameraHostArmed,
+    cameraPreviewReady,
+    frameOutputSupportLabel,
+    mode,
+  ])
+
+  useEffect(() => (
+    () => {
+      if (cameraPreviewRemountTimerRef.current) {
+        clearTimeout(cameraPreviewRemountTimerRef.current)
+        cameraPreviewRemountTimerRef.current = null
+      }
+    }
+  ), [])
 
   async function startBodyScan() {
     if (cameraRestartingRef.current) return
@@ -8916,6 +8987,9 @@ export default function DrapeVisionScreen() {
 
     setEngineError(null)
     setEngineStatus('initializing')
+    cameraPreviewReadyRef.current = false
+    cameraPreviewRecoveryCountRef.current = 0
+    setCameraPreviewReady(false)
     resetScanState()
     await restartVisionCameraSession()
     addVisionBreadcrumb('scan_start', {
@@ -8931,6 +9005,7 @@ export default function DrapeVisionScreen() {
       await resetNativeVisionSession('start_body_scan')
       assertNativeAnalyzerInitialized('Drapeon Vision', initializeDrapePoseLandmarker())
       setBodyWorkletActive(true)
+      setCameraHostArmed(true)
       setEngineStatus('ready')
       setInstruction(heightInputConfidence === 'approximate' ? 'Approx height. Draft will need review.' : 'Set phone down, then start countdown')
       setPoseDebug(emptyPoseDebug(Platform.OS === 'android' ? 'Camera preview warming' : 'Preview ready'))
@@ -9226,6 +9301,10 @@ export default function DrapeVisionScreen() {
       }
       setSpecialistReadinessStatus('ready')
       setSpecialistStatusMessage('Ready to scan. Compare the result with tape before cutting.')
+      cameraPreviewReadyRef.current = false
+      cameraPreviewRecoveryCountRef.current = 0
+      setCameraPreviewReady(false)
+      setCameraHostArmed(true)
       setEngineStatus('ready')
       setPoseDebug(emptyPoseDebug('Specialist scan ready'))
       activateSpecialistWorkletState(specialistMode)
@@ -12309,7 +12388,7 @@ export default function DrapeVisionScreen() {
 
   return (
     <View style={styles.visionScreenRoot}>
-      {frontCamera && frameOutputReady ? (
+      {cameraHostArmed && frontCamera && frameOutputReady ? (
         <View
           pointerEvents="none"
           style={[
@@ -12326,7 +12405,10 @@ export default function DrapeVisionScreen() {
             orientationSource={Platform.OS === 'android' ? 'interface' : undefined}
             resizeMode="cover"
             mirrorMode="auto"
-            onPreviewStarted={() => handleCameraSessionUpdate(`preview started / ${frameOutputSupportLabel}`)}
+            onPreviewStarted={() => {
+              handleVisionCameraPreviewStarted()
+              handleCameraSessionUpdate(`preview started / ${frameOutputSupportLabel}`)
+            }}
             onConfigured={() => handleCameraSessionUpdate(`configured / ${frameOutputSupportLabel}`)}
             onStarted={() => {
               handleVisionCameraStarted()

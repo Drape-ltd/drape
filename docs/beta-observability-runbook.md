@@ -6,14 +6,14 @@ and push-provider delivery evidence separate.
 
 ## What is visible
 
-| Signal | Source | What it proves |
-| --- | --- | --- |
-| Mobile crash/runtime exception | Sentry React Native | A beta build failed, with release/source context when upload is enabled |
-| Edge request and structured function logs | Supabase Logs | The server received and processed a request |
-| Background job state | `job_queue`, `job_attempts` | A notification/email/SMS side effect was claimed, retried, completed, or dead-lettered |
-| Expo push ticket and receipt | `push_delivery_attempts` | Expo accepted the ticket and whether APNs/FCM later accepted or rejected it |
-| Operational escalation | `ops_issues` | A launch-critical failure needs a human response |
-| Availability | GitHub Actions `Beta Service Health` | Edge liveness and, when configured, full protected readiness |
+| Signal                                    | Source                               | What it proves                                                                         |
+| ----------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------- |
+| Mobile crash/runtime exception            | Sentry React Native                  | A beta build failed, with release/source context when upload is enabled                |
+| Edge request and structured function logs | Supabase Logs                        | The server received and processed a request                                            |
+| Background job state                      | `job_queue`, `job_attempts`          | A notification/email/SMS side effect was claimed, retried, completed, or dead-lettered |
+| Expo push ticket and receipt              | `push_delivery_attempts`             | Expo accepted the ticket and whether APNs/FCM later accepted or rejected it            |
+| Operational escalation                    | `ops_issues`                         | A launch-critical failure needs a human response                                       |
+| Availability                              | GitHub Actions `Beta Service Health` | Edge liveness and, when configured, full protected readiness                           |
 
 `PROVIDER_ACCEPTED` does not prove a person saw a notification. It proves Expo's
 receipt says APNs or FCM accepted the message. Foreground/background/terminated
@@ -57,6 +57,22 @@ pnpm beta:logs
 Use `pnpm beta:logs -- --json` when the output needs to be archived or compared.
 The command intentionally omits push tokens, message bodies, job payloads, and
 secrets.
+
+When local read-only Sentry monitoring is configured, the same command also
+lists unresolved `beta` issues across the accessible Sentry projects. Add these
+values to the ignored `apps/mobile/.env.local` file:
+
+```text
+SENTRY_MONITOR_TOKEN
+SENTRY_MONITOR_ORG
+SENTRY_MONITOR_PROJECTS=drape-mobile,deno
+```
+
+Use a dedicated Sentry Internal Integration token with only organization,
+project, and issue/event read permissions. Do not reuse the source-map upload
+token and do not grant write, admin, release, member, distribution, alert, or CI
+permissions. The report includes issue identifiers, sanitized titles, counts,
+timestamps, and Sentry permalinks; it omits event payloads and user identifiers.
 
 ## Push delivery inspection
 
