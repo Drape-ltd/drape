@@ -32,4 +32,10 @@ describe('exception OS launch content', () => {
     const titles = DRAPE_EXCEPTION_RUNBOOK_ENTRIES.map((entry) => entry.title)
     expect(new Set(titles).size).toBe(titles.length)
   })
+
+  it('uses the Drapeon name throughout the customer guide', () => {
+    for (const topic of DRAPE_CUSTOMER_GUIDE_TOPICS) {
+      expect(topic.body).not.toMatch(/\bDrape\b/)
+    }
+  })
 })

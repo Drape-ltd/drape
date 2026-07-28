@@ -1,7 +1,9 @@
 import {
   buildMeasurementProfileStoragePayload,
+  hasCustomOrderMeasurementFallback,
   measurementCoreCompleteness,
   mergeMeasurementProfileValues,
+  missingCustomOrderMeasurements,
   promoteSpecialistMeasurementsToProfileValues,
   specialistMeasurementProfileValueKeys,
   stripDrapeVisionSpecialistTopLevelDraftFields,
@@ -9,6 +11,31 @@ import {
 } from '../src/measurement-profile'
 
 describe('measurement profile helpers', () => {
+  it('requires height with the core custom-order measurements', () => {
+    expect(missingCustomOrderMeasurements({
+      chest: 40,
+      waist: 32,
+      hips: 42,
+    }, 'Agbada')).toEqual(['height'])
+  })
+
+  it('accepts positive numeric strings and exempts headwear-only orders', () => {
+    expect(missingCustomOrderMeasurements({
+      chest: '40',
+      waist: '32',
+      hips: '42',
+      height: '70',
+    }, 'Dress')).toEqual([])
+    expect(missingCustomOrderMeasurements(null, 'Gele')).toEqual([])
+  })
+
+  it('only treats a substantial fit note as a measurement fallback', () => {
+    expect(hasCustomOrderMeasurementFallback('Ask the tailor')).toBe(false)
+    expect(hasCustomOrderMeasurementFallback(
+      'Please confirm my missing height with me before preparing the quote.',
+    )).toBe(true)
+  })
+
   it('keeps canonical measurement fields when preparing named profile storage', () => {
     const payload = buildMeasurementProfileStoragePayload({
       chest: 40,

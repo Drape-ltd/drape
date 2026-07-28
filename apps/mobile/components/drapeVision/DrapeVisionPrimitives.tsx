@@ -58,7 +58,7 @@ export const VISION_CAMERA_PALETTE = {
 function toneColors(colors: DrapeColorPalette, tone: VisionSurfaceTone) {
   switch (tone) {
     case 'active':
-      return { background: colors.needleGreenLight, foreground: colors.needleGreen, border: colors.needleGreen }
+      return { background: colors.needleGreenLight, foreground: colors.needleGreenDark, border: colors.needleGreen }
     case 'success':
       return { background: colors.needleGreenLight, foreground: colors.success, border: colors.success }
     case 'warning':
@@ -281,18 +281,24 @@ export function VisionStepCard({
     <>
       <View style={[styles.stepIcon, { backgroundColor: colors.needleGreenLight }]}>
         {materialIcon ? (
-          <MaterialCommunityIcons name={materialIcon} size={22} color={colors.needleGreen} />
+          <MaterialCommunityIcons name={materialIcon} size={22} color={colors.needleGreenDark} />
         ) : (
-          <Feather name={icon ?? 'aperture'} size={21} color={colors.needleGreen} />
+          <Feather name={icon ?? 'aperture'} size={21} color={colors.needleGreenDark} />
         )}
       </View>
       <View style={styles.stepCopy}>
-        {eyebrow ? <Text style={[styles.eyebrow, { color: colors.needleGreen }]}>{eyebrow}</Text> : null}
+        {eyebrow ? <Text style={[styles.eyebrow, { color: colors.needleGreenDark }]}>{eyebrow}</Text> : null}
         <Text style={[styles.stepTitle, { color: colors.ink }]}>{title}</Text>
         <Text style={[styles.stepBody, { color: colors.inkLight }]}>{body}</Text>
         {status ? <VisionStatusChip label={status} tone={statusTone} /> : null}
       </View>
-      {trailing ?? (onPress ? <Feather name="chevron-right" size={20} color={colors.midGrey} /> : null)}
+      {trailing ?? (
+        selected
+          ? <Feather name="check-circle" size={22} color={colors.needleGreenDark} />
+          : onPress
+            ? <Feather name="chevron-right" size={20} color={colors.midGrey} />
+            : null
+      )}
     </>
   )
   const cardStyle = [
@@ -489,7 +495,7 @@ export function VisionMetricCard({
         <Text style={[styles.metricLabel, { color: colors.inkLight }]}>{label}</Text>
         {onEdit ? (
           <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${label}`} onPress={onEdit} hitSlop={8}>
-            <Feather name="edit-2" size={15} color={colors.needleGreen} />
+            <Feather name="edit-2" size={15} color={colors.needleGreenDark} />
           </Pressable>
         ) : null}
       </View>
@@ -510,12 +516,12 @@ export function VisionPrivacyNotice({ points }: { points: readonly string[] }) {
   return (
     <View style={[styles.privacy, { backgroundColor: colors.surface, borderColor: colors.lightGrey }]}>
       <View style={styles.privacyHeader}>
-        <Feather name="shield" size={19} color={colors.needleGreen} />
+        <Feather name="shield" size={19} color={colors.needleGreenDark} />
         <Text style={[styles.privacyTitle, { color: colors.ink }]}>Private by design</Text>
       </View>
       {points.map((point) => (
         <View key={point} style={styles.privacyRow}>
-          <Feather name="check-circle" size={16} color={colors.needleGreen} />
+          <Feather name="check-circle" size={16} color={colors.needleGreenDark} />
           <Text style={[styles.privacyText, { color: colors.inkLight }]}>{point}</Text>
         </View>
       ))}
@@ -549,7 +555,7 @@ export function VisionErrorState({
       <VisionPrimaryButton label={actionLabel} onPress={onAction} />
       {secondaryLabel && onSecondary ? (
         <Pressable accessibilityRole="button" accessibilityLabel={secondaryLabel} onPress={onSecondary} style={styles.secondaryAction}>
-          <Text style={[styles.secondaryActionText, { color: colors.needleGreen }]}>{secondaryLabel}</Text>
+          <Text style={[styles.secondaryActionText, { color: colors.needleGreenDark }]}>{secondaryLabel}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -570,7 +576,7 @@ export function VisionSectionTitle({
   const { colors } = useDrapeTheme()
   return (
     <View style={[styles.sectionHeading, style]}>
-      {eyebrow ? <Text style={[styles.eyebrow, { color: colors.needleGreen }]}>{eyebrow}</Text> : null}
+      {eyebrow ? <Text style={[styles.eyebrow, { color: colors.needleGreenDark }]}>{eyebrow}</Text> : null}
       <Text style={[styles.sectionTitle, { color: colors.ink }]}>{title}</Text>
       {body ? <Text style={[styles.sectionBody, { color: colors.inkLight }]}>{body}</Text> : null}
     </View>
@@ -655,7 +661,7 @@ export function VisionDockIconButton({
         disabled && styles.disabled,
       ]}
     >
-      <Feather name={icon} size={19} color={destructive ? colors.error : colors.needleGreen} />
+      <Feather name={icon} size={19} color={destructive ? colors.error : colors.needleGreenDark} />
     </Pressable>
   )
 }

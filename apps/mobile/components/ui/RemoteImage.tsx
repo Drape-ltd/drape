@@ -9,6 +9,8 @@ import {
   type StorageImageBucket,
 } from '@/lib/image-url'
 
+const MAX_IMAGE_LOAD_ATTEMPTS = 2
+
 type RemoteImageProps = Omit<ImageProps, 'source' | 'placeholder' | 'onError'> & {
   uri?: string | null
   bucket?: StorageImageBucket
@@ -36,8 +38,10 @@ function RemoteImageComponent({
   ...imageProps
 }: RemoteImageProps) {
   const resolvedUri = useMemo(() => resolveStorageImageUrl(uri, bucket), [bucket, uri])
-  const [failedUri, setFailedUri] = useState<string | null>(null)
-  const failed = !!resolvedUri && failedUri === resolvedUri
+  const [loadFailure, setLoadFailure] = useState<{ uri: string; attempts: number } | null>(null)
+  const attempts = resolvedUri && loadFailure?.uri === resolvedUri ? loadFailure.attempts : 0
+  const failed = !!resolvedUri && attempts >= MAX_IMAGE_LOAD_ATTEMPTS
+  const activeCachePolicy = attempts > 0 ? 'none' : cachePolicy
 
   if (!resolvedUri || failed) {
     return (
@@ -52,15 +56,26 @@ function RemoteImageComponent({
       <Image
         {...imageProps}
         source={{ uri: resolvedUri }}
+        recyclingKey={`${resolvedUri}:${attempts}`}
         style={[{ backgroundColor: placeholderColor }, style]}
         contentFit={contentFit}
-        cachePolicy={cachePolicy}
-        transition={transition}
+        cachePolicy={activeCachePolicy}
+        transition={attempts > 0 ? 0 : transition}
         placeholder={placeholder}
         onError={(error) => {
-          setFailedUri(resolvedUri)
-          captureImageLoadFailure({ url: resolvedUri, bucket, surface, error })
-          onLoadError?.(resolvedUri)
+          const nextAttempts = Math.min(MAX_IMAGE_LOAD_ATTEMPTS, attempts + 1)
+          const willRetry = nextAttempts < MAX_IMAGE_LOAD_ATTEMPTS
+          setLoadFailure({ uri: resolvedUri, attempts: nextAttempts })
+          captureImageLoadFailure({
+            url: resolvedUri,
+            bucket,
+            surface,
+            error,
+            attempt: nextAttempts,
+            willRetry,
+            cachePolicy: String(activeCachePolicy),
+          })
+          if (!willRetry) onLoadError?.(resolvedUri)
         }}
       />
     </View>

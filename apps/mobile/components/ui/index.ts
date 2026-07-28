@@ -1,6 +1,7 @@
 export { Button } from './Button'
 export { AddressAutocompleteInput } from './AddressAutocompleteInput'
 export { Input } from './Input'
+export { PhoneNumberInput } from './PhoneNumberInput'
 export { Screen } from './Screen'
 export { TierBadgeChip, StarRating, Tag } from './Badge'
 export { Divider } from './Divider'

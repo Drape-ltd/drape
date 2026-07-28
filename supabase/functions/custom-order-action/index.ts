@@ -31,6 +31,10 @@ import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 import { resolveDeadlineContextWarning } from '../../../packages/shared/src/deadline-context.ts'
 import { getCustomOrderFabricIssues } from '../../../packages/shared/src/custom-order-fabric.ts'
+import {
+  hasCustomOrderMeasurementFallback,
+  missingCustomOrderMeasurements,
+} from '../../../packages/shared/src/measurement-profile.ts'
 
 const FN = 'custom-order-action'
 const STALE_MEASUREMENT_MONTHS = 6
@@ -155,28 +159,6 @@ function isDeadlineAllowed(value: string | null | undefined, now = new Date()) {
   const deadline = normalizeDeadline(value)
   if (!deadline) return false
   return deadline.getTime() >= customOrderMinimumDeliveryDate(now).getTime()
-}
-
-function measurementValue(snapshot: unknown, key: string) {
-  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null
-  const value = (snapshot as Record<string, unknown>)[key]
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
-  if (typeof value === 'string') {
-    const parsed = Number.parseFloat(value)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed
-  }
-  return null
-}
-
-function missingCoreMeasurements(snapshot: unknown, garmentType: string) {
-  const normalizedGarment = garmentType.trim().toLowerCase()
-  if (normalizedGarment === 'gele') return []
-  const required = ['chest', 'waist', 'hips', 'height']
-  return required.filter((field) => measurementValue(snapshot, field) == null)
-}
-
-function hasMeasurementFallbackNote(value: string | null | undefined) {
-  return (value ?? '').trim().length >= MEASUREMENT_FALLBACK_MIN_CHARS
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -426,10 +408,13 @@ Deno.serve(async (req) => {
       return rateLimitExceededResponse(cors)
     }
 
-    const missingMeasurements = missingCoreMeasurements(measurementSnapshot, body.garmentType)
+    const missingMeasurements = missingCustomOrderMeasurements(measurementSnapshot, body.garmentType)
     const hasStructuredMeasurements =
       !!measurementSnapshot && typeof measurementSnapshot === 'object' && !Array.isArray(measurementSnapshot)
-    const hasMeasurementFallback = hasMeasurementFallbackNote(normalizedBodyNote)
+    const hasMeasurementFallback = hasCustomOrderMeasurementFallback(
+      normalizedBodyNote,
+      MEASUREMENT_FALLBACK_MIN_CHARS,
+    )
     const measurementPreflight = runPreflight([
       {
         name: 'measurement_snapshot_present',

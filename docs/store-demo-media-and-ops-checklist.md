@@ -1,6 +1,6 @@
 # Store Demo Media And Ops Checklist
 
-Last updated: 2026-05-25
+Last updated: 2026-07-27
 
 ## Demo Media Standard
 
@@ -23,6 +23,8 @@ Prepare at least:
 - 2 proof-of-handoff or packaging photos for order timeline screenshots.
 
 For app-store screenshots, prefer vertical or 4:5 fashion images. Drape now renders Explore and tailor-profile portfolio cards with portrait-friendly heights, but images should still have the garment centered with breathing room around the head, hem, sleeves, and embellishment.
+
+Re-encode generated or externally edited still images as baseline JPEG before adding them to the manifest. Do not seed PNG files carrying C2PA/JUMBF content-credential chunks (`caBX` or `jumb`); those files can return HTTP 200 and still fail to decode on iOS. The seed command preflights every media URL and stops before database writes when it detects this class of incompatible PNG.
 
 ## Image QA
 

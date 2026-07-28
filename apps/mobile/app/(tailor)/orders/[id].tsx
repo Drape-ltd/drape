@@ -86,6 +86,7 @@ import {
   Button,
   DrapeCapsuleButton,
   DrapeFloatingActionDock,
+  DrapeIconButton,
   DrapeInlineActionCard,
   DrapeMediaMosaic,
   DrapeMediaViewer,
@@ -93,6 +94,7 @@ import {
   DrapeStatusChip,
   HandoffSupportModal,
   Input,
+  PhoneNumberInput,
   PortfolioVideoPreview,
   RemoteImage,
   type DrapeMediaMosaicItem,
@@ -1353,7 +1355,7 @@ export default function TailorOrderDetailScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <ActivityIndicator color={Colors.needleGreenDark} size="large" />
             <Text style={styles.stateTitle}>Loading this order...</Text>
             <Text style={styles.stateHint}>
               We’re pulling together the brief, measurements, quote context, and current production state.
@@ -2124,7 +2126,7 @@ export default function TailorOrderDetailScreen() {
             <Text style={styles.supportCardTitle}>Customer context</Text>
             {referralTrust?.visibleToTailor ? (
               <View style={styles.referralTrustCard}>
-                <Feather name="user-check" size={16} color={Colors.needleGreen} />
+                <Feather name="user-check" size={16} color={Colors.needleGreenDark} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.referralTrustTitle}>
                     Referred through Drapeon
@@ -2204,7 +2206,7 @@ export default function TailorOrderDetailScreen() {
                   />
                   <TouchableOpacity style={styles.compactActionMenuButton} onPress={openQuoteActionMenu}>
                     <Text style={styles.compactActionMenuText}>Consultation or decline</Text>
-                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreenDark} />
                   </TouchableOpacity>
                 </>
               )}
@@ -2279,7 +2281,7 @@ export default function TailorOrderDetailScreen() {
                   />
                   <TouchableOpacity style={styles.compactActionMenuButton} onPress={openCustomerConsultationMenu}>
                     <Text style={styles.compactActionMenuText}>Other consultation options</Text>
-                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreenDark} />
                   </TouchableOpacity>
                 </>
               ) : (
@@ -2292,7 +2294,7 @@ export default function TailorOrderDetailScreen() {
                   />
                   <TouchableOpacity style={styles.compactActionMenuButton} onPress={openConsultationNextMenu}>
                     <Text style={styles.compactActionMenuText}>Quote or decline</Text>
-                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreenDark} />
                   </TouchableOpacity>
                 </>
               )}
@@ -2431,7 +2433,7 @@ export default function TailorOrderDetailScreen() {
                 {order.orderKind === 'READY_MADE' ? 'Prepare this order' : 'Update production stage'}
               </Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
+                Currently: <Text style={{ color: Colors.needleGreenDark, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Text style={styles.stageCardHint}>
                 {order.orderKind === 'READY_MADE'
@@ -2455,7 +2457,7 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>Update production stage</Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
+                Currently: <Text style={{ color: Colors.needleGreenDark, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Button
                 label={`Advance to ${nextProductionStage ? STAGE_LABELS[nextProductionStage] : '...'}`}
@@ -2519,7 +2521,7 @@ export default function TailorOrderDetailScreen() {
           <View style={styles.supportCard}>
             <View style={styles.visionOrderHeader}>
               <View style={styles.visionOrderIcon}>
-                <Feather name="image" size={16} color={Colors.needleGreen} />
+                <Feather name="image" size={16} color={Colors.needleGreenDark} />
               </View>
               <Text style={styles.supportCardTitle}>Order evidence timeline</Text>
             </View>
@@ -3254,14 +3256,23 @@ export default function TailorOrderDetailScreen() {
         </View>
       </ScrollView>
 
-      <DrapeFloatingActionDock testID="tailor-order-message-dock">
-        <DrapeCapsuleButton
-          label={conversationCtaLabel}
-          tone="primary"
-          icon="message-circle"
-          style={{ flex: 1 }}
-          onPress={openOrderMessages}
-        />
+      <DrapeFloatingActionDock compactWidth={76} testID="tailor-order-message-dock">
+        {(compact) => compact ? (
+          <DrapeIconButton
+            icon="message-circle"
+            accessibilityLabel={conversationCtaLabel}
+            tone="primary"
+            onPress={openOrderMessages}
+          />
+        ) : (
+          <DrapeCapsuleButton
+            label={conversationCtaLabel}
+            tone="primary"
+            icon="message-circle"
+            style={{ flex: 1 }}
+            onPress={openOrderMessages}
+          />
+        )}
       </DrapeFloatingActionDock>
 
       <HandoffSupportModal
@@ -5216,7 +5227,6 @@ function QuoteModal({
 function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
   visible: boolean; order: OrderDetail; targetStage: OrderStage; onClose: () => void; onUpdated: (updatedStage: OrderStage) => void
 }) {
-  const insets = useSafeAreaInsets()
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [primaryMedia, setPrimaryMedia] = useState<StageMedia | null>(null)
@@ -5313,10 +5323,56 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
     const slot = mediaSourceSlot
     setMediaSourceSlot(null)
     if (!slot) return
-    setTimeout(() => {
-      if (source === 'camera') void pickStageMediaFromCamera(slot)
-      else void pickStageMediaFromLibrary(slot)
-    }, 250)
+    if (source === 'camera') void pickStageMediaFromCamera(slot)
+    else void pickStageMediaFromLibrary(slot)
+  }
+
+  function renderMediaSourceChooser(slot: 'primary' | 'secondary') {
+    if (mediaSourceSlot !== slot) return null
+
+    return (
+      <View style={styles.mediaSourceInline}>
+        <View style={styles.mediaSourceInlineHeader}>
+          <View style={styles.mediaSourceActionCopy}>
+            <Text style={styles.mediaSourceTitle}>Add proof media</Text>
+            <Text style={styles.mediaSourceText}>
+              Use fresh media from this exact stage. Reused proof is blocked.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.mediaSourceInlineClose}
+            onPress={() => setMediaSourceSlot(null)}
+            disabled={updating}
+            accessibilityRole="button"
+            accessibilityLabel="Close proof media options"
+          >
+            <Feather name="x" size={20} color={Colors.ink} />
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          style={styles.mediaSourceAction}
+          onPress={() => chooseStageMediaSource('camera')}
+          disabled={updating}
+        >
+          <Feather name="camera" size={20} color={Colors.needleGreenDark} />
+          <View style={styles.mediaSourceActionCopy}>
+            <Text style={styles.mediaSourceActionTitle}>Take photo or video</Text>
+            <Text style={styles.mediaSourceActionText}>Best for fresh production proof.</Text>
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.mediaSourceAction}
+          onPress={() => chooseStageMediaSource('library')}
+          disabled={updating}
+        >
+          <Feather name="image" size={20} color={Colors.needleGreenDark} />
+          <View style={styles.mediaSourceActionCopy}>
+            <Text style={styles.mediaSourceActionTitle}>Choose from library</Text>
+            <Text style={styles.mediaSourceActionText}>Use only media captured for this stage.</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    )
   }
 
   async function update() {
@@ -5475,14 +5531,25 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
                     style={styles.photoPreview}
                     surface="tailor_stage_update_photo_preview"
                   />
-                  <TouchableOpacity style={styles.photoRemove} onPress={() => setPrimaryMedia(null)} disabled={updating}>
-                    <Text style={styles.photoRemoveText}>Remove</Text>
-                  </TouchableOpacity>
+                  <View style={styles.photoActions}>
+                    <TouchableOpacity
+                      style={styles.photoReplace}
+                      onPress={() => pickStageMedia('primary')}
+                      disabled={updating}
+                    >
+                      <Feather name="refresh-cw" size={16} color={Colors.needleGreenDark} />
+                      <Text style={styles.photoReplaceText}>Replace</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => setPrimaryMedia(null)} disabled={updating}>
+                      <Feather name="trash-2" size={16} color={Colors.error} />
+                      <Text style={styles.photoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ) : (
                 <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('primary')} disabled={updating}>
                   <View style={styles.photoPickIcon}>
-                    <Feather name="camera" size={20} color={Colors.needleGreen} />
+                    <Feather name="camera" size={20} color={Colors.needleGreenDark} />
                   </View>
                   <Text style={styles.photoPickText}>Take or add photo/video</Text>
                   <Text style={styles.photoPickSubtext}>
@@ -5490,6 +5557,7 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
                   </Text>
                 </TouchableOpacity>
               )}
+              {renderMediaSourceChooser('primary')}
             </View>
 
             {finishingNeedsSecondPhoto ? (
@@ -5504,19 +5572,31 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
                       style={styles.photoPreview}
                       surface="tailor_stage_update_second_photo_preview"
                     />
-                    <TouchableOpacity style={styles.photoRemove} onPress={() => setSecondMedia(null)} disabled={updating}>
-                      <Text style={styles.photoRemoveText}>Remove</Text>
-                    </TouchableOpacity>
+                    <View style={styles.photoActions}>
+                      <TouchableOpacity
+                        style={styles.photoReplace}
+                        onPress={() => pickStageMedia('secondary')}
+                        disabled={updating}
+                      >
+                        <Feather name="refresh-cw" size={16} color={Colors.needleGreenDark} />
+                        <Text style={styles.photoReplaceText}>Replace</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.photoRemove} onPress={() => setSecondMedia(null)} disabled={updating}>
+                        <Feather name="trash-2" size={16} color={Colors.error} />
+                        <Text style={styles.photoRemoveText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('secondary')} disabled={updating}>
                     <View style={styles.photoPickIcon}>
-                      <Feather name="camera" size={20} color={Colors.needleGreen} />
+                      <Feather name="camera" size={20} color={Colors.needleGreenDark} />
                     </View>
                     <Text style={styles.photoPickText}>Take or add second proof</Text>
                     <Text style={styles.photoPickSubtext}>Use a different, well-lit angle for finishing quality.</Text>
                   </TouchableOpacity>
                 )}
+                {renderMediaSourceChooser('secondary')}
               </View>
             ) : null}
 
@@ -5565,13 +5645,11 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
                   hint={nextStage === 'OUT_FOR_DELIVERY' ? 'Required so the customer knows who is trying to reach them.' : 'Required so the customer knows who accepted the parcel.'}
                   required
                 />
-                <Input
+                <PhoneNumberInput
                   label={nextStage === 'OUT_FOR_DELIVERY' ? 'Delivery contact phone' : 'Shipping contact phone'}
-                  placeholder="e.g. +2348012345678"
+                  placeholder="Phone number"
                   value={deliveryContactPhone}
-                  onChangeText={(value) => setDeliveryContactPhone(normalizeContactPhoneInput(value))}
-                  keyboardType="phone-pad"
-                  autoCapitalize="none"
+                  onChangeText={setDeliveryContactPhone}
                   hint={nextStage === 'OUT_FOR_DELIVERY' ? 'Required so the customer can identify the active rider.' : 'Required so the customer can identify the courier or shipping desk.'}
                   required
                 />
@@ -5611,58 +5689,6 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
           </ScrollView>
         </SafeAreaView>
       </KeyboardAvoidingView>
-    </Modal>
-    <Modal
-      visible={!!mediaSourceSlot}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setMediaSourceSlot(null)}
-    >
-      <View style={styles.mediaSourceOverlay}>
-        <TouchableOpacity
-          style={styles.mediaSourceBackdrop}
-          activeOpacity={1}
-          onPress={() => setMediaSourceSlot(null)}
-          accessibilityRole="button"
-          accessibilityLabel="Close proof media options"
-        />
-        <View style={[styles.mediaSourceSheet, { paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xxl) }]}>
-          <View style={styles.mediaSourceHandle} />
-          <Text style={styles.mediaSourceTitle}>Add proof media</Text>
-          <Text style={styles.mediaSourceText}>
-            Use fresh stage proof. Reused media is blocked to keep the order timeline trustworthy.
-          </Text>
-          <TouchableOpacity
-            style={styles.mediaSourceAction}
-            onPress={() => chooseStageMediaSource('camera')}
-            disabled={updating}
-          >
-            <Feather name="camera" size={20} color={Colors.needleGreen} />
-            <View style={styles.mediaSourceActionCopy}>
-              <Text style={styles.mediaSourceActionTitle}>Take photo or video</Text>
-              <Text style={styles.mediaSourceActionText}>Best for fresh production proof.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.mediaSourceAction}
-            onPress={() => chooseStageMediaSource('library')}
-            disabled={updating}
-          >
-            <Feather name="image" size={20} color={Colors.needleGreen} />
-            <View style={styles.mediaSourceActionCopy}>
-              <Text style={styles.mediaSourceActionTitle}>Choose from library</Text>
-              <Text style={styles.mediaSourceActionText}>Use only media from this exact stage.</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.mediaSourceCancel}
-            onPress={() => setMediaSourceSlot(null)}
-            disabled={updating}
-          >
-            <Text style={styles.mediaSourceCancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
     </Modal>
     </>
   )
@@ -6168,7 +6194,7 @@ const styles = StyleSheet.create({
   },
   stateEyebrow: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
@@ -6176,7 +6202,7 @@ const styles = StyleSheet.create({
   stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  backText: { color: Colors.needleGreenDark, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.md },
 
@@ -6192,7 +6218,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingVertical: 6,
   },
-  orderTypePillText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  orderTypePillText: { fontSize: FontSize.xs, color: Colors.needleGreenDark, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   alertCard: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
@@ -6214,7 +6240,7 @@ const styles = StyleSheet.create({
   },
   compactActionMenuText: {
     fontSize: FontSize.sm,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
   },
 
@@ -6272,7 +6298,7 @@ const styles = StyleSheet.create({
   dossierRowStacked: { gap: 6 },
   dossierRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.sm },
   dossierStackedText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
-  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreen, lineHeight: 20 },
+  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreenDark, lineHeight: 20 },
   dossierMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   dossierMediaTile: { width: '31%', aspectRatio: 1, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
   dossierMediaImage: { width: '100%', height: '100%' },
@@ -6299,7 +6325,7 @@ const styles = StyleSheet.create({
   },
   referralTrustTitle: {
     fontSize: FontSize.sm,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
   },
   referralTrustText: {
@@ -6344,7 +6370,7 @@ const styles = StyleSheet.create({
   supportBadgeSuccess: { backgroundColor: Colors.needleGreenLight },
   supportBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   supportBadgeTextWarning: { color: Colors.kanteRust },
-  supportBadgeTextSuccess: { color: Colors.needleGreen },
+  supportBadgeTextSuccess: { color: Colors.needleGreenDark },
   supportBodyText: { fontSize: 13, color: Colors.inkLight, lineHeight: 19 },
   supportHint: { fontSize: 12, color: Colors.midGrey, lineHeight: 18 },
   timeline: { gap: 0, paddingTop: Spacing.xs },
@@ -6385,7 +6411,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingVertical: 5,
   },
-  styleChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  styleChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreenDark },
   referenceLinkList: { gap: 6 },
   referenceLinkRow: {
     borderRadius: Radius.md,
@@ -6396,7 +6422,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   referenceLinkHost: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink },
-  referenceLinkText: { fontSize: FontSize.xs, color: Colors.needleGreen },
+  referenceLinkText: { fontSize: FontSize.xs, color: Colors.needleGreenDark },
   handoffIssueCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -6429,7 +6455,7 @@ const styles = StyleSheet.create({
   handoffStatusText: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
   },
   supportWarningCard: {
     backgroundColor: Colors.kanteRustLight,
@@ -6444,7 +6470,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
     padding: Spacing.md, gap: 4, borderWidth: 1, borderColor: Colors.needleGreen + '35',
   },
-  fitNoteLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  fitNoteLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreenDark },
   fitNoteText: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
 
   refPhoto: { width: 152, height: 152, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
@@ -6466,7 +6492,7 @@ const styles = StyleSheet.create({
     ...Shadow.lg,
   },
 
-  backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  backLink: { color: Colors.needleGreenDark, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
   retryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   secondaryBtn: {
@@ -6486,7 +6512,7 @@ const styles = StyleSheet.create({
     padding: Spacing.xl, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.white,
   },
-  modalClose: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
+  modalClose: { color: Colors.needleGreenDark, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
   modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalScroll: { flex: 1 },
   modalContent: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
@@ -6534,7 +6560,7 @@ const styles = StyleSheet.create({
   },
   selectableSettingBody: { flex: 1 },
   selectableSettingLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  selectableSettingLabelActive: { color: Colors.needleGreen },
+  selectableSettingLabelActive: { color: Colors.needleGreenDark },
   selectableSettingDetail: { marginTop: 3, fontSize: FontSize.xs, lineHeight: 17, color: Colors.midGrey },
   policySummaryRow: {
     borderRadius: Radius.md,
@@ -6560,7 +6586,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   nextStageLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
-  nextStageValue: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.needleGreen, fontFamily: Fonts.display },
+  nextStageValue: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.needleGreenDark, fontFamily: Fonts.display },
 
   photoLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 4 },
   photoHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: Spacing.md, lineHeight: 18 },
@@ -6584,36 +6610,56 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.white,
   },
-  photoPickText: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  photoPickText: { fontSize: FontSize.md, color: Colors.needleGreenDark, fontWeight: FontWeight.semibold },
   photoPickSubtext: { fontSize: FontSize.xs, color: Colors.inkLight, textAlign: 'center' },
   photoPreviewWrap: { gap: Spacing.sm },
   photoPreview: { width: '100%', height: 200, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
-  photoRemove: { alignSelf: 'flex-start' },
-  photoRemoveText: { color: Colors.error, fontSize: FontSize.sm },
-  mediaSourceOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.45)',
+  photoActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
   },
-  mediaSourceBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+  photoReplace: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '55',
+    paddingHorizontal: Spacing.md,
   },
-  mediaSourceSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xxl,
+  photoReplaceText: { color: Colors.needleGreenDark, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  photoRemove: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: Spacing.md,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.error + '44',
+    paddingHorizontal: Spacing.md,
   },
-  mediaSourceHandle: {
+  photoRemoveText: { color: Colors.error, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  mediaSourceInline: {
+    marginTop: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '44',
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bone,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  mediaSourceInlineHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
+  mediaSourceInlineClose: {
     width: 44,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: Colors.lightGrey,
-    alignSelf: 'center',
-    marginBottom: Spacing.sm,
+    height: 44,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   mediaSourceTitle: {
     fontSize: FontSize.lg,
@@ -6641,16 +6687,6 @@ const styles = StyleSheet.create({
   mediaSourceActionCopy: { flex: 1, gap: 2 },
   mediaSourceActionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   mediaSourceActionText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 17 },
-  mediaSourceCancel: {
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-  },
-  mediaSourceCancelText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   // Collection code modal
   codeModalContent: { flex: 1, padding: Spacing.xl, gap: Spacing.xl, alignItems: 'center' },
@@ -6698,5 +6734,5 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   reasonText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
-  reasonTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  reasonTextActive: { color: Colors.needleGreenDark, fontWeight: FontWeight.semibold },
 })

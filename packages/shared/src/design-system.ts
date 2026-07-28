@@ -37,15 +37,15 @@ export const colors = {
 } as const
 
 export const darkColors = {
-  background: '#1A1A18',
-  surface: '#2C2C2A',
-  surfaceElevated: '#343330',
+  background: '#171714',
+  surface: '#302F2B',
+  surfaceElevated: '#3B3934',
   surfaceDark: '#11110F',
   textPrimary: '#F9F7F3',
-  textSecondary: '#C8C5C0',
-  textMuted: '#A8A49D',
+  textSecondary: '#D8D4CD',
+  textMuted: '#BBB6AD',
   textInverse: '#FFFFFF',
-  border: '#3C3B38',
+  border: '#504D47',
   borderFocus: '#9FCFB5',
   borderError: '#F07A52',
   primary: '#2D6A4F',
@@ -63,11 +63,11 @@ export const darkColors = {
   statusBlocked: '#F07A52',
   statusBlockedBg: '#3D241C',
   statusMuted: '#A8A49D',
-  statusMutedBg: '#24231F',
+  statusMutedBg: '#282620',
   timeEvening: '#C7BEFF',
   timeEveningBg: '#292542',
-  disabledFill: '#3C3B38',
-  disabledText: '#A8A49D',
+  disabledFill: '#47443F',
+  disabledText: '#BBB6AD',
 } as const
 
 export const typography = {

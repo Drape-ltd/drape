@@ -554,17 +554,17 @@ export const DRAPE_CUSTOMER_GUIDE_TOPICS: DrapeGuideTopic[] = [
   {
     icon: 'credit-card',
     title: 'Protected payments',
-    body: 'If payment is processing, do not pay twice. Drape reconciles provider confirmations and keeps the order timeline updated.',
+    body: 'If payment is processing, do not pay twice. Drapeon reconciles provider confirmations and keeps the order timeline updated.',
   },
   {
     icon: 'package',
     title: 'Pickup, delivery, and shipping',
-    body: 'Carrier status is not the same as Drape handoff. Confirm receipt only when you actually have the garment.',
+    body: 'Carrier status is not the same as Drapeon handoff. Confirm receipt only when you actually have the garment.',
   },
   {
     icon: 'alert-triangle',
     title: 'When something changes',
-    body: 'Use the order thread for amendments, rework, pauses, or concerns so Drape can protect the record.',
+    body: 'Use the order thread for amendments, rework, pauses, or concerns so Drapeon can protect the record.',
   },
 ]
 

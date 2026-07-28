@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 const DEFAULT_PASSWORD = process.env.STORE_DEMO_PASSWORD ?? 'DrapeLaunch2026!'
+const MEDIA_PREFLIGHT_BYTES = 512 * 1024
+const IOS_INCOMPATIBLE_PNG_CHUNKS = new Set(['caBX', 'jumb'])
 
 function argValue(name) {
   const index = process.argv.indexOf(name)
@@ -135,6 +137,127 @@ function requireUrlList(values, label) {
   return urls
 }
 
+function manifestMediaEntries(manifest) {
+  const entries = []
+
+  for (const tailor of manifest.tailors) {
+    entries.push({
+      label: `${tailor.key}.avatarUrl`,
+      url: tailor.avatarUrl,
+    })
+    for (const [index, url] of tailor.portfolioUrls.entries()) {
+      entries.push({
+        label: `${tailor.key}.portfolioUrls.${index}`,
+        url,
+      })
+    }
+    for (const [itemIndex, item] of (tailor.shopItems ?? []).entries()) {
+      for (const [mediaIndex, url] of (item.photoUrls ?? []).entries()) {
+        entries.push({
+          label: `${tailor.key}.shopItems.${itemIndex}.photoUrls.${mediaIndex}`,
+          url,
+        })
+      }
+    }
+  }
+
+  return entries
+}
+
+async function readResponsePrefix(response, maxBytes) {
+  if (!response.body) {
+    return new Uint8Array(await response.arrayBuffer()).slice(0, maxBytes)
+  }
+
+  const reader = response.body.getReader()
+  const chunks = []
+  let totalBytes = 0
+
+  try {
+    while (totalBytes < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done || !value) break
+      const remainingBytes = maxBytes - totalBytes
+      const chunk = value.byteLength > remainingBytes ? value.slice(0, remainingBytes) : value
+      chunks.push(chunk)
+      totalBytes += chunk.byteLength
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+
+  const prefix = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    prefix.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return prefix
+}
+
+function isPng(bytes) {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  return signature.every((value, index) => bytes[index] === value)
+}
+
+function pngChunkTypes(bytes) {
+  if (!isPng(bytes)) return []
+
+  const chunkTypes = []
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  let offset = 8
+  while (offset + 12 <= bytes.byteLength) {
+    const chunkLength = view.getUint32(offset, false)
+    const typeOffset = offset + 4
+    const chunkEnd = offset + 12 + chunkLength
+    if (chunkEnd > bytes.byteLength) break
+
+    chunkTypes.push(String.fromCharCode(
+      bytes[typeOffset],
+      bytes[typeOffset + 1],
+      bytes[typeOffset + 2],
+      bytes[typeOffset + 3],
+    ))
+    offset = chunkEnd
+  }
+  return chunkTypes
+}
+
+async function validateManifestMedia(manifest) {
+  const checkedUrls = new Map()
+
+  for (const entry of manifestMediaEntries(manifest)) {
+    const url = typeof entry.url === 'string' ? entry.url.trim() : ''
+    if (!url || checkedUrls.has(url)) continue
+
+    let response
+    try {
+      response = await fetch(url)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`${entry.label} could not be loaded: ${reason}`)
+    }
+    if (!response.ok) {
+      throw new Error(`${entry.label} could not be loaded (${response.status}).`)
+    }
+
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? ''
+    if (!contentType.startsWith('image/') && !contentType.startsWith('video/')) {
+      throw new Error(`${entry.label} returned ${contentType || 'an unknown content type'} instead of media.`)
+    }
+
+    const prefix = await readResponsePrefix(response, MEDIA_PREFLIGHT_BYTES)
+    const incompatibleChunks = pngChunkTypes(prefix).filter((type) => IOS_INCOMPATIBLE_PNG_CHUNKS.has(type))
+    if (incompatibleChunks.length > 0) {
+      throw new Error(
+        `${entry.label} contains PNG content-credential metadata (${incompatibleChunks.join(', ')}) that is not reliable in the iOS image decoder. Re-encode it as a baseline JPEG before seeding.`,
+      )
+    }
+
+    checkedUrls.set(url, entry.label)
+  }
+}
+
 const env = {
   ...loadEnv('apps/web/.env.local'),
   ...process.env,
@@ -147,6 +270,8 @@ const manifest = parseManifest(manifestPath)
 if (!baseUrl || !serviceKey) {
   throw new Error('Missing Supabase URL/service role. Set STORE_DEMO_SUPABASE_URL and STORE_DEMO_SUPABASE_SERVICE_ROLE_KEY, or use apps/web/.env.local.')
 }
+
+await validateManifestMedia(manifest)
 
 const headers = {
   apikey: serviceKey,

@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { appendToHistory, goBackOrReturnToIfNeeded, pickSafeReturnTo, sanitizeReturnTo } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback, goBackOrReturnToIfNeeded, pickSafeReturnTo, sanitizeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   isMeasurementSource,
@@ -582,6 +582,10 @@ function normalizeBodyShape(value: unknown): BodyShape | null {
   return null
 }
 
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function MeasurementsScreen() {
@@ -589,7 +593,16 @@ export default function MeasurementsScreen() {
   const navigation = useNavigation()
   const keyboard = useKeyboardState()
   const actionDockScroll = useDrapeCapsuleNavScroll()
-  const { returnTo, historyChain } = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
+  const routeParams = useLocalSearchParams<{
+    returnTo?: string | string[]
+    historyChain?: string | string[]
+    fromVision?: string | string[]
+    visionReturnTo?: string | string[]
+  }>()
+  const returnTo = firstParam(routeParams.returnTo)
+  const historyChain = firstParam(routeParams.historyChain)
+  const fromVision = firstParam(routeParams.fromVision) === '1'
+  const visionReturnTo = sanitizeReturnTo(firstParam(routeParams.visionReturnTo))
   const sanitizedReturnTo = sanitizeReturnTo(pickSafeReturnTo(historyChain, returnTo))
   const safeReturnTo = sanitizedReturnTo && sanitizedReturnTo !== '/(customer)/profile/measurements'
     ? sanitizedReturnTo
@@ -608,6 +621,26 @@ export default function MeasurementsScreen() {
   const [visibleMeasurementModules, setVisibleMeasurementModules] = useState<MeasurementModuleKey[]>([])
   const [specialistMeasurementSections, setSpecialistMeasurementSections] = useState<SpecialistMeasurementSection[]>([])
   const [editingMeasurements, setEditingMeasurements] = useState(false)
+
+  function exitMeasurements() {
+    if (fromVision) {
+      goBackOrFallback(
+        router,
+        navigation,
+        {
+          pathname: DRAPE_VISION_ROUTE,
+          params: {
+            mode: 'customer_scan',
+            ...(visionReturnTo
+              ? { returnTo: visionReturnTo, historyChain: visionReturnTo }
+              : {}),
+          },
+        },
+      )
+      return
+    }
+    goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
+  }
 
   // Layer 1
   const [measurementProfileLabel, setMeasurementProfileLabel] = useState('Me')
@@ -1282,7 +1315,7 @@ export default function MeasurementsScreen() {
       }
       setSaving(false)
       capture('measurements_saved', { unit, measurement_source: measurementSource })
-      goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
+      exitMeasurements()
     }
   }
 
@@ -1298,7 +1331,7 @@ export default function MeasurementsScreen() {
 
   function back() {
     if (editingMeasurements && step > 0) setStep(step - 1)
-    else goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
+    else exitMeasurements()
   }
 
   useContextualBackHandler(back)

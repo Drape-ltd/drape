@@ -43,6 +43,16 @@ export const CORE_MEASUREMENT_FIELDS = [
 
 export type CoreMeasurementField = (typeof CORE_MEASUREMENT_FIELDS)[number]
 
+export const CUSTOM_ORDER_REQUIRED_MEASUREMENTS = [
+  'chest',
+  'waist',
+  'hips',
+  'height',
+] as const
+
+export type CustomOrderRequiredMeasurement =
+  (typeof CUSTOM_ORDER_REQUIRED_MEASUREMENTS)[number]
+
 const MEASUREMENT_FIELD_KEY_SET = new Set<string>(MEASUREMENT_FIELD_KEYS)
 
 const MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS = new Set([
@@ -199,6 +209,30 @@ function numericValue(value: unknown) {
   if (typeof value !== 'string') return null
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function positiveMeasurementValue(snapshot: unknown, key: string) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null
+  const value = (snapshot as Record<string, unknown>)[key]
+  const parsed = numericValue(value)
+  return parsed != null && parsed > 0 ? parsed : null
+}
+
+export function missingCustomOrderMeasurements(
+  snapshot: unknown,
+  garmentType: string,
+): CustomOrderRequiredMeasurement[] {
+  if (garmentType.trim().toLowerCase() === 'gele') return []
+  return CUSTOM_ORDER_REQUIRED_MEASUREMENTS.filter(
+    (field) => positiveMeasurementValue(snapshot, field) == null,
+  )
+}
+
+export function hasCustomOrderMeasurementFallback(
+  note: string | null | undefined,
+  minimumCharacters = 24,
+) {
+  return (note ?? '').trim().length >= minimumCharacters
 }
 
 function measurementValuesMatch(left: unknown, right: unknown) {

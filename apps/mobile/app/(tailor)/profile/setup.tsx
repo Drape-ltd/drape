@@ -77,6 +77,7 @@ import {
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
+  PhoneNumberInput,
   RemoteImage,
   AvatarImage,
   PortfolioVideoPreview,
@@ -2606,7 +2607,7 @@ export default function TailorSetupScreen() {
                     />
                   </View>
                   <View onLayout={rememberSetupFieldY('phone')}>
-                    <Input
+                    <PhoneNumberInput
                       label="Phone number"
                       placeholder="For order updates and account recovery"
                       value={phone}
@@ -2623,8 +2624,6 @@ export default function TailorSetupScreen() {
                       }}
                       error={phoneError || visibleErrors.phone}
                       required
-                      keyboardType="phone-pad"
-                      autoCapitalize="none"
                       hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
                       testID="phone-input"
                     />

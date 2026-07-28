@@ -33,6 +33,7 @@ import {
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
 import { markWebSessionScope } from '../lib/web-session-scope'
+import { PhoneNumberField } from './ui/phone-number-field'
 
 type AuthMode = 'sign-in' | 'sign-up'
 
@@ -827,20 +828,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               />
             </label>
 
-            <label className="grid gap-2 text-sm font-semibold text-ink">
-              Phone number
-              <input
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="+2348012345678"
-                type="tel"
-                autoComplete="tel"
-                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-              />
-              <span className="text-xs font-normal leading-5 text-ink/52">
-                Used for order updates, account recovery, and critical trust-chain alerts.
-              </span>
-            </label>
+            <PhoneNumberField
+              label="Phone number"
+              value={phone}
+              onValueChange={setPhone}
+              placeholder="Phone number"
+              required
+              hint="Used for order updates, account recovery, and critical trust-chain alerts."
+            />
 
             <label className="grid gap-2 text-sm font-semibold text-ink">
               Email

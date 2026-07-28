@@ -22,6 +22,24 @@
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
+    "development-device": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development",
+      "ios": { "simulator": false },
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "development",
+        "EXPO_PUBLIC_SENTRY_ENVIRONMENT": "development",
+        "EXPO_PUBLIC_SUPABASE_ENV": "development",
+        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi",
+        "EXPO_PUBLIC_SITE_URL": "https://drapeon.co",
+        "EXPO_PUBLIC_PROJECT_ID": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d",
+        "EXPO_PUBLIC_DRAPE_INTERACTION_SYSTEM_V1": "true",
+        "EXPO_PUBLIC_QUOTE_NEGOTIATION_V1": "true",
+        "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "true",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "environment": "preview",

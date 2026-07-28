@@ -97,6 +97,25 @@ export type VisionTapeComparisonItem = {
   onChange: (value: string) => void
 }
 
+function VisionHubOptionCard({ option }: { option: VisionHubOption }) {
+  return (
+    <View style={styles.optionWrap}>
+      <VisionStepCard
+        materialIcon={option.icon}
+        eyebrow={option.recommended ? 'Start here' : undefined}
+        title={option.title}
+        body={option.body}
+        status={option.status}
+        statusTone={option.tone}
+        disabled={option.disabled}
+        selected={option.recommended}
+        onPress={option.onPress}
+      />
+      {option.hint ? <OptionHint>{option.hint}</OptionHint> : null}
+    </View>
+  )
+}
+
 export function VisionHubView({
   status,
   statusTone,
@@ -122,6 +141,22 @@ export function VisionHubView({
   manualLabel: string
   onManual: () => void
 }) {
+  const { colors } = useDrapeTheme()
+  const fit360Option = options.find((option) => option.id === 'fit_360')
+  const fitProfileOptions = options.filter((option) => (
+    option.id === 'bodice_corset' || option.id === 'lower_body_detail'
+  ))
+  const accessoryOptions = options.filter((option) => (
+    option.id === 'hand_wrist' || option.id === 'headwear'
+  ))
+  const remainingOptions = options.filter((option) => (
+    option.id !== 'fit_360'
+    && option.id !== 'bodice_corset'
+    && option.id !== 'lower_body_detail'
+    && option.id !== 'hand_wrist'
+    && option.id !== 'headwear'
+  ))
+
   return (
     <VisionShell
       testID="vision-hub"
@@ -138,7 +173,7 @@ export function VisionHubView({
       <VisionSectionTitle
         eyebrow="Drapeon Vision"
         title="Choose what to measure"
-        body="Start with Fit 360 for your core profile, or choose a focused scan for one area."
+        body="Start with Fit 360 for your core profile, then add torso and lower-body detail when a garment needs a more complete fit."
       />
 
       <VisionStepCard
@@ -152,30 +187,53 @@ export function VisionHubView({
       />
 
       <VisionInstructionPanel
-        icon="sun"
-        title="Prepare the space"
-        body="Use fitted clothing, bright even light, and a plain background. Set the phone down so the requested area fills the guide."
+        icon="check-circle"
+        title="Before Fit 360"
+        body={'1. Stay fully clothed in one fitted, lightweight layer. Avoid loose or bulky clothing.\n2. Use bright, even front light and a plain background.\n3. Stand your phone upright on a stable table or stand around waist-to-chest height, never on the floor.\n4. Step back until your full body, including your head and ankles, stays inside the guide.'}
         tone="active"
       />
 
-      <View style={styles.optionList}>
-        {options.map((option) => (
-          <View key={option.id} style={styles.optionWrap}>
-            <VisionStepCard
-              materialIcon={option.icon}
-              eyebrow={option.recommended ? 'Start here' : undefined}
-              title={option.title}
-              body={option.body}
-              status={option.status}
-              statusTone={option.tone}
-              disabled={option.disabled}
-              selected={option.recommended}
-              onPress={option.onPress}
-            />
-            {option.hint ? <OptionHint>{option.hint}</OptionHint> : null}
+      {fit360Option ? <VisionHubOptionCard option={fit360Option} /> : null}
+
+      {fitProfileOptions.length > 0 ? (
+        <View style={styles.optionGroup}>
+          <View style={styles.optionGroupHeader}>
+            <Text style={[styles.optionGroupEyebrow, { color: colors.needleGreenDark }]}>
+              Complete your fit profile
+            </Text>
+            <Text style={[styles.optionGroupBody, { color: colors.inkLight }]}>
+              Add fitted torso and lower-body detail after Fit 360. These scans extend the same saved profile.
+            </Text>
           </View>
-        ))}
-      </View>
+          {fitProfileOptions.map((option) => (
+            <VisionHubOptionCard key={option.id} option={option} />
+          ))}
+        </View>
+      ) : null}
+
+      {accessoryOptions.length > 0 ? (
+        <View style={styles.optionGroup}>
+          <View style={styles.optionGroupHeader}>
+            <Text style={[styles.optionGroupEyebrow, { color: colors.needleGreenDark }]}>
+              Specialist accessories
+            </Text>
+            <Text style={[styles.optionGroupBody, { color: colors.inkLight }]}>
+              Use these when an order needs cuff, bangle, sleeve-opening, or headwear measurements.
+            </Text>
+          </View>
+          {accessoryOptions.map((option) => (
+            <VisionHubOptionCard key={option.id} option={option} />
+          ))}
+        </View>
+      ) : null}
+
+      {remainingOptions.length > 0 ? (
+        <View style={styles.optionList}>
+          {remainingOptions.map((option) => (
+            <VisionHubOptionCard key={option.id} option={option} />
+          ))}
+        </View>
+      ) : null}
 
       <VisionPrivacyNotice points={privacyPoints} />
     </VisionShell>
@@ -223,7 +281,7 @@ export function VisionIntroView({
           <VisionPrimaryButton label={primaryLabel} onPress={onPrimary} />
           {secondaryLabel && onSecondary ? (
             <Pressable accessibilityRole="button" accessibilityLabel={secondaryLabel} onPress={onSecondary} style={styles.secondaryResultAction}>
-              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>{secondaryLabel}</Text>
+              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>{secondaryLabel}</Text>
             </Pressable>
           ) : null}
         </View>
@@ -290,7 +348,7 @@ export function VisionSpecialistReadyView({
         <View style={styles.resultActions}>
           <VisionPrimaryButton label={primaryLabel} icon="camera" disabled={!active} onPress={onPrimary} />
           <Pressable accessibilityRole="button" accessibilityLabel="Back to scan picker" onPress={onBack} style={styles.secondaryResultAction}>
-            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>Back to scan picker</Text>
+            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>Back to scan picker</Text>
           </Pressable>
         </View>
       )}
@@ -307,7 +365,7 @@ export function VisionSpecialistReadyView({
         <View style={styles.fieldChipRow}>
           {fields.map((field) => (
             <View key={field} style={[styles.fieldChip, { backgroundColor: colors.needleGreenLight }]}>
-              <Text style={[styles.fieldChipText, { color: colors.needleGreen }]}>{field}</Text>
+              <Text style={[styles.fieldChipText, { color: colors.needleGreenDark }]}>{field}</Text>
             </View>
           ))}
         </View>
@@ -331,7 +389,7 @@ export function VisionSpecialistReadyView({
           <VisionSectionTitle title="Debug readiness" body="Native requirements for this focused scan." />
           {debugRequirements.map((requirement) => (
             <View key={requirement} style={styles.checkRow}>
-              <Feather name={active ? 'check-circle' : 'circle'} size={17} color={colors.needleGreen} />
+              <Feather name={active ? 'check-circle' : 'circle'} size={17} color={colors.needleGreenDark} />
               <Text style={[styles.checkTitle, { color: colors.ink }]}>{requirement}</Text>
             </View>
           ))}
@@ -434,7 +492,7 @@ export function VisionHeightView({
           onPress={onDecrease}
           style={styles.heightAdjust}
         >
-          <Feather name="minus" size={24} color={colors.needleGreen} />
+          <Feather name="minus" size={24} color={colors.needleGreenDark} />
         </Pressable>
         <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.heightValue, { color: colors.ink }]}>
           {formattedHeight}
@@ -446,7 +504,7 @@ export function VisionHeightView({
           onPress={onIncrease}
           style={styles.heightAdjust}
         >
-          <Feather name="plus" size={24} color={colors.needleGreen} />
+          <Feather name="plus" size={24} color={colors.needleGreenDark} />
         </Pressable>
       </View>
 
@@ -475,8 +533,8 @@ export function VisionHeightView({
       ) : null}
 
       <Pressable accessibilityRole="button" accessibilityLabel="Back to scan picker" onPress={onBack} style={styles.textAction}>
-        <Feather name="grid" size={17} color={colors.needleGreen} />
-        <Text style={[styles.textActionLabel, { color: colors.needleGreen }]}>Back to scan picker</Text>
+        <Feather name="grid" size={17} color={colors.needleGreenDark} />
+        <Text style={[styles.textActionLabel, { color: colors.needleGreenDark }]}>Back to scan picker</Text>
       </Pressable>
     </VisionShell>
   )
@@ -513,7 +571,7 @@ export function VisionCalculatingView({
       />
       <View style={[styles.processingCard, { backgroundColor: colors.surface, borderColor: colors.lightGrey }]}>
         <View style={styles.processingMark}>
-          <MaterialCommunityIcons name="human-male-height-variant" size={72} color={colors.needleGreen} />
+          <MaterialCommunityIcons name="human-male-height-variant" size={72} color={colors.needleGreenDark} />
         </View>
         <VisionProgressRail progress={completed / messages.length} segments={messages.length} />
         <View style={styles.processingList}>
@@ -738,8 +796,8 @@ export function VisionResultsView({
           </View>
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Use manual measurements instead" onPress={onManual} style={styles.manualAction}>
-          <Feather name="edit-2" size={17} color={colors.needleGreen} />
-          <Text style={[styles.manualActionLabel, { color: colors.needleGreen }]}>Use manual measurements instead</Text>
+          <Feather name="edit-2" size={17} color={colors.needleGreenDark} />
+          <Text style={[styles.manualActionLabel, { color: colors.needleGreenDark }]}>Use manual measurements instead</Text>
         </Pressable>
       </View>
 
@@ -1085,7 +1143,7 @@ export function VisionGarmentQcView({
         <View style={styles.resultActions}>
           <VisionPrimaryButton label="Save QC to order" icon="check" loading={saving} onPress={onSave} />
           <Pressable accessibilityRole="button" accessibilityLabel="Return to order" disabled={saving} onPress={onReturn} style={styles.secondaryResultAction}>
-            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>Return to order</Text>
+            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>Return to order</Text>
           </Pressable>
         </View>
       )}
@@ -1099,12 +1157,12 @@ export function VisionGarmentQcView({
         <VisionSectionTitle title="Proof photo" body="Attach a clear finished-garment image for the customer and ops." />
         <View style={styles.photoActions}>
           <Pressable accessibilityRole="button" accessibilityLabel="Take proof photo" disabled={saving} onPress={onTakePhoto} style={[styles.outlineAction, { borderColor: colors.lightGrey }]}>
-            <Feather name="camera" size={18} color={colors.needleGreen} />
-            <Text style={[styles.outlineActionText, { color: colors.needleGreen }]}>Take photo</Text>
+            <Feather name="camera" size={18} color={colors.needleGreenDark} />
+            <Text style={[styles.outlineActionText, { color: colors.needleGreenDark }]}>Take photo</Text>
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Choose proof photo" disabled={saving} onPress={onChoosePhoto} style={[styles.outlineAction, { borderColor: colors.lightGrey }]}>
-            <Feather name="image" size={18} color={colors.needleGreen} />
-            <Text style={[styles.outlineActionText, { color: colors.needleGreen }]}>Choose photo</Text>
+            <Feather name="image" size={18} color={colors.needleGreenDark} />
+            <Text style={[styles.outlineActionText, { color: colors.needleGreenDark }]}>Choose photo</Text>
           </Pressable>
         </View>
         {photoUrl ? (
@@ -1186,7 +1244,7 @@ export function VisionSizeGuideView({
         <View style={styles.resultActions}>
           <VisionPrimaryButton label={primaryLabel} icon="check" loading={saving} disabled={primaryDisabled} onPress={onPrimary} />
           <Pressable accessibilityRole="button" accessibilityLabel={secondaryLabel} disabled={saving} onPress={onSecondary} style={styles.secondaryResultAction}>
-            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>{secondaryLabel}</Text>
+            <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>{secondaryLabel}</Text>
           </Pressable>
         </View>
       )}
@@ -1263,7 +1321,7 @@ export function VisionFallbackView({
           <VisionPrimaryButton label={primaryLabel} onPress={onPrimary} />
           {retryLabel && onRetry ? (
             <Pressable accessibilityRole="button" accessibilityLabel={retryLabel} onPress={onRetry} style={styles.secondaryResultAction}>
-              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>{retryLabel}</Text>
+              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>{retryLabel}</Text>
             </Pressable>
           ) : null}
           <View style={styles.secondaryActionRow}>
@@ -1272,8 +1330,8 @@ export function VisionFallbackView({
               <Text style={[styles.secondaryResultLabel, { color: colors.inkLight }]}>Report issue</Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Back to scan picker" onPress={onBack} style={styles.secondaryHalf}>
-              <Feather name="grid" size={16} color={colors.needleGreen} />
-              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreen }]}>Scan picker</Text>
+              <Feather name="grid" size={16} color={colors.needleGreenDark} />
+              <Text style={[styles.secondaryResultLabel, { color: colors.needleGreenDark }]}>Scan picker</Text>
             </Pressable>
           </View>
         </View>
@@ -1293,6 +1351,10 @@ export function VisionFallbackView({
 
 const styles = StyleSheet.create({
   optionList: { gap: Spacing.md },
+  optionGroup: { gap: Spacing.md },
+  optionGroupHeader: { gap: Spacing.xs, paddingTop: Spacing.sm, paddingHorizontal: Spacing.xs },
+  optionGroupEyebrow: { fontFamily: Fonts.bodySemiBold, fontSize: FontSize.sm, lineHeight: 19 },
+  optionGroupBody: { fontFamily: Fonts.body, fontSize: FontSize.sm, lineHeight: 20 },
   optionWrap: { gap: Spacing.sm },
   optionHint: { fontFamily: Fonts.body, fontSize: FontSize.xs, lineHeight: 17, paddingHorizontal: Spacing.md },
   segmentedControl: { minHeight: 48, borderRadius: Radius.full, backgroundColor: 'rgba(128,128,128,0.14)', padding: 4, flexDirection: 'row' },

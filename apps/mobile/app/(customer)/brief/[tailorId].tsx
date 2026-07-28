@@ -21,6 +21,7 @@ import {
   isLikelyConnectivityIssue,
   isMachineErrorCodeMessage,
   readFunctionErrorMessage,
+  readFunctionErrorPayload,
 } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
@@ -54,6 +55,7 @@ import {
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
   MeasurementModule,
+  PhoneNumberInput,
   PortfolioVideoPreview,
   RemoteImage,
 } from '@/components/ui'
@@ -93,6 +95,8 @@ import {
   isAllowedCustomStyleReference,
   isCustomOrderBriefLongEnough,
   measurementCoreCompleteness,
+  hasCustomOrderMeasurementFallback,
+  missingCustomOrderMeasurements,
   normalizeAccountCurrency,
   parseMajorCurrencyAmountToMinor,
   promoteSpecialistMeasurementsToProfileValues,
@@ -534,6 +538,10 @@ export default function OrderBriefScreen() {
     closeGarmentPicker()
   }
   const guidedFitProfile = buildOrderFitProfile(measurements)
+  const missingOrderMeasurements = missingCustomOrderMeasurements(measurements, garmentType)
+  const hasMeasurementFallback = hasCustomOrderMeasurementFallback(fitNote)
+  const measurementsReadyForOrder =
+    !!measurements && (missingOrderMeasurements.length === 0 || hasMeasurementFallback)
   const recipientPhoneHint = phoneHintForContext(deliveryCountry)
   const savedMeasurementProfileLabel =
     typeof measurements?.measurementProfileLabel === 'string' && measurements.measurementProfileLabel.trim()
@@ -1287,7 +1295,7 @@ export default function OrderBriefScreen() {
       )
     }
     if (step === 1) return photos.length + inspirationLinks.length >= 1 && !linkError
-    if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
+    if (step === 2) return measurementsReadyForOrder && fitNote.trim().length >= 20 && !fitNoteError
     if (step === 3) {
       return validateFabricStep()
     }
@@ -1340,7 +1348,7 @@ export default function OrderBriefScreen() {
           !!deadline &&
           deadline.getTime() >= customOrderMinimumDeliveryDate().getTime() &&
           photos.length + inspirationLinks.length >= 1 &&
-          !!measurements &&
+          measurementsReadyForOrder &&
           fitNote.trim().length >= 20 &&
           validateFabricStep() &&
           hasDelivery &&
@@ -1416,6 +1424,24 @@ export default function OrderBriefScreen() {
       wearerContext,
       measurementProfileLabel: wearerContext.measurementProfileLabel,
     })
+    const missingSnapshotMeasurements = missingCustomOrderMeasurements(
+      measurementSnapshot,
+      garmentType,
+    )
+    if (
+      missingSnapshotMeasurements.length > 0 &&
+      !hasCustomOrderMeasurementFallback(fitNote)
+    ) {
+      setSubmitting(false)
+      const labels = missingSnapshotMeasurements
+        .map((field) => field === 'height' ? 'height' : field)
+        .join(', ')
+      Alert.alert(
+        'Measurements need attention',
+        `Your saved profile is missing ${labels} for this order. Update the profile, or add a clear note asking the tailor to follow up before quoting.`,
+      )
+      return
+    }
     const fitProfile = buildOrderFitProfile(measurementSnapshot)
     const measurementAge = measurementAgeFromSnapshot(measurementSnapshot)
     const measurementAgeMeta = measurementAge
@@ -1656,10 +1682,32 @@ export default function OrderBriefScreen() {
 
     if (preflightError || !preflightData?.ok) {
       setSubmitting(false)
-      if (preflightError)
-        Sentry.captureException(preflightError, {
-          extra: { context: 'custom_order_preflight', tailorId },
+      if (preflightError) {
+        const payload = await readFunctionErrorPayload(preflightError)
+        const errorCode =
+          typeof payload?.code === 'string'
+            ? payload.code
+            : typeof payload?.errorCode === 'string'
+              ? payload.errorCode
+              : 'CUSTOM_ORDER_PREFLIGHT_FAILED'
+        const serverMessage =
+          typeof payload?.message === 'string'
+            ? payload.message
+            : typeof payload?.error === 'string'
+              ? payload.error
+              : 'Custom order preflight failed'
+        Sentry.captureException(new Error(`${errorCode}: ${serverMessage}`), {
+          extra: {
+            context: 'custom_order_preflight',
+            tailorId,
+            errorCode,
+            missingMeasurements:
+              errorCode === 'MEASUREMENTS_INCOMPLETE'
+                ? missingSnapshotMeasurements
+                : undefined,
+          },
         })
+      }
       const message = await resolveOrderSubmitErrorMessage(preflightError)
       if (message.toLowerCase().includes('delivery address')) {
         setDeliveryAddressError('Please enter your full delivery address before continuing.')
@@ -3061,17 +3109,15 @@ export default function OrderBriefScreen() {
                       }
                       required
                     />
-                    <Input
+                    <PhoneNumberInput
                       label="Recipient phone"
-                      placeholder="e.g. +2348012345678 or +447700900123"
+                      placeholder="Phone number"
                       value={recipientPhone}
                       onChangeText={(v) => {
-                        setRecipientPhone(normalizePhoneForStorage(v))
+                        setRecipientPhone(v)
                         if (recipientContactError) setRecipientContactError('')
                       }}
                       onBlur={validateRecipientContact}
-                      keyboardType="phone-pad"
-                      autoCapitalize="none"
                       hint={
                         recipientMode === 'SELF'
                           ? recipientPhoneHint
@@ -3960,7 +4006,7 @@ const styles = StyleSheet.create({
   },
   stateEyebrow: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
@@ -4026,7 +4072,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  backText: { color: Colors.needleGreenDark, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   stepLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.lg, marginBottom: 6 },
   progressSeg: { flex: 1, height: 3, borderRadius: 2, backgroundColor: Colors.lightGrey },
@@ -4087,7 +4133,7 @@ const styles = StyleSheet.create({
   },
   dropdownChevron: {
     fontSize: 22,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     lineHeight: 24,
   },
   fieldLabel: {
@@ -4120,7 +4166,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   quickAddIconText: {
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     lineHeight: 20,
@@ -4307,10 +4353,10 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     fontWeight: FontWeight.medium,
   },
-  pickerItemTextSelected: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  pickerItemTextSelected: { color: Colors.needleGreenDark, fontWeight: FontWeight.semibold },
   pickerItemCheck: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
   },
   pickerEmpty: {
@@ -4511,7 +4557,7 @@ const styles = StyleSheet.create({
   },
   measureEditHint: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.medium,
   },
 
@@ -4645,11 +4691,11 @@ const styles = StyleSheet.create({
   },
   selectedLinkText: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.medium,
     flexShrink: 1,
   },
-  selectedLinkRemove: { fontSize: 10, color: Colors.needleGreen },
+  selectedLinkRemove: { fontSize: 10, color: Colors.needleGreenDark },
   linkError: { fontSize: FontSize.xs, color: Colors.error, marginTop: Spacing.xs, lineHeight: 18 },
 
   // Fabric & delivery options
@@ -4754,7 +4800,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
   },
   reviewEditText: {
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },

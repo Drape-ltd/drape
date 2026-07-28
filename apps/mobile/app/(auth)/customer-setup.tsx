@@ -43,7 +43,7 @@ import {
   fetchCurrencyPreferenceContext,
   type CurrencyCode,
 } from '@/lib/currency'
-import { Button, ChoiceSheet, Input } from '@/components/ui'
+import { Button, ChoiceSheet, Input, PhoneNumberInput } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import {
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
@@ -727,7 +727,7 @@ export default function CustomerSetupScreen() {
               </View>
 
               <View onLayout={rememberFieldY('phone')}>
-                <Input
+                <PhoneNumberInput
                   label="Phone number"
                   placeholder="For order updates and account recovery"
                   value={phone}
@@ -744,8 +744,6 @@ export default function CustomerSetupScreen() {
                   }}
                   error={phoneError}
                   required
-                  keyboardType="phone-pad"
-                  autoCapitalize="none"
                   hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
                 />
               </View>

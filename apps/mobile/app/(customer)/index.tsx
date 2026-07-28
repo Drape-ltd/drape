@@ -1132,7 +1132,7 @@ export default function CustomerHomeScreen() {
               </View>
               {recentlyViewed.length > 0 ? (
                 <View style={styles.recentLegend}>
-                  <Feather name="clock" size={12} color={PRIMARY_GREEN} />
+                  <Feather name="clock" size={12} color={Colors.needleGreenDark} />
                   <Text style={styles.recentLegendText}>Recently viewed</Text>
                 </View>
               ) : null}
@@ -1961,7 +1961,7 @@ const styles = StyleSheet.create({
   },
   recentLegendText: {
     fontSize: 11,
-    color: PRIMARY_GREEN,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
   },
 

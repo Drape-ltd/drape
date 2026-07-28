@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   BackHandler,
   Image,
   Platform,
@@ -14,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio'
 import type * as ExpoSpeech from 'expo-speech'
@@ -43,6 +44,11 @@ import {
   DRAPE_VISION_TARGET_ANGLES_DEGREES,
   DRAPE_VISION_VERSION,
 } from '@drape/drape-vision/constants'
+import {
+  clampDrapeVisionHeightCm as clampHeight,
+  formatDrapeVisionHeight as formatHeight,
+  stepDrapeVisionHeight,
+} from '@drape/drape-vision/height'
 import {
   calculateDrapeVisionMeasurements,
 } from '@drape/drape-vision/measurement-calculator'
@@ -1068,20 +1074,6 @@ function scanInstructionForTargetYaw(targetAngleDegrees: number, yawDegrees: num
   }
 
   return scanInstructionForTargetAngleDegrees(target)
-}
-
-function clampHeight(value: number) {
-  const range = DRAPE_VISION_MEASUREMENT_RANGES_CM.height
-  return Math.min(Math.max(Math.round(value), range.min), range.max)
-}
-
-function formatHeight(heightCm: number, unit: HeightUnit) {
-  if (unit === 'cm') return `${Math.round(heightCm)} cm`
-
-  const totalInches = Math.round(heightCm / DRAPE_VISION_CM_PER_INCH)
-  const feet = Math.floor(totalInches / 12)
-  const inches = totalInches % 12
-  return `${feet} ft ${inches} in`
 }
 
 function visionHeightStorageKey(userId?: string | null) {
@@ -3185,6 +3177,9 @@ export default function DrapeVisionScreen() {
   const [cameraRestarting, setCameraRestarting] = useState(false)
   const [cameraHostArmed, setCameraHostArmed] = useState(false)
   const [cameraPreviewReady, setCameraPreviewReady] = useState(false)
+  const [visionRouteFocused, setVisionRouteFocused] = useState(true)
+  const [visionAppActive, setVisionAppActive] = useState(() => AppState.currentState === 'active')
+  const [visionSessionSuspended, setVisionSessionSuspended] = useState(false)
   const cameraRestartingRef = useRef(false)
   const cameraSessionRunningRef = useRef(false)
   const cameraPreviewReadyRef = useRef(false)
@@ -3321,6 +3316,10 @@ export default function DrapeVisionScreen() {
   })
   const phaseRef = useRef(phase)
   const engineStatusRef = useRef(engineStatus)
+  const visionRouteFocusedRef = useRef(true)
+  const visionAppActiveRef = useRef(AppState.currentState === 'active')
+  const visionInteractionActiveRef = useRef(visionAppActiveRef.current)
+  const visionSessionSuspendedRef = useRef(false)
   const captureArmedRef = useRef(captureArmed)
   const scanCountdownRef = useRef(scanCountdown)
   const scanPrecheckRef = useRef(scanPrecheck)
@@ -3565,7 +3564,9 @@ export default function DrapeVisionScreen() {
     }
 
     countdownPulse.setValue(1.16)
-    trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+      trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
     Animated.spring(countdownPulse, {
       toValue: 1,
       friction: 5,
@@ -3757,7 +3758,12 @@ export default function DrapeVisionScreen() {
   }, [captureArmed, engineStatus, phase, scanCountdown])
 
   useEffect(() => {
-    const active = phase === 'specialist_scan' ? 1 : 0
+    const active = (
+      phase === 'specialist_scan' &&
+      visionRouteFocused &&
+      visionAppActive &&
+      !visionSessionSuspended
+    ) ? 1 : 0
     const modeCode = specialistModeCode(selectedSpecialistMode)
     specialistScanActiveValue.value = active
     specialistScanActiveSync.setBlocking(active)
@@ -3792,6 +3798,9 @@ export default function DrapeVisionScreen() {
     specialistModeCodeSync,
     specialistScanActiveValue,
     specialistScanActiveSync,
+    visionAppActive,
+    visionRouteFocused,
+    visionSessionSuspended,
   ])
 
   useEffect(() => {
@@ -3862,6 +3871,11 @@ export default function DrapeVisionScreen() {
     prompt: DrapeVisionSpokenPrompt,
     options: { force?: boolean; replace?: boolean } = {},
   ) => {
+    if (!visionInteractionActiveRef.current || visionSessionSuspendedRef.current) {
+      setAudioDebugMessage(null)
+      return
+    }
+
     const currentPhase = phaseRef.current
     const audioAllowed =
       currentPhase === 'scan' ||
@@ -4065,6 +4079,8 @@ export default function DrapeVisionScreen() {
   }, [captureArmedSync, captureArmedValue, mode, specialistScanActiveSync, specialistScanActiveValue])
 
   const announceVisionStatus = useCallback((message: string, options: { force?: boolean } = {}) => {
+    if (!visionInteractionActiveRef.current || visionSessionSuspendedRef.current) return
+
     const normalizedMessage = message.trim()
     if (!normalizedMessage) return
 
@@ -4171,12 +4187,16 @@ export default function DrapeVisionScreen() {
         void playVisionPrompt('capturingNow', { force: true })
         if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
         captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
-        trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+        if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+          trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+        }
       }, 0)
       return () => clearTimeout(timer)
     }
 
-    trigger('impactLight', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+      trigger('impactLight', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
     if (scanCountdown === 3) {
       void playVisionPrompt('threeTwoOne', { force: true })
     }
@@ -4329,6 +4349,7 @@ export default function DrapeVisionScreen() {
     const exitReturnTarget = resolveVisionExitReturnTarget()
     const fallbackTarget = DRAPE_VISION_MODE_META[mode].fallbackRoute as never
     visionExitInProgressRef.current = true
+    visionInteractionActiveRef.current = false
     setVisionExitPending(true)
 
     preserveCurrentVisionNavigationContext()
@@ -4486,13 +4507,17 @@ export default function DrapeVisionScreen() {
       const measurementsReturnTo = primaryReturnTarget !== '/(customer)' && primaryReturnTarget !== '/(customer)/profile/measurements'
         ? primaryReturnTarget
         : undefined
+      preserveCurrentVisionNavigationContext()
       router.navigate({
         pathname: '/(customer)/profile/measurements',
-        params: measurementsReturnTo
-          ? { returnTo: measurementsReturnTo, historyChain: measurementsReturnTo }
-          : {},
+        params: {
+          fromVision: '1',
+          visionReturnTo: primaryReturnTarget,
+          ...(measurementsReturnTo
+            ? { returnTo: measurementsReturnTo, historyChain: measurementsReturnTo }
+            : {}),
+        },
       } as never)
-      clearPreservedVisionNavigationContext()
       return
     }
 
@@ -4533,7 +4558,7 @@ export default function DrapeVisionScreen() {
       { fromPath: '/vision' },
     )
     clearPreservedVisionNavigationContext()
-  }, [mode, navigation, params.diaryId, params.orderId, resolveVisionExitReturnTarget, router])
+  }, [mode, navigation, params.diaryId, params.orderId, preserveCurrentVisionNavigationContext, resolveVisionExitReturnTarget, router])
 
   const openManualMeasurementsFromResult = useCallback(() => {
     if (measurementResult && !savedMeasurementScanId) {
@@ -6275,6 +6300,100 @@ export default function DrapeVisionScreen() {
     setBodyWorkletActiveTrace(active)
   }, [bodyScanActiveSync, bodyScanActiveValue])
 
+  const suspendVisionActivity = useCallback((reason: string) => {
+    const suspendedPhase = phaseRef.current
+    visionInteractionActiveRef.current = false
+    visionSessionSuspendedRef.current = true
+    setVisionSessionSuspended(true)
+    stopVisionAudio(reason)
+    clearAutoCountdownTimer()
+
+    // Result calculation may finish atomically, but user-facing scan timers
+    // must stop while Vision is not the active surface.
+    if (captureNoticeTimerRef.current) {
+      clearTimeout(captureNoticeTimerRef.current)
+      captureNoticeTimerRef.current = null
+    }
+    if (finalBackCompletionTimerRef.current) {
+      clearTimeout(finalBackCompletionTimerRef.current)
+      finalBackCompletionTimerRef.current = null
+    }
+    if (specialistWatchdogTimerRef.current) {
+      clearTimeout(specialistWatchdogTimerRef.current)
+      specialistWatchdogTimerRef.current = null
+    }
+    if (cameraPreviewRemountTimerRef.current) {
+      clearTimeout(cameraPreviewRemountTimerRef.current)
+      cameraPreviewRemountTimerRef.current = null
+    }
+
+    setCaptureArmed(false)
+    setScanCountdown(null)
+    captureArmedRef.current = false
+    scanCountdownRef.current = null
+    captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
+    scanArmedAtRef.current = null
+    setBodyWorkletActive(false)
+    specialistScanActiveValue.value = 0
+    specialistScanActiveSync.setBlocking(0)
+    setSpecialistWorkletTrace((current) => ({ ...current, active: false }))
+
+    if (suspendedPhase === 'scan') {
+      setCaptureNotice(null)
+      setInstruction('Scan paused. Start capture when you are ready.')
+    } else if (suspendedPhase === 'specialist_scan') {
+      setCaptureNotice(null)
+      setSpecialistReadinessStatus('ready')
+      setSpecialistStatusMessage('Scan paused. Start again when you are ready.')
+      phaseRef.current = 'specialist'
+      setPhase('specialist')
+    }
+
+    addVisionBreadcrumb('vision_activity_suspended', {
+      mode,
+      phase: suspendedPhase,
+      reason,
+      capturedAngles: capturedSetRef.current.size,
+    })
+  }, [
+    captureArmedSync,
+    captureArmedValue,
+    clearAutoCountdownTimer,
+    mode,
+    setBodyWorkletActive,
+    specialistScanActiveSync,
+    specialistScanActiveValue,
+    stopVisionAudio,
+  ])
+
+  useFocusEffect(useCallback(() => {
+    visionRouteFocusedRef.current = true
+    setVisionRouteFocused(true)
+    visionInteractionActiveRef.current = visionAppActiveRef.current
+
+    return () => {
+      visionRouteFocusedRef.current = false
+      setVisionRouteFocused(false)
+      suspendVisionActivity('vision_route_blur')
+    }
+  }, [suspendVisionActivity]))
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const active = nextState === 'active'
+      visionAppActiveRef.current = active
+      setVisionAppActive(active)
+      visionInteractionActiveRef.current = active && visionRouteFocusedRef.current
+
+      if (!active) {
+        suspendVisionActivity(`vision_app_${nextState}`)
+      }
+    })
+
+    return () => subscription.remove()
+  }, [suspendVisionActivity])
+
   useEffect(() => {
     if (phase !== 'scan') {
       setBodyWorkletActive(false)
@@ -6595,7 +6714,9 @@ export default function DrapeVisionScreen() {
     })
     void playVisionPrompt('scanComplete', { force: true })
     announceVisionStatus('Scan complete. Calculating your measurement draft.', { force: true })
-    trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+      trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
 
     void pauseVisionCameraSession().then(() => {
       setPhase('calculating')
@@ -6821,7 +6942,9 @@ export default function DrapeVisionScreen() {
     setCaptureNotice(`Captured ${formatScanCaptureProgress(capturedSetRef.current.size)}`)
     if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
     captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 700)
-    trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+      trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
 
     const hasFullScan = capturedSetRef.current.size >= SCAN_TARGET_CAPTURE_COUNT
     const hasCompletionCoverage = hasDrapeVisionCompletionCoverage(capturesRef.current)
@@ -7068,7 +7191,9 @@ export default function DrapeVisionScreen() {
     setInstruction(result.title)
     setCaptureNotice('Draft captured')
     setFrameDropWarning(null)
-    trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+      trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
     void playVisionPrompt('scanComplete', { force: true })
     addVisionBreadcrumb('specialist_guide_captured', {
       mode,
@@ -7330,12 +7455,20 @@ export default function DrapeVisionScreen() {
       }
     })
 
-    if (!captureArmed && scanCountdown == null) {
+    if (!captureArmed && scanCountdown == null && !visionSessionSuspendedRef.current) {
       setInstruction(next.ready ? 'Hold position. Countdown starts automatically.' : next.message)
     }
 
-    if (!captureArmed && scanCountdown == null && next.ready && !wasReady) {
-      trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (
+      !captureArmed &&
+      scanCountdown == null &&
+      next.ready &&
+      !wasReady &&
+      !visionSessionSuspendedRef.current
+    ) {
+      if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+        trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+      }
       announceVisionStatus('Pre-check passed. Countdown starts automatically. Step back now.', { force: true })
     }
 
@@ -7343,6 +7476,8 @@ export default function DrapeVisionScreen() {
       Platform.OS === 'ios' &&
       phaseRef.current === 'scan' &&
       engineStatusRef.current === 'ready' &&
+      visionInteractionActiveRef.current &&
+      !visionSessionSuspendedRef.current &&
       !captureArmedRef.current &&
       scanCountdownRef.current == null
 
@@ -7369,6 +7504,8 @@ export default function DrapeVisionScreen() {
         if (
           phaseRef.current !== 'scan' ||
           engineStatusRef.current !== 'ready' ||
+          !visionInteractionActiveRef.current ||
+          visionSessionSuspendedRef.current ||
           captureArmedRef.current ||
           scanCountdownRef.current != null ||
           !scanPrecheckReadyRef.current
@@ -7387,6 +7524,8 @@ export default function DrapeVisionScreen() {
       if (
         phaseRef.current !== 'scan' ||
         engineStatusRef.current !== 'ready' ||
+        !visionInteractionActiveRef.current ||
+        visionSessionSuspendedRef.current ||
         captureArmedRef.current ||
         scanCountdownRef.current != null ||
         !scanPrecheckReadyRef.current
@@ -7475,7 +7614,9 @@ export default function DrapeVisionScreen() {
     }
     const haptic = scanHapticForInstruction(message)
     if (haptic) {
-      trigger(haptic, { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+      if (visionInteractionActiveRef.current && !visionSessionSuspendedRef.current) {
+        trigger(haptic, { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+      }
     }
     setInstruction(message)
   }, [playVisionPrompt])
@@ -8830,7 +8971,9 @@ export default function DrapeVisionScreen() {
 
   const cameraActive = (phase === 'scan' || phase === 'specialist_scan') &&
     engineStatus === 'ready' &&
-    !cameraRestarting
+    !cameraRestarting &&
+    visionRouteFocused &&
+    visionAppActive
   const cameraPreviewVisible = phase === 'scan' || phase === 'specialist_scan'
   const cameraOutputs = useMemo(
     () => cameraHostArmed && frameOutputReady ? [frameOutput] : [],
@@ -8987,6 +9130,8 @@ export default function DrapeVisionScreen() {
 
     setEngineError(null)
     setEngineStatus('initializing')
+    visionSessionSuspendedRef.current = false
+    setVisionSessionSuspended(false)
     cameraPreviewReadyRef.current = false
     cameraPreviewRecoveryCountRef.current = 0
     setCameraPreviewReady(false)
@@ -9024,6 +9169,20 @@ export default function DrapeVisionScreen() {
 
   async function startCaptureCountdown(options: StartCaptureCountdownOptions = {}) {
     if (cameraRestartingRef.current) return
+    if (options.automated && visionSessionSuspendedRef.current) return
+
+    const resumingPausedSession =
+      !options.automated &&
+      visionSessionSuspendedRef.current &&
+      capturedSetRef.current.size > 0
+
+    if (!options.automated) {
+      visionSessionSuspendedRef.current = false
+      setVisionSessionSuspended(false)
+      visionInteractionActiveRef.current =
+        visionRouteFocusedRef.current && visionAppActiveRef.current
+    }
+
     clearAutoCountdownTimer()
 
     if (isAndroidLiveScanPreflightBlocked()) {
@@ -9088,7 +9247,19 @@ export default function DrapeVisionScreen() {
     const precheckSnapshot = scanPrecheckRef.current
     const precheckWasReady = scanPrecheckReadyRef.current
 
-    resetScanState()
+    if (resumingPausedSession && hasDrapeVisionCompletionCoverage(capturesRef.current)) {
+      addVisionBreadcrumb('scan_resume_completed_capture', {
+        mode,
+        heightCm,
+        capturedAngles: capturedSetRef.current.size,
+      })
+      completeScan()
+      return
+    }
+
+    if (!resumingPausedSession) {
+      resetScanState()
+    }
     if (Platform.OS === 'ios' && precheckWasReady) {
       const restoredPrecheck = {
         ...precheckSnapshot,
@@ -9099,14 +9270,17 @@ export default function DrapeVisionScreen() {
       setScanPrecheck(restoredPrecheck)
     }
     setBodyWorkletActive(true)
-    setPoseDebug(emptyPoseDebug('Resetting camera'))
-    setCaptureNotice('Resetting camera')
-    startVisionLabSession()
-    addVisionBreadcrumb('scan_start', {
+    setPoseDebug(emptyPoseDebug(resumingPausedSession ? 'Resuming camera' : 'Resetting camera'))
+    setCaptureNotice(resumingPausedSession ? 'Resuming scan' : 'Resetting camera')
+    if (!resumingPausedSession) {
+      startVisionLabSession()
+    }
+    addVisionBreadcrumb(resumingPausedSession ? 'scan_resume' : 'scan_start', {
       mode,
       step: 'countdown',
       heightCm,
       targetAngles: SCAN_TARGET_CAPTURE_COUNT,
+      capturedAngles: capturedSetRef.current.size,
     })
     setCaptureArmed(false)
     captureArmedValue.value = 0
@@ -9124,6 +9298,8 @@ export default function DrapeVisionScreen() {
   async function retakeScan() {
     if (cameraRestartingRef.current) return
 
+    visionSessionSuspendedRef.current = false
+    setVisionSessionSuspended(false)
     addVisionBreadcrumb('scan_retake_requested', {
       mode,
       phase,
@@ -9264,6 +9440,10 @@ export default function DrapeVisionScreen() {
     }
 
     try {
+      visionSessionSuspendedRef.current = false
+      setVisionSessionSuspended(false)
+      visionInteractionActiveRef.current =
+        visionRouteFocusedRef.current && visionAppActiveRef.current
       const copy = specialistGuideCopyForMode(specialistMode)
       if (!options.watchdogRepair) {
         specialistWatchdogRepairCountRef.current = 0
@@ -9384,10 +9564,10 @@ export default function DrapeVisionScreen() {
   }
 
   function adjustHeight(direction: 1 | -1) {
-    const step = heightUnit === 'cm'
-      ? DRAPE_VISION_HEIGHT_STEP_CM
-      : DRAPE_VISION_HEIGHT_STEP_INCHES * DRAPE_VISION_CM_PER_INCH
-    const nextHeightCm = clampHeight(heightCm + direction * step)
+    const nextHeightCm = stepDrapeVisionHeight(heightCm, heightUnit, direction, {
+      cmStep: DRAPE_VISION_HEIGHT_STEP_CM,
+      inchStep: DRAPE_VISION_HEIGHT_STEP_INCHES,
+    })
     setHeightCm(nextHeightCm)
     void saveVisionHeightPreference({
       heightCm: nextHeightCm,
@@ -10110,6 +10290,15 @@ export default function DrapeVisionScreen() {
         tone: 'active' | 'warning' | 'blocked'
         icon: FeatherIconName
       }> = []
+      if (canStartLiveBodyScan) {
+        notices.push({
+          id: 'fit-360-setup',
+          title: 'Set up Fit 360 before you begin',
+          body: 'Stay fully clothed in one fitted, lightweight layer. Use bright, even front light and a plain background. Stand your phone upright on a stable table or stand around waist-to-chest height, never on the floor. Step back until your head and ankles stay inside the guide.',
+          tone: 'active',
+          icon: 'check-circle',
+        })
+      }
       if (missingTailorDiaryTarget) {
         notices.push({
           id: 'diary',
@@ -11127,7 +11316,11 @@ export default function DrapeVisionScreen() {
                   onPress={() => updateHeightInputConfidence(option.value)}
                   style={[styles.heightConfidenceCard, selected && styles.heightConfidenceCardActive]}
                 >
-                  <Feather name={option.icon} size={18} color={selected ? Colors.needleGreen : DRAPE_VISION_COLORS.textMuted} />
+                  <Feather
+                    name={selected ? 'check-circle' : option.icon}
+                    size={18}
+                    color={selected ? DRAPE_VISION_COLORS.text : DRAPE_VISION_COLORS.textMuted}
+                  />
                   <View style={styles.heightConfidenceCopy}>
                     <Text style={[styles.heightConfidenceTitle, selected && styles.heightConfidenceTitleActive]}>{option.title}</Text>
                     <Text style={styles.heightConfidenceBody}>{option.body}</Text>
@@ -11243,7 +11436,9 @@ export default function DrapeVisionScreen() {
       : scanCountdown == null
         ? iosPrecheckBlocked
           ? 'Stand fully in frame first'
-          : 'Start countdown now'
+          : visionSessionSuspended && capturedAngleCount > 0
+            ? 'Resume scan'
+            : 'Start countdown now'
         : `Capture starts in ${scanCountdown}`
     const scanStartIcon = cameraRestarting || scanCountdown != null
       ? 'clock'
@@ -11414,15 +11609,6 @@ export default function DrapeVisionScreen() {
               style={styles.scanRailButton}
             >
               <Feather name="grid" size={22} color={Colors.textInverse} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Use manual measurements instead"
-              accessibilityHint="Leaves live scanning and opens the manual measurement workflow."
-              onPress={openPrimary}
-              style={styles.scanRailButton}
-            >
-              <Feather name="file-text" size={22} color={Colors.textInverse} />
             </TouchableOpacity>
           </View>
           {renderLiveVisionTrace()}
@@ -13065,7 +13251,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   savedHeightEyebrow: {
-    color: Colors.needleGreenLight,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.sm,
     lineHeight: 20,
     fontWeight: FontWeight.bold,
@@ -13092,7 +13278,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.needleGreen + '44',
   },
   savedHeightButtonText: {
-    color: Colors.needleGreenLight,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
   },
@@ -13156,7 +13342,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.needleGreen + '44',
   },
   specialistRecommendedText: {
-    color: Colors.needleGreenLight,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.xs,
     lineHeight: 16,
     fontWeight: FontWeight.bold,
@@ -13174,7 +13360,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   specialistModeHint: {
-    color: Colors.needleGreenLight,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.sm,
     lineHeight: 20,
     fontWeight: FontWeight.semibold,
@@ -13388,7 +13574,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
   },
   heightConfidenceTitleActive: {
-    color: Colors.needleGreenLight,
+    color: DRAPE_VISION_COLORS.text,
   },
   heightConfidenceBody: {
     color: DRAPE_VISION_COLORS.textMuted,
@@ -14121,7 +14307,7 @@ const styles = StyleSheet.create({
   },
   measurementModuleTag: {
     marginTop: Spacing.xs,
-    color: Colors.needleGreenLight,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },
@@ -14279,7 +14465,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
 	  specialistTapeToneGood: {
-	    color: Colors.needleGreenLight,
+	    color: Colors.needleGreenDark,
 	  },
 	  specialistTapeToneWatch: {
 	    color: Colors.statusPending,

@@ -2070,7 +2070,7 @@ export default function OrderTrackingScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <ActivityIndicator color={Colors.needleGreenDark} size="large" />
             <Text style={styles.stateTitle}>Loading your order...</Text>
             <Text style={styles.stateHint}>Pulling the latest order updates.</Text>
           </View>
@@ -3970,7 +3970,7 @@ export default function OrderTrackingScreen() {
                           </View>
                           {member.status === 'ACCEPTED' ? (
                             <View style={styles.groupMemberBadge}>
-                              <Feather name="check" size={14} color={Colors.needleGreen} />
+                              <Feather name="check" size={14} color={Colors.needleGreenDark} />
                               <Text style={styles.groupMemberBadgeText}>Ready</Text>
                             </View>
                           ) : member.status === 'REMOVED' ? null : (
@@ -4546,7 +4546,7 @@ export default function OrderTrackingScreen() {
               {order.fabricTracking && (
                 <Text style={styles.fabricSavedNote}>
                   Saved:{' '}
-                  <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>
+                  <Text style={{ color: Colors.needleGreenDark, fontWeight: FontWeight.semibold }}>
                     {order.fabricTracking}
                   </Text>
                 </Text>
@@ -4582,24 +4582,42 @@ export default function OrderTrackingScreen() {
         </View>
       </ScrollView>
 
-      <DrapeFloatingActionDock testID="customer-order-message-dock">
-        <DrapeCapsuleButton
-          label={conversationCtaLabel}
-          tone="primary"
-          icon="message-circle"
-          style={{ flex: 1 }}
-          onPress={() =>
-            router.navigate({
-              pathname: '/(customer)/messages/[orderId]',
-              params: {
-                orderId: order.id,
-                returnTo: `/(customer)/orders/${order.id}`,
-                historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
-              },
-            })
-          }
-          testID="message-tailor-btn"
-        />
+      <DrapeFloatingActionDock compactWidth={76} testID="customer-order-message-dock">
+        {(compact) => compact ? (
+          <DrapeIconButton
+            icon="message-circle"
+            accessibilityLabel={conversationCtaLabel}
+            tone="primary"
+            onPress={() =>
+              router.navigate({
+                pathname: '/(customer)/messages/[orderId]',
+                params: {
+                  orderId: order.id,
+                  returnTo: `/(customer)/orders/${order.id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                },
+              })
+            }
+          />
+        ) : (
+          <DrapeCapsuleButton
+            label={conversationCtaLabel}
+            tone="primary"
+            icon="message-circle"
+            style={{ flex: 1 }}
+            onPress={() =>
+              router.navigate({
+                pathname: '/(customer)/messages/[orderId]',
+                params: {
+                  orderId: order.id,
+                  returnTo: `/(customer)/orders/${order.id}`,
+                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                },
+              })
+            }
+            testID="message-tailor-btn"
+          />
+        )}
       </DrapeFloatingActionDock>
 
       {showDispute ? (
@@ -6272,7 +6290,7 @@ const disputeStyles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   cancel: {
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.md,
     fontWeight: FontWeight.medium,
     width: 60,
@@ -7113,7 +7131,7 @@ const quoteLabel: import('react-native').TextStyle = {
 const quoteAmount: import('react-native').TextStyle = {
   fontSize: 22,
   fontWeight: '700',
-  color: Colors.needleGreen,
+  color: Colors.needleGreenDark,
 }
 const quoteValue: import('react-native').TextStyle = {
   fontSize: 14,
@@ -7129,7 +7147,7 @@ const quoteFootnote: import('react-native').TextStyle = {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  backText: { color: Colors.needleGreenDark, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.md },
   quoteActionBar: { paddingHorizontal: 0, paddingVertical: 0, justifyContent: 'center', flexWrap: 'wrap' },
@@ -7179,7 +7197,7 @@ const styles = StyleSheet.create({
   },
   progressLineDone: { backgroundColor: Colors.needleGreen },
   progressLabel: { fontSize: 8, color: Colors.midGrey, textAlign: 'center', lineHeight: 11 },
-  progressLabelDone: { color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  progressLabelDone: { color: Colors.needleGreenDark, fontWeight: FontWeight.medium },
 
   // Status card
   statusCard: {
@@ -7207,7 +7225,7 @@ const styles = StyleSheet.create({
   nextStepsTitle: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     marginBottom: 4,
     fontFamily: Fonts.display,
   },
@@ -7251,7 +7269,7 @@ const styles = StyleSheet.create({
   },
   orderTypePillText: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -7269,7 +7287,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   modalClose: {
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.md,
     fontWeight: FontWeight.medium,
     width: 60,
@@ -7318,7 +7336,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.needleGreen + '30',
   },
-  codeDigitText: { fontSize: 32, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  codeDigitText: { fontSize: 32, fontWeight: FontWeight.bold, color: Colors.needleGreenDark },
   collectionInstruction: { fontSize: FontSize.sm, color: Colors.inkLight },
   disputeLink: { fontSize: FontSize.sm, color: Colors.kanteRust, fontWeight: FontWeight.medium },
 
@@ -7374,7 +7392,7 @@ const styles = StyleSheet.create({
   trackingNumber: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
   },
   summaryLine: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.md },
   summaryLineLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
@@ -7389,7 +7407,7 @@ const styles = StyleSheet.create({
   dossierRowStacked: { gap: 6 },
   dossierRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.sm },
   dossierStackedText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
-  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreen, lineHeight: 20 },
+  dossierLinkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.needleGreenDark, lineHeight: 20 },
   dossierMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   dossierMediaTile: { width: '31%', aspectRatio: 1, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
   dossierMediaImage: { width: '100%', height: '100%' },
@@ -7400,7 +7418,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingVertical: 5,
   },
-  styleChipText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  styleChipText: { fontSize: FontSize.xs, color: Colors.needleGreenDark, fontWeight: FontWeight.semibold },
   helperText: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
   quoteFootnote,
   supportCard: {
@@ -7419,7 +7437,7 @@ const styles = StyleSheet.create({
   disclosureCopy: { flex: 1, gap: 3 },
   disclosureSummary: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   disclosureAction: {
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },
@@ -7448,7 +7466,7 @@ const styles = StyleSheet.create({
   supportStatusSuccess: { backgroundColor: Colors.needleGreenLight },
   supportStatusText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   supportStatusTextWarning: { color: Colors.kanteRust },
-  supportStatusTextSuccess: { color: Colors.needleGreen },
+  supportStatusTextSuccess: { color: Colors.needleGreenDark },
   supportBodyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   supportWarningText: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   supportHint: { fontSize: 11, color: Colors.midGrey, lineHeight: 17 },
@@ -7483,7 +7501,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: Spacing.sm,
   },
-  groupMemberBadgeText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  groupMemberBadgeText: { fontSize: FontSize.xs, color: Colors.needleGreenDark, fontWeight: FontWeight.semibold },
   inlineDecisionCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -7548,7 +7566,7 @@ const styles = StyleSheet.create({
   handoffStatusText: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
   },
 
   // Fabric tracking input
@@ -7646,7 +7664,7 @@ const styles = StyleSheet.create({
   },
   sentBannerText: {
     fontSize: FontSize.sm,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.medium,
   },
 
@@ -7663,7 +7681,7 @@ const styles = StyleSheet.create({
   },
   stateEyebrow: {
     fontSize: FontSize.xs,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
@@ -7676,7 +7694,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.display,
   },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  backLink: { color: Colors.needleGreenDark, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   retryBtn: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,

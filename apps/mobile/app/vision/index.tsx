@@ -112,9 +112,14 @@ function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
 function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode === 'customer_scan') {
     const returnTo = pickSafeReturnTo(params.historyChain, params.returnTo)
-    const targetParams = returnTo && returnTo !== '/(customer)/profile/measurements'
-      ? { returnTo, historyChain: returnTo }
-      : {}
+    const visionReturnTo = returnRouteForParams(mode, params)
+    const targetParams = {
+      fromVision: '1',
+      visionReturnTo,
+      ...(returnTo && returnTo !== '/(customer)/profile/measurements'
+        ? { returnTo, historyChain: returnTo }
+        : {}),
+    }
     return {
       pathname: '/(customer)/profile/measurements',
       params: targetParams,
@@ -303,10 +308,10 @@ export default function DrapeVisionRoute() {
     if (visionExitTimerRef.current) clearTimeout(visionExitTimerRef.current)
     visionExitTimerRef.current = setTimeout(() => {
       router.navigate(primaryFallbackTarget as never)
-      clearPreservedVisionNavigationContext()
+      if (mode !== 'customer_scan') clearPreservedVisionNavigationContext()
       visionExitTimerRef.current = null
     }, VISION_ROUTE_EXIT_DELAY_MS)
-  }, [primaryFallbackTarget, router])
+  }, [mode, primaryFallbackTarget, router])
 
   const openReturnRoute = useCallback(() => {
     if (visionExitInProgressRef.current) return

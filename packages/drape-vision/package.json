@@ -23,6 +23,7 @@
     "./constants": "./src/constants.ts",
     "./ellipse-fitter": "./src/ellipseFitter.ts",
     "./field-dictionary": "./src/fieldDictionary.ts",
+    "./height": "./src/height.ts",
     "./measurement-calculator": "./src/measurementCalculator.ts",
     "./native": "./src/native.ts",
     "./types": "./src/types.ts"

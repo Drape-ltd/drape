@@ -34,6 +34,7 @@ import {
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   PaymentTrustCard,
+  PhoneNumberInput,
 } from '@/components/ui'
 import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo, resetTo } from '@/lib/navigation'
@@ -903,27 +904,21 @@ export default function ReadyMadeCheckoutScreen() {
                     placeholder={recipientMode === 'SELF' ? 'Your name' : 'Recipient name'}
                     placeholderTextColor={Colors.midGrey}
                   />
-                  <TextInput
-                    style={styles.input}
+                  <PhoneNumberInput
+                    label={recipientMode === 'SELF' ? 'Your phone' : 'Recipient phone'}
                     value={recipientPhone}
                     onChangeText={(value) => {
-                      setRecipientPhone(normalizePhoneForStorage(value))
+                      setRecipientPhone(value)
                       if (recipientError) setRecipientError('')
                     }}
-                    placeholder={
+                    placeholder="Phone number"
+                    required
+                    hint={
                       recipientMode === 'SELF'
-                        ? 'Your phone, e.g. +234... or +44...'
-                        : 'Recipient phone, e.g. +234... or +44...'
+                        ? `This is the number the courier or rider will use if they need you. ${recipientPhoneHint}`
+                        : `The courier or rider may call this person directly. ${recipientPhoneHint}`
                     }
-                    placeholderTextColor={Colors.midGrey}
-                    keyboardType="phone-pad"
-                    autoCapitalize="none"
                   />
-                  <Text style={styles.helperText}>
-                    {recipientMode === 'SELF'
-                      ? `This is the number the courier or rider will use if they need you. ${recipientPhoneHint}`
-                      : `The courier or rider may call this person directly. ${recipientPhoneHint}`}
-                  </Text>
                   <TextInput
                     style={styles.input}
                     value={addressSearch}

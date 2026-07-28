@@ -145,6 +145,7 @@ import {
 import { Field } from './ui/field'
 import { IconButton } from './ui/icon-button'
 import { Input } from './ui/input'
+import { PhoneNumberField } from './ui/phone-number-field'
 import { MediaViewerDialog } from './ui/media-viewer-dialog'
 import { MetricCard } from './ui/metric-card'
 import { NativeSelect } from './ui/native-select'
@@ -10001,11 +10002,11 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   placeholder="Dispatch contact name"
                   className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
-                <input
+                <PhoneNumberField
                   value={stageFulfillmentContactPhone}
-                  onChange={(event) => setStageFulfillmentContactPhone(event.target.value)}
+                  onValueChange={setStageFulfillmentContactPhone}
                   placeholder="Dispatch contact phone"
-                  className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50 md:col-span-2"
+                  containerClassName="md:col-span-2"
                 />
               </div>
             ) : null}
@@ -10783,7 +10784,11 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
         {needsAddress ? (
           <div className="grid gap-3 md:grid-cols-2">
             <Input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="Recipient name" />
-            <Input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} placeholder="Recipient phone for courier only" />
+            <PhoneNumberField
+              value={recipientPhone}
+              onValueChange={setRecipientPhone}
+              placeholder="Recipient phone for courier only"
+            />
             <Input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Address" className="md:col-span-2" />
             <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="City" />
             <Input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Region/state" />
@@ -12573,10 +12578,12 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
                 <span className="text-xs font-semibold text-ink">Recipient name</span>
                 <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
-              <label className="grid gap-1.5">
-                <span className="text-xs font-semibold text-ink">Recipient phone</span>
-                <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
-              </label>
+              <PhoneNumberField
+                label="Recipient phone"
+                value={recipientPhone}
+                onValueChange={setRecipientPhone}
+                placeholder="Phone number"
+              />
               <label className="grid gap-1.5 md:col-span-2">
                 <span className="text-xs font-semibold text-ink">Street address</span>
                 <input value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />

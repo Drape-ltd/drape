@@ -55,10 +55,26 @@ export const DRAPE_VISION_SPECIALIST_SCAN_MODULES: readonly DrapeVisionSpecialis
   {
     mode: 'fit_360',
     title: 'Fit 360',
-    subtitle: 'A guided turn for chest, waist, hips, and shoulder width.',
+    subtitle: 'A guided turn for chest, waist, hips, and shoulder width—the foundation of your full fit profile.',
     status: 'active',
     icon: 'rotate-360',
     fields: ['chest', 'waist', 'hips', 'shoulderWidth'],
+  },
+  {
+    mode: 'bodice_corset',
+    title: 'Bodice/Corset Scan',
+    subtitle: 'For corsets, fitted bodices, bust fit, ribcage, waist, and torso detail.',
+    status: 'active',
+    icon: 'human-female',
+    fields: ['underBust', 'chest', 'waist', 'shoulderWidth', 'torsoLength', 'backLength', 'bicepCircumference'],
+  },
+  {
+    mode: 'lower_body_detail',
+    title: 'Lower Body Detail',
+    subtitle: 'For trousers, hems, thigh, knee, inseam, outseam, and ankle fit.',
+    status: 'active',
+    icon: 'human-male-height-variant',
+    fields: ['thighCircumference', 'kneeCircumference', 'inseam', 'outseam', 'ankleHemOpening'],
   },
   {
     mode: 'hand_wrist',
@@ -83,22 +99,6 @@ export const DRAPE_VISION_SPECIALIST_SCAN_MODULES: readonly DrapeVisionSpecialis
       'frontToBackOverCrown',
       'filaHeight',
     ],
-  },
-  {
-    mode: 'bodice_corset',
-    title: 'Bodice/Corset Scan',
-    subtitle: 'For corsets, fitted bodices, bust fit, ribcage, waist, and torso detail.',
-    status: 'active',
-    icon: 'human-female',
-    fields: ['underBust', 'chest', 'waist', 'shoulderWidth', 'torsoLength', 'backLength', 'bicepCircumference'],
-  },
-  {
-    mode: 'lower_body_detail',
-    title: 'Lower Body Detail',
-    subtitle: 'For trousers, hems, thigh, knee, inseam, outseam, and ankle fit.',
-    status: 'active',
-    icon: 'human-male-height-variant',
-    fields: ['thighCircumference', 'kneeCircumference', 'inseam', 'outseam', 'ankleHemOpening'],
   },
 ]
 

@@ -14,7 +14,7 @@ import { useAuth } from '@/lib/auth'
 import { updatePersonalInfoWithServerPreflight } from '@/lib/account-profile-actions'
 import { issueReauthProof } from '@/lib/reauth-proof'
 import { goBackOrFallback } from '@/lib/navigation'
-import { Input } from '@/components/ui'
+import { Input, PhoneNumberInput } from '@/components/ui'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -203,29 +203,24 @@ export default function TailorPersonalInfoScreen() {
           <View style={styles.divider} />
 
           <View style={styles.field}>
-            <Text style={styles.label}>Phone number</Text>
-            <TextInput
-              style={styles.input}
+            <PhoneNumberInput
+              label="Phone number"
               value={phone}
               onChangeText={(value) => {
                 setPhone(value)
                 if (phoneError) validatePhone(value)
               }}
               onBlur={() => validatePhone(phone)}
-              placeholder="+234... / +44... / +1..."
-              placeholderTextColor={Colors.midGrey}
-              keyboardType="phone-pad"
-              maxLength={20}
+              placeholder="Phone number"
               returnKeyType="done"
-            />
-            {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
-            {!phoneError ? (
-              <Text style={styles.hint}>
-                {phoneChanged
+              required
+              error={phoneError}
+              hint={
+                phoneChanged
                   ? 'Changing this number requires your current password before it saves.'
-                  : PHONE_STORAGE_HINT}
-              </Text>
-            ) : null}
+                  : PHONE_STORAGE_HINT
+              }
+            />
           </View>
         </View>
 

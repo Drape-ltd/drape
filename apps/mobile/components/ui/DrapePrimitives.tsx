@@ -120,7 +120,7 @@ export function DrapeCapsuleButton({
       {...props}
     >
       {loading ? (
-        <ActivityIndicator size="small" color={inverse ? Colors.textInverse : Colors.needleGreen} />
+        <ActivityIndicator size="small" color={inverse ? Colors.textInverse : Colors.needleGreenDark} />
       ) : (
         <>
           {icon ? (
@@ -223,7 +223,7 @@ export function DrapeInlineActionCard({
       <View style={styles.inlineCardHeader}>
         {icon ? (
           <View style={styles.inlineCardIcon}>
-            <Feather name={icon} size={18} color={Colors.needleGreen} />
+            <Feather name={icon} size={18} color={Colors.needleGreenDark} />
           </View>
         ) : null}
         <View style={styles.inlineCardCopy}>
@@ -287,7 +287,7 @@ export function DrapeEmptyState({
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyStateIcon}>
-        <Feather name={icon} size={24} color={Colors.needleGreen} />
+        <Feather name={icon} size={24} color={Colors.needleGreenDark} />
       </View>
       <Text style={styles.emptyStateTitle}>{title}</Text>
       <Text style={styles.emptyStateBody}>{body}</Text>
@@ -357,7 +357,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   capsuleButtonLabelInverse: { color: Colors.textInverse },
-  capsuleButtonLabelGhost: { color: Colors.needleGreen },
+  capsuleButtonLabelGhost: { color: Colors.needleGreenDark },
   actionBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: Colors.needleGreenDark,
     textTransform: 'uppercase',
   },
   inlineCardTitle: {

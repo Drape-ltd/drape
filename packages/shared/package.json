@@ -9,6 +9,7 @@
     "./constants": "./src/constants.ts",
     "./auth-security": "./src/auth-security.ts",
     "./phone": "./src/phone.ts",
+    "./phone-countries": "./src/phone-countries.ts",
     "./cancellation-policy": "./src/cancellation-policy.ts",
     "./sms-copy": "./src/sms-copy.ts",
     "./order-terminal": "./src/order-terminal.ts",
@@ -42,5 +43,9 @@
     "jest": "^30.3.0",
     "ts-jest": "^29.4.6",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "countries-list": "^3.4.1",
+    "libphonenumber-js": "^1.13.9"
   }
 }

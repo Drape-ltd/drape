@@ -601,7 +601,14 @@ async function sendPushToUser(
   },
 ) {
   const orderId = notification.data?.orderId ?? notification.data?.order_id ?? null
-  const eventKey = notification.data?.event ?? notification.data?.type ?? notification.data?.stage ?? notification.preferenceKey ?? notification.title
+  const eventKey =
+    notification.data?.eventId ??
+    notification.data?.quoteId ??
+    notification.data?.event ??
+    notification.data?.type ??
+    notification.data?.stage ??
+    notification.preferenceKey ??
+    notification.title
   await enqueuePushJob(supabase, {
     userId,
     notification,
