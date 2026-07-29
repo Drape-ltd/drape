@@ -47,6 +47,7 @@ import { AvatarImage } from '@/components/ui/AvatarImage'
 import { RemoteImage } from '@/components/ui/RemoteImage'
 import { PortfolioVideoPreview } from '@/components/ui/PortfolioVideoPreview'
 import { BottomSheetScaffold } from './BottomSheetScaffold'
+import UILibView from 'react-native-ui-lib/src/components/view'
 import type { MediaLightboxItem } from './MediaLightboxModal'
 import { DrapeMediaViewer } from './DrapeMediaViewer'
 import { DrapeMediaMosaic, type DrapeMediaMosaicItem } from './DrapeMediaMosaic'
@@ -70,8 +71,14 @@ import {
 type MessageType = 'TEXT' | 'PHOTO' | 'VOICE'
 type MessageMediaSource = 'camera-photo' | 'camera-video' | 'library'
 type ThreadNotice = { tone: 'warning' | 'error'; text: string }
+type EmptyConversationPrompt = {
+  eyebrow?: string
+  title: string
+  body: string
+  starters?: string[]
+}
 type CallLifecycleEvent = {
-  kind: 'consultation' | 'ready-made'
+  kind: 'consultation' | 'order'
   scheduledStartAt: string | null | undefined
   timezone?: string | null
   reason?: string | null
@@ -153,6 +160,7 @@ interface Props {
   focusedEventId?: string | null
   focusedMessageId?: string | null
   onConversationAction?: (action: OrderConversationAction) => void
+  emptyConversationPrompt?: EmptyConversationPrompt
 }
 
 // Rate limit: max 8 sends in 30 seconds
@@ -549,6 +557,7 @@ export function MessageThread({
   focusedEventId,
   focusedMessageId,
   onConversationAction,
+  emptyConversationPrompt,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
@@ -1507,6 +1516,12 @@ export function MessageThread({
     setTimeout(() => composerInputRef.current?.focus(), 24)
   }
 
+  function selectConversationStarter(starter: string) {
+    setText(starter)
+    setTextError('')
+    focusComposer()
+  }
+
   function openReplyComposer(message: Message) {
     setEditingMessage(null)
     setReplyingTo(message)
@@ -1576,7 +1591,9 @@ export function MessageThread({
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyEyebrow}>Conversation</Text>
+              <Text style={styles.emptyEyebrow}>
+                {emptyConversationPrompt?.eyebrow ?? 'Conversation'}
+              </Text>
               {loadError ? (
                 <>
                   <Text style={styles.emptyTitle}>Couldn't load messages.</Text>
@@ -1594,8 +1611,29 @@ export function MessageThread({
                 </>
               ) : (
                 <>
-                  <Text style={styles.emptyTitle}>No messages yet</Text>
-                  <Text style={styles.emptyText}>Start the conversation with {otherName}. Keep updates and decisions here.</Text>
+                  <Text style={styles.emptyTitle}>
+                    {emptyConversationPrompt?.title ?? 'No messages yet'}
+                  </Text>
+                  <Text style={styles.emptyText}>
+                    {emptyConversationPrompt?.body ??
+                      `Start the conversation with ${otherName}. Keep updates and decisions here.`}
+                  </Text>
+                  {emptyConversationPrompt?.starters?.length ? (
+                    <View style={styles.emptyStarterList}>
+                      {emptyConversationPrompt.starters.map((starter) => (
+                        <TouchableOpacity
+                          key={starter}
+                          style={styles.emptyStarterButton}
+                          onPress={() => selectConversationStarter(starter)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Use message starter: ${starter}`}
+                        >
+                          <Text style={styles.emptyStarterText}>{starter}</Text>
+                          <Feather name="arrow-right" size={16} color={Colors.needleGreen} />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ) : null}
                 </>
               )}
             </View>
@@ -1801,7 +1839,7 @@ export function MessageThread({
           ) : null}
 
           {/* Input bar */}
-          <View style={[styles.inputBar, { paddingBottom: composerBottomPadding }]}>
+          <UILibView style={[styles.inputBar, { paddingBottom: composerBottomPadding }]}>
             <TouchableOpacity
               style={styles.iconBtn}
               onPress={openPhotoSourceSheet}
@@ -1884,7 +1922,7 @@ export function MessageThread({
                 </Animated.View>
               )}
             </View>
-          </View>
+          </UILibView>
 
           {callGateMessage ? (
             <View style={styles.callGateCard}>
@@ -2049,7 +2087,7 @@ function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
     event.status === 'COMPLETED' ||
     lifecycle.status === 'expired'
   const scheduledLabel = formatLifecycleTime(event.scheduledStartAt ?? null, event.timezone)
-  const title = event.kind === 'consultation' ? 'Consultation call' : 'Ready-made coordination call'
+  const title = event.kind === 'consultation' ? 'Consultation call' : 'Scheduled order call'
 
   return (
     <View style={[styles.callLifecycleCard, isExpired && styles.callLifecycleCardExpired]}>
@@ -2743,6 +2781,30 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  emptyStarterList: {
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  emptyStarterButton: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+    backgroundColor: Colors.surface,
+  },
+  emptyStarterText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    lineHeight: 20,
+    fontWeight: FontWeight.medium,
+  },
   retryThreadBtn: {
     marginTop: Spacing.sm,
     alignSelf: 'stretch',
@@ -2812,14 +2874,17 @@ const styles = StyleSheet.create({
 
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.sm,
-    paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
-    backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.md,
+    backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
   },
   iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   textInputWrap: { flex: 1, gap: 3 },
   textInput: {
     backgroundColor: Colors.bone, borderRadius: Radius.xl,
-    paddingHorizontal: Spacing.md, paddingVertical: 7,
+    borderWidth: 1, borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md, paddingVertical: 10,
     fontSize: FontSize.md, lineHeight: 20, color: Colors.ink, maxHeight: 108,
   },
   composerCounter: {

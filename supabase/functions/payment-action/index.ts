@@ -191,19 +191,19 @@ function paymentDescription(order: {
   delivery_method?: string | null
 }, phase: PaymentPhase) {
   if (phase === 'CONSULTATION') {
-    return `Drape consultation payment #${order.reference ?? 'unknown'}`
+    return `Drapeon consultation payment #${order.reference ?? 'unknown'}`
   }
 
   if (phase === 'FULFILLMENT') {
     return order.delivery_method === 'LOCAL_DELIVERY'
-      ? `Drape delivery payment #${order.reference ?? 'unknown'}`
-      : `Drape shipping payment #${order.reference ?? 'unknown'}`
+      ? `Drapeon delivery payment #${order.reference ?? 'unknown'}`
+      : `Drapeon shipping payment #${order.reference ?? 'unknown'}`
   }
 
   const label = order.order_kind === 'READY_MADE'
     ? (order.item_title ?? order.garment_type ?? 'Ready-made order')
     : (order.garment_type ?? 'Custom order')
-  return `Drape order #${order.reference ?? 'unknown'} - ${label}`
+  return `Drapeon order #${order.reference ?? 'unknown'} - ${label}`
 }
 
 function paystackStatusMessage(status: string) {
@@ -645,8 +645,8 @@ async function finalizeSuccessfulPayment(
         notification: {
           title: order.delivery_method === 'LOCAL_DELIVERY' ? 'Delivery payment confirmed' : 'Shipping payment confirmed',
           body: order.delivery_method === 'LOCAL_DELIVERY'
-            ? 'Drape received your delivery payment. Your order can move into local delivery.'
-            : 'Drape received your shipping payment. Your order can move into dispatch.',
+            ? 'Drapeon received your delivery payment. Your order can move into local delivery.'
+            : 'Drapeon received your shipping payment. Your order can move into dispatch.',
           preferenceKey: 'paymentConfirmations',
           data: { orderId: order.id },
         },
@@ -791,8 +791,8 @@ async function finalizeSuccessfulPayment(
       notification: {
         title: order.order_kind === 'READY_MADE' ? 'Order confirmed' : 'Payment confirmed',
         body: order.order_kind === 'READY_MADE'
-          ? 'Your ready-made order is paid and the tailor can prepare it inside Drape.'
-          : 'Your order is funded. The tailor can continue production inside Drape.',
+          ? 'Your ready-made order is paid and the tailor can prepare it inside Drapeon.'
+          : 'Your order is funded. The tailor can continue production inside Drapeon.',
         preferenceKey: 'paymentConfirmations',
         data: { orderId: order.id },
       },

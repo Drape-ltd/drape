@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { normalizeDrapeonSender } from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { enqueueBackgroundJob } from '../_shared/jobs.ts'
 import { audit, log } from '../_shared/logger.ts'
@@ -42,7 +43,9 @@ const BodySchema = z.discriminatedUnion('action', [
     storagePath: z.string().trim().min(1).max(500),
     consentGranted: z.boolean().optional(),
     consentVersion: z.string().trim().min(1).max(120).optional(),
-    consentSource: z.enum(['MOBILE_SETUP', 'WEB_SETUP', 'MOBILE_HANDOFF', 'WEB_HANDOFF']).optional(),
+    consentSource: z
+      .enum(['MOBILE_SETUP', 'WEB_SETUP', 'MOBILE_HANDOFF', 'WEB_HANDOFF'])
+      .optional(),
     locale: z.string().trim().min(2).max(40).optional(),
   }),
 ])
@@ -77,7 +80,7 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drapeon Trust <security@drapeon.co>'
+  return normalizeDrapeonSender(Deno.env.get('RESEND_FROM'), 'Drapeon Trust', 'security@drapeon.co')
 }
 
 function getResendApiKey() {
@@ -87,7 +90,7 @@ function getResendApiKey() {
 async function notifyOpsVerification(
   supabase: SupabaseClient,
   tailorId: string,
-  deliveryKey: string,
+  deliveryKey: string
 ) {
   const serviceRoleKey = getServiceRoleKey()
   const { data, error } = await supabase.functions.invoke('notify-ops-verification', {
@@ -106,10 +109,7 @@ async function notifyOpsVerification(
 function base64Url(bytes: Uint8Array) {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replaceAll('=', '')
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
 async function sha256Base64Url(value: string) {
@@ -241,7 +241,7 @@ function videoExtension(contentType: 'video/mp4' | 'video/quicktime' | 'video/we
 function challengeVideoPath(
   userId: string,
   challengeId: string,
-  contentType: 'video/mp4' | 'video/quicktime' | 'video/webm',
+  contentType: 'video/mp4' | 'video/quicktime' | 'video/webm'
 ) {
   return `verification-video/${userId}/challenge_${challengeId}_${Date.now()}.${videoExtension(contentType)}`
 }
@@ -291,12 +291,13 @@ Deno.serve(async (req) => {
       `identity-handoff:${body.action}`,
       limit,
       15 * 60_000,
-      { ip, userId: caller?.id ?? null, userAgent: req.headers.get('user-agent') },
+      { ip, userId: caller?.id ?? null, userAgent: req.headers.get('user-agent') }
     )
     if (!allowed.allowed) return rateLimitExceededResponse(cors, allowed.retryAfter)
 
     if (body.action === 'create') {
-      if (!caller?.id) return jsonResponse({ error: 'Sign in before starting trust verification.' }, 401, cors)
+      if (!caller?.id)
+        return jsonResponse({ error: 'Sign in before starting trust verification.' }, 401, cors)
 
       const { data: profile, error: profileError } = await supabase
         .from('tailor_profiles')
@@ -306,10 +307,20 @@ Deno.serve(async (req) => {
 
       if (profileError) throw new Error('Could not load your tailor profile.')
       if (!profile?.id) {
-        return jsonResponse({ error: 'Complete your tailor profile before trust verification.' }, 409, cors)
+        return jsonResponse(
+          { error: 'Complete your tailor profile before trust verification.' },
+          409,
+          cors
+        )
       }
-      if (['PENDING', 'VERIFIED', 'APPROVED'].includes(String(profile.id_verification_status ?? ''))) {
-        return jsonResponse({ error: 'Trust verification is already pending or approved.' }, 409, cors)
+      if (
+        ['PENDING', 'VERIFIED', 'APPROVED'].includes(String(profile.id_verification_status ?? ''))
+      ) {
+        return jsonResponse(
+          { error: 'Trust verification is already pending or approved.' },
+          409,
+          cors
+        )
       }
 
       await supabase
@@ -323,9 +334,9 @@ Deno.serve(async (req) => {
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS).toISOString()
       const randomBytes = new Uint32Array(1)
       crypto.getRandomValues(randomBytes)
-      const challenge = TAILOR_TRUST_VIDEO_CHALLENGES[
-        randomBytes[0] % TAILOR_TRUST_VIDEO_CHALLENGES.length
-      ] ?? TAILOR_TRUST_VIDEO_CHALLENGES[0]
+      const challenge =
+        TAILOR_TRUST_VIDEO_CHALLENGES[randomBytes[0] % TAILOR_TRUST_VIDEO_CHALLENGES.length] ??
+        TAILOR_TRUST_VIDEO_CHALLENGES[0]
       const { data, error } = await supabase
         .from('identity_verification_handoffs')
         .insert({
@@ -357,21 +368,27 @@ Deno.serve(async (req) => {
         payload: { handoff_id: data.id, expires_at: expiresAt },
       })
 
-      return jsonResponse({
-        handoffId: data.id,
-        token,
-        path: handoffPath(token),
-        url: handoffUrl(token),
-        expiresAt,
-        challengeId: challenge.id,
-        challengeText: challenge.text,
-      }, 200, cors)
+      return jsonResponse(
+        {
+          handoffId: data.id,
+          token,
+          path: handoffPath(token),
+          url: handoffUrl(token),
+          expiresAt,
+          challengeId: challenge.id,
+          challengeText: challenge.text,
+        },
+        200,
+        cors
+      )
     }
 
     if (body.action === 'send-link') {
-      if (!caller?.id) return jsonResponse({ error: 'Sign in before sending the trust video link.' }, 401, cors)
+      if (!caller?.id)
+        return jsonResponse({ error: 'Sign in before sending the trust video link.' }, 401, cors)
       const row = await getHandoffByToken(supabase, body.token)
-      if (row.tailor_user_id !== caller.id) return jsonResponse({ error: 'This handoff does not belong to your account.' }, 403, cors)
+      if (row.tailor_user_id !== caller.id)
+        return jsonResponse({ error: 'This handoff does not belong to your account.' }, 403, cors)
 
       const url = handoffUrl(body.token)
       if (body.channel === 'EMAIL') {
@@ -381,8 +398,12 @@ Deno.serve(async (req) => {
         await sendHandoffEmail({ to: body.requestedDelivery, url })
       } else {
         const phone = normalizePhone(body.requestedDelivery)
-        if (!phone) return jsonResponse({ error: 'Enter a valid phone number with country code.' }, 400, cors)
-        await sendSmsDirect(phone, `Drapeon trust video: open ${url} on your phone. The link expires in 15 minutes.`)
+        if (!phone)
+          return jsonResponse({ error: 'Enter a valid phone number with country code.' }, 400, cors)
+        await sendSmsDirect(
+          phone,
+          `Drapeon trust video: open ${url} on your phone. The link expires in 15 minutes.`
+        )
       }
 
       await supabase
@@ -399,7 +420,11 @@ Deno.serve(async (req) => {
 
     const row = await getHandoffByToken(supabase, body.token)
     if (await expireIfNeeded(supabase, row)) {
-      return jsonResponse({ error: 'Verification handoff session has expired. Start a new verification session.' }, 410, cors)
+      return jsonResponse(
+        { error: 'Verification handoff session has expired. Start a new verification session.' },
+        410,
+        cors
+      )
     }
 
     if (body.action === 'resolve-token') {
@@ -413,28 +438,43 @@ Deno.serve(async (req) => {
           })
           .eq('id', row.id)
       }
-      return jsonResponse({
-        handoffId: row.id,
-        status: row.status === 'CREATED' ? 'OPENED' : row.status,
-        expiresAt: row.expires_at,
-        challengeId: row.challenge_id ?? null,
-        challengeText: row.challenge_text ?? null,
-      }, 200, cors)
+      return jsonResponse(
+        {
+          handoffId: row.id,
+          status: row.status === 'CREATED' ? 'OPENED' : row.status,
+          expiresAt: row.expires_at,
+          challengeId: row.challenge_id ?? null,
+          challengeText: row.challenge_text ?? null,
+        },
+        200,
+        cors
+      )
     }
 
     if (body.action === 'create-upload-url') {
       if (!['CREATED', 'OPENED', 'CAPTURED'].includes(row.status)) {
-        return jsonResponse({ error: 'Open the verification handoff before recording your video.' }, 409, cors)
+        return jsonResponse(
+          { error: 'Open the verification handoff before recording your video.' },
+          409,
+          cors
+        )
       }
       if (!row.challenge_id || !row.challenge_text) {
-        return jsonResponse({ error: 'Verification challenge is missing. Start a new session.' }, 409, cors)
+        return jsonResponse(
+          { error: 'Verification challenge is missing. Start a new session.' },
+          409,
+          cors
+        )
       }
       const path = challengeVideoPath(row.tailor_user_id, row.challenge_id, body.contentType)
       const { data, error } = await supabase.storage
         .from(TRUST_VIDEO_BUCKET)
         .createSignedUploadUrl(path)
       if (error || !data?.signedUrl || !data?.path || !data?.token) {
-        log('error', FN, 'storage.signed_upload_failed', { handoff_id: row.id, error: error?.message })
+        log('error', FN, 'storage.signed_upload_failed', {
+          handoff_id: row.id,
+          error: error?.message,
+        })
         throw new Error('Could not prepare secure upload. Try again.')
       }
       await supabase
@@ -446,13 +486,17 @@ Deno.serve(async (req) => {
           media_content_type: body.contentType,
         })
         .eq('id', row.id)
-      return jsonResponse({
-        bucket: TRUST_VIDEO_BUCKET,
-        path,
-        signedUrl: data.signedUrl,
-        uploadToken: data.token,
-        expiresInSeconds: SIGNED_UPLOAD_EXPIRES_SECONDS,
-      }, 200, cors)
+      return jsonResponse(
+        {
+          bucket: TRUST_VIDEO_BUCKET,
+          path,
+          signedUrl: data.signedUrl,
+          uploadToken: data.token,
+          expiresInSeconds: SIGNED_UPLOAD_EXPIRES_SECONDS,
+        },
+        200,
+        cors
+      )
     }
 
     if (body.action === 'submit') {
@@ -462,22 +506,38 @@ Deno.serve(async (req) => {
         typeof body.consentSource === 'string'
 
       if (IDENTITY_RETENTION_ENFORCEMENT && !hasVersionedConsent) {
-        return jsonResponse({
-          code: 'IDENTITY_CONSENT_REQUIRED',
-          error: 'Review and accept the trust verification consent before submitting.',
-        }, 400, cors)
+        return jsonResponse(
+          {
+            code: 'IDENTITY_CONSENT_REQUIRED',
+            error: 'Review and accept the trust verification consent before submitting.',
+          },
+          400,
+          cors
+        )
       }
 
       const expectedPrefix = `verification-video/${row.tailor_user_id}/challenge_${row.challenge_id}_`
-      if (!body.storagePath.startsWith(expectedPrefix) || !/\.(mp4|mov|webm)$/iu.test(body.storagePath)) {
+      if (
+        !body.storagePath.startsWith(expectedPrefix) ||
+        !/\.(mp4|mov|webm)$/iu.test(body.storagePath)
+      ) {
         return jsonResponse({ error: 'Invalid trust verification video path.' }, 400, cors)
       }
       if (row.storage_path && row.storage_path !== body.storagePath) {
-        return jsonResponse({ error: 'Trust video path does not match this handoff session.' }, 400, cors)
+        return jsonResponse(
+          { error: 'Trust video path does not match this handoff session.' },
+          400,
+          cors
+        )
       }
 
       const exists = await ensureStorageObjectExists(supabase, body.storagePath)
-      if (!exists) return jsonResponse({ error: 'Trust video upload was not found. Record and upload again.' }, 409, cors)
+      if (!exists)
+        return jsonResponse(
+          { error: 'Trust video upload was not found. Record and upload again.' },
+          409,
+          cors
+        )
 
       const submissionRpc = hasVersionedConsent
         ? 'submit_identity_verification_handoff_with_consent'
@@ -538,8 +598,10 @@ Deno.serve(async (req) => {
         relatedEntityId: row.id,
         stage: 'PENDING_REVIEW',
         title: 'A tailor trust verification is ready for review',
-        description: 'A tailor submitted the required private challenge video and completed marketplace setup.',
-        recommendedAction: 'Review the challenge video, profile photo, portfolio evidence, and onboarding proof item before approving or rejecting the tailor.',
+        description:
+          'A tailor submitted the required private challenge video and completed marketplace setup.',
+        recommendedAction:
+          'Review the challenge video, profile photo, portfolio evidence, and onboarding proof item before approving or rejecting the tailor.',
         dedupeKey: `tailor-verification:${profileId ?? row.tailor_user_id}`,
         metadata: {
           handoff_id: row.id,
@@ -591,11 +653,7 @@ Deno.serve(async (req) => {
 
       let opsEmailAccepted = false
       try {
-        await notifyOpsVerification(
-          supabase,
-          row.tailor_user_id,
-          `verification-${row.id}`,
-        )
+        await notifyOpsVerification(supabase, row.tailor_user_id, `verification-${row.id}`)
         opsEmailAccepted = true
       } catch (notifyError) {
         log('error', FN, 'notify_ops.immediate_failed', {
@@ -606,15 +664,19 @@ Deno.serve(async (req) => {
         })
       }
 
-      return jsonResponse({
-        ok: true,
-        status: 'PENDING',
-        profileId,
-        reviewQueued: Boolean(reviewIssue),
-        notificationQueued,
-        opsEmailAccepted,
-        message: 'Trust video submitted for review.',
-      }, 200, cors)
+      return jsonResponse(
+        {
+          ok: true,
+          status: 'PENDING',
+          profileId,
+          reviewQueued: Boolean(reviewIssue),
+          notificationQueued,
+          opsEmailAccepted,
+          message: 'Trust video submitted for review.',
+        },
+        200,
+        cors
+      )
     }
 
     return jsonResponse({ error: 'Unsupported action.' }, 400, cors)
@@ -622,8 +684,15 @@ Deno.serve(async (req) => {
     log('error', FN, 'request.failed', {
       error: error instanceof Error ? error.message : String(error),
     })
-    return jsonResponse({
-      error: error instanceof Error ? error.message : 'Verification handoff could not finish right now.',
-    }, 500, cors)
+    return jsonResponse(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Verification handoff could not finish right now.',
+      },
+      500,
+      cors
+    )
   }
 })

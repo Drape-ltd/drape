@@ -11,9 +11,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { validatePasswordStrength } from '../../../packages/shared/src/auth-security.ts'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { normalizeDrapeonSender } from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
-import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
+import {
+  logPreflightFailure,
+  preflightFailureResponse,
+  runPreflight,
+} from '../_shared/preflight.ts'
 import { verifyReauthProof } from '../_shared/reauth-proof.ts'
 import { checkRateLimit, getClientIp, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { parseBody, z } from '../_shared/validate.ts'
@@ -54,7 +59,11 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drape Security <security@drapeon.co>'
+  return normalizeDrapeonSender(
+    Deno.env.get('RESEND_FROM'),
+    'Drapeon Security',
+    'security@drapeon.co'
+  )
 }
 
 function getResendApiKey() {
@@ -82,11 +91,7 @@ function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)
 }
 
-async function sendResendEmail(input: {
-  to: string
-  subject: string
-  html: string
-}) {
+async function sendResendEmail(input: { to: string; subject: string; html: string }) {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     log('warn', FN, 'resend.missing_api_key')
@@ -127,15 +132,19 @@ async function sendPasswordChangedEmail(to: string | null | undefined) {
   const timestamp = new Date().toISOString()
   return sendResendEmail({
     to: email,
-    subject: 'Your Drape password was changed',
+    subject: 'Your Drapeon password was changed',
     html: `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
   <h1 style="font-size:24px;margin:0 0 12px">Password changed</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Your Drape password was changed after a recent password confirmation.</p>
+  <p style="line-height:1.6;margin:0 0 16px">Your Drapeon password was changed after a recent password confirmation.</p>
   <p style="line-height:1.6;margin:0 0 16px">If this was not you, reset your password immediately and contact security@drapeon.co.</p>
   <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Time</td><td style="padding:8px 0;font-weight:600">${escapeHtml(timestamp)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Account email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(email)}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280">Time</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
+      timestamp
+    )}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280">Account email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
+      email
+    )}</td></tr>
   </table>
   <a href="${getSiteUrl()}/security" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Security help</a>
 </div>`,
@@ -147,17 +156,22 @@ function getEmailChangeRedirectUrl() {
 }
 
 function getActionLink(data: unknown) {
-  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
-  const properties = record.properties && typeof record.properties === 'object'
-    ? record.properties as Record<string, unknown>
-    : {}
+  const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+  const properties =
+    record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : {}
   const candidates = [
     properties.action_link,
     properties.actionLink,
     record.action_link,
     record.actionLink,
   ]
-  return candidates.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null
+  return (
+    candidates.find(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0
+    ) ?? null
+  )
 }
 
 async function generateEmailChangeLink(
@@ -166,7 +180,7 @@ async function generateEmailChangeLink(
     type: 'email_change_current' | 'email_change_new'
     currentEmail: string
     newEmail: string
-  },
+  }
 ) {
   const { data, error } = await supabase.auth.admin.generateLink({
     type: input.type,
@@ -183,7 +197,10 @@ async function generateEmailChangeLink(
 
   const link = getActionLink(data)
   if (!link) {
-    return { error: 'Supabase did not return an email-change action link.', link: null }
+    return {
+      error: 'Supabase did not return an email-change action link.',
+      link: null,
+    }
   }
   return { error: null, link }
 }
@@ -201,10 +218,18 @@ function emailChangeHtml(input: {
   <h1 style="font-size:24px;margin:0 0 12px">${escapeHtml(input.title)}</h1>
   <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(input.body)}</p>
   <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Current email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.currentEmail)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">New email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.newEmail)}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280">Current email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
+      input.currentEmail
+    )}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280">New email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
+      input.newEmail
+    )}</td></tr>
   </table>
-  <a href="${escapeHtml(input.actionLink)}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">${escapeHtml(input.actionLabel)}</a>
+  <a href="${escapeHtml(
+    input.actionLink
+  )}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">${escapeHtml(
+    input.actionLabel
+  )}</a>
   <p style="line-height:1.6;margin:24px 0 0;color:#6b7280">If you did not request this, do not click the link and contact security@drapeon.co.</p>
 </div>`
 }
@@ -217,10 +242,10 @@ async function sendEmailChangeLinks(input: {
 }) {
   const currentQueued = await sendResendEmail({
     to: input.currentEmail,
-    subject: 'Confirm your Drape email change',
+    subject: 'Confirm your Drapeon email change',
     html: emailChangeHtml({
       title: 'Confirm your email change',
-      body: 'Someone signed in to Drape and asked to change the email on this account. Confirm this from your current inbox before we switch it.',
+      body: 'Someone signed in to Drapeon and asked to change the email on this account. Confirm this from your current inbox before we switch it.',
       actionLabel: 'Confirm from current email',
       actionLink: input.currentLink,
       currentEmail: input.currentEmail,
@@ -229,10 +254,10 @@ async function sendEmailChangeLinks(input: {
   })
   const newQueued = await sendResendEmail({
     to: input.newEmail,
-    subject: 'Confirm this email for Drape',
+    subject: 'Confirm this email for Drapeon',
     html: emailChangeHtml({
       title: 'Confirm this new email',
-      body: 'Confirm this inbox so Drape can finish changing your account email. Your account email will not change until the confirmation steps are complete.',
+      body: 'Confirm this inbox so Drapeon can finish changing your account email. Your account email will not change until the confirmation steps are complete.',
       actionLabel: 'Confirm new email',
       actionLink: input.newLink,
       currentEmail: input.currentEmail,
@@ -250,15 +275,22 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return jsonResponse({
-        error: 'Please sign in again before changing account security settings.',
-        message: 'Please sign in again before changing account security settings.',
-      }, 401, cors)
+      return jsonResponse(
+        {
+          error: 'Please sign in again before changing account security settings.',
+          message: 'Please sign in again before changing account security settings.',
+        },
+        401,
+        cors
+      )
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
-      log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
+      log('warn', FN, 'validation.failed', {
+        actor_id: caller.id,
+        error: parsed.error,
+      })
       return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
@@ -288,7 +320,8 @@ Deno.serve(async (req) => {
           name: 'current_email_available',
           condition: !!currentEmail,
           errorCode: 'CURRENT_EMAIL_MISSING',
-          message: 'We could not find the current email for this session. Sign out and sign back in, then retry.',
+          message:
+            'We could not find the current email for this session. Sign out and sign back in, then retry.',
           field: 'email',
           severity: 'BLOCKING',
         },
@@ -307,21 +340,26 @@ Deno.serve(async (req) => {
           message: 'Enter a different email address.',
           field: 'newEmail',
           severity: 'BLOCKING',
-          actual: { currentEmail: maskEmail(currentEmail), newEmail: maskEmail(newEmail) },
+          actual: {
+            currentEmail: maskEmail(currentEmail),
+            newEmail: maskEmail(newEmail),
+          },
         },
         {
           name: 'email_change_has_recent_password_confirmation',
           condition: proofResult.ok,
           errorCode: proofResult.ok ? 'EMAIL_REAUTH_OK' : proofResult.code,
-          message: proofResult.ok ? 'Email change has a current password confirmation.' : proofResult.message,
+          message: proofResult.ok
+            ? 'Email change has a current password confirmation.'
+            : proofResult.message,
           field: 'reauthProof',
           severity: 'BLOCKING',
           actual: proofResult.ok
             ? {
-              issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
-              expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
-              purpose: proofResult.payload.purpose,
-            }
+                issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
+                expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
+                purpose: proofResult.payload.purpose,
+              }
             : proofResult.actual,
         },
       ])
@@ -340,11 +378,12 @@ Deno.serve(async (req) => {
             new_email: maskEmail(newEmail),
           },
         })
-        const status = !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING'
-          ? 503
-          : !proofResult.ok
-            ? 401
-            : 400
+        const status =
+          !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING'
+            ? 503
+            : !proofResult.ok
+              ? 401
+              : 400
         return preflightFailureResponse(preflight, cors, status)
       }
 
@@ -361,7 +400,12 @@ Deno.serve(async (req) => {
         }),
       ])
 
-      if (currentLinkResult.error || newLinkResult.error || !currentLinkResult.link || !newLinkResult.link) {
+      if (
+        currentLinkResult.error ||
+        newLinkResult.error ||
+        !currentLinkResult.link ||
+        !newLinkResult.link
+      ) {
         log('error', FN, 'email_change.link_generation_failed', {
           actor_id: caller.id,
           current_error: currentLinkResult.error,
@@ -381,10 +425,14 @@ Deno.serve(async (req) => {
             new_email: maskEmail(newEmail),
           },
         })
-        return jsonResponse({
-          error: 'We could not start the email change right now. Please try again in a moment.',
-          message: 'We could not start the email change right now. Please try again in a moment.',
-        }, 500, cors)
+        return jsonResponse(
+          {
+            error: 'We could not start the email change right now. Please try again in a moment.',
+            message: 'We could not start the email change right now. Please try again in a moment.',
+          },
+          500,
+          cors
+        )
       }
 
       const emailQueued = await sendEmailChangeLinks({
@@ -406,11 +454,15 @@ Deno.serve(async (req) => {
         },
       })
 
-      return jsonResponse({
-        ok: true,
-        currentEmailQueued: emailQueued.currentQueued,
-        newEmailQueued: emailQueued.newQueued,
-      }, 200, cors)
+      return jsonResponse(
+        {
+          ok: true,
+          currentEmailQueued: emailQueued.currentQueued,
+          newEmailQueued: emailQueued.newQueued,
+        },
+        200,
+        cors
+      )
     }
 
     const proofResult = await verifyReauthProof(parsed.data.reauthProof, {
@@ -431,17 +483,17 @@ Deno.serve(async (req) => {
         severity: 'BLOCKING',
         actual: proofResult.ok
           ? {
-            issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
-            expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
-            purpose: proofResult.payload.purpose,
-          }
+              issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
+              expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
+              purpose: proofResult.payload.purpose,
+            }
           : proofResult.actual,
       },
       {
         name: 'new_password_meets_policy',
         condition: !passwordIssue,
         errorCode: 'PASSWORD_POLICY_FAILED',
-        message: passwordIssue ?? 'Password meets Drape policy.',
+        message: passwordIssue ?? 'Password meets Drapeon policy.',
         field: 'newPassword',
         severity: 'BLOCKING',
       },
@@ -457,11 +509,12 @@ Deno.serve(async (req) => {
         source: FN,
         metadata: { action: parsed.data.action },
       })
-      const status = !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING'
-        ? 503
-        : !proofResult.ok
-          ? 401
-          : 400
+      const status =
+        !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING'
+          ? 503
+          : !proofResult.ok
+            ? 401
+            : 400
       return preflightFailureResponse(preflight, cors, status)
     }
 
@@ -480,10 +533,14 @@ Deno.serve(async (req) => {
         severity: 'error',
         payload: { function: FN, reason: updateError.message },
       })
-      return jsonResponse({
-        error: 'We could not update your password right now. Please try again in a moment.',
-        message: 'We could not update your password right now. Please try again in a moment.',
-      }, 500, cors)
+      return jsonResponse(
+        {
+          error: 'We could not update your password right now. Please try again in a moment.',
+          message: 'We could not update your password right now. Please try again in a moment.',
+        },
+        500,
+        cors
+      )
     }
 
     const emailQueued = await sendPasswordChangedEmail(caller.email)
@@ -499,10 +556,16 @@ Deno.serve(async (req) => {
 
     return jsonResponse({ ok: true, emailQueued }, 200, cors)
   } catch (error) {
-    log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonResponse({
-      error: 'Something went wrong updating account security. Please try again.',
-      message: 'Something went wrong updating account security. Please try again.',
-    }, 500, cors)
+    log('error', FN, 'unhandled', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return jsonResponse(
+      {
+        error: 'Something went wrong updating account security. Please try again.',
+        message: 'Something went wrong updating account security. Please try again.',
+      },
+      500,
+      cors
+    )
   }
 })

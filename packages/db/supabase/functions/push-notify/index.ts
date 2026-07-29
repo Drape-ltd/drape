@@ -1,5 +1,5 @@
 /**
- * Drape — push-notify Edge Function
+ * Drapeon — push-notify Edge Function
  *
  * Called by Supabase Database Webhooks on:
  *   - orders table  INSERT / UPDATE

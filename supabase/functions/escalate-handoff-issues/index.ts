@@ -136,7 +136,7 @@ Deno.serve(async (req) => {
         })
 
         const title = issue.delivery_method === 'LOCAL_COLLECTION' ? 'Pickup help escalated' : 'Delivery help escalated'
-        const body = `Drape support flagged this ${handoffIssueLabel(issue.issue_type).toLowerCase()} issue for follow-up. Keep all updates inside the order thread.`
+        const body = `Drapeon support flagged this ${handoffIssueLabel(issue.issue_type).toLowerCase()} issue for follow-up. Keep all updates inside the order thread.`
 
         if (issue.reporter_id) {
           EdgeRuntime.waitUntil(sendPushToUser(supabase, issue.reporter_id, { title, body, data: { orderId: issue.order_id } }))

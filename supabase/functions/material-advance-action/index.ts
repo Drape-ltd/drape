@@ -165,7 +165,7 @@ function buildPaymentReference(advanceId: string) {
 }
 
 function paymentDescription(order: OrderRow, advance: MaterialAdvanceRow) {
-  return `Drape material advance #${order.reference ?? order.id} - ${advance.title}`
+  return `Drapeon material advance #${order.reference ?? order.id} - ${advance.title}`
 }
 
 function releaseReference(advanceId: string) {
@@ -397,7 +397,7 @@ async function markAdvancePaid(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: order.stage,
-    note: `Material advance paid for ${advance.title}. Drape ops will review release before any funds move to the tailor.`,
+    note: `Material advance paid for ${advance.title}. Drapeon ops will review release before any funds move to the tailor.`,
   })
 
   await createMaterialAdvanceOpsIssue(supabase, {
@@ -428,7 +428,7 @@ async function markAdvancePaid(
     supabase,
     order,
     'Material advance paid',
-    'The customer paid the approved material amount. Drape ops will review release before funds move.',
+    'The customer paid the approved material amount. Drapeon ops will review release before funds move.',
     `material-advance-paid:${advance.id}`,
   )
 
@@ -538,7 +538,7 @@ Deno.serve(async (req) => {
           name: 'amount_within_launch_guardrail',
           condition: maxAdvance > 0 && parsed.data.amount <= maxAdvance,
           errorCode: 'MATERIAL_ADVANCE_TOO_LARGE',
-          message: 'This material request is too large for automatic customer approval. Contact Drape support for ops review.',
+          message: 'This material request is too large for automatic customer approval. Contact Drapeon support for ops review.',
           field: 'amount',
           severity: 'BLOCKING',
           actual: { requestedAmount: parsed.data.amount, maxAdvance },
@@ -712,7 +712,7 @@ Deno.serve(async (req) => {
         approved ? 'Material advance approved' : 'Material advance declined',
         approved
           ? 'The customer approved the material advance. It still needs payment and ops release before funds move.'
-          : 'The customer declined the material advance. Keep the next step inside Drape.',
+          : 'The customer declined the material advance. Keep the next step inside Drapeon.',
         `material-advance-response:${advance.id}:${parsed.data.decision}`,
       )
 
@@ -1091,7 +1091,7 @@ Deno.serve(async (req) => {
 
     if (parsed.data.action === 'release-advance') {
       if (!isServiceRole) {
-        return jsonError(cors, 403, 'OPS_ONLY', 'Only Drape ops can release a material advance.')
+        return jsonError(cors, 403, 'OPS_ONLY', 'Only Drapeon ops can release a material advance.')
       }
 
       const profile = await fetchTailorProfile(supabase, advance.tailor_id)
@@ -1172,7 +1172,7 @@ Deno.serve(async (req) => {
           advance,
           severity: 'HIGH',
           title: 'Material advance release blocked',
-          description: `Drape could not release the material advance for ${advance.title}.`,
+          description: `Drapeon could not release the material advance for ${advance.title}.`,
           recommendedAction: 'Fix the payout destination or account verification issue, then retry release from ops.',
           reason: 'release_failed',
         })
@@ -1186,7 +1186,7 @@ Deno.serve(async (req) => {
           const transfer = await createPaystackTransfer({
             amount: advance.amount,
             recipientCode: paystackRecipient!,
-            reason: `Drape material advance ${order.reference ?? order.id}`,
+            reason: `Drapeon material advance ${order.reference ?? order.id}`,
             reference: releaseReference(advance.id),
             currency,
           })
@@ -1227,7 +1227,7 @@ Deno.serve(async (req) => {
         await supabase.from('order_stage_updates').insert({
           order_id: order.id,
           stage: order.stage,
-          note: `Drape released the approved material advance for ${advance.title}. Receipt proof is required from the tailor.`,
+          note: `Drapeon released the approved material advance for ${advance.title}. Receipt proof is required from the tailor.`,
         })
 
         await audit(supabase, {
@@ -1249,7 +1249,7 @@ Deno.serve(async (req) => {
           supabase,
           order,
           'Material advance released',
-          'Drape released the approved material funds. Upload the receipt as soon as the purchase is made.',
+          'Drapeon released the approved material funds. Upload the receipt as soon as the purchase is made.',
           `material-advance-released:${advance.id}`,
         )
 
@@ -1274,7 +1274,7 @@ Deno.serve(async (req) => {
           recommendedAction: 'Review provider transfer status and tailor payout destination before retrying. Do not retry automatically.',
           reason: 'release_failed',
         })
-        return jsonError(cors, 502, 'MATERIAL_ADVANCE_RELEASE_FAILED', 'Drape could not release this material advance. Ops needs to review it.', {
+        return jsonError(cors, 502, 'MATERIAL_ADVANCE_RELEASE_FAILED', 'Drapeon could not release this material advance. Ops needs to review it.', {
           detail: message,
         })
       }

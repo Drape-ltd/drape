@@ -9,10 +9,15 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { normalizeDrapeonSender } from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
-import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
+import {
+  logPreflightFailure,
+  preflightFailureResponse,
+  runPreflight,
+} from '../_shared/preflight.ts'
 import { verifyReauthProof } from '../_shared/reauth-proof.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { optionalNote, parseBody, z } from '../_shared/validate.ts'
@@ -57,7 +62,11 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drapeon Privacy <privacy@drapeon.co>'
+  return normalizeDrapeonSender(
+    Deno.env.get('RESEND_FROM'),
+    'Drapeon Privacy',
+    'privacy@drapeon.co'
+  )
 }
 
 function getResendApiKey() {
@@ -148,10 +157,7 @@ async function countActiveOrders(supabase: SupabaseClient, userId: string) {
     activeCustomerOrderCount: customerOrders.count ?? 0,
     activeTailorOrderCount: tailorOrders.count ?? 0,
     lookupFailed: !!customerOrders.error || !!tailorOrders.error,
-    lookupError:
-      customerOrders.error?.message ??
-      tailorOrders.error?.message ??
-      null,
+    lookupError: customerOrders.error?.message ?? tailorOrders.error?.message ?? null,
   }
 }
 
@@ -162,7 +168,12 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
   })
 }
 
-function jsonError(cors: HeadersInit, status: number, error: string, extra?: Record<string, unknown>) {
+function jsonError(
+  cors: HeadersInit,
+  status: number,
+  error: string,
+  extra?: Record<string, unknown>
+) {
   return jsonResponse({ error, message: error, ...(extra ?? {}) }, status, cors)
 }
 
@@ -180,12 +191,21 @@ Deno.serve(async (req) => {
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return jsonError(cors, 400, 'Type DELETE and confirm your password before submitting this request.')
+      return jsonError(
+        cors,
+        400,
+        'Type DELETE and confirm your password before submitting this request.'
+      )
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
 
-    const allowed = await checkRateLimit(supabase, `request-account-deletion:${caller.id}`, 86400, 3)
+    const allowed = await checkRateLimit(
+      supabase,
+      `request-account-deletion:${caller.id}`,
+      86400,
+      3
+    )
     if (!allowed) {
       await audit(supabase, {
         event: 'rate_limit.exceeded',
@@ -210,10 +230,10 @@ Deno.serve(async (req) => {
         severity: 'BLOCKING',
         actual: proofResult.ok
           ? {
-            issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
-            expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
-            purpose: proofResult.payload.purpose,
-          }
+              issuedAt: new Date(proofResult.payload.issuedAt).toISOString(),
+              expiresAt: new Date(proofResult.payload.expiresAt).toISOString(),
+              purpose: proofResult.payload.purpose,
+            }
           : proofResult.actual,
       },
     ])
@@ -230,7 +250,8 @@ Deno.serve(async (req) => {
           reason: proofResult.ok ? null : proofResult.code,
         },
       })
-      const status = !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING' ? 503 : 401
+      const status =
+        !proofResult.ok && proofResult.code === 'REAUTH_PROOF_SECRET_MISSING' ? 503 : 401
       return preflightFailureResponse(reauthPreflight, cors, status)
     }
 
@@ -268,13 +289,15 @@ Deno.serve(async (req) => {
       })
     }
 
-    const activeOrderCount = activeOrders.activeCustomerOrderCount + activeOrders.activeTailorOrderCount
+    const activeOrderCount =
+      activeOrders.activeCustomerOrderCount + activeOrders.activeTailorOrderCount
     const deletionPreflight = runPreflight([
       {
         name: 'active_order_lookup_succeeded',
         condition: !activeOrders.lookupFailed,
         errorCode: 'ACTIVE_ORDER_LOOKUP_FAILED',
-        message: 'We could not confirm whether this account has active orders. Try again in a moment.',
+        message:
+          'We could not confirm whether this account has active orders. Try again in a moment.',
         field: 'orders',
         severity: 'BLOCKING',
         actual: { lookupError: activeOrders.lookupError },
@@ -283,7 +306,8 @@ Deno.serve(async (req) => {
         name: 'no_active_orders',
         condition: activeOrderCount === 0,
         errorCode: 'ACTIVE_ORDERS_PRESENT',
-        message: 'You have active orders. Wait for them to complete or cancel them before deleting your account.',
+        message:
+          'You have active orders. Wait for them to complete or cancel them before deleting your account.',
         field: 'orders',
         severity: 'BLOCKING',
         actual: {
@@ -325,8 +349,12 @@ Deno.serve(async (req) => {
           source: 'MOBILE_APP',
           confirmation_text_entered: true,
           reauth_proof_verified: true,
-          reauth_proof_issued_at: proofResult.ok ? new Date(proofResult.payload.issuedAt).toISOString() : null,
-          reauth_proof_expires_at: proofResult.ok ? new Date(proofResult.payload.expiresAt).toISOString() : null,
+          reauth_proof_issued_at: proofResult.ok
+            ? new Date(proofResult.payload.issuedAt).toISOString()
+            : null,
+          reauth_proof_expires_at: proofResult.ok
+            ? new Date(proofResult.payload.expiresAt).toISOString()
+            : null,
           deletion_path: deletionPath,
           active_customer_order_count: activeOrders.activeCustomerOrderCount,
           active_tailor_order_count: activeOrders.activeTailorOrderCount,
@@ -359,12 +387,14 @@ Deno.serve(async (req) => {
       relatedEntityType: 'account_deletion_request',
       relatedEntityId: (insertedRequest as { id?: string } | null)?.id ?? null,
       title: 'Account deletion request',
-      description: activeOrderCount > 0
-        ? `${role.toLowerCase()} requested permanent account deletion with ${activeOrderCount} active order(s).`
-        : `${role.toLowerCase()} requested permanent account deletion inside Drapeon.`,
-      recommendedAction: activeOrderCount > 0
-        ? 'Acknowledge the request, restrict new marketplace activity if needed, review active orders/refunds first, then complete deletion/anonymization after transaction obligations are resolved.'
-        : 'Acknowledge the request, verify identity if needed, and move the deletion workflow through privacy review to completion.',
+      description:
+        activeOrderCount > 0
+          ? `${role.toLowerCase()} requested permanent account deletion with ${activeOrderCount} active order(s).`
+          : `${role.toLowerCase()} requested permanent account deletion inside Drapeon.`,
+      recommendedAction:
+        activeOrderCount > 0
+          ? 'Acknowledge the request, restrict new marketplace activity if needed, review active orders/refunds first, then complete deletion/anonymization after transaction obligations are resolved.'
+          : 'Acknowledge the request, verify identity if needed, and move the deletion workflow through privacy review to completion.',
       dedupeKey: `account-deletion:${caller.id}`,
       metadata: {
         account_email: caller.email ?? null,
@@ -386,14 +416,17 @@ Deno.serve(async (req) => {
 
     log('info', FN, 'account_deletion.requested', { actor_id: caller.id, actor_role: role })
 
-    return new Response(JSON.stringify({
-      ok: true,
-      activeOrderCount,
-      deletionPath,
-    }), {
-      status: 200,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        activeOrderCount,
+        deletionPath,
+      }),
+      {
+        status: 200,
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      }
+    )
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
     return jsonError(cors, 500, 'We could not submit your deletion request right now.')

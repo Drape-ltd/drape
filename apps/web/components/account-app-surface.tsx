@@ -7490,7 +7490,7 @@ function MessageComposer({
       onRefresh()
       if (result.url) {
         window.open(result.url, '_blank', 'noopener,noreferrer')
-        setSuccess(order.stage === 'CONSULTATION' ? `Consultation ${callType} opened in a new tab.` : `Drape ${callType} call opened in a new tab.`)
+        setSuccess(order.stage === 'CONSULTATION' ? `Consultation ${callType} opened in a new tab.` : `Drapeon ${callType} call opened in a new tab.`)
         return
       }
       setError(result.message ?? 'Calling is unavailable right now. Continue in Messages so the order record stays protected.')
@@ -9551,7 +9551,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
     }
     if (stageMediaFiles.length === 0) {
       setError(selectedTargetNeedsDispatchMeta
-        ? 'Add fresh packed-order proof before marking this order ready for Drape dispatch.'
+        ? 'Add fresh packed-order proof before marking this order ready for Drapeon dispatch.'
         : 'Attach fresh proof media before updating this stage.')
       return
     }

@@ -802,7 +802,7 @@ Deno.serve(async (req) => {
         referencePhotoCount: referencePhotos.length,
         styleReferenceLinkCount: styleReferenceLinks.length,
         instruction:
-          'Before cutting, confirm what can and cannot be matched from the customer references inside Drape.',
+          'Before cutting, confirm what can and cannot be matched from the customer references inside Drapeon.',
         customerExpectation:
           'Reference photos guide the garment. Exact replication depends on fabric, budget, measurements, and agreed finish.',
       },

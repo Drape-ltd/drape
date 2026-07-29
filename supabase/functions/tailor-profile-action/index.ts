@@ -534,7 +534,7 @@ Deno.serve(async (req) => {
 
     const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
       ['tailor_profile.display_name', 'displayName', profile.displayName, "Contact details can't be included in your public profile name."],
-      ['tailor_profile.bio', 'bio', profile.bio, "Contact details can't be included in your bio. Keep communication on Drape so orders stay protected."],
+      ['tailor_profile.bio', 'bio', profile.bio, "Contact details can't be included in your bio. Keep communication on Drapeon so orders stay protected."],
       ['tailor_profile.location', 'location', profile.location, "Contact details can't be included in your location."],
       ['tailor_profile.pickup_instructions', 'pickupInstructions', profile.pickupInstructions, "Contact details can't be included in pickup instructions."],
       ...languages.map((language): [string, string, string, string] => [

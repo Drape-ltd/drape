@@ -563,8 +563,8 @@ Deno.serve(async (req) => {
     log('warn', FN, 'auth.unauthorized')
     return jsonResponse({
       ok: false,
-      error: 'This readiness check requires the Drape healthcheck secret.',
-      message: 'This readiness check requires the Drape healthcheck secret.',
+      error: 'This readiness check requires the Drapeon healthcheck secret.',
+      message: 'This readiness check requires the Drapeon healthcheck secret.',
     }, 401, cors)
   }
 

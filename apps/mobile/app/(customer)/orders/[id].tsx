@@ -33,7 +33,6 @@ import { useAuth } from '@/lib/auth'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
-import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { Sentry } from '@/lib/sentry'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
@@ -1042,6 +1041,7 @@ export default function OrderTrackingScreen() {
   const [fabricChangeNote, setFabricChangeNote] = useState('')
   const [approvingStyle, setApprovingStyle] = useState(false)
   const [styleChangeNote, setStyleChangeNote] = useState('')
+  const [showStyleCorrection, setShowStyleCorrection] = useState(false)
   const [showEmergencySupport, setShowEmergencySupport] = useState(false)
   const [savingFabric, setSavingFabric] = useState(false)
   const [confirmingMeasurements, setConfirmingMeasurements] = useState(false)
@@ -1050,7 +1050,6 @@ export default function OrderTrackingScreen() {
   const [materialAdvances, setMaterialAdvances] = useState<MaterialAdvance[]>([])
   const [respondingAdvanceId, setRespondingAdvanceId] = useState<string | null>(null)
   const [payingAdvanceId, setPayingAdvanceId] = useState<string | null>(null)
-  const [startingHandoffCall, setStartingHandoffCall] = useState<'audio' | 'video' | null>(null)
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([])
   const [mediaPreview, setMediaPreview] = useState<{ items: MediaLightboxItem[]; index: number } | null>(null)
   const [startingConsultationCall, setStartingConsultationCall] = useState<
@@ -1504,80 +1503,6 @@ export default function OrderTrackingScreen() {
     }
   }, [fetchOrder, id, user?.id])
 
-  async function startHandoffCall(callType: 'audio' | 'video') {
-    if (!order || startingHandoffCall) return
-    setStartingHandoffCall(callType)
-    try {
-      const room = await createOrderCallRoom(order.id, callType, 'customer')
-      if (room?.fallback === 'MESSAGES') {
-        await fetchOrder()
-        openOrderMessages()
-        return
-      }
-      if (!room?.url) return
-      await fetchOrder()
-      await openDrapeCallUrl(room.url, 'customer')
-    } catch (error) {
-      Sentry.captureException(error, {
-        extra: { context: 'customer_start_handoff_call', orderId: order.id, callType },
-      })
-      Alert.alert(
-        'Call unavailable',
-        isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. Keep using messages and retry the Drapeon call when the signal improves.'
-          : 'Could not start the Drapeon call right now. Keep using messages and try again shortly.'
-      )
-    } finally {
-      setStartingHandoffCall(null)
-    }
-  }
-
-  function openHandoffCallOptions() {
-    if (!order || startingHandoffCall) return
-    if (order.videoCallUrl) {
-      Alert.alert(
-        'Join Drapeon call',
-        `Open the current Drapeon call with ${order.tailorName}. Keep decisions in Messages after the call so the order record stays complete.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Video',
-            onPress: () => {
-              void startHandoffCall('video')
-            },
-          },
-          {
-            text: 'Audio only',
-            onPress: () => {
-              void startHandoffCall('audio')
-            },
-          },
-        ]
-      )
-      return
-    }
-
-    Alert.alert(
-      'Call tailor in Drapeon',
-      `Start a Drapeon call with ${order.tailorName} without exposing personal phone numbers. Keep decisions in Messages after the call so the order record stays complete.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Video',
-          onPress: () => {
-            void startHandoffCall('video')
-          },
-        },
-        {
-          text: 'Audio only',
-          onPress: () => {
-            void startHandoffCall('audio')
-          },
-        },
-      ]
-    )
-  }
-
   async function markHandoffIssueResolved() {
     if (!handoffIssue || resolvingHandoffIssue) return
     setResolvingHandoffIssue(true)
@@ -1848,6 +1773,7 @@ export default function OrderTrackingScreen() {
       data?.styleAlignmentStatus ??
       (action === 'approve-style-alignment' ? 'APPROVED' : 'CHANGES_REQUESTED')
     setStyleChangeNote('')
+    setShowStyleCorrection(false)
     setOrder((prev) =>
       prev
         ? {
@@ -2329,10 +2255,6 @@ export default function OrderTrackingScreen() {
     !materialIssueOpen &&
     (handoffStageActive || deliveryReviewOpen || !!handoffIssue)
   const handoffHelpAvailable = handoffContextAvailable
-  const activeOrderCallAvailable =
-    order.orderKind === 'CUSTOM' &&
-    !handoffHelpAvailable &&
-    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(order.stage)
   const showNonCollectionHandoffPanels =
     order.deliveryMethod !== 'LOCAL_COLLECTION' && handoffContextAvailable
   const showShipmentDetails = showNonCollectionHandoffPanels && hasShipmentDetails
@@ -2741,6 +2663,45 @@ export default function OrderTrackingScreen() {
                 </Text>
               )}
           </View>
+
+          {styleAlignment?.status === 'PENDING_CUSTOMER_APPROVAL' ? (
+            <View style={[styles.supportCard, styles.supportCardWarning]}>
+              <Text style={styles.supportCardTitle}>Review the tailor&apos;s style plan</Text>
+              <Text style={styles.supportHint}>
+                {styleAlignment.tailorInterpretation ??
+                  'Your tailor added their interpretation of your references. Approve it before cutting, or request a correction.'}
+              </Text>
+              <Button
+                label={approvingStyle ? 'Saving...' : 'Approve style plan'}
+                onPress={() => decideStyleAlignment('approve-style-alignment')}
+                disabled={approvingStyle}
+              />
+              {showStyleCorrection ? (
+                <>
+                  <Input
+                    label="What should change?"
+                    value={styleChangeNote}
+                    onChangeText={setStyleChangeNote}
+                    placeholder="Example: Please make the neckline closer to the first reference."
+                    multiline
+                  />
+                  <Button
+                    label={approvingStyle ? 'Sending...' : 'Send correction'}
+                    variant="secondary"
+                    onPress={() => decideStyleAlignment('request-style-alignment-change')}
+                    disabled={approvingStyle || !styleChangeNote.trim()}
+                  />
+                </>
+              ) : (
+                <Button
+                  label="Request changes"
+                  variant="secondary"
+                  onPress={() => setShowStyleCorrection(true)}
+                  disabled={approvingStyle}
+                />
+              )}
+            </View>
+          ) : null}
 
           {activeMaterialAdvances.length > 0 ? (
             <View style={styles.section}>
@@ -3217,13 +3178,14 @@ export default function OrderTrackingScreen() {
           )}
 
           {order.orderKind === 'CUSTOM' && !['CANCELLED'].includes(order.stage) ? (
-            <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Fit protection</Text>
+            <SupportDisclosure
+              title="Fit protection"
+              summary="Measurements, style decisions, and aftercare are recorded here."
+              defaultExpanded={false}
+            >
               <Text style={styles.supportHint}>
-                Drapeon keeps the fit trail in this order: measurements, consultation notes,
-                fabric approval, stage proof, and aftercare. Before cutting starts, your tailor
-                should confirm the details that affect fit. After handoff, you can report fit or
-                finish issues from this page for 14 days.
+                Before cutting, confirm the measurements and decisions that affect fit. After
+                handoff, you can report fit or finish issues from this page for 14 days.
               </Text>
               <View style={styles.timelineContent}>
                 <SummaryLine
@@ -3251,34 +3213,7 @@ export default function OrderTrackingScreen() {
                   value="Use aftercare if the garment arrives with a fit or finish issue"
                 />
               </View>
-              {styleAlignment?.status === 'PENDING_CUSTOMER_APPROVAL' ? (
-                <View style={styles.inlineDecisionCard}>
-                  <Text style={styles.inlineDecisionTitle}>Approve style interpretation</Text>
-                  <Text style={styles.supportHint}>
-                    {styleAlignment.tailorInterpretation ??
-                      'Your tailor added their interpretation of your references. Approve it before cutting, or ask for a correction in writing.'}
-                  </Text>
-                  <Button
-                    label={approvingStyle ? 'Saving...' : 'Approve style'}
-                    onPress={() => decideStyleAlignment('approve-style-alignment')}
-                    disabled={approvingStyle}
-                  />
-                  <Input
-                    label="Ask for a correction"
-                    value={styleChangeNote}
-                    onChangeText={setStyleChangeNote}
-                    placeholder="Example: Please make the neckline closer to the first reference."
-                    multiline
-                  />
-                  <Button
-                    label={approvingStyle ? 'Sending...' : 'Request correction'}
-                    variant="secondary"
-                    onPress={() => decideStyleAlignment('request-style-alignment-change')}
-                    disabled={approvingStyle}
-                  />
-                </View>
-              ) : null}
-            </View>
+            </SupportDisclosure>
           ) : null}
 
           {(scopeChangeOpen || canRequestScopeChange) && (
@@ -3389,27 +3324,6 @@ export default function OrderTrackingScreen() {
             </View>
           ) : null}
 
-          {activeOrderCallAvailable ? (
-            <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Talk in Drapeon</Text>
-              <Text style={styles.supportHint}>
-                Use a Drapeon call for fit, fabric, or timeline details that need a quick conversation. Keep the final decision in Messages so the order record stays clear.
-              </Text>
-              <Button
-                label={
-                  startingHandoffCall
-                    ? 'Starting Drapeon call...'
-                    : order.videoCallUrl
-                      ? 'Join Drapeon call'
-                      : 'Call tailor in Drapeon'
-                }
-                variant="secondary"
-                onPress={openHandoffCallOptions}
-                disabled={!!startingHandoffCall}
-              />
-            </View>
-          ) : null}
-
           {handoffHelpAvailable ? (
             <View style={styles.supportCard}>
               <Text style={styles.supportCardTitle}>
@@ -3460,16 +3374,9 @@ export default function OrderTrackingScreen() {
                   onPress={() => setShowHandoffSupport(true)}
                 />
                 <Button
-                  label={
-                    startingHandoffCall
-                      ? 'Starting Drapeon call...'
-                      : order.videoCallUrl
-                        ? 'Join Drapeon call'
-                        : 'Call tailor in Drapeon'
-                  }
+                  label="Message tailor"
                   variant="secondary"
-                  onPress={openHandoffCallOptions}
-                  disabled={!!startingHandoffCall}
+                  onPress={openOrderMessages}
                 />
               </View>
             </View>
@@ -4864,6 +4771,9 @@ function SupportDisclosure({
   return (
     <View style={styles.supportCard}>
       <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
         style={styles.disclosureHeader}
         onPress={() => setExpanded((value) => !value)}
         activeOpacity={0.82}
@@ -4872,7 +4782,11 @@ function SupportDisclosure({
           <Text style={styles.supportCardTitle}>{title}</Text>
           <Text style={styles.disclosureSummary}>{summary}</Text>
         </View>
-        <Text style={styles.disclosureAction}>{expanded ? 'Hide' : 'Show'}</Text>
+        <Feather
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color={Colors.midGrey}
+        />
       </TouchableOpacity>
       {expanded ? <View style={styles.disclosureBody}>{children}</View> : null}
     </View>
@@ -6611,6 +6525,15 @@ function QuoteReviewScreen({
   const paymentRouteCopy = paymentRouteCopyForCurrency(orderCurrency)
   const consultationMeta = order.supportMeta.consultation ?? null
   const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
+  const hasDetailedQuoteBreakdown = Boolean(
+    quoteBreakdown &&
+      (typeof quoteBreakdown.laborAmount === 'number' ||
+        typeof quoteBreakdown.sourcingAmount === 'number' ||
+        typeof quoteBreakdown.rushAmount === 'number' ||
+        quoteBreakdown.summary ||
+        quoteBreakdown.included?.length ||
+        quoteBreakdown.excluded?.length)
+  )
   // Find the quote from stage updates or a separate quote field
   // The tailor's quote note is in the QUOTE_SENT stage update
   const quoteUpdate = order.stageUpdates.find((u) => u.stage === 'QUOTE_SENT')
@@ -6759,10 +6682,10 @@ function QuoteReviewScreen({
               eyebrow={`Revision ${conversationActions.revisionRoundsUsed} of ${conversationActions.revisionRoundLimit}`}
               title={openRevision ? 'Changes requested' : 'Review this quote'}
               body={openRevision
-                ? `${order.tailorName.split(' ')[0]} can revise the quote, retain it with an explanation, or decline the order.`
+                ? `${order.tailorName.split(' ')[0]} is reviewing your requested changes.`
                 : conversationActions.revisionLimitReached
-                  ? 'The formal revision limit has been reached. Accept, decline, or continue the discussion in chat.'
-                  : 'Chat questions are free. A formal change request only counts when you submit it here.'}
+                  ? 'Continue in chat, or accept or decline this quote.'
+                  : 'Ask questions in chat, or submit a formal change request.'}
               icon="file-text"
             >
               <DrapeStatusChip
@@ -6790,8 +6713,6 @@ function QuoteReviewScreen({
               <Text style={styles.sectionTitle}>Quote received</Text>
               <Text style={styles.stateEyebrow}>{orderCurrency}</Text>
             </View>
-            <Text style={styles.statusNote}>{accountCurrencyNote}</Text>
-            {paymentRouteCopy ? <Text style={styles.statusNote}>{paymentRouteCopy}</Text> : null}
 
             {baseAmount(order) != null && (
               <View style={quoteDetailRow}>
@@ -6893,7 +6814,21 @@ function QuoteReviewScreen({
               </View>
             )}
 
-            {quoteBreakdown ? (
+          </View>
+
+          {hasDetailedQuoteBreakdown || quoteUpdate?.note ? (
+            <SupportDisclosure
+              title="Quote details"
+              summary={
+                hasDetailedQuoteBreakdown && quoteUpdate?.note
+                  ? `Breakdown, inclusions, and note from ${order.tailorName.split(' ')[0]}`
+                  : hasDetailedQuoteBreakdown
+                    ? 'Breakdown and inclusions'
+                    : `Note from ${order.tailorName.split(' ')[0]}`
+              }
+              defaultExpanded={false}
+            >
+              {hasDetailedQuoteBreakdown && quoteBreakdown ? (
               <View style={{ gap: 6 }}>
                 {typeof quoteBreakdown.laborAmount === 'number' ? (
                   <View style={quoteDetailRow}>
@@ -6950,52 +6885,83 @@ function QuoteReviewScreen({
               </View>
             ) : null}
 
-            {quoteUpdate?.note && (
+              {quoteUpdate?.note ? (
               <View style={{ gap: 4 }}>
                 <Text style={quoteLabel}>Note from {order.tailorName.split(' ')[0]}</Text>
                 <Text style={styles.statusNote}>"{quoteUpdate.note}"</Text>
               </View>
-            )}
+              ) : null}
+            </SupportDisclosure>
+          ) : null}
 
-            <View style={styles.escrowNote}>
-              <Text style={styles.escrowNoteText}>
-                {consultationMeta?.feeCreditable && order.consultationFee
-                  ? 'Your consultation fee is set to count toward this order if you go ahead. Accepting locks in the price and target date. Your payment stays held securely by Drapeon until delivery is confirmed.'
-                  : 'Accepting locks in the price and target date. Your payment stays held securely by Drapeon until delivery is confirmed. Raise a dispute inside Drapeon if something goes wrong.'}
-              </Text>
-            </View>
-          </View>
+          <SupportDisclosure
+            title="Payment and currency"
+            summary={`${orderCurrency} order · Checkout and payment protection`}
+            defaultExpanded={false}
+          >
+            <Text style={styles.supportBodyText}>{accountCurrencyNote}</Text>
+            {paymentRouteCopy ? <Text style={styles.supportBodyText}>{paymentRouteCopy}</Text> : null}
+            <Text style={styles.supportBodyText}>
+              {consultationMeta?.feeCreditable && order.consultationFee
+                ? 'Your consultation fee counts toward this order. Accepting locks the price and target date, and Drapeon holds payment until delivery is confirmed.'
+                : 'Accepting locks the price and target date. Drapeon holds payment until delivery is confirmed; raise any problem inside the order.'}
+            </Text>
+          </SupportDisclosure>
         </View>
       </ScrollView>
 
-      <DrapeFloatingActionDock testID="quote-action-dock">
-        <DrapeActionBar style={styles.quoteActionBar}>
-          {negotiationAvailable && openRevision ? (
-            <DrapeCapsuleButton
-              label="Edit change request"
-              icon="edit-3"
-              onPress={openRevisionEditor}
-              disabled={revisionSaving}
-              style={styles.quotePrimaryAction}
+      <DrapeFloatingActionDock compactWidth={76} testID="quote-action-dock">
+        {(compact) =>
+          compact ? (
+            <DrapeIconButton
+              icon={negotiationAvailable && openRevision ? 'edit-3' : 'lock'}
+              accessibilityLabel={
+                negotiationAvailable && openRevision
+                  ? 'Edit change request'
+                  : 'Accept and pay'
+              }
+              tone="primary"
+              onPress={
+                negotiationAvailable && openRevision
+                  ? openRevisionEditor
+                  : accept
+              }
+              disabled={
+                negotiationAvailable && openRevision
+                  ? revisionSaving
+                  : accepting || declining || !!openRevision
+              }
             />
           ) : (
-            <DrapeCapsuleButton
-              label="Accept and pay"
-              icon="lock"
-              onPress={accept}
-              loading={accepting}
-              disabled={accepting || declining || !!openRevision}
-              style={styles.quotePrimaryAction}
-              testID="quote-accept-btn"
-            />
-          )}
-          <DrapeIconButton
-            icon="more-horizontal"
-            accessibilityLabel="More quote actions"
-            onPress={() => setActionSheetVisible(true)}
-            disabled={accepting || declining}
-          />
-        </DrapeActionBar>
+            <DrapeActionBar style={styles.quoteActionBar}>
+              {negotiationAvailable && openRevision ? (
+                <DrapeCapsuleButton
+                  label="Edit change request"
+                  icon="edit-3"
+                  onPress={openRevisionEditor}
+                  disabled={revisionSaving}
+                  style={styles.quotePrimaryAction}
+                />
+              ) : (
+                <DrapeCapsuleButton
+                  label="Accept and pay"
+                  icon="lock"
+                  onPress={accept}
+                  loading={accepting}
+                  disabled={accepting || declining || !!openRevision}
+                  style={styles.quotePrimaryAction}
+                  testID="quote-accept-btn"
+                />
+              )}
+              <DrapeIconButton
+                icon="more-horizontal"
+                accessibilityLabel="More quote actions"
+                onPress={() => setActionSheetVisible(true)}
+                disabled={accepting || declining}
+              />
+            </DrapeActionBar>
+          )
+        }
       </DrapeFloatingActionDock>
 
       <DrapeSheet

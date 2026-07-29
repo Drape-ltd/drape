@@ -313,7 +313,7 @@ async function createPickupIssue(
       ? "Contact both parties, confirm whether the garment is still with the tailor, and decide the storage or reschedule plan before payout release."
       : daysWaiting >= PICKUP_OPS_DAYS
         ? "Follow up with the customer and tailor to schedule collection, then log the plan in the order timeline."
-        : "Remind the customer to collect the garment and remind the tailor to keep the pickup record inside Drape.",
+        : "Remind the customer to collect the garment and remind the tailor to keep the pickup record inside Drapeon.",
     dedupeKey: pickupIssueKey(order.id, daysWaiting >= PICKUP_STORAGE_DAYS ? PICKUP_STORAGE_DAYS : daysWaiting >= PICKUP_OPS_DAYS ? PICKUP_OPS_DAYS : PICKUP_REMINDER_DAYS),
     metadata: {
       days_waiting: daysWaiting,
@@ -378,7 +378,7 @@ async function ensureSystemDispute(
 ) {
   const reason = "Tailor inactivity";
   const description =
-    `Drape opened this review automatically because the tailor has not posted a ${staleUpdateLabel(order)} for ${daysIdle} days.`;
+    `Drapeon opened this review automatically because the tailor has not posted a ${staleUpdateLabel(order)} for ${daysIdle} days.`;
 
   const existing = await supabase
     .from("disputes")
@@ -435,8 +435,8 @@ async function sendReminderNotifications(
     userId: order.customer_id,
     audience: "CUSTOMER",
     title: "We are checking on your order",
-    body: "Your order has not been updated recently. Drape is following up so the next step is clear.",
-    smsBody: `Drape: order ${ref} has not been updated recently. We are following up so the next step is clear.`,
+    body: "Your order has not been updated recently. Drapeon is following up so the next step is clear.",
+    smsBody: `Drapeon: order ${ref} has not been updated recently. We are following up so the next step is clear.`,
     event: "production_stall_reminder",
     idempotencyKey: `production-stall-reminder:${order.id}:customer`,
     preferenceKey: "orderUpdates",
@@ -453,7 +453,7 @@ async function sendReminderNotifications(
     audience: "TAILOR",
     title: "Production update needed",
     body: tailorBody,
-    smsBody: `Drape: order ${ref} needs an update. Open the order and post the next step so the customer is not left waiting.`,
+    smsBody: `Drapeon: order ${ref} needs an update. Open the order and post the next step so the customer is not left waiting.`,
     event: "production_stall_reminder",
     idempotencyKey: `production-stall-reminder:${order.id}:tailor`,
     preferenceKey: "newOrders",
@@ -474,9 +474,9 @@ async function sendDisputeNotifications(
     order,
     userId: order.customer_id,
     audience: "CUSTOMER",
-    title: "Drape is stepping in",
+    title: "Drapeon is stepping in",
     body: "Your order has been paused for support review because production updates stopped.",
-    smsBody: `Drape: order ${ref} has been paused for support review because updates stopped. Open Drape for the latest status.`,
+    smsBody: `Drapeon: order ${ref} has been paused for support review because updates stopped. Open Drapeon for the latest status.`,
     event: "production_stall_dispute",
     idempotencyKey: `production-stall-dispute:${order.id}:customer`,
     preferenceKey: "orderUpdates",
@@ -489,8 +489,8 @@ async function sendDisputeNotifications(
     userId: tailorId,
     audience: "TAILOR",
     title: "Order review opened",
-    body: "This order has not been updated in 10 days. Add an update in Drape or respond to support.",
-    smsBody: `Drape: order ${ref} is now in support review after no update. Open Drape and respond before work continues.`,
+    body: "This order has not been updated in 10 days. Add an update in Drapeon or respond to support.",
+    smsBody: `Drapeon: order ${ref} is now in support review after no update. Open Drapeon and respond before work continues.`,
     event: "production_stall_dispute",
     idempotencyKey: `production-stall-dispute:${order.id}:tailor`,
     preferenceKey: "newOrders",
@@ -520,7 +520,7 @@ async function sendDeadlineNotifications(
     audience: "CUSTOMER",
     title: "Order deadline check",
     body: customerBody,
-    smsBody: `Drape: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. We are checking progress now.`,
+    smsBody: `Drapeon: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. We are checking progress now.`,
     event: "deadline_warning",
     idempotencyKey: `deadline-warning:${order.id}:customer`,
     preferenceKey: "orderUpdates",
@@ -534,7 +534,7 @@ async function sendDeadlineNotifications(
     audience: "TAILOR",
     title: "Deadline check needed",
     body: tailorBody,
-    smsBody: `Drape: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. Post an update or message the customer in Drape.`,
+    smsBody: `Drapeon: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. Post an update or message the customer in Drapeon.`,
     event: "deadline_warning",
     idempotencyKey: `deadline-warning:${order.id}:tailor`,
     preferenceKey: "newOrders",
@@ -552,11 +552,11 @@ async function sendPickupNotifications(
   const sends: Promise<unknown>[] = [];
   const ref = orderRef(order);
   const customerBody = daysWaiting >= PICKUP_OPS_DAYS
-    ? "Your order has been waiting for collection. Drape is checking in so pickup stays clear."
-    : "Your order is ready for collection. Please collect it soon or message the tailor inside Drape.";
+    ? "Your order has been waiting for collection. Drapeon is checking in so pickup stays clear."
+    : "Your order is ready for collection. Please collect it soon or message the tailor inside Drapeon.";
   const tailorBody = daysWaiting >= PICKUP_OPS_DAYS
-    ? "Drape is checking on this uncollected pickup. Keep the garment and any pickup plan in the order thread."
-    : "This pickup is still open. Message the customer in Drape if collection needs a new time.";
+    ? "Drapeon is checking on this uncollected pickup. Keep the garment and any pickup plan in the order thread."
+    : "This pickup is still open. Message the customer in Drapeon if collection needs a new time.";
 
   sends.push(queueOrderNotice(supabase, {
     order,
@@ -564,7 +564,7 @@ async function sendPickupNotifications(
     audience: "CUSTOMER",
     title: "Pickup reminder",
     body: customerBody,
-    smsBody: `Drape: order ${ref} is ready for pickup and still open. Collect it soon or message the tailor in Drape.`,
+    smsBody: `Drapeon: order ${ref} is ready for pickup and still open. Collect it soon or message the tailor in Drapeon.`,
     event: "pickup_uncollected",
     idempotencyKey: `pickup-uncollected:${order.id}:${daysWaiting}:customer`,
     preferenceKey: "orderUpdates",
@@ -578,7 +578,7 @@ async function sendPickupNotifications(
     audience: "TAILOR",
     title: "Pickup still open",
     body: tailorBody,
-    smsBody: `Drape: pickup for order ${ref} is still open. Keep collection plans inside Drape.`,
+    smsBody: `Drapeon: pickup for order ${ref} is still open. Keep collection plans inside Drapeon.`,
     event: "pickup_uncollected",
     idempotencyKey: `pickup-uncollected:${order.id}:${daysWaiting}:tailor`,
     preferenceKey: "newOrders",
@@ -685,7 +685,7 @@ Deno.serve(async (req) => {
             order_id: order.id,
             stage: "IN_DISPUTE",
             note:
-              `Drape opened support review after ${daysIdle} days without a production update.`,
+              `Drapeon opened support review after ${daysIdle} days without a production update.`,
           });
           await audit(supabase, {
             event: "order.production_stall_disputed",
@@ -720,7 +720,7 @@ Deno.serve(async (req) => {
           order_id: order.id,
           stage: order.stage,
           note:
-            `Drape reminded the tailor after ${daysIdle} days without a ${staleUpdateLabel(order)}.`,
+            `Drapeon reminded the tailor after ${daysIdle} days without a ${staleUpdateLabel(order)}.`,
         });
         await audit(supabase, {
           event: "order.production_stall_reminder",
@@ -788,7 +788,7 @@ Deno.serve(async (req) => {
             order_id: order.id,
             stage: order.stage,
             note:
-              `Drape flagged this order because the deadline is due in ${daysRemaining} day${
+              `Drapeon flagged this order because the deadline is due in ${daysRemaining} day${
                 daysRemaining === 1 ? "" : "s"
               }.`,
           });
@@ -862,7 +862,7 @@ Deno.serve(async (req) => {
             order_id: order.id,
             stage: order.stage,
             note:
-              `Drape flagged this pickup because it has been ready for collection for ${daysWaiting} day${
+              `Drapeon flagged this pickup because it has been ready for collection for ${daysWaiting} day${
                 daysWaiting === 1 ? "" : "s"
               }.`,
           });

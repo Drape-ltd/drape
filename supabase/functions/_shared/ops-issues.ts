@@ -219,3 +219,77 @@ export async function createOrRefreshOpsIssue(
 
   return insertResponse.data as { id: string; issue_number: number }
 }
+
+export async function resolveOpsIssueByDedupeKey(
+  supabase: SupabaseClient,
+  dedupeKey: string,
+  metadata: Record<string, unknown> = {},
+) {
+  const lookup = await supabase
+    .from('ops_issues')
+    .select('id, status, metadata')
+    .eq('dedupe_key', dedupeKey)
+    .maybeSingle()
+
+  if (lookup.error) {
+    console.error(JSON.stringify({
+      level: 'error',
+      fn: 'ops-issues',
+      event: 'issue.resolve_lookup_failed',
+      error: lookup.error.message,
+      dedupe_key: dedupeKey,
+    }))
+    return
+  }
+
+  const existing = lookup.data as {
+    id: string
+    status: OpsIssueStatus
+    metadata: Record<string, unknown> | null
+  } | null
+
+  if (!existing?.id || existing.status === 'RESOLVED') return
+
+  const resolvedAt = new Date().toISOString()
+  const nextMetadata = {
+    ...(existing.metadata ?? {}),
+    ...metadata,
+    recoveredAt: resolvedAt,
+  }
+  const update = await supabase
+    .from('ops_issues')
+    .update({
+      status: 'RESOLVED',
+      resolved_at: resolvedAt,
+      last_seen_at: resolvedAt,
+      metadata: nextMetadata,
+    })
+    .eq('id', existing.id)
+
+  if (update.error) {
+    console.error(JSON.stringify({
+      level: 'error',
+      fn: 'ops-issues',
+      event: 'issue.resolve_failed',
+      error: update.error.message,
+      dedupe_key: dedupeKey,
+    }))
+    return
+  }
+
+  await supabase.from('ops_audit_logs').insert({
+    issue_id: existing.id,
+    action_taken: 'ISSUE_AUTO_RESOLVED',
+    performed_by: null,
+    performed_role: 'SYSTEM',
+    reason: 'Provider recovered during a successful health-checked request.',
+    before_state: {
+      status: existing.status,
+      metadata: existing.metadata ?? {},
+    },
+    after_state: {
+      status: 'RESOLVED',
+      metadata: nextMetadata,
+    },
+  })
+}

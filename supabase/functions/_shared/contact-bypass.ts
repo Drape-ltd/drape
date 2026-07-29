@@ -129,7 +129,7 @@ export async function logContactBypassAttempt(options: {
       relatedEntityType: 'contact_bypass_log',
       relatedEntityId: (insertedLog as { id?: string } | null)?.id ?? null,
       title: 'Contact bypass attempt blocked',
-      description: `${options.actorRole.toLowerCase()} tried to move contact off Drape on ${options.surface}.`,
+      description: `${options.actorRole.toLowerCase()} tried to move contact off Drapeon on ${options.surface}.`,
       recommendedAction: 'Review the blocked content, decide whether this needs a warning or trust follow-up, and mark the attempt reviewed in ops.',
       dedupeKey: `contact-bypass:${(insertedLog as { id?: string } | null)?.id ?? `${options.actorId}:${options.surface}:${attempt}`}`,
       metadata: {

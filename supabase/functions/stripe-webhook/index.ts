@@ -295,7 +295,7 @@ async function recordProviderPayoutFailure(
   if (tailorId && input.orderId) {
     await sendPushToUser(supabase, tailorId, {
       title: 'Payout needs review',
-      body: 'A payout release for this order needs Drape ops review before it can be retried.',
+      body: 'A payout release for this order needs Drapeon ops review before it can be retried.',
       data: { orderId: input.orderId },
     })
   }
@@ -429,7 +429,7 @@ async function markMaterialAdvancePayment(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: order.stage,
-    note: `Material advance paid for ${advance.title ?? 'materials'}. Drape ops will review release before funds move.`,
+    note: `Material advance paid for ${advance.title ?? 'materials'}. Drapeon ops will review release before funds move.`,
   })
 
   await createOrRefreshOpsIssue(supabase, {

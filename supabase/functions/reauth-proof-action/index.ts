@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
         name: 'reauth_signing_secret_configured',
         condition: hasReauthProofSecret(),
         errorCode: 'REAUTH_PROOF_SECRET_MISSING',
-        message: 'Drape could not verify your recent password confirmation. Try again in a moment.',
+        message: 'Drapeon could not verify your recent password confirmation. Try again in a moment.',
         field: 'reauthProof',
         severity: 'BLOCKING',
       },

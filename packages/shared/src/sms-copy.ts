@@ -10,7 +10,7 @@ const STAGE_LABELS = {
   SEWING: 'sewing',
   FINISHING: 'finishing',
   READY_FOR_COLLECTION: 'ready for collection',
-  READY_FOR_DRAPE_DISPATCH: 'ready for Drape dispatch',
+  READY_FOR_DRAPE_DISPATCH: 'ready for Drapeon dispatch',
   OUT_FOR_DELIVERY: 'out for delivery',
   SHIPPED: 'shipped',
   DELIVERED: 'delivered',
@@ -64,20 +64,20 @@ export function buildCustomerOrderPaymentSms(order: OrderSmsContext, phase: SmsP
   const ref = orderReference(order)
 
   if (phase === 'FULFILLMENT') {
-    return `Drape: ${fulfillmentLabel(order.deliveryMethod)} payment for order #${ref} is confirmed. Dispatch can now move ahead.`
+    return `Drapeon: ${fulfillmentLabel(order.deliveryMethod)} payment for order #${ref} is confirmed. Dispatch can now move ahead.`
   }
 
-  return `Drape: Order #${ref} for ${orderLabel(order)} is confirmed. We will keep you updated in the app.`
+  return `Drapeon: Order #${ref} for ${orderLabel(order)} is confirmed. We will keep you updated in the app.`
 }
 
 export function buildTailorOrderPaymentSms(order: OrderSmsContext, phase: SmsPaymentPhase) {
   const ref = orderReference(order)
 
   if (phase === 'FULFILLMENT') {
-    return `Drape: ${fulfillmentLabel(order.deliveryMethod)} payment for order #${ref} is confirmed.`
+    return `Drapeon: ${fulfillmentLabel(order.deliveryMethod)} payment for order #${ref} is confirmed.`
   }
 
-  return `Drape: Order #${ref} for ${orderLabel(order)} is paid and ready for fulfillment in Drape.`
+  return `Drapeon: Order #${ref} for ${orderLabel(order)} is paid and ready for fulfillment in Drapeon.`
 }
 
 export function buildCustomerStageSms(order: OrderStageSmsContext, stage: string) {
@@ -85,23 +85,23 @@ export function buildCustomerStageSms(order: OrderStageSmsContext, stage: string
   const provider = providerLabel(order)
 
   if (stage === 'READY_FOR_COLLECTION') {
-    return `Drape: Order #${ref} is ready for pickup. Open Drape for your collection details and code.`
+    return `Drapeon: Order #${ref} is ready for pickup. Open Drapeon for your collection details and code.`
   }
 
   if (stage === 'READY_FOR_DRAPE_DISPATCH') {
-    return `Drape: Order #${ref} is packed and waiting for Drape dispatch. We will text again when it starts moving.`
+    return `Drapeon: Order #${ref} is packed and waiting for Drapeon dispatch. We will text again when it starts moving.`
   }
 
   if (stage === 'OUT_FOR_DELIVERY') {
-    return `Drape: Order #${ref} is out for delivery${provider ? ` with ${provider}` : ''}. Keep your phone available.`
+    return `Drapeon: Order #${ref} is out for delivery${provider ? ` with ${provider}` : ''}. Keep your phone available.`
   }
 
   if (stage === 'SHIPPED') {
-    return `Drape: Order #${ref} has shipped${provider ? ` with ${provider}` : ''}. Track it in Drape.`
+    return `Drapeon: Order #${ref} has shipped${provider ? ` with ${provider}` : ''}. Track it in Drapeon.`
   }
 
   if (stage === 'DELIVERED') {
-    return `Drape: Order #${ref} was marked delivered. Open Drape if anything looks wrong.`
+    return `Drapeon: Order #${ref} was marked delivered. Open Drapeon if anything looks wrong.`
   }
 
   return null
@@ -112,15 +112,15 @@ export function buildTailorStageSms(order: OrderStageSmsContext, stage: string) 
   const provider = providerLabel(order)
 
   if (stage === 'OUT_FOR_DELIVERY') {
-    return `Drape: Order #${ref} is now out for delivery${provider ? ` with ${provider}` : ''}.`
+    return `Drapeon: Order #${ref} is now out for delivery${provider ? ` with ${provider}` : ''}.`
   }
 
   if (stage === 'SHIPPED') {
-    return `Drape: Order #${ref} has shipped${provider ? ` with ${provider}` : ''}.`
+    return `Drapeon: Order #${ref} has shipped${provider ? ` with ${provider}` : ''}.`
   }
 
   if (stage === 'DELIVERED') {
-    return `Drape: Order #${ref} was confirmed delivered.`
+    return `Drapeon: Order #${ref} was confirmed delivered.`
   }
 
   return null
@@ -135,10 +135,10 @@ export function buildCustomerReviewResolutionSms(
   const ref = orderReference(order)
 
   if (outcome === 'REFUND') {
-    return `Drape: We approved the ${reviewType === 'CANCELLATION' ? 'cancellation' : 'delivery'} review for order #${ref} and marked it for refund.`
+    return `Drapeon: We approved the ${reviewType === 'CANCELLATION' ? 'cancellation' : 'delivery'} review for order #${ref} and marked it for refund.`
   }
 
-  return `Drape: We reviewed order #${ref}. It will continue from ${stageLabel(restoreStage ?? 'CONFIRMED')}.`
+  return `Drapeon: We reviewed order #${ref}. It will continue from ${stageLabel(restoreStage ?? 'CONFIRMED')}.`
 }
 
 export function buildTailorReviewResolutionSms(
@@ -150,8 +150,8 @@ export function buildTailorReviewResolutionSms(
   const ref = orderReference(order)
 
   if (outcome === 'REFUND') {
-    return `Drape: We approved the ${reviewType === 'CANCELLATION' ? 'cancellation' : 'delivery'} review for order #${ref}. The order is now marked for refund.`
+    return `Drapeon: We approved the ${reviewType === 'CANCELLATION' ? 'cancellation' : 'delivery'} review for order #${ref}. The order is now marked for refund.`
   }
 
-  return `Drape: We reviewed order #${ref}. It will continue from ${stageLabel(restoreStage ?? 'CONFIRMED')}.`
+  return `Drapeon: We reviewed order #${ref}. It will continue from ${stageLabel(restoreStage ?? 'CONFIRMED')}.`
 }

@@ -1,4 +1,4 @@
-# Supabase project config for Drape V1
+# Supabase project config for Drapeon V1
 # Project: https://pqptfuqogvrajozfsqzi.supabase.co
 
 
@@ -50,12 +50,12 @@ enable_confirmations = true
 
 [auth.email.notification.email_changed]
 enabled = true
-subject = "Your Drape email address was changed"
+subject = "Your Drapeon email address was changed"
 content_path = "./templates/email_changed_notification.html"
 
 [auth.email.notification.password_changed]
 enabled = true
-subject = "Your Drape password was changed"
+subject = "Your Drapeon password was changed"
 content_path = "./templates/password_changed_notification.html"
 
 [auth.external.google]

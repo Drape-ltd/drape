@@ -9,6 +9,7 @@ export type StatusDisplayDomain =
   | 'payment'
   | 'payout'
   | 'identity'
+  | 'appointment'
   | 'generic'
 
 export type StatusDisplayTone = 'success' | 'warning' | 'danger' | 'neutral' | 'info'
@@ -27,7 +28,7 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   PENDING_QUOTE: 'Awaiting Quote',
   PAYMENT_PENDING: 'Awaiting Payment',
   PAYMENT_FAILED: 'Payment Failed',
-  READY_FOR_DRAPE_DISPATCH: 'Ready for Drape Dispatch',
+  READY_FOR_DRAPE_DISPATCH: 'Ready for Drapeon Dispatch',
   READY_FOR_COLLECTION: 'Ready for Collection',
   OUT_FOR_DELIVERY: 'Out for Delivery',
   IN_DISPUTE: 'Under Review',
@@ -43,6 +44,9 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   PAID_OUT: 'Paid Out',
   PARTIALLY_REFUNDED: 'Partially Refunded',
   NOT_CHECKED: 'Not Checked',
+  PROPOSED: 'Times Proposed',
+  COUNTERED: 'New Times Proposed',
+  NO_SHOW: 'No-show Reported',
 }
 
 const MATERIAL_ADVANCE_LABELS: Readonly<Record<StatusDisplayAudience, Readonly<Record<string, string>>>> = {

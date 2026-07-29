@@ -8,6 +8,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { normalizeDrapeonSender } from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
@@ -41,7 +42,11 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drapeon Security <security@drapeon.co>'
+  return normalizeDrapeonSender(
+    Deno.env.get('RESEND_FROM'),
+    'Drapeon Security',
+    'security@drapeon.co'
+  )
 }
 
 function getResendApiKey() {
@@ -70,18 +75,20 @@ async function sendSecurityEmail(input: {
 
   const timestamp = new Date().toISOString()
   const appUrl = getSiteUrl()
-  const subject = input.event === 'PASSWORD_CHANGED'
-    ? 'Your Drapeon password was changed'
-    : 'Drapeon email change requested'
-  const headline = input.event === 'PASSWORD_CHANGED'
-    ? 'Password changed'
-    : 'Email change requested'
-  const body = input.event === 'PASSWORD_CHANGED'
-    ? 'Your Drapeon password was changed from a signed-in session.'
-    : `A signed-in session requested changing this Drapeon account email${input.newEmail ? ` to ${input.newEmail}` : ''}. Your account email changes only after the required confirmation step is complete.`
-  const action = input.event === 'PASSWORD_CHANGED'
-    ? 'If this was not you, reset your password immediately and contact security@drapeon.co.'
-    : 'If this was not you, do not confirm the change and contact security@drapeon.co immediately.'
+  const subject =
+    input.event === 'PASSWORD_CHANGED'
+      ? 'Your Drapeon password was changed'
+      : 'Drapeon email change requested'
+  const headline =
+    input.event === 'PASSWORD_CHANGED' ? 'Password changed' : 'Email change requested'
+  const body =
+    input.event === 'PASSWORD_CHANGED'
+      ? 'Your Drapeon password was changed from a signed-in session.'
+      : `A signed-in session requested changing this Drapeon account email${input.newEmail ? ` to ${input.newEmail}` : ''}. Your account email changes only after the required confirmation step is complete.`
+  const action =
+    input.event === 'PASSWORD_CHANGED'
+      ? 'If this was not you, reset your password immediately and contact security@drapeon.co.'
+      : 'If this was not you, do not confirm the change and contact security@drapeon.co immediately.'
 
   const response = await fetch(RESEND_API, {
     method: 'POST',
@@ -130,7 +137,11 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return jsonResponse({ error: 'Please sign in again before sending account security notices.' }, 401, cors)
+      return jsonResponse(
+        { error: 'Please sign in again before sending account security notices.' },
+        401,
+        cors
+      )
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
@@ -140,7 +151,12 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
-    const allowed = await checkRateLimit(supabase, `account-security-notification:${caller.id}`, 86400, 20)
+    const allowed = await checkRateLimit(
+      supabase,
+      `account-security-notification:${caller.id}`,
+      86400,
+      20
+    )
     if (!allowed) {
       await audit(supabase, {
         event: 'rate_limit.exceeded',
@@ -152,7 +168,11 @@ Deno.serve(async (req) => {
     }
 
     if (!caller.email) {
-      return jsonResponse({ ok: false, emailQueued: false, error: 'No account email available.' }, 200, cors)
+      return jsonResponse(
+        { ok: false, emailQueued: false, error: 'No account email available.' },
+        200,
+        cors
+      )
     }
 
     const emailQueued = await sendSecurityEmail({
@@ -162,21 +182,27 @@ Deno.serve(async (req) => {
     })
 
     await audit(supabase, {
-      event: parsed.data.event === 'PASSWORD_CHANGED'
-        ? 'auth.password_security_notice_sent'
-        : 'auth.email_change_security_notice_sent',
+      event:
+        parsed.data.event === 'PASSWORD_CHANGED'
+          ? 'auth.password_security_notice_sent'
+          : 'auth.email_change_security_notice_sent',
       actor_id: caller.id,
       severity: emailQueued ? 'info' : 'warn',
       payload: {
         function: FN,
         email_queued: emailQueued,
-        new_email: parsed.data.event === 'EMAIL_CHANGE_STARTED' ? parsed.data.newEmail ?? null : null,
+        new_email:
+          parsed.data.event === 'EMAIL_CHANGE_STARTED' ? (parsed.data.newEmail ?? null) : null,
       },
     })
 
     return jsonResponse({ ok: true, emailQueued }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonResponse({ error: 'Something went wrong sending this security notice. Please try again.' }, 500, cors)
+    return jsonResponse(
+      { error: 'Something went wrong sending this security notice. Please try again.' },
+      500,
+      cors
+    )
   }
 })

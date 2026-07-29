@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
@@ -27,7 +27,6 @@ import {
 } from '@/lib/shipping'
 import { stripExif } from '@/lib/stripExif'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
-import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import {
   CANCELLATION_REVIEW_REASON_LABELS,
   CONSULTATION_EXPIRY_POLICY_LABELS,
@@ -976,7 +975,6 @@ export default function TailorOrderDetailScreen() {
   const [showFlexibleStageSheet, setShowFlexibleStageSheet] = useState(false)
   const [mediaPreview, setMediaPreview] = useState<{ items: MediaLightboxItem[]; index: number } | null>(null)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
-  const [startingOrderCall, setStartingOrderCall] = useState<'audio' | 'video' | null>(null)
   const [confirmingFabricReceived, setConfirmingFabricReceived] = useState(false)
   const [failedReferencePhotos, setFailedReferencePhotos] = useState<string[]>([])
   const [hasCustomerReview, setHasCustomerReview] = useState(false)
@@ -1541,10 +1539,6 @@ export default function TailorOrderDetailScreen() {
   const materialIssueNeedsCustomerDecision = materialIssue?.status === 'OPEN'
   const materialIssueCancellationRequested = materialIssue?.status === 'CUSTOMER_REQUESTED_CANCEL'
   const handoffHelpAvailable = ['READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'].includes(order.stage)
-  const activeOrderCallAvailable =
-    order.orderKind === 'CUSTOM' &&
-    !handoffHelpAvailable &&
-    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(order.stage)
   const materialIssueReasonLabel =
     materialIssue?.reasonLabel ??
     (materialIssue?.reason ? MATERIAL_ISSUE_REASON_LABELS[materialIssue.reason] : null)
@@ -1765,51 +1759,6 @@ export default function TailorOrderDetailScreen() {
     } finally {
       setStartingCall(null)
     }
-  }
-
-  async function startOrderCall(callType: 'audio' | 'video') {
-    if (!order) return
-    if (startingOrderCall) return
-    setStartingOrderCall(callType)
-    try {
-      const room = await createOrderCallRoom(order.id, callType, 'tailor')
-      if (room?.fallback === 'MESSAGES') {
-        await fetchOrder()
-        openOrderMessages()
-        return
-      }
-      if (!room?.url) return
-      await fetchOrder()
-      await openDrapeCallUrl(room.url, 'tailor')
-    } finally {
-      setStartingOrderCall(null)
-    }
-  }
-
-  function openOrderCallOptions() {
-    if (!order || startingOrderCall) return
-    if (order.videoCallUrl) {
-      Alert.alert(
-        'Join Drapeon call',
-        `Open the current Drapeon call with ${order.customerName}.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Video', onPress: () => { void startOrderCall('video') } },
-          { text: 'Audio only', onPress: () => { void startOrderCall('audio') } },
-        ]
-      )
-      return
-    }
-
-    Alert.alert(
-      'Start Drapeon call',
-      `Start a Drapeon call with ${order.customerName} without exposing personal phone numbers.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Video', onPress: () => { void startOrderCall('video') } },
-        { text: 'Audio only', onPress: () => { void startOrderCall('audio') } },
-      ]
-    )
   }
 
   function confirmDeclineOrder(title = 'Decline order', message = 'Are you sure you want to decline this order?') {
@@ -2122,8 +2071,21 @@ export default function TailorOrderDetailScreen() {
             </View>
           </View>
 
-          <View style={styles.supportCard}>
-            <Text style={styles.supportCardTitle}>Customer context</Text>
+          <SupportDisclosure
+            title="Customer context"
+            summary={
+              customerReviewSummary && customerReviewSummary.count > 0
+                ? `${customerReviewSummary.count} past ${customerReviewSummary.count === 1 ? 'review' : 'reviews'}${
+                    customerReviewSummary.averageRating
+                      ? ` · ${customerReviewSummary.averageRating.toFixed(1)}/5`
+                      : ''
+                  }`
+                : referralTrust?.visibleToTailor
+                  ? 'Referral and customer history'
+                  : 'Profile and order history'
+            }
+            defaultExpanded={false}
+          >
             {referralTrust?.visibleToTailor ? (
               <View style={styles.referralTrustCard}>
                 <Feather name="user-check" size={16} color={Colors.needleGreenDark} />
@@ -2145,12 +2107,8 @@ export default function TailorOrderDetailScreen() {
             ) : null}
             <Text style={styles.supportHint}>
               {customerReviewSummary && customerReviewSummary.count > 0
-                ? `${customerReviewSummary.count} past internal ${customerReviewSummary.count === 1 ? 'review' : 'reviews'}${
-                    customerReviewSummary.averageRating
-                      ? ` · ${customerReviewSummary.averageRating.toFixed(1)}/5 average`
-                      : ''
-                  }. This helps you decide how to work before accepting more risk.`
-                : 'No previous internal reviews for this customer yet. Keep communication and decisions inside Drapeon so future context is useful.'}
+                ? 'Review the internal notes before taking on extra risk.'
+                : 'No previous internal reviews. Keep decisions in Drapeon so future context stays useful.'}
             </Text>
             {customerReviewSummary?.tags.length ? (
               <Text style={styles.supportHint}>Notes seen before: {customerReviewSummary.tags.join(', ')}</Text>
@@ -2168,7 +2126,7 @@ export default function TailorOrderDetailScreen() {
                 })
               }
             />
-          </View>
+          </SupportDisclosure>
 
           {/* PENDING_QUOTE — show brief + quote/consultation CTAs */}
           {order.stage === 'PENDING_QUOTE' && (
@@ -2302,10 +2260,17 @@ export default function TailorOrderDetailScreen() {
           )}
 
           {order.orderKind === 'CUSTOM' && (consultationMeta || quoteBreakdown || bulkOrder) ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Commercial setup</Text>
+            <SupportDisclosure
+              title="Commercial setup"
+              summary={[
+                consultationMeta ? 'Consultation' : '',
+                quoteBreakdown ? 'Quote breakdown' : '',
+                bulkOrder?.enabled ? 'Bulk handling' : '',
+              ].filter(Boolean).join(' · ')}
+              defaultExpanded={false}
+            >
               {consultationMeta ? (
-                <View style={styles.supportCard}>
+                <View style={styles.disclosureSection}>
                   <Text style={styles.supportCardTitle}>Consultation policy</Text>
                   <View style={styles.supportMetaList}>
                     <BriefRow label="Status" value={formatConsultationStatusLabel(consultationMeta.status)} />
@@ -2352,7 +2317,13 @@ export default function TailorOrderDetailScreen() {
               ) : null}
 
               {quoteBreakdown ? (
-                <View style={styles.supportCard}>
+                <View
+                  style={
+                    consultationMeta
+                      ? [styles.disclosureSection, styles.disclosureSectionBordered]
+                      : styles.disclosureSection
+                  }
+                >
                   <Text style={styles.supportCardTitle}>Quote breakdown</Text>
                   <View style={styles.supportMetaList}>
                     {typeof quoteBreakdown.laborAmount === 'number' ? (
@@ -2391,7 +2362,13 @@ export default function TailorOrderDetailScreen() {
               ) : null}
 
               {bulkOrder?.enabled ? (
-                <View style={styles.supportCard}>
+                <View
+                  style={
+                    consultationMeta || quoteBreakdown
+                      ? [styles.disclosureSection, styles.disclosureSectionBordered]
+                      : styles.disclosureSection
+                  }
+                >
                   <Text style={styles.supportCardTitle}>Bulk order handling</Text>
                   <View style={styles.supportMetaList}>
                     <BriefRow label="Mode" value="Ops-managed linked custom order" />
@@ -2423,7 +2400,7 @@ export default function TailorOrderDetailScreen() {
                   {bulkOrder.notes ? <Text style={styles.supportHint}>{bulkOrder.notes}</Text> : null}
                 </View>
               ) : null}
-            </View>
+            </SupportDisclosure>
           ) : null}
 
           {/* Flexible stages: CONFIRMED / DESIGNING / SOURCING — tailor picks next stage */}
@@ -2518,15 +2495,17 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          <View style={styles.supportCard}>
-            <View style={styles.visionOrderHeader}>
-              <View style={styles.visionOrderIcon}>
-                <Feather name="image" size={16} color={Colors.needleGreenDark} />
-              </View>
-              <Text style={styles.supportCardTitle}>Order evidence timeline</Text>
-            </View>
+          <SupportDisclosure
+            title="Order evidence"
+            summary={
+              order.stageUpdates.length > 0
+                ? `${order.stageUpdates.length} ${order.stageUpdates.length === 1 ? 'update' : 'updates'} · Photos and milestones`
+                : 'Photos and milestones'
+            }
+            defaultExpanded={false}
+          >
             <Text style={styles.supportHint}>
-              Production photos and stage updates stay here so you, the customer, and ops are looking at the same proof.
+              Production photos and milestones shared with the customer and Drapeon support.
             </Text>
             <View style={styles.timeline}>
               {order.stageUpdates.length > 0 ? order.stageUpdates.map((update) => (
@@ -2561,7 +2540,7 @@ export default function TailorOrderDetailScreen() {
                 </View>
               )}
             </View>
-          </View>
+          </SupportDisclosure>
 
           {showCancellationPolicyCard && (
             <View style={styles.supportCard}>
@@ -3088,9 +3067,7 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.section}>
               <View style={styles.supportCard}>
                 <Text style={styles.supportCardTitle}>Measurement profile</Text>
-                <Text style={styles.supportHint}>
-                  Review saved body context, fit flags, and garment-specific values in one focused view before you cut, confirm readiness, or ask the customer to verify anything.
-                </Text>
+          <Text style={styles.supportHint}>Fit context, flags, and garment-specific values.</Text>
                 <Button
                   label="Review measurements"
                   variant="secondary"
@@ -3104,32 +3081,17 @@ export default function TailorOrderDetailScreen() {
           <View style={styles.section}>
             <View style={styles.supportCard}>
               <Text style={styles.supportCardTitle}>{briefDossier.title}</Text>
-              <Text style={styles.supportHint}>
-                {briefDossier.sections.length === 1
-                  ? '1 section is ready for review.'
-                  : briefDossier.sections.length + ' sections are ready for review.'} Open the focused dossier to inspect style references, fabric planning, fulfillment, and long-form notes without crowding the main order screen.
-              </Text>
+        <Text style={styles.supportHint}>
+          {briefDossier.sections.length === 0
+            ? 'No dossier details yet.'
+            : `${briefDossier.sections.length} ${briefDossier.sections.length === 1 ? 'section' : 'sections'} · Style, fabric, fulfillment, and proof.`}
+        </Text>
               <Button
                 label="Open brief dossier"
                 variant="secondary"
                 onPress={() => setShowDossierSheet(true)}
               />
             </View>
-
-            {activeOrderCallAvailable ? (
-              <View style={styles.supportCard}>
-                <Text style={styles.supportCardTitle}>Talk in Drapeon</Text>
-                <Text style={styles.supportHint}>
-                  Use a Drapeon call for fit, fabric, or timeline details that need a quick conversation. Keep final decisions in Messages so the order record stays clear.
-                </Text>
-                <Button
-                  label={startingOrderCall ? 'Starting Drapeon call...' : order.videoCallUrl ? 'Join Drapeon call' : 'Call customer in Drapeon'}
-                  variant="secondary"
-                  onPress={openOrderCallOptions}
-                  disabled={!!startingOrderCall}
-                />
-              </View>
-            ) : null}
 
             {handoffHelpAvailable ? (
               <View style={styles.supportCard}>
@@ -3165,10 +3127,9 @@ export default function TailorOrderDetailScreen() {
                 ) : null}
                 <View style={{ gap: Spacing.md }}>
                   <Button
-                    label={startingOrderCall ? 'Starting Drapeon call...' : order.videoCallUrl ? 'Join Drapeon call' : 'Start Drapeon call'}
+                    label="Message customer"
                     variant="secondary"
-                    onPress={openOrderCallOptions}
-                    disabled={!!startingOrderCall}
+                    onPress={openOrderMessages}
                   />
                   <Button
                     label={handoffIssue ? 'Log another help issue' : 'Log handoff help'}
@@ -3212,19 +3173,21 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Aftercare</Text>
-              <View style={styles.supportCard}>
-                <Text style={styles.supportCardTitle}>Post-handoff expectations</Text>
-                <Text style={styles.supportHint}>
-                  Keep any fit, finish, alteration, remake, or workmanship follow-up inside Drapeon. Obvious issues should be
-                  answered quickly, and any remedy should stay tied to the order timeline so support can help if the
-                  conversation becomes disputed later.
-                </Text>
-              </View>
-            </View>
-          )}
+        {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Aftercare</Text>
+            <SupportDisclosure
+              title="Post-handoff expectations"
+              summary="Fit, finish, alteration, and remedy guidance"
+              defaultExpanded={false}
+            >
+              <Text style={styles.supportBodyText}>
+                Keep fit, finish, alteration, remake, and workmanship follow-up inside Drapeon. Answer clear issues
+                quickly and keep remedies tied to the order timeline so support can help when needed.
+              </Text>
+            </SupportDisclosure>
+          </View>
+        )}
 
           {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
             <View style={styles.section}>
@@ -3289,20 +3252,21 @@ export default function TailorOrderDetailScreen() {
 
       <BottomSheetScaffold
         visible={showDossierSheet}
-        testID="tailor-dossier-sheet"
-        title={briefDossier.title}
-        subtitle="Summary, style refs, fabric plan, fulfillment, and proof in one focused review surface."
+      testID="tailor-dossier-sheet"
+      title={briefDossier.title}
+      subtitle="Open only the section you need."
         onDismiss={() => setShowDossierSheet(false)}
         scrollable
       >
         <View style={styles.sheetSectionStack}>
           {briefDossier.sections.map((section) => (
-            <BriefDossierCard
-              key={section.id}
-              section={section}
-              onOpenLink={openDossierLink}
-              onOpenMedia={openMediaPreview}
-            />
+          <BriefDossierCard
+            key={section.id}
+            section={section}
+            onOpenLink={openDossierLink}
+            onOpenMedia={openMediaPreview}
+            defaultExpanded={section.id === 'summary'}
+          />
           ))}
         </View>
       </BottomSheetScaffold>
@@ -3316,9 +3280,9 @@ export default function TailorOrderDetailScreen() {
 
       <BottomSheetScaffold
         visible={showMeasurementSheet}
-        testID="tailor-measurement-sheet"
-        title="Measurement profile"
-        subtitle="Review body context and garment-specific values before the next production step."
+      testID="tailor-measurement-sheet"
+      title="Measurement profile"
+      subtitle="Fit context and production-ready measurements."
         onDismiss={() => setShowMeasurementSheet(false)}
         scrollable
       >
@@ -3359,8 +3323,8 @@ export default function TailorOrderDetailScreen() {
           ? 'Move this item through its real handoff state.'
           : 'Design, fabric, and production can move in a flexible order. Pick the true next step.'}
         onDismiss={() => setShowFlexibleStageSheet(false)}
-        enableDynamicSizing
-        secondaryAction={{ label: 'Cancel', onPress: () => setShowFlexibleStageSheet(false), tone: 'secondary' }}
+        scrollable
+        snapPoints={['68%']}
       >
         <View style={styles.stageChoiceList}>
           {flexibleNextStages?.map((target) => (
@@ -6119,19 +6083,65 @@ function BriefDossierRowView({
   return <BriefRow label={row.label} value={row.value ?? 'Not set'} />
 }
 
+function SupportDisclosure({
+  title,
+  summary,
+  defaultExpanded,
+  children,
+}: {
+  title: string
+  summary: string
+  defaultExpanded: boolean
+  children: ReactNode
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  return (
+    <View style={styles.supportCard}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+        style={styles.disclosureHeader}
+        onPress={() => setExpanded((current) => !current)}
+        activeOpacity={0.82}
+      >
+        <View style={styles.disclosureCopy}>
+          <Text style={styles.supportCardTitle}>{title}</Text>
+          <Text style={styles.disclosureSummary}>{summary}</Text>
+        </View>
+        <Feather
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color={Colors.midGrey}
+        />
+      </TouchableOpacity>
+      {expanded ? <View style={styles.disclosureBody}>{children}</View> : null}
+    </View>
+  )
+}
+
 function BriefDossierCard({
   section,
   onOpenLink,
   onOpenMedia,
+  defaultExpanded = false,
 }: {
   section: BriefDossierSection
   onOpenLink: (href: string) => void
   onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+  defaultExpanded?: boolean
 }) {
+  const rowCount = `${section.rows.length} ${section.rows.length === 1 ? 'detail' : 'details'}`
+  const rawSummary = section.summary?.trim()
+  const disclosureSummary = rawSummary && rawSummary.length <= 84 ? rawSummary : rowCount
+
   return (
-    <View style={styles.supportCard}>
-      <Text style={styles.supportCardTitle}>{section.title}</Text>
-      {section.summary ? <Text style={styles.supportHint}>{section.summary}</Text> : null}
+    <SupportDisclosure
+      title={section.title}
+      summary={disclosureSummary}
+      defaultExpanded={defaultExpanded}
+    >
       <View style={styles.supportMetaList}>
         {section.rows.map((row) => (
           <BriefDossierRowView
@@ -6142,7 +6152,7 @@ function BriefDossierCard({
           />
         ))}
       </View>
-    </View>
+    </SupportDisclosure>
   )
 }
 
@@ -6334,20 +6344,35 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 18,
   },
-  visionOrderHeader: {
+  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  disclosureHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
+    justifyContent: 'space-between',
+    gap: Spacing.md,
   },
-  visionOrderIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
+  disclosureCopy: {
+    flex: 1,
+    gap: 3,
   },
-  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  disclosureSummary: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 18,
+  },
+  disclosureBody: {
+    paddingTop: Spacing.xs,
+    gap: 6,
+  },
+  disclosureSection: {
+    gap: 6,
+  },
+  disclosureSectionBordered: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: Spacing.md,
+    marginTop: Spacing.xs,
+  },
   supportMetaList: { gap: 6 },
   advanceRow: {
     flexDirection: 'row',

@@ -178,7 +178,7 @@ Deno.serve(async (req) => {
       await supabase.from('order_stage_updates').insert({
         order_id: order.id,
         stage: order.stage,
-        note: `${actorRole === 'CUSTOMER' ? 'Customer' : 'Tailor'} requested handoff help in Drape. Issue: ${handoffIssueLabel(body.issueType)}.`,
+        note: `${actorRole === 'CUSTOMER' ? 'Customer' : 'Tailor'} requested handoff help in Drapeon. Issue: ${handoffIssueLabel(body.issueType)}.`,
       })
 
       await audit(supabase, {
@@ -202,8 +202,8 @@ Deno.serve(async (req) => {
           sendPushToUser(supabase, counterpartId, {
             title: order.delivery_method === 'LOCAL_COLLECTION' ? 'Pickup help requested' : 'Delivery help requested',
             body: actorRole === 'CUSTOMER'
-              ? 'Your customer requested handoff help in Drape. Open the order and respond there.'
-              : 'Your seller requested handoff help in Drape. Open the order and respond there.',
+              ? 'Your customer requested handoff help in Drapeon. Open the order and respond there.'
+              : 'Your seller requested handoff help in Drapeon. Open the order and respond there.',
             data: { orderId: order.id },
           }),
         )
@@ -212,7 +212,7 @@ Deno.serve(async (req) => {
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, caller.id, {
           title: 'Handoff help opened',
-          body: `${handoffIssueSummary(body.issueType, order.delivery_method)} has been logged in Drape.`,
+          body: `${handoffIssueSummary(body.issueType, order.delivery_method)} has been logged in Drapeon.`,
           data: { orderId: order.id },
         }),
       )
@@ -262,7 +262,7 @@ Deno.serve(async (req) => {
     await supabase.from('order_stage_updates').insert({
       order_id: linkedOrder.id,
       stage: linkedOrder.stage,
-      note: `${actorRole === 'CUSTOMER' ? 'Customer' : 'Tailor'} marked the open handoff help thread as resolved in Drape.`,
+      note: `${actorRole === 'CUSTOMER' ? 'Customer' : 'Tailor'} marked the open handoff help thread as resolved in Drapeon.`,
     })
 
     await audit(supabase, {
@@ -282,7 +282,7 @@ Deno.serve(async (req) => {
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, counterpartId, {
           title: 'Handoff help resolved',
-          body: 'The open handoff help thread on this order was marked resolved in Drape.',
+          body: 'The open handoff help thread on this order was marked resolved in Drapeon.',
           data: { orderId: linkedOrder.id },
         }),
       )

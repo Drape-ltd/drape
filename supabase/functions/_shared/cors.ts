@@ -1,7 +1,7 @@
 /**
  * _shared/cors.ts
  *
- * Allowlist-based CORS headers for Drape Edge Functions.
+ * Allowlist-based CORS headers for Drapeon Edge Functions.
  *
  * Strategy:
  *  - Native mobile clients (iOS/Android) do NOT send an Origin header.

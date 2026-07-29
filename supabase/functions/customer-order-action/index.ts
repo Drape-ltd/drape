@@ -281,10 +281,10 @@ const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string 
   'request-style-alignment-change': { title: 'Style clarification requested', body: 'The customer asked you to clarify the style interpretation before cutting.' },
   'respond-material-issue': { title: 'Customer responded to fabric issue', body: 'The customer chose how they want to handle the material issue.' },
   'cancel-order': { title: 'Order cancelled', body: 'The customer cancelled this order before live production started.' },
-  'request-cancellation-review': { title: 'Cancellation review requested', body: 'The customer asked Drape to review cancellation before handoff.' },
-  'request-delivery-review': { title: 'Delivery review requested', body: 'The customer asked Drape to review a dispatch or delivery issue.' },
-  'request-aftercare-support': { title: 'Aftercare support requested', body: 'The customer asked Drape to review a post-delivery fit or finish issue.' },
-  'request-emergency-support': { title: 'Emergency support requested', body: 'The customer flagged an event-sensitive order issue. Keep every update inside Drape.' },
+  'request-cancellation-review': { title: 'Cancellation review requested', body: 'The customer asked Drapeon to review cancellation before handoff.' },
+  'request-delivery-review': { title: 'Delivery review requested', body: 'The customer asked Drapeon to review a dispatch or delivery issue.' },
+  'request-aftercare-support': { title: 'Aftercare support requested', body: 'The customer asked Drapeon to review a post-delivery fit or finish issue.' },
+  'request-emergency-support': { title: 'Emergency support requested', body: 'The customer flagged an event-sensitive order issue. Keep every update inside Drapeon.' },
   'request-consultation': { title: 'Consultation requested', body: 'A customer asked for a consultation. Approve, price, reschedule, or decline from the order.' },
   'request-quote-revision': { title: 'Quote changes requested', body: 'The customer requested formal changes to your quote.' },
   'edit-quote-revision': { title: 'Quote request updated', body: 'The customer updated their formal quote change request.' },
@@ -923,7 +923,7 @@ Deno.serve(async (req) => {
           cors,
           409,
           'CANCELLATION_NOT_ALLOWED',
-          'This order can no longer be self-cancelled from here. Use Drape review or support if something has gone wrong.',
+          'This order can no longer be self-cancelled from here. Use Drapeon review or support if something has gone wrong.',
         )
       }
 
@@ -948,7 +948,7 @@ Deno.serve(async (req) => {
           cors,
           409,
           'REFUND_FAILED',
-          'We could not safely cancel this order because the payment refund did not complete. Please try again or contact Drape support.',
+          'We could not safely cancel this order because the payment refund did not complete. Please try again or contact Drapeon support.',
         )
       }
 
@@ -1669,7 +1669,7 @@ Deno.serve(async (req) => {
 
       const cancellationReason = parsed.data.cancellationReason
       if (!cancellationReason) {
-        return jsonError(cors, 400, 'CANCELLATION_REASON_REQUIRED', 'Choose why you want Drape to review this cancellation.')
+        return jsonError(cors, 400, 'CANCELLATION_REASON_REQUIRED', 'Choose why you want Drapeon to review this cancellation.')
       }
 
       if (supportMeta.cancellationReview?.status === 'OPEN') {
@@ -1729,7 +1729,7 @@ Deno.serve(async (req) => {
         userId: caller.id,
         stage: order.stage,
         title: 'Cancellation review requested',
-        description: `Customer asked Drape to review a cancellation from ${order.stage}.`,
+        description: `Customer asked Drapeon to review a cancellation from ${order.stage}.`,
         recommendedAction: 'Review the order timeline, cancellation reason, and refund implications before ruling.',
         dedupeKey: `order-review:cancellation:${orderId}`,
         metadata: {
@@ -1772,7 +1772,7 @@ Deno.serve(async (req) => {
     if (action === 'request-delivery-review') {
       const deliveryReason = parsed.data.deliveryReason
       if (!deliveryReason) {
-        return jsonError(cors, 400, 'DELIVERY_REVIEW_REASON_REQUIRED', 'Choose why you want Drape to review this dispatch or delivery issue.')
+        return jsonError(cors, 400, 'DELIVERY_REVIEW_REASON_REQUIRED', 'Choose why you want Drapeon to review this dispatch or delivery issue.')
       }
 
       const meta = parseOrderSupportMeta(order.special_note)
@@ -1833,7 +1833,7 @@ Deno.serve(async (req) => {
         userId: caller.id,
         stage: order.stage,
         title: 'Delivery review requested',
-        description: `Customer asked Drape to review a dispatch or delivery issue from ${order.stage}.`,
+        description: `Customer asked Drapeon to review a dispatch or delivery issue from ${order.stage}.`,
         recommendedAction: 'Check dispatch evidence, customer contact attempts, and the current delivery stage before deciding the next step.',
         dedupeKey: `order-review:delivery:${orderId}`,
         metadata: {
@@ -1859,7 +1859,7 @@ Deno.serve(async (req) => {
     if (action === 'request-emergency-support') {
       const note = parsed.data.description?.trim() || parsed.data.note?.trim() || ''
       if (note.length < 10) {
-        return jsonError(cors, 400, 'EMERGENCY_NOTE_REQUIRED', 'Tell Drape what is wrong and when the event or wear date is.')
+        return jsonError(cors, 400, 'EMERGENCY_NOTE_REQUIRED', 'Tell Drapeon what is wrong and when the event or wear date is.')
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -1912,7 +1912,7 @@ Deno.serve(async (req) => {
           supabase,
           order,
           'Emergency support requested',
-          'A customer flagged an event-sensitive issue. Keep all updates inside Drape while ops reviews the next step.',
+          'A customer flagged an event-sensitive issue. Keep all updates inside Drapeon while ops reviews the next step.',
         )
       }
 
@@ -1924,11 +1924,11 @@ Deno.serve(async (req) => {
       const aftercareNote = parsed.data.note?.trim() ?? ''
 
       if (!aftercareType) {
-        return jsonError(cors, 400, 'AFTERCARE_TYPE_REQUIRED', 'Choose the kind of aftercare help you need before sending this to Drape.')
+        return jsonError(cors, 400, 'AFTERCARE_TYPE_REQUIRED', 'Choose the kind of aftercare help you need before sending this to Drapeon.')
       }
 
       if (aftercareNote.length < 10) {
-        return jsonError(cors, 400, 'AFTERCARE_NOTE_REQUIRED', 'Add a short note so Drape knows what happened and how to help.')
+        return jsonError(cors, 400, 'AFTERCARE_NOTE_REQUIRED', 'Add a short note so Drapeon knows what happened and how to help.')
       }
 
       const aftercareClosesAt = aftercareWindowClosesAt(order)
@@ -1937,7 +1937,7 @@ Deno.serve(async (req) => {
           cors,
           400,
           'AFTERCARE_NOT_OPEN',
-          'Confirm delivery or collection before opening aftercare in Drape.',
+          'Confirm delivery or collection before opening aftercare in Drapeon.',
         )
       }
       if (Date.parse(aftercareClosesAt) < Date.now()) {
@@ -1954,7 +1954,7 @@ Deno.serve(async (req) => {
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: order.stage,
-        note: `Customer requested aftercare support in Drape. Issue: ${issueLabel}. Note: ${aftercareNote}`,
+        note: `Customer requested aftercare support in Drapeon. Issue: ${issueLabel}. Note: ${aftercareNote}`,
       })
 
       await audit(supabase, {
@@ -1982,7 +1982,7 @@ Deno.serve(async (req) => {
         userId: caller.id,
         stage: order.stage,
         title: 'Aftercare support requested',
-        description: `Customer requested Drape aftercare support for ${issueLabel.toLowerCase()}.`,
+        description: `Customer requested Drapeon aftercare support for ${issueLabel.toLowerCase()}.`,
         recommendedAction: 'Review the aftercare note, gather evidence if needed, and decide whether support, alteration follow-up, or refund review is required.',
         dedupeKey: `aftercare:${orderId}`,
         metadata: {
@@ -2069,7 +2069,7 @@ Deno.serve(async (req) => {
           name: 'no_existing_dispute',
           condition: !existingDispute?.id,
           errorCode: 'DISPUTE_ALREADY_EXISTS',
-          message: 'A concern is already open for this order. Drape support is reviewing it.',
+          message: 'A concern is already open for this order. Drapeon support is reviewing it.',
           field: 'orderId',
           severity: 'BLOCKING',
           actual: { disputeId: existingDispute?.id ?? null, status: existingDispute?.status ?? null },
@@ -2078,7 +2078,7 @@ Deno.serve(async (req) => {
           name: 'dispute_has_evidence',
           condition: description.trim().length >= 10,
           errorCode: 'DISPUTE_EVIDENCE_REQUIRED',
-          message: 'Add a short description so Drape can understand what happened.',
+          message: 'Add a short description so Drapeon can understand what happened.',
           field: 'description',
           severity: 'BLOCKING',
           actual: { descriptionLength: description.trim().length },

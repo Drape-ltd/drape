@@ -59,7 +59,7 @@ export const DRAPE_VISION_FIELD_DICTIONARY = {
     tapeEnd: 'Tip of right shoulder',
     path: 'straight_line',
     ease: 'None.',
-    note: 'Drape treats this as back shoulder width unless a tailor marks a different definition.',
+    note: 'Drapeon treats this as back shoulder width unless a tailor marks a different definition.',
     tailorAliases: ['across shoulder', 'back shoulder', 'shoulder'],
   },
   sleeveLength: {
@@ -255,7 +255,7 @@ export const DRAPE_VISION_FIELD_DICTIONARY = {
     tapeEnd: 'Underarm level',
     path: 'straight_line',
     ease: 'Tailor-defined.',
-    note: 'Different tailors anchor this differently; Drape requires tailor confirmation before cutting fitted sleeves.',
+    note: 'Different tailors anchor this differently; Drapeon requires tailor confirmation before cutting fitted sleeves.',
     tailorAliases: ['armscye depth', 'arm depth'],
   },
   acrossBack: {

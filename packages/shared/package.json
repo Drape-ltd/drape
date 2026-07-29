@@ -22,6 +22,7 @@
     "./preflight": "./src/preflight.ts",
     "./media-policy": "./src/media-policy.ts",
     "./call-scheduling-policy": "./src/call-scheduling-policy.ts",
+    "./order-appointments": "./src/order-appointments.ts",
     "./exception-os": "./src/exception-os.ts",
     "./deadline-context": "./src/deadline-context.ts",
     "./display-text": "./src/display-text.ts",

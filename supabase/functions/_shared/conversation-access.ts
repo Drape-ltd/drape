@@ -58,7 +58,7 @@ export function buildConversationBlockedMessage(state: ConversationAccessState) 
         ? 'after abusive language was reported'
         : state.reason === 'UNSAFE_BEHAVIOR'
           ? 'after unsafe behavior was reported'
-          : 'while Drape reviews a safety concern'
+          : 'while Drapeon reviews a safety concern'
 
-  return `This conversation is paused ${reason}. Keep the existing thread intact as evidence and use Drape support if you still need help.`
+  return `This conversation is paused ${reason}. Keep the existing thread intact as evidence and use Drapeon support if you still need help.`
 }

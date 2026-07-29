@@ -87,13 +87,13 @@ export const DRAPE_EXCEPTION_BUCKETS: DrapeExceptionBucket[] = [
   {
     id: 'safety',
     title: 'Safety and ops',
-    principle: 'Drape protects the transaction by keeping communication, evidence, and decisions inside the platform.',
+    principle: 'Drapeon protects the transaction by keeping communication, evidence, and decisions inside the platform.',
     launchRule: 'Off-platform contact, unsafe content, fake reviews, stolen photos, and unclear ops decisions need reviewable records.',
   },
 ]
 
 export const DRAPE_EXCEPTION_LAUNCH_RAILS = [
-  'Every live exception must name the owner: customer, tailor, Drape ops, finance, trust, or engineering.',
+  'Every live exception must name the owner: customer, tailor, Drapeon ops, finance, trust, or engineering.',
   'Every irreversible move needs evidence: photos, videos, receipt, tracking, acknowledgement, or a written order decision.',
   'Every money state must be explainable in one sentence: processing, held, refundable, pending release, blocked, released, or refunded.',
   'Every scope change must show impact before approval: price, deadline, fit, material, or refund effect.',
@@ -109,8 +109,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['payment pending', 'paid', 'webhook', 'stripe', 'paystack', 'double charge', 'processing'],
     useWhen: 'A customer says money left their account but the order still looks unpaid or pending.',
     firstMove: 'Tell the customer not to pay again, check provider event status, then reconcile the order payment before creating any duplicate payment attempt.',
-    customerCopy: 'Your payment is processing. This usually clears shortly, so please do not pay again while Drape checks the confirmation.',
-    tailorCopy: 'The customer payment is being reconciled. Do not start paid work until Drape confirms the order is active.',
+    customerCopy: 'Your payment is processing. This usually clears shortly, so please do not pay again while Drapeon checks the confirmation.',
+    tailorCopy: 'The customer payment is being reconciled. Do not start paid work until Drapeon confirms the order is active.',
     opsActions: [
       'Check order_payments, payment_webhook_events, provider dashboard, and idempotency key.',
       'If provider succeeded, mark the payment confirmed through the normal reconciliation path.',
@@ -125,7 +125,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['style mismatch', 'reference photo', 'neckline', 'embroidery', 'silhouette', 'pre-cutting', 'interpretation'],
     useWhen: 'The customer expects one interpretation and the tailor understood the reference differently.',
     firstMove: 'Pause cutting and get a written style interpretation inside the order: what can be matched, what will differ, and what changes price or deadline.',
-    customerCopy: 'Before cutting starts, confirm the style interpretation in Drape so there is no confusion about the look you approved.',
+    customerCopy: 'Before cutting starts, confirm the style interpretation in Drapeon so there is no confusion about the look you approved.',
     tailorCopy: 'Explain what you can match from the reference and what will differ before cutting. Keep that approval inside the order.',
     opsActions: [
       'Check reference photos, brief text, consultation notes, and any proposed sketch or description.',
@@ -173,7 +173,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['fabric', 'sourcing', 'dropoff', 'quantity', 'shortfall', 'aso-oke', 'lace', 'colour', 'color', 'material'],
     useWhen: 'Fabric is missing, misrepresented, too short, different from photos, or not approved before cutting.',
     firstMove: 'Pause at pre-cutting, collect fabric proof, and make the next owner explicit before production moves forward.',
-    customerCopy: 'Before cutting starts, fabric details need to be confirmed in Drape so the order stays protected.',
+    customerCopy: 'Before cutting starts, fabric details need to be confirmed in Drapeon so the order stays protected.',
     tailorCopy: 'Do not cut until the fabric path is approved. Upload proof and explain what is missing, different, or risky.',
     opsActions: [
       'Ask for fabric photos with a white reference sheet, receipt, measured quantity, or dropoff proof.',
@@ -190,7 +190,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     useWhen: 'The tailor already purchased order-specific fabric and the customer wants to cancel or pause.',
     firstMove: 'Verify whether the customer acknowledged the fabric purchase before it happened, then apply cancellation policy with the material cost visible.',
     customerCopy: 'We are checking whether fabric was already purchased for this order before deciding the refund path.',
-    tailorCopy: 'Upload the fabric receipt and purchase proof. Drape needs a record before applying any material-cost decision.',
+    tailorCopy: 'Upload the fabric receipt and purchase proof. Drapeon needs a record before applying any material-cost decision.',
     opsActions: [
       'Confirm purchase date, cost, receipt, and customer acknowledgement.',
       'Separate garment labour refund from material cost treatment.',
@@ -205,8 +205,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['delivery', 'shipping', 'customs', 'tracking', 'recipient', 'flatmate', 'neighbour', 'wrong address', 'delivered'],
     useWhen: 'Carrier tracking, pickup, customs, duties, or recipient confirmation does not prove the actual customer received the garment.',
     firstMove: 'Separate carrier status from customer handoff. Ask for delivery proof and customer receipt confirmation before closing the order.',
-    customerCopy: 'Courier status is not the same as your Drape handoff. Confirm receipt in the app when you actually have the garment.',
-    tailorCopy: 'Keep dispatch proof, tracking, and handoff evidence in Drape so delivery questions can be traced.',
+    customerCopy: 'Courier status is not the same as your Drapeon handoff. Confirm receipt in the app when you actually have the garment.',
+    tailorCopy: 'Keep dispatch proof, tracking, and handoff evidence in Drapeon so delivery questions can be traced.',
     opsActions: [
       'For international orders, explain customs duties and delays before they become complaints.',
       'If courier says delivered but customer denies receipt, keep payout paused and open a dispatch review.',
@@ -221,8 +221,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['fit', 'alteration', 'aftercare', 'does not fit', 'quality', 'damaged', 'rework'],
     useWhen: 'A customer says the garment arrived but the fit, finish, or workmanship is wrong.',
     firstMove: 'Open an aftercare case, collect photos, confirm delivery date, and keep the order out of automated payout review while ops assesses the remedy.',
-    customerCopy: 'Thanks for flagging this. Upload clear photos and keep the details in this order so Drape can review the best next step.',
-    tailorCopy: 'The customer opened an aftercare review. Please keep all remedy discussion inside Drape and wait for ops guidance before offering refunds off-platform.',
+    customerCopy: 'Thanks for flagging this. Upload clear photos and keep the details in this order so Drapeon can review the best next step.',
+    tailorCopy: 'The customer opened an aftercare review. Please keep all remedy discussion inside Drapeon and wait for ops guidance before offering refunds off-platform.',
     opsActions: [
       'Confirm the order is within the 14-day aftercare window.',
       'Check stage photos, measurements, consultation notes, and final handoff proof.',
@@ -238,7 +238,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     useWhen: 'Real life changes the order after acceptance: event postponed, customer forgot details, tailor proposes additions, or work needs restarting.',
     firstMove: 'Keep the order live, state the proposed change, and capture customer approval for price, deadline, and responsibility before work continues.',
     customerCopy: 'We can review the change, but price, deadline, and responsibility need to be clear before the tailor continues.',
-    tailorCopy: 'Do not treat add-ons or rework as informal chat. Propose the change in Drape with price and deadline impact.',
+    tailorCopy: 'Do not treat add-ons or rework as informal chat. Propose the change in Drapeon with price and deadline impact.',
     opsActions: [
       'Use a grace period for immediate note-only changes before tailor review where possible.',
       'If work already started, record whether this is customer-caused, tailor-caused, or shared ambiguity.',
@@ -269,8 +269,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['sick', 'malaria', 'emergency', 'relocation', 'closing', 'offboarding', 'transfer order'],
     useWhen: 'A tailor cannot continue because of illness, relocation, closure, or a genuine personal emergency.',
     firstMove: 'Freeze new intake, notify affected customers, and offer wait, transfer, or cancellation paths per order.',
-    customerCopy: 'The tailor has reported an interruption. Drape will give you clear options to wait, transfer, or cancel safely.',
-    tailorCopy: 'Thank you for telling us early. Pause new work, update each active order, and let Drape help protect customers and your reputation.',
+    customerCopy: 'The tailor has reported an interruption. Drapeon will give you clear options to wait, transfer, or cancel safely.',
+    tailorCopy: 'Thank you for telling us early. Pause new work, update each active order, and let Drapeon help protect customers and your reputation.',
     opsActions: [
       'Switch the tailor to unavailable for new orders.',
       'List active orders by deadline and payment state.',
@@ -285,12 +285,12 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['consultation', 'call', 'daily', 'no show', 'audio', 'video', 'reminder', 'timezone'],
     useWhen: 'A scheduled audio or video call fails, either party misses it, or time zones caused confusion.',
     firstMove: 'Keep the order thread as source of truth, offer reschedule, and capture consultation notes so the brief does not depend on memory.',
-    customerCopy: 'If the call did not work, keep the key notes in this order and reschedule from Drape so the brief stays protected.',
+    customerCopy: 'If the call did not work, keep the key notes in this order and reschedule from Drapeon so the brief stays protected.',
     tailorCopy: 'If you missed the call or Daily was unavailable, propose a new time and summarize anything already agreed in the thread.',
     opsActions: [
       'Check reminder delivery, call room status, no-show history, and local time zones.',
       'If Daily is down, keep messaging and SMS reminders active rather than shutting consultations down.',
-      'Do not allow pre-order calls to become paid side consultations outside Drape.',
+      'Do not allow pre-order calls to become paid side consultations outside Drapeon.',
     ],
   },
   {
@@ -317,8 +317,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['wrong item', 'damaged', 'ready-made return', 'exchange', 'missing item', 'unboxing'],
     useWhen: 'A buyer receives a ready-made item that is damaged, wrong, missing, or materially different from the listing.',
     firstMove: 'Collect unboxing or item photos, compare listing media and dispatch proof, then choose refund, exchange, or no-action with reason.',
-    customerCopy: 'Upload photos of what arrived before closing the order so Drape can review the right remedy.',
-    tailorCopy: 'Keep listing, packing, and dispatch proof in Drape. Do not settle this outside the platform.',
+    customerCopy: 'Upload photos of what arrived before closing the order so Drapeon can review the right remedy.',
+    tailorCopy: 'Keep listing, packing, and dispatch proof in Drapeon. Do not settle this outside the platform.',
     opsActions: [
       'Check item listing photos, size guide, stock record, dispatch proof, and customer photos.',
       'If wrong or damaged, hold payout and route refund or exchange review.',
@@ -334,7 +334,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     useWhen: 'A customer or tailor wants to cancel, continue with a remedy, or refund part of an order.',
     firstMove: 'Determine current stage first. Refund amount follows the cancellation policy and original provider payment.',
     customerCopy: 'We are reviewing the order stage and refund policy before changing the order. You will see the decision in this timeline.',
-    tailorCopy: 'Do not settle this outside Drape. Refund and continuation decisions must stay tied to the original payment.',
+    tailorCopy: 'Do not settle this outside Drapeon. Refund and continuation decisions must stay tied to the original payment.',
     opsActions: [
       'Before acceptance or before cutting: full refund can apply.',
       'After cutting begins: assess partial refund, aftercare remedy, or rework responsibility.',
@@ -349,7 +349,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['payout', 'release', '72 hour', 'escrow', 'recipient', 'paystack', 'stripe'],
     useWhen: 'A payout did not release after handoff, dispute window, or provider transfer checks.',
     firstMove: 'Verify handoff confirmed, 72 hours elapsed, no dispute is open, payout account is verified, and no payout already exists.',
-    customerCopy: 'Your payment remains protected while Drape checks the order status.',
+    customerCopy: 'Your payment remains protected while Drapeon checks the order status.',
     tailorCopy: 'Your payout is being reviewed. We will update you once the release checks are clean or explain the blocker.',
     opsActions: [
       'Check payout table status and blocked reason.',
@@ -363,10 +363,10 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     severity: 'Medium',
     bucket: 'safety',
     keywords: ['phone', 'email', 'whatsapp', 'instagram', 'unsafe', 'message', 'bypass', 'sexual'],
-    useWhen: 'A message tries to move the order off Drape or includes prohibited content.',
+    useWhen: 'A message tries to move the order off Drapeon or includes prohibited content.',
     firstMove: 'Keep the message blocked, review context, and decide whether the conversation needs a warning or temporary pause.',
-    customerCopy: 'This message could not be sent. Please keep all order communication inside Drape so your payment and support trail stay protected.',
-    tailorCopy: 'This message could not be sent. Keep communication inside Drape until the order is safely completed.',
+    customerCopy: 'This message could not be sent. Please keep all order communication inside Drapeon so your payment and support trail stay protected.',
+    tailorCopy: 'This message could not be sent. Keep communication inside Drapeon until the order is safely completed.',
     opsActions: [
       'Review bypass logs for repeat attempts.',
       'Escalate after repeated attempts from the same account.',
@@ -381,8 +381,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['review', 'complaint', 'fake review', 'one star', 'abusive', 'manipulation', 'rating'],
     useWhen: 'A review contains dispute language, safety concerns, non-delivery claims, or signs of review manipulation.',
     firstMove: 'Hold the review, route the issue to ops if it needs resolution, and only publish once the right channel has handled it.',
-    customerCopy: 'Your review may describe an issue Drape should help resolve first. We are routing it to the right team before publishing.',
-    tailorCopy: 'This review is under Drape review. We will check order history and publish or hold it with context.',
+    customerCopy: 'Your review may describe an issue Drapeon should help resolve first. We are routing it to the right team before publishing.',
+    tailorCopy: 'This review is under Drapeon review. We will check order history and publish or hold it with context.',
     opsActions: [
       'Confirm the reviewer had a completed paid order with this tailor.',
       'Look for complaint terms that should become a dispute or support case.',
@@ -397,10 +397,10 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['portfolio', 'stolen photo', 'fake work', 'reverse image', 'photo theft', 'not their work'],
     useWhen: 'A tailor may have uploaded photos that are not their own work or copied another tailor listing.',
     firstMove: 'Hide the questionable media from discovery if risk is high, then review source, similarity, and tailor proof before restoring.',
-    customerCopy: 'Drape is reviewing a portfolio authenticity concern before relying on that media.',
-    tailorCopy: 'Only upload work you made or can prove is yours. Drape may ask for source proof before keeping photos live.',
+    customerCopy: 'Drapeon is reviewing a portfolio authenticity concern before relying on that media.',
+    tailorCopy: 'Only upload work you made or can prove is yours. Drapeon may ask for source proof before keeping photos live.',
     opsActions: [
-      'Compare against existing Drape media and public sources.',
+      'Compare against existing Drapeon media and public sources.',
       'Ask for process photos, client references, or original files where needed.',
       'Suspend repeated or intentional misrepresentation.',
     ],
@@ -430,7 +430,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     useWhen: 'A customer or tailor requests deletion while orders, disputes, refunds, payouts, or data-export obligations are still unresolved.',
     firstMove: 'Block immediate deletion, explain the open dependency, and resolve the financial or order obligation first.',
     customerCopy: 'We cannot delete the account while active orders, disputes, or refunds are still open. We will help close those first.',
-    tailorCopy: 'We cannot delete the account while active orders, pending payouts, or disputes are open. Drape will resolve those first.',
+    tailorCopy: 'We cannot delete the account while active orders, pending payouts, or disputes are open. Drapeon will resolve those first.',
     opsActions: [
       'Check active orders, disputes, pending refunds, and pending payouts.',
       'For tailors, offer data export before final deletion where applicable.',
@@ -444,9 +444,9 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     bucket: 'evidence',
     keywords: ['pickup', 'collection', 'uncollected', 'storage', 'collection code', 'ready for collection'],
     useWhen: 'A local pickup order has been ready for collection for 7+ days and the customer has not completed handoff.',
-    firstMove: 'Confirm the tailor still has the garment, message the customer in Drape, and agree a collection window before payout release.',
-    customerCopy: 'Your order is ready and still waiting for pickup. Please collect it or tell Drape if the plan needs to change.',
-    tailorCopy: 'Keep the garment safe and keep pickup coordination inside Drape. Ops will help if collection keeps slipping.',
+    firstMove: 'Confirm the tailor still has the garment, message the customer in Drapeon, and agree a collection window before payout release.',
+    customerCopy: 'Your order is ready and still waiting for pickup. Please collect it or tell Drapeon if the plan needs to change.',
+    tailorCopy: 'Keep the garment safe and keep pickup coordination inside Drapeon. Ops will help if collection keeps slipping.',
     opsActions: [
       'At 7 days: remind both parties.',
       'At 14 days: open an ops follow-up with a specific collection plan.',
@@ -461,8 +461,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['emergency', 'event tomorrow', 'wedding tomorrow', 'cannot wear', 'urgent', 'after hours', 'on call'],
     useWhen: 'A wear date is within 24 hours, the garment cannot be worn, or delivery/pickup broke down close to the event.',
     firstMove: 'Acknowledge immediately, confirm the event time, collect photos, and decide whether the path is wait, transfer, alteration, partial refund, or full refund review.',
-    customerCopy: 'Drape has opened urgent support for this event-sensitive issue. Keep photos and updates here so we can act quickly.',
-    tailorCopy: 'An urgent event issue is under Drape review. Keep all updates inside the order and do not move the transaction off-platform.',
+    customerCopy: 'Drapeon has opened urgent support for this event-sensitive issue. Keep photos and updates here so we can act quickly.',
+    tailorCopy: 'An urgent event issue is under Drapeon review. Keep all updates inside the order and do not move the transaction off-platform.',
     opsActions: [
       'Confirm whether the event is within 24 hours.',
       'Check proof photos, calls, messages, stage updates, and handoff state.',
@@ -477,11 +477,11 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['group order', 'aso ebi', 'wrong measurement', 'gift', 'wearer', 'member invite', 'measurement profile'],
     useWhen: 'The buyer, wearer, recipient, or group member is not the same person, or the wrong measurement profile was attached.',
     firstMove: 'Pause irreversible work, identify the exact wearer for each garment, then attach or request the right measurement profile before quote acceptance or cutting.',
-    customerCopy: 'Tell Drape who each garment is for so the right measurements travel with the order.',
+    customerCopy: 'Tell Drapeon who each garment is for so the right measurements travel with the order.',
     tailorCopy: 'Do not reuse the buyer measurements for another wearer. Check the named wearer and member rows before quoting or cutting.',
     opsActions: [
       'Check order_group_members and customer_measurement_profiles.',
-      'Invite missing members to claim or provide measurements inside Drape.',
+      'Invite missing members to claim or provide measurements inside Drapeon.',
       'Use a formal scope or measurement amendment if the order has already started.',
     ],
   },
@@ -491,10 +491,10 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     severity: 'Standard',
     bucket: 'participants',
     keywords: ['referral', 'referred by', 'trust transfer', 'new customer', 'cold start'],
-    useWhen: 'A new customer is referred by someone with strong Drape history and a tailor needs context before accepting.',
+    useWhen: 'A new customer is referred by someone with strong Drapeon history and a tailor needs context before accepting.',
     firstMove: 'Confirm the referral record, show the trust context without exposing private order details, and let the new customer earn their own history.',
-    customerCopy: 'Your referral gives tailors helpful context, but your own order history builds from completed Drape orders.',
-    tailorCopy: 'This customer was referred through Drape. Review the brief normally; referral context is a trust signal, not a guarantee.',
+    customerCopy: 'Your referral gives tailors helpful context, but your own order history builds from completed Drapeon orders.',
+    tailorCopy: 'This customer was referred through Drapeon. Review the brief normally; referral context is a trust signal, not a guarantee.',
     opsActions: [
       'Check referrals.status and trust_context.',
       'Do not expose the referrer’s private measurements, payment, or dispute details.',
@@ -507,10 +507,10 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     severity: 'Medium',
     bucket: 'safety',
     keywords: ['data export', 'portability', 'tailor data', 'download', 'client list', 'privacy request'],
-    useWhen: 'A tailor asks for their Drape data or wants reassurance they can access their history.',
+    useWhen: 'A tailor asks for their Drapeon data or wants reassurance they can access their history.',
     firstMove: 'Create the export request, verify identity, include only customer contact or measurement data customers opted into sharing, and document delivery.',
-    customerCopy: 'Drape only shares your personal order or measurement data according to privacy and order rules.',
-    tailorCopy: 'You can request your Drape history. Customer personal data is included only where privacy rules allow it.',
+    customerCopy: 'Drapeon only shares your personal order or measurement data according to privacy and order rules.',
+    tailorCopy: 'You can request your Drapeon history. Customer personal data is included only where privacy rules allow it.',
     opsActions: [
       'Review tailor_data_exports and linked ops issue.',
       'Include profile, portfolio, own order history, reviews, payout summary, and permitted client data.',
@@ -525,8 +525,8 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     keywords: ['outage', 'provider down', 'daily down', 'stripe down', 'paystack down', 'supabase', 'queue', 'status'],
     useWhen: 'Payments, calls, pushes, queues, storage, or data services are degraded while customers and tailors are waiting.',
     firstMove: 'Declare the degraded path, keep the order timeline source of truth, and tell users what is safe and what to avoid.',
-    customerCopy: 'Drape is experiencing a service interruption. Your order and payment record are safe; please avoid duplicate actions until we update you.',
-    tailorCopy: 'Drape is experiencing a service interruption. Keep production safe and wait for the order timeline to update before changing state.',
+    customerCopy: 'Drapeon is experiencing a service interruption. Your order and payment record are safe; please avoid duplicate actions until we update you.',
+    tailorCopy: 'Drapeon is experiencing a service interruption. Keep production safe and wait for the order timeline to update before changing state.',
     opsActions: [
       'Post status guidance and log the incident.',
       'Pause duplicate payment attempts and payout retries while provider state is unclear.',
@@ -586,7 +586,7 @@ export const DRAPE_TAILOR_GUIDE_TOPICS: DrapeGuideTopic[] = [
   },
   {
     icon: 'message-square',
-    title: 'Keep decisions inside Drape',
+    title: 'Keep decisions inside Drapeon',
     body: 'Calls are for clarity, but price, deadline, fabric, and scope changes must be written in the order.',
   },
   {
@@ -604,22 +604,22 @@ export const DRAPE_TAILOR_GUIDE_TOPICS: DrapeGuideTopic[] = [
 export const DRAPE_HELP_FAQ: DrapeGuideFaq[] = [
   {
     question: 'What happens if payment works but the order still says pending?',
-    answer: 'Do not pay again. Drape checks the provider confirmation and updates the order once the payment event is reconciled.',
+    answer: 'Do not pay again. Drapeon checks the provider confirmation and updates the order once the payment event is reconciled.',
   },
   {
     question: 'What if the garment does not fit or the style is wrong?',
-    answer: 'Raise the concern from the order and upload photos. Drape reviews measurements, reference photos, stage updates, and handoff evidence before deciding the remedy.',
+    answer: 'Raise the concern from the order and upload photos. Drapeon reviews measurements, reference photos, stage updates, and handoff evidence before deciding the remedy.',
   },
   {
     question: 'Can I change measurements or details after ordering?',
-    answer: 'Yes, but the impact depends on timing. Before cutting, amendments are usually simpler. After cutting starts, the tailor and Drape need to review cost, deadline, and fit implications.',
+    answer: 'Yes, but the impact depends on timing. Before cutting, amendments are usually simpler. After cutting starts, the tailor and Drapeon need to review cost, deadline, and fit implications.',
   },
   {
-    question: 'How does Drape handle calls if video or audio fails?',
-    answer: 'The order thread remains the source of truth. If a call fails, reschedule in Drape and write the important decisions back into the order.',
+    question: 'How does Drapeon handle calls if video or audio fails?',
+    answer: 'The order thread remains the source of truth. If a call fails, reschedule in Drapeon and write the important decisions back into the order.',
   },
   {
-    question: 'Why keep messages inside Drape?',
+    question: 'Why keep messages inside Drapeon?',
     answer: 'It protects both sides. Payments, approvals, evidence, disputes, and support decisions work best when the record stays in one place.',
   },
 ]
@@ -627,7 +627,7 @@ export const DRAPE_HELP_FAQ: DrapeGuideFaq[] = [
 export const DRAPE_PUBLIC_TRUST_SECTIONS: DrapeTrustSection[] = [
   {
     title: 'Payment is protected, not mysterious',
-    body: 'Drape separates payment processing, held funds, refunds, and payout release so nobody has to guess where the money is.',
+    body: 'Drapeon separates payment processing, held funds, refunds, and payout release so nobody has to guess where the money is.',
     bullets: [
       'Customers see reassurance if provider confirmation is delayed.',
       'Tailors see payout readiness and blocked reasons.',
@@ -636,7 +636,7 @@ export const DRAPE_PUBLIC_TRUST_SECTIONS: DrapeTrustSection[] = [
   },
   {
     title: 'Cutting should not start in ambiguity',
-    body: 'The risky moment in custom clothing is before scissors touch fabric. Drape keeps style, measurement, fabric, and scope approvals close to the order.',
+    body: 'The risky moment in custom clothing is before scissors touch fabric. Drapeon keeps style, measurement, fabric, and scope approvals close to the order.',
     bullets: [
       'Reference photos need interpretation, not assumptions.',
       'Measurement owner and age matter, especially for gifts and group orders.',

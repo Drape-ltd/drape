@@ -1,7 +1,8 @@
+import { normalizeDrapeonSender } from './email-template.ts'
 import { escapeHtml } from './hmac.ts'
 
 export const VERIFICATION_DECISIONS = ['APPROVE', 'REJECT'] as const
-export type VerificationDecision = typeof VERIFICATION_DECISIONS[number]
+export type VerificationDecision = (typeof VERIFICATION_DECISIONS)[number]
 
 export const VERIFICATION_STATUSES = {
   APPROVE: 'VERIFIED',
@@ -15,20 +16,22 @@ export const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
 export const PROFILE_IMAGE_REJECTION_REASON =
   'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
 export const VERIFICATION_REJECTION_CODES = [INVALID_PROFILE_IMAGE_REJECTION_CODE] as const
-export type VerificationRejectionCode = typeof VERIFICATION_REJECTION_CODES[number]
+export type VerificationRejectionCode = (typeof VERIFICATION_REJECTION_CODES)[number]
 export const VERIFICATION_ISSUE_TYPE = 'TAILOR_VERIFICATION'
 export const VERIFICATION_SOURCE_OPS_DASHBOARD = 'ops_dashboard'
 export const VERIFICATION_SOURCE_SIGNED_LINK = 'signed_email_link'
 
 const RESEND_API_URL = 'https://api.resend.com/emails'
 const DEFAULT_APP_URL = 'https://drapeon.co'
-const DEFAULT_EMAIL_FROM = 'Drape Verification <verify@drapeon.co>'
 
 type DbError = { message?: string } | null
 
 export type VerificationSupabaseClient = {
   from: (table: string) => any
-  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data?: unknown; error?: DbError }>
+  rpc: (
+    fn: string,
+    args: Record<string, unknown>
+  ) => PromiseLike<{ data?: unknown; error?: DbError }>
 }
 
 export type VerificationEmailMessage = {
@@ -55,7 +58,7 @@ export type VerificationPushResult = {
 
 export type VerificationPushSender = (
   userId: string,
-  message: VerificationPushMessage,
+  message: VerificationPushMessage
 ) => Promise<VerificationPushResult | void>
 
 export type VerificationUserEmailLookup = (userId: string) => Promise<string | null>
@@ -93,31 +96,39 @@ function trim(value: string | null | undefined) {
 }
 
 function arrayCount(value: unknown) {
-  return Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item.trim().length > 0).length : 0
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === 'string' && item.trim().length > 0).length
+    : 0
 }
 
-export function normalizeVerificationDecision(value: string | null | undefined): VerificationDecision | null {
+export function normalizeVerificationDecision(
+  value: string | null | undefined
+): VerificationDecision | null {
   const normalized = trim(value).toUpperCase()
   return VERIFICATION_DECISIONS.includes(normalized as VerificationDecision)
-    ? normalized as VerificationDecision
+    ? (normalized as VerificationDecision)
     : null
 }
 
-export function normalizeVerificationRejectionCode(value: string | null | undefined): VerificationRejectionCode | null {
+export function normalizeVerificationRejectionCode(
+  value: string | null | undefined
+): VerificationRejectionCode | null {
   const normalized = trim(value).toUpperCase()
   return VERIFICATION_REJECTION_CODES.includes(normalized as VerificationRejectionCode)
-    ? normalized as VerificationRejectionCode
+    ? (normalized as VerificationRejectionCode)
     : null
 }
 
 export function resolveVerificationReason(
   decision: VerificationDecision,
   reason: string | null | undefined,
-  rejectionCode?: VerificationRejectionCode | null,
+  rejectionCode?: VerificationRejectionCode | null
 ) {
   const trimmed = trim(reason)
   if (decision === 'APPROVE') return trimmed || null
-  if (rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE) return trimmed || PROFILE_IMAGE_REJECTION_REASON
+  if (rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE) {
+    return trimmed || PROFILE_IMAGE_REJECTION_REASON
+  }
   return trimmed || null
 }
 
@@ -131,22 +142,25 @@ export function buildVerificationDecisionEmail(input: {
   const appUrl = trim(input.appUrl) || DEFAULT_APP_URL
   const displayName = escapeHtml(input.displayName || 'there')
   const reason = trim(input.reason) || DEFAULT_VERIFICATION_REJECTION_REASON
-  const recoveryCopy = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
-    ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
-    : 'Please record the challenge again in good light and submit your profile when you are ready.'
+  const recoveryCopy =
+    input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
+      ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
+      : 'Please record the challenge again in good light and submit your profile when you are ready.'
 
   if (input.approved) {
     return {
       subject: 'Your Drapeon profile has been verified',
       html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drapeon" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust review approved</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">Your challenge video and tailor profile have been approved. Your storefront is now active on Drapeon.</p>
   <p style="color:#555;line-height:1.6">Paid orders and earnings release still require payout verification with the payment provider.</p>
-  <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
-  <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
+  <a href="${escapeHtml(
+    appUrl
+  )}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
+  <p style="margin-top:32px;font-size:12px;color:#aaa">© Drapeon.</p>
 </div>`,
     }
   }
@@ -155,14 +169,16 @@ export function buildVerificationDecisionEmail(input: {
     subject: 'Drapeon trust review - action needed',
     html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drapeon" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust video needs another look</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">We could not approve your Drapeon trust review yet.</p>
   <p style="color:#555;line-height:1.6"><strong>Reason:</strong> ${escapeHtml(reason)}</p>
   <p style="color:#555;line-height:1.6">${escapeHtml(recoveryCopy)}</p>
-  <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
-  <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
+  <a href="${escapeHtml(
+    appUrl
+  )}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
+  <p style="margin-top:32px;font-size:12px;color:#aaa">© Drapeon.</p>
 </div>`,
   }
 }
@@ -221,7 +237,11 @@ export function createResendVerificationEmailSender(options?: {
         'User-Agent': 'drape-verification-decision/1.0',
       },
       body: JSON.stringify({
-        from: trim(options?.from) || Deno.env.get('RESEND_FROM') || DEFAULT_EMAIL_FROM,
+        from: normalizeDrapeonSender(
+          trim(options?.from) || Deno.env.get('RESEND_FROM'),
+          'Drapeon Verification',
+          'verify@drapeon.co'
+        ),
         to: message.to,
         subject: message.subject,
         html: message.html,
@@ -238,7 +258,7 @@ export function createResendVerificationEmailSender(options?: {
 async function safeInsert(
   supabase: VerificationSupabaseClient,
   table: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ) {
   const { error } = await supabase.from(table).insert(payload)
   return error?.message ?? null
@@ -246,7 +266,7 @@ async function safeInsert(
 
 async function syncApprovedPortfolioPhotoUrls(
   supabase: VerificationSupabaseClient,
-  tailorProfileId: string,
+  tailorProfileId: string
 ) {
   try {
     const { data, error } = await supabase
@@ -271,36 +291,47 @@ async function syncApprovedPortfolioPhotoUrls(
         .eq('id', tailorProfileId)
         .maybeSingle()
 
-      if (profileError) return profileError.message ?? 'Legacy portfolio lookup failed.'
+      if (profileError) {
+        return profileError.message ?? 'Legacy portfolio lookup failed.'
+      }
 
       const setupUrls: string[] = Array.isArray(profile?.portfolio_photo_urls)
-        ? Array.from(new Set<string>(
-            (profile.portfolio_photo_urls as unknown[])
-              .filter((url: unknown): url is string => typeof url === 'string' && url.trim().length > 0)
-              .map((url: string) => url.trim()),
-          )).slice(0, 12)
+        ? Array.from(
+            new Set<string>(
+              (profile.portfolio_photo_urls as unknown[])
+                .filter(
+                  (url: unknown): url is string => typeof url === 'string' && url.trim().length > 0
+                )
+                .map((url: string) => url.trim())
+            )
+          ).slice(0, 12)
         : []
 
       if (setupUrls.length > 0) {
-        const { error: seedError } = await supabase
-          .from('portfolio_items')
-          .insert(setupUrls.map((url, index) => ({
+        const { error: seedError } = await supabase.from('portfolio_items').insert(
+          setupUrls.map((url, index) => ({
             tailor_profile_id: tailorProfileId,
             image_url: url,
             title: `Portfolio photo ${index + 1}`,
             description: null,
             category: null,
             sort_order: index,
-          })))
+          }))
+        )
 
-        if (seedError) return seedError.message ?? 'Legacy portfolio recovery failed.'
+        if (seedError) {
+          return seedError.message ?? 'Legacy portfolio recovery failed.'
+        }
         nextUrls = setupUrls
       }
     }
 
     const { error: updateError } = await supabase
       .from('tailor_profiles')
-      .update({ portfolio_photo_urls: nextUrls, updated_at: new Date().toISOString() })
+      .update({
+        portfolio_photo_urls: nextUrls,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', tailorProfileId)
 
     return updateError?.message ?? null
@@ -318,7 +349,7 @@ export async function performVerificationDecision(
     lookupUserEmail?: VerificationUserEmailLookup
     appUrl?: string | null
     now?: () => Date
-  },
+  }
 ): Promise<VerificationDecisionResult> {
   const tailorUserId = trim(input.tailorUserId)
   const decision = normalizeVerificationDecision(input.decision)
@@ -348,7 +379,9 @@ export async function performVerificationDecision(
 
   const { data: profile, error: profileError } = await supabase
     .from('tailor_profiles')
-    .select('id, user_id, display_name, id_verification_status, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls')
+    .select(
+      'id, user_id, display_name, id_verification_status, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, avatar_url, specialty_tags, portfolio_photo_urls, portfolio_video_urls'
+    )
     .eq('user_id', tailorUserId)
     .maybeSingle()
 
@@ -399,11 +432,20 @@ export async function performVerificationDecision(
     if (!trim(profile.display_name)) missing.push('display_name')
     if (!trim(user?.phone)) missing.push('phone')
     if (!trim(profile.avatar_url)) missing.push('profile_photo')
-    if (!trim(profile.trust_verification_video_path) || !trim(profile.trust_verification_video_path).startsWith('verification-video/')) missing.push('challenge_video')
-    if (!trim(profile.trust_verification_challenge_id)) missing.push('challenge_id')
-    if (!trim(profile.trust_verification_challenge_text)) missing.push('challenge_prompt')
+    if (
+      !trim(profile.trust_verification_video_path) ||
+      !trim(profile.trust_verification_video_path).startsWith('verification-video/')
+    )
+      missing.push('challenge_video')
+    if (!trim(profile.trust_verification_challenge_id)) {
+      missing.push('challenge_id')
+    }
+    if (!trim(profile.trust_verification_challenge_text)) {
+      missing.push('challenge_prompt')
+    }
     if (arrayCount(profile.specialty_tags) < 1) missing.push('specialties')
-    if (arrayCount(profile.portfolio_photo_urls) + arrayCount(profile.portfolio_video_urls) < 1) missing.push('portfolio')
+    if (arrayCount(profile.portfolio_photo_urls) + arrayCount(profile.portfolio_video_urls) < 1)
+      missing.push('portfolio')
     if (missing.length > 0) {
       return {
         ok: false,
@@ -421,13 +463,18 @@ export async function performVerificationDecision(
   }
   if (rejectionCode) verificationRpcArgs.p_rejection_code = rejectionCode
 
-  const { data: rpcData, error: rpcError } = await supabase.rpc('ops_decide_verification', verificationRpcArgs)
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'ops_decide_verification',
+    verificationRpcArgs
+  )
 
   if (rpcError) {
     return {
       ok: false,
       status: rpcError.message?.includes('no longer pending') ? 409 : 500,
-      code: rpcError.message?.includes('no longer pending') ? 'VERIFICATION_ALREADY_PROCESSED' : 'VERIFICATION_UPDATE_FAILED',
+      code: rpcError.message?.includes('no longer pending')
+        ? 'VERIFICATION_ALREADY_PROCESSED'
+        : 'VERIFICATION_UPDATE_FAILED',
       message: rpcError.message ?? 'Could not update verification status.',
     }
   }
@@ -470,10 +517,7 @@ export async function performVerificationDecision(
     }
     if (profileId) issueUpdate.tailor_profile_id = profileId
 
-    await supabase
-      .from('ops_issues')
-      .update(issueUpdate)
-      .eq('id', verificationIssue.id)
+    await supabase.from('ops_issues').update(issueUpdate).eq('id', verificationIssue.id)
 
     await safeInsert(supabase, 'ops_audit_logs', {
       issue_id: verificationIssue.id,
@@ -503,7 +547,7 @@ export async function performVerificationDecision(
 
   if (!email && options.lookupUserEmail) {
     try {
-      email = await options.lookupUserEmail(tailorUserId) ?? ''
+      email = (await options.lookupUserEmail(tailorUserId)) ?? ''
     } catch (error) {
       emailError = error instanceof Error ? error.message : 'Auth email lookup failed.'
     }
@@ -531,14 +575,18 @@ export async function performVerificationDecision(
   let pushError: string | null = null
   if (options.sendPush) {
     try {
-      const pushResult = await options.sendPush(tailorUserId, buildVerificationDecisionPush({
-        displayName,
-        approved: decision === 'APPROVE',
-        status,
-        profileId,
-      }))
+      const pushResult = await options.sendPush(
+        tailorUserId,
+        buildVerificationDecisionPush({
+          displayName,
+          approved: decision === 'APPROVE',
+          status,
+          profileId,
+        })
+      )
       pushStatus = pushResult?.status ?? 'SENT'
-      pushError = pushResult && pushResult.status !== 'SENT' ? pushResult.reason ?? pushResult.status : null
+      pushError =
+        pushResult && pushResult.status !== 'SENT' ? (pushResult.reason ?? pushResult.status) : null
     } catch (error) {
       pushStatus = 'ERROR'
       pushError = error instanceof Error ? error.message : 'Push send failed.'

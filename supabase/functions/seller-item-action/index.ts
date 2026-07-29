@@ -135,7 +135,7 @@ function liveListingPreflightIssues(input: {
   }
 
   if (!input.hasSizeGuide) {
-    issues.push('Before this item can go live, add a fit guide so buyers can see what each size means and Drape can recommend the right fit.')
+    issues.push('Before this item can go live, add a fit guide so buyers can see what each size means and Drapeon can recommend the right fit.')
   }
 
   if (input.description.trim().length < 24) {
@@ -671,7 +671,7 @@ Deno.serve(async (req) => {
         ? existing.sizes.filter((size): size is string => typeof size === 'string' && size.trim().length > 0)
         : []
       if (existingSizes.length === 0) {
-        return jsonResponse({ error: 'Add at least one size to this item before saving a Drape Vision size guide.' }, 409, cors)
+        return jsonResponse({ error: 'Add at least one size to this item before saving a Drapeon Vision size guide.' }, 409, cors)
       }
 
       const nextSizeGuide = sanitizeSizeGuide(body.sizeGuide, existingSizes)

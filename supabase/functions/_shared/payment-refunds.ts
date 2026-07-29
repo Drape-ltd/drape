@@ -417,7 +417,7 @@ export async function partiallyRefundOrderPayments(
   }
 
   if (amountLeft > 0) {
-    throw new Error('Drape could not allocate the requested refund amount safely across the order payments.')
+    throw new Error('Drapeon could not allocate the requested refund amount safely across the order payments.')
   }
 
   await audit(supabase, {

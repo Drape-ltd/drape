@@ -17,12 +17,12 @@ const ZIPTAX_FALLBACK_REASON = 'ZIPTAX_UNAVAILABLE'
 const ONTARIO_FALLBACK_RATE_BPS = 1_300
 const ONTARIO_FALLBACK_REGION = 'Ontario HST'
 
-// Drape is a Wyoming LLC. Formal nexus analysis has not
+// Drapeon is a Wyoming LLC. Formal nexus analysis has not
 // yet been completed with a US accountant. Tax is being
 // collected conservatively across all US states pending
 // that review. Economic nexus threshold in most states
 // is $100,000 in sales or 200 transactions per year.
-// At early stage volume Drape is unlikely to trigger
+// At early stage volume Drapeon is unlikely to trigger
 // nexus obligations in any state. Revisit at scale.
 // Physical nexus: Wyoming only. WY has no general sales
 // tax on digital marketplace services.

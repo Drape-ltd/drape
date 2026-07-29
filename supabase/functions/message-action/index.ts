@@ -252,7 +252,7 @@ async function handleEdit(
   }
 
   if (hasBlockedContact(newBody)) {
-    return jsonError(cors, 400, 'BLOCKED_CONTACT', "Contact details can't be shared in messages. Keep everything on Drape so your order and payment stay protected.")
+    return jsonError(cors, 400, 'BLOCKED_CONTACT', "Contact details can't be shared in messages. Keep everything on Drapeon so your order and payment stay protected.")
   }
   if (hasThreateningLanguage(newBody)) {
     return jsonError(cors, 400, 'THREATENING_LANGUAGE', "That message can't be sent. Keep communication respectful — our team reviews flagged messages.")
@@ -368,7 +368,7 @@ Deno.serve(async (req) => {
         name: 'conversation_open',
         condition: !['CANCELLED', 'COMPLETE'].includes(orderRow?.stage ?? ''),
         errorCode: 'CONVERSATION_CLOSED',
-        message: 'This order thread is closed. Contact Drape support if you still need help.',
+        message: 'This order thread is closed. Contact Drapeon support if you still need help.',
         field: 'stage',
         severity: 'BLOCKING',
         actual: { stage: orderRow?.stage ?? null },
@@ -425,7 +425,7 @@ Deno.serve(async (req) => {
         cors,
         400,
         'BLOCKED_CONTACT',
-        "Contact details can't be shared in messages. Keep everything on Drape so your order and payment stay protected.",
+        "Contact details can't be shared in messages. Keep everything on Drapeon so your order and payment stay protected.",
       )
     }
 

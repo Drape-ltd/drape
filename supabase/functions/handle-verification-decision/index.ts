@@ -261,7 +261,7 @@ async function handleSignedGet(req: Request) {
     return htmlPage(
       'Tailor approved',
       `<h1 style="color:#2F6844">Approved</h1>
-       <p><strong>${escapeHtml(displayName)}</strong> is now live on Drape.</p>
+       <p><strong>${escapeHtml(displayName)}</strong> is now live on Drapeon.</p>
        <p style="font-size:13px;margin-top:16px">They will receive an app notification and email confirmation shortly when delivery is available.</p>`,
     )
   }

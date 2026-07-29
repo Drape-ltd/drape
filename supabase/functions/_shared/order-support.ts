@@ -453,18 +453,18 @@ export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
   HELPER_GUIDED: 'Measured with a helper',
   TAILOR_CAPTURED: 'Measured by a tailor',
   EXTERNAL_PRO_CAPTURED: 'Measured by another professional',
-  DRAPE_VISION: 'Drape Vision',
-  TAILOR_ASSISTED_DRAPE_VISION: 'Drape Vision with tailor',
+  DRAPE_VISION: 'Drapeon Vision',
+  TAILOR_ASSISTED_DRAPE_VISION: 'Drapeon Vision with tailor',
 }
 
 export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptureMethod, string> = {
   GUIDED_MANUAL_BASELINE: 'Guided fit intake',
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
-  DRAPE_VISION_ROTATION: 'Drape Vision scan',
-  DRAPE_VISION_SPECIALIST_SCAN: 'Drape Vision specialist scan',
-  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drape Vision scan',
-  GARMENT_QC_VISION_FLAT_LAY: 'Drape Vision garment QC',
+  DRAPE_VISION_ROTATION: 'Drapeon Vision scan',
+  DRAPE_VISION_SPECIALIST_SCAN: 'Drapeon Vision specialist scan',
+  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drapeon Vision scan',
+  GARMENT_QC_VISION_FLAT_LAY: 'Drapeon Vision garment QC',
 }
 
 export const FABRIC_HANDOFF_LABELS: Record<FabricHandoffMode, string> = {

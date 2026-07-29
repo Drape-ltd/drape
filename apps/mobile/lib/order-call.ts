@@ -28,7 +28,7 @@ function orderCallUnavailableMessage(audience: OrderCallAudience) {
   }
 
   if (audience === 'tailor') {
-    return 'This Drapeon order call link is unavailable right now. Reopen the Order Details screen and schedule a fresh ready-made call if needed.'
+    return 'This Drapeon order call link is unavailable right now. Reopen Messages and schedule a fresh call if needed.'
   }
 
   return 'This Drapeon call link is unavailable right now.'
@@ -52,22 +52,22 @@ function orderCallCodeMessage(code: string | null, audience: OrderCallAudience, 
   switch (code) {
     case 'ORDER_CALL_NOT_SCHEDULED':
       return audience === 'customer'
-        ? 'This ready-made call has not been scheduled yet. Open Order Details and choose a time first.'
+        ? 'This call has not been scheduled yet. Open Messages and choose a time first.'
         : audience === 'tailor'
-          ? 'Schedule this ready-made order call from the Order Details screen first so the customer knows when to join.'
-          : 'Schedule a call from the Order Details screen first.'
+          ? 'Schedule this order call from Messages first so the customer knows when to join.'
+          : 'Schedule a call from Messages first.'
     case 'ORDER_CALL_TOO_EARLY':
       return audience === 'customer'
-        ? 'This ready-made call is scheduled, but the room opens shortly before the agreed time.'
+        ? 'This call is scheduled, but the room opens shortly before the agreed time.'
         : audience === 'tailor'
-          ? 'This ready-made call is not open yet. Join near the scheduled time so the customer is ready too.'
-          : 'This ready-made order call opens around the scheduled time.'
+          ? 'This call is not open yet. Join near the scheduled time so the customer is ready too.'
+          : 'This order call opens around the scheduled time.'
     case 'ORDER_CALL_EXPIRED':
       return audience === 'customer'
-        ? 'That ready-made call window has passed. Open Order Details or Messages to choose another time with the tailor.'
+        ? 'That call window has passed. Open Messages to choose another time with the tailor.'
         : audience === 'tailor'
-          ? 'That ready-made call window has passed. Schedule a new time from the Order Details screen.'
-          : 'This ready-made order call needs a new scheduled time.'
+          ? 'That call window has passed. Schedule a new time from Messages.'
+          : 'This order call needs a new scheduled time.'
     default:
       return null
   }
@@ -138,11 +138,11 @@ export async function createOrderCallRoom(
       Alert.alert('Schedule the call first', orderCallCodeMessage(code, audience, payloadMessage) ?? 'Schedule a call from the Order Details screen first.')
       return null
     case 'ORDER_CALL_TOO_EARLY':
-      Alert.alert('Call not open yet', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This ready-made order call opens around the scheduled time.')
+      Alert.alert('Call not open yet', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This order call opens around the scheduled time.')
       return null
     case 'ORDER_CALL_EXPIRED':
     case 'ORDER_CALL_INVALID_TIME':
-      Alert.alert('Schedule a new call', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This ready-made order call needs a new scheduled time.')
+      Alert.alert('Schedule a new call', orderCallCodeMessage(code, audience, payloadMessage) ?? 'This order call needs a new scheduled time.')
       return null
     case 'ORDER_NOT_FOUND':
     case 'FORBIDDEN':

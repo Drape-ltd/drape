@@ -130,7 +130,7 @@ async function recordProviderPayoutFailure(
   if (tailorId && input.orderId) {
     await sendPushToUser(supabase, tailorId, {
       title: 'Payout needs review',
-      body: 'A payout release for this order needs Drape ops review before it can be retried.',
+      body: 'A payout release for this order needs Drapeon ops review before it can be retried.',
       data: { orderId: input.orderId },
     })
   }
@@ -287,7 +287,7 @@ async function markMaterialAdvancePayment(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: order.stage,
-    note: `Material advance paid for ${advance.title ?? 'materials'}. Drape ops will review release before funds move.`,
+    note: `Material advance paid for ${advance.title ?? 'materials'}. Drapeon ops will review release before funds move.`,
   })
 
   await createOrRefreshOpsIssue(supabase, {
@@ -653,7 +653,7 @@ async function markPaystackChargeReversed(
   await supabase.from('order_stage_updates').insert({
     order_id: input.order.id,
     stage: orderStageChanged ? 'PAYMENT_FAILED' : input.order.stage,
-    note: `Paystack reversed payment ${input.transaction.reference}. Drape ops must review the order before work, handoff, or payout continues.`,
+    note: `Paystack reversed payment ${input.transaction.reference}. Drapeon ops must review the order before work, handoff, or payout continues.`,
   })
 
   await createOrRefreshOpsIssue(supabase, {

@@ -161,7 +161,7 @@ export async function queueMediaSafetyReview(
     relatedEntityId: input.relatedEntityId ?? queuedAssetIds[0] ?? null,
     title: 'Public media needs safety review',
     description: `New public media was uploaded on ${input.surface}. Review it for explicit, unsafe, or off-platform content.`,
-    recommendedAction: 'Open the media asset in ops, approve it if safe, or set moderation_status to BLOCKED to remove it from public Drape surfaces.',
+    recommendedAction: 'Open the media asset in ops, approve it if safe, or set moderation_status to BLOCKED to remove it from public Drapeon surfaces.',
     dedupeKey: moderationDedupeKey(input, urls),
     metadata: {
       surface: input.surface,

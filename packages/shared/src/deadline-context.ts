@@ -78,7 +78,7 @@ export function resolveDeadlineContextWarning(input: {
     return {
       code: 'CULTURAL_RUSH',
       message:
-        'This date may sit inside Eid, wedding, or spring event rush. Drape will keep the deadline visible, but ask the tailor to confirm capacity before cutting.',
+        'This date may sit inside Eid, wedding, or spring event rush. Drapeon will keep the deadline visible, but ask the tailor to confirm capacity before cutting.',
       suggestedDate: null,
     }
   }
@@ -87,7 +87,7 @@ export function resolveDeadlineContextWarning(input: {
     return {
       code: 'CUSTOMS_RISK',
       message:
-        'International shipping can include customs review, duties, and carrier delays outside Drape or the tailor. Build in extra days before the event.',
+        'International shipping can include customs review, duties, and carrier delays outside Drapeon or the tailor. Build in extra days before the event.',
       suggestedDate: daysUntil != null && daysUntil < 21 ? suggestedBusinessDateAfter(deadline, 7) : null,
     }
   }

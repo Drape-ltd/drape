@@ -108,7 +108,7 @@ async function markOrderDelivered(supabase: SupabaseClient, order: OrderRow) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id, {
         title: 'Order auto-delivered',
-        body: `${orderLabel} was automatically marked as delivered after 14 days in the final handoff stage. Review the order in Drape if any follow-up is still needed.`,
+        body: `${orderLabel} was automatically marked as delivered after 14 days in the final handoff stage. Review the order in Drapeon if any follow-up is still needed.`,
         preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
@@ -147,7 +147,7 @@ async function sendAutoReleaseWarning(supabase: SupabaseClient, order: OrderRow)
   EdgeRuntime.waitUntil(
     sendPushToUser(supabase, order.customer_id, {
       title: 'Confirm your order soon',
-      body: `Your ${orderLabel} has been in the final delivery stage for 12 days. Confirm receipt or raise a concern within 2 days before Drape marks delivery automatically.`,
+      body: `Your ${orderLabel} has been in the final delivery stage for 12 days. Confirm receipt or raise a concern within 2 days before Drapeon marks delivery automatically.`,
       preferenceKey: 'orderUpdates',
       data: { orderId: order.id },
     }),

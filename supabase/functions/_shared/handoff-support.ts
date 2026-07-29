@@ -41,7 +41,7 @@ export function handoffIssueLabel(issueType: HandoffIssueType) {
     case 'COURIER_OR_DELIVERY_ISSUE':
       return 'Courier or delivery issue'
     case 'NEED_DRAPE_HELP':
-      return 'Need Drape help'
+      return 'Need Drapeon help'
     default:
       return 'Handoff issue'
   }
@@ -53,5 +53,5 @@ export function handoffIssueSummary(issueType: HandoffIssueType, deliveryMethod:
 }
 
 export function handoffEscalationSummary(issueType: HandoffIssueType, deliveryMethod: string | null | undefined) {
-  return `${handoffIssueSummary(issueType, deliveryMethod)} escalated to Drape support.`
+  return `${handoffIssueSummary(issueType, deliveryMethod)} escalated to Drapeon support.`
 }

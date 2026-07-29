@@ -509,7 +509,7 @@ Deno.serve(async (req) => {
       })
 
       const inquiryTitle = 'New ready-made inquiry'
-      const inquiryBody = `A customer asked about ${item.title}. Reply from Drape so the full order trail stays protected.`
+      const inquiryBody = `A customer asked about ${item.title}. Reply from Drapeon so the full order trail stays protected.`
       const orderNotificationContext = {
         id: created.id,
         reference: orderReference,
@@ -539,7 +539,7 @@ Deno.serve(async (req) => {
           subject: inquiryTitle,
           headline: 'A customer asked about your ready-made item',
           body: inquiryBody,
-          ctaLabel: 'Reply in Drape',
+          ctaLabel: 'Reply in Drapeon',
         }),
       )
 

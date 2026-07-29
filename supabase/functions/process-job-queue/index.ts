@@ -228,7 +228,7 @@ async function reportDeadJob(
   errorMessage: string,
 ) {
   await Promise.allSettled([
-    Sentry.captureMessage('Drape job reached dead-letter state', {
+    Sentry.captureMessage('Drapeon job reached dead-letter state', {
       level: 'error',
       tags: { fn: FN, job_type: job.job_type },
       extra: {

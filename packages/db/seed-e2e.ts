@@ -1,5 +1,5 @@
 /**
- * Drape — E2E seed script
+ * Drapeon — E2E seed script
  *
  * Auth users: Supabase Admin REST API
  * DB records: Prisma (direct Postgres, bypasses PostgREST/RLS)

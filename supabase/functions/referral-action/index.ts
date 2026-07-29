@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
           .eq('stage', 'COMPLETE'),
       ])
 
-      const referrerName = profileName(profile, caller.email?.split('@')[0] ?? 'A Drape customer')
+      const referrerName = profileName(profile, caller.email?.split('@')[0] ?? 'A Drapeon customer')
       const { data: created, error: createError } = await supabase
         .from('referrals')
         .insert({
@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
             referrerName,
             completedOrderCount: completedOrderCount ?? 0,
             visibleToTailor: true,
-            note: 'Referral context helps tailors understand the customer was introduced by a Drape user. It does not replace order review.',
+            note: 'Referral context helps tailors understand the customer was introduced by a Drapeon user. It does not replace order review.',
           },
         })
         .select('id, referral_code, trust_context')
@@ -132,12 +132,12 @@ Deno.serve(async (req) => {
     }
 
     if (row.referrer_user_id === caller.id) {
-      return jsonResponse({ error: 'This is your own referral link. Share it with someone else to invite them to Drape.' }, 409, cors)
+      return jsonResponse({ error: 'This is your own referral link. Share it with someone else to invite them to Drapeon.' }, 409, cors)
     }
 
     const referrerName = typeof row.trust_context?.referrerName === 'string'
       ? row.trust_context.referrerName
-      : 'A Drape customer'
+      : 'A Drapeon customer'
     const completedOrderCount = typeof row.trust_context?.completedOrderCount === 'number'
       ? row.trust_context.completedOrderCount
       : 0

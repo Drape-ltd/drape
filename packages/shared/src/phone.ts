@@ -37,7 +37,7 @@ export function normalizePhoneForStorage(value: string): string {
     return `+234${digits.slice(1)}`
   }
 
-  // Drape is currently Nigeria-first, so treat 10-digit 7/8/9 mobile values
+  // Drapeon is currently Nigeria-first, so treat 10-digit 7/8/9 mobile values
   // as local numbers missing the leading zero.
   if (digits.length === NIGERIAN_MOBILE_WITHOUT_ZERO_LENGTH && looksLikeNigerianMobileWithoutLeadingZero(digits)) {
     return `+234${digits}`

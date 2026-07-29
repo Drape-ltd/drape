@@ -1,5 +1,5 @@
 /**
- * Drape Order State Machine
+ * Drapeon Order State Machine
  * Defines valid transitions between order stages and who can trigger them.
  */
 
@@ -80,7 +80,7 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'CUTTING', to: 'SEWING', actor: 'TAILOR', trigger: 'start_sewing' },
   { from: 'SEWING', to: 'FINISHING', actor: 'TAILOR', trigger: 'start_finishing' },
 
-  // Drape-managed dispatch path
+  // Drapeon-managed dispatch path
   { from: 'FINISHING', to: 'READY_FOR_DRAPE_DISPATCH', actor: 'TAILOR', trigger: 'mark_ready_for_drape_dispatch' },
   { from: 'READY_FOR_DRAPE_DISPATCH', to: 'OUT_FOR_DELIVERY', actor: 'PLATFORM', trigger: 'mark_out_for_delivery' },
   { from: 'OUT_FOR_DELIVERY', to: 'DELIVERED', actor: 'CUSTOMER', trigger: 'confirm_receipt' },
@@ -167,7 +167,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   CUTTING: 'Cutting',
   SEWING: 'Sewing',
   FINISHING: 'Finishing',
-  READY_FOR_DRAPE_DISPATCH: 'Ready for Drape Dispatch',
+  READY_FOR_DRAPE_DISPATCH: 'Ready for Drapeon Dispatch',
   OUT_FOR_DELIVERY: 'Out for Delivery',
   SHIPPED: 'Shipped',
   READY_FOR_COLLECTION: 'Ready for Collection',
@@ -191,6 +191,6 @@ export const STAGE_DESCRIPTIONS: Partial<Record<OrderStage, string>> = {
   CUTTING: 'Fabric is being cut to your measurements.',
   SEWING: 'Your garment is being sewn together.',
   FINISHING: 'Final touches, pressing, and quality checks.',
-  READY_FOR_DRAPE_DISPATCH: 'Drape is lining up dispatch after the tailor finishes packing your order.',
+  READY_FOR_DRAPE_DISPATCH: 'Drapeon is lining up dispatch after the tailor finishes packing your order.',
   OUT_FOR_DELIVERY: 'A local delivery partner is bringing your order to you.',
 }

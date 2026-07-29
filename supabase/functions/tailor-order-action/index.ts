@@ -529,17 +529,17 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   SEWING:                  { title: 'Order update 🧵',          body: 'Your tailor is now sewing your garment.' },
   FINISHING:               { title: 'Almost ready ✨',          body: 'Your tailor is putting the finishing touches on your order.' },
   READY_FOR_COLLECTION:    { title: 'Ready to collect! 📦',    body: 'Your order is ready. Show your collection code at pickup.' },
-  READY_FOR_DRAPE_DISPATCH:{ title: 'Ready for Drape dispatch 📦', body: 'Your order is packed and ready for Drape dispatch.' },
+  READY_FOR_DRAPE_DISPATCH:{ title: 'Ready for Drapeon dispatch 📦', body: 'Your order is packed and ready for Drapeon dispatch.' },
   'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
   'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
   'request-style-alignment': { title: 'Style approval needed', body: 'Your tailor explained how they will interpret your references before cutting.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
-  'save-garment-qc': { title: 'Quality check saved', body: 'Your tailor added a Drape Vision quality check to your order timeline.' },
+  'save-garment-qc': { title: 'Quality check saved', body: 'Your tailor added a Drapeon Vision quality check to your order timeline.' },
   'request-scope-change': { title: 'Order change proposed', body: 'Your tailor proposed a formal change. Review it before production continues.' },
   'respond-scope-change': { title: 'Order change updated', body: 'Your tailor responded to the change request on this order.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
-  'request-cancellation-review': { title: 'Cancellation review requested', body: 'Your tailor asked Drape to review cancelling this order before handoff.' },
-  'request-delivery-review': { title: 'Delivery review requested', body: 'Your tailor asked Drape to review a dispatch or delivery issue.' },
+  'request-cancellation-review': { title: 'Cancellation review requested', body: 'Your tailor asked Drapeon to review cancelling this order before handoff.' },
+  'request-delivery-review': { title: 'Delivery review requested', body: 'Your tailor asked Drapeon to review a dispatch or delivery issue.' },
 }
 
 function isReadyMadeOrder(order: Pick<OrderRow, 'order_kind'>) {
@@ -1055,7 +1055,7 @@ Deno.serve(async (req) => {
           referencePhotoCount: meta.styleAlignment?.referencePhotoCount ?? null,
           styleReferenceLinkCount: meta.styleAlignment?.styleReferenceLinkCount ?? null,
           instruction: meta.styleAlignment?.instruction ??
-            'Before cutting, confirm what can and cannot be matched from the customer references inside Drape.',
+            'Before cutting, confirm what can and cannot be matched from the customer references inside Drapeon.',
           customerExpectation: meta.styleAlignment?.customerExpectation ??
             'Reference photos guide the garment. Exact replication depends on fabric, budget, measurements, and agreed finish.',
         },
@@ -1629,7 +1629,7 @@ Deno.serve(async (req) => {
 
       const now = new Date().toISOString()
       const normalizedMeasurements = Object.fromEntries(measurementEntries)
-      const note = `Drape Vision QC: ${body.note.trim()}`
+      const note = `Drapeon Vision QC: ${body.note.trim()}`
       const photoUrls = uniquePhotoUrls(body.photoUrl)
 
       const stageUpdate = await supabase.from('order_stage_updates').insert({
@@ -1887,7 +1887,7 @@ Deno.serve(async (req) => {
         userId: caller.id,
         stage: order.stage,
         title: 'Cancellation review requested',
-        description: `Tailor asked Drape to review a cancellation from ${order.stage}.`,
+        description: `Tailor asked Drapeon to review a cancellation from ${order.stage}.`,
         recommendedAction: 'Review the order timeline, tailor note, and refund implications before ruling.',
         dedupeKey: `order-review:cancellation:${orderId}`,
         metadata: {
@@ -1982,7 +1982,7 @@ Deno.serve(async (req) => {
         userId: caller.id,
         stage: order.stage,
         title: 'Delivery review requested',
-        description: `Tailor asked Drape to review a dispatch or delivery issue from ${order.stage}.`,
+        description: `Tailor asked Drapeon to review a dispatch or delivery issue from ${order.stage}.`,
         recommendedAction: 'Check dispatch evidence, courier handoff context, and the current delivery stage before deciding the next step.',
         dedupeKey: `order-review:delivery:${orderId}`,
         metadata: {
@@ -2049,7 +2049,7 @@ Deno.serve(async (req) => {
           quotedCurrency: order.quoted_currency ?? null,
         })
         return new Response(
-          JSON.stringify({ error: 'This order currency needs review before quoting. Please contact Drape support.' }),
+          JSON.stringify({ error: 'This order currency needs review before quoting. Please contact Drapeon support.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -2383,7 +2383,7 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           error:
-            'Standard delivery and shipping are now Drape-managed with a flat fee paid at checkout. Finish packing the order, then mark it ready for Drape dispatch.',
+            'Standard delivery and shipping are now Drapeon-managed with a flat fee paid at checkout. Finish packing the order, then mark it ready for Drapeon dispatch.',
         }),
         { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
       )
@@ -2422,7 +2422,7 @@ Deno.serve(async (req) => {
         })
         return new Response(
           JSON.stringify({
-            error: 'We could not safely decline this order because the payment refund did not complete. Please try again or contact Drape support.',
+            error: 'We could not safely decline this order because the payment refund did not complete. Please try again or contact Drapeon support.',
           }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
@@ -2462,7 +2462,7 @@ Deno.serve(async (req) => {
           supabase,
           order,
           'Order declined',
-          'Your tailor could not take this order. If any payment had already settled, Drape will handle the refund path before closing it out.',
+          'Your tailor could not take this order. If any payment had already settled, Drapeon will handle the refund path before closing it out.',
         )
       }
 
@@ -2623,7 +2623,7 @@ Deno.serve(async (req) => {
           supabase,
           order,
           'Consultation scheduled',
-          'Your tailor reserved a consultation slot. Review the time in Drape and pay the consultation fee first if one is required.',
+          'Your tailor reserved a consultation slot. Review the time in Drapeon and pay the consultation fee first if one is required.',
         )
       }
 
@@ -3081,7 +3081,7 @@ Deno.serve(async (req) => {
           name: 'dispatch_address_present',
           condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !!order.delivery_address?.trim(),
           errorCode: 'DELIVERY_ADDRESS_MISSING',
-          message: 'Delivery address is missing on this order. Ask the customer to update it before Drape dispatch.',
+          message: 'Delivery address is missing on this order. Ask the customer to update it before Drapeon dispatch.',
           field: 'delivery_address',
           severity: 'BLOCKING',
           actual: { hasDeliveryAddress: !!order.delivery_address?.trim() },
@@ -3090,7 +3090,7 @@ Deno.serve(async (req) => {
           name: 'dispatch_recipient_name_present',
           condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !!order.recipient_name?.trim(),
           errorCode: 'RECIPIENT_NAME_MISSING',
-          message: 'Recipient name is missing on this order. Ask the customer to update it before Drape dispatch.',
+          message: 'Recipient name is missing on this order. Ask the customer to update it before Drapeon dispatch.',
           field: 'recipient_name',
           severity: 'BLOCKING',
           actual: { hasRecipientName: !!order.recipient_name?.trim() },
@@ -3099,7 +3099,7 @@ Deno.serve(async (req) => {
           name: 'dispatch_recipient_phone_valid',
           condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !dispatchRecipientPhoneError,
           errorCode: 'RECIPIENT_PHONE_INVALID',
-          message: dispatchRecipientPhoneError ?? 'Recipient phone is missing on this order. Ask the customer to update it before Drape dispatch.',
+          message: dispatchRecipientPhoneError ?? 'Recipient phone is missing on this order. Ask the customer to update it before Drapeon dispatch.',
           field: 'recipient_phone',
           severity: 'BLOCKING',
           actual: { recipientPhone: order.recipient_phone ?? null },
@@ -3108,7 +3108,7 @@ Deno.serve(async (req) => {
           name: 'dispatch_photo_present',
           condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || productionPhotoUrls.length >= 1,
           errorCode: 'DISPATCH_PROOF_MISSING',
-          message: 'Add fresh packed-order proof before marking this order ready for Drape dispatch.',
+          message: 'Add fresh packed-order proof before marking this order ready for Drapeon dispatch.',
           field: 'photoUrl',
           severity: 'BLOCKING',
           actual: { photoCount: productionPhotoUrls.length },
@@ -3273,7 +3273,7 @@ Deno.serve(async (req) => {
       if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.delivery_address?.trim()) {
         await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'delivery_address_missing')
         return new Response(
-          JSON.stringify({ error: 'Delivery address is missing on this order. Ask the customer to update it before Drape dispatch.' }),
+          JSON.stringify({ error: 'Delivery address is missing on this order. Ask the customer to update it before Drapeon dispatch.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -3281,7 +3281,7 @@ Deno.serve(async (req) => {
       if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.recipient_name?.trim()) {
         await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'recipient_name_missing')
         return new Response(
-          JSON.stringify({ error: 'Recipient name is missing on this order. Ask the customer to update it before Drape dispatch.' }),
+          JSON.stringify({ error: 'Recipient name is missing on this order. Ask the customer to update it before Drapeon dispatch.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -3289,7 +3289,7 @@ Deno.serve(async (req) => {
       if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.recipient_phone?.trim()) {
         await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'recipient_phone_missing')
         return new Response(
-          JSON.stringify({ error: 'Recipient phone is missing on this order. Ask the customer to update it before Drape dispatch.' }),
+          JSON.stringify({ error: 'Recipient phone is missing on this order. Ask the customer to update it before Drapeon dispatch.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -3308,7 +3308,7 @@ Deno.serve(async (req) => {
       if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && productionPhotoUrls.length < 1) {
         await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'dispatch_proof_missing')
         return new Response(
-          JSON.stringify({ error: 'Add a packed-order photo before marking this order ready for Drape dispatch.' }),
+          JSON.stringify({ error: 'Add a packed-order photo before marking this order ready for Drapeon dispatch.' }),
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -3495,7 +3495,7 @@ Deno.serve(async (req) => {
           itemTitle: order.item_title ?? null,
           itemSize: order.item_size ?? null,
           deliveryMethod: order.delivery_method ?? null,
-          fulfillmentProvider: targetStage === 'READY_FOR_DRAPE_DISPATCH' ? 'Drape' : null,
+          fulfillmentProvider: targetStage === 'READY_FOR_DRAPE_DISPATCH' ? 'Drapeon' : null,
           carrier: null,
         }, targetStage)
 

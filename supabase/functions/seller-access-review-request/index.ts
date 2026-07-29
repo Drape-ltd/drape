@@ -144,7 +144,7 @@ Deno.serve(async (req) => {
       userId: caller.id,
       tailorProfileId: profile.id,
       title: 'Seller access review requested',
-      description: `Tailor asked Drape to review a blocked seller state: ${requestCategory ?? readiness.code ?? idStatus}.`,
+      description: `Tailor asked Drapeon to review a blocked seller state: ${requestCategory ?? readiness.code ?? idStatus}.`,
       recommendedAction: 'Review identity verification, payout readiness, and live-access blockers before deciding whether seller access can be restored.',
       dedupeKey: `seller-access-review:${caller.id}`,
       metadata: {

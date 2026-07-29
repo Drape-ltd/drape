@@ -202,7 +202,7 @@ Deno.serve(async (req) => {
     if (actorRole === 'TAILOR') {
       const tailorProfileId = (tailorProfile as { id?: string } | null)?.id
       if (!tailorProfileId) {
-        return jsonResponse({ error: 'We could not find your tailor profile for export. Please try again after reopening Drape.' }, 409, cors)
+        return jsonResponse({ error: 'We could not find your tailor profile for export. Please try again after reopening Drapeon.' }, 409, cors)
       }
       const exportPackage = await buildTailorExportPackage(supabase, caller.id, tailorProfileId)
       const { data: exportRow, error: exportError } = await supabase

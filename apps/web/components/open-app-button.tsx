@@ -23,7 +23,7 @@ export function OpenAppButton({
         window.location.href = appStoreUrl
         return
       }
-      setFallback(isMobile ? 'If Drape does not open, use your TestFlight or App Store invite.' : 'Open Drape on your phone for camera, push, and native scan flows.')
+      setFallback(isMobile ? 'If Drapeon does not open, use your TestFlight or App Store invite.' : 'Open Drapeon on your phone for camera, push, and native scan flows.')
     }, 900)
   }
 

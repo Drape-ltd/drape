@@ -19,11 +19,12 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
-import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
-import { enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { parseOrderSupportMeta } from '../_shared/order-support.ts'
+import { enqueueOrderEventEmailJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { createDailyRoomWithObservability } from '../_shared/daily-observability.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -86,14 +87,14 @@ function consultationStartGate(scheduledStartAt: string | null | undefined) {
 
 function consultationFallbackMessage(audioOnly: boolean) {
   return audioOnly
-    ? 'Consultation audio is unavailable right now. Continue inside Messages so Drape keeps the consultation record complete.'
-    : 'Consultation video is unavailable right now. Continue inside Messages so Drape keeps the consultation record complete.'
+    ? 'Consultation audio is unavailable right now. Continue inside Messages so Drapeon keeps the consultation record complete.'
+    : 'Consultation video is unavailable right now. Continue inside Messages so Drapeon keeps the consultation record complete.'
 }
 
 function consultationFallbackStageNote(audioOnly: boolean) {
   return audioOnly
-    ? 'Consultation audio is unavailable. Continue this consultation in Messages; Drape has logged the fallback.'
-    : 'Consultation video is unavailable. Continue this consultation in Messages; Drape has logged the fallback.'
+    ? 'Consultation audio is unavailable. Continue this consultation in Messages; Drapeon has logged the fallback.'
+    : 'Consultation video is unavailable. Continue this consultation in Messages; Drapeon has logged the fallback.'
 }
 
 function recipientAudience(callerRole: 'CUSTOMER' | 'TAILOR') {
@@ -103,7 +104,7 @@ function recipientAudience(callerRole: 'CUSTOMER' | 'TAILOR') {
 function consultationCallSmsBody(reference: string | null, callerRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
   const actor = callerRole === 'TAILOR' ? 'tailor' : 'customer'
   const kind = audioOnly ? 'audio room' : 'call'
-  return `Drape: your ${actor} opened the consultation ${kind} for order ${reference ?? 'your order'}. Open Drape to join.`;
+  return `Drapeon: your ${actor} opened the consultation ${kind} for order ${reference ?? 'your order'}. Open Drapeon to join.`;
 }
 
 Deno.serve(async (req) => {
@@ -220,7 +221,7 @@ Deno.serve(async (req) => {
             await Promise.allSettled([
               sendPushToUser(supabase, recipientId.toString(), {
                 title: 'Consultation fallback active',
-                body: 'Calling is unavailable right now. Continue inside the order thread so Drape keeps the record.',
+                body: 'Calling is unavailable right now. Continue inside the order thread so Drapeon keeps the record.',
                 preferenceKey: 'orderUpdates',
                 data: { orderId },
               }),
@@ -232,7 +233,19 @@ Deno.serve(async (req) => {
                 event: 'consultation_call_fallback',
                 idempotencyKey: `consultation-call-fallback:${orderId}:${reason}:${recipientId}`,
                 priority: 12,
-                body: `Drape: consultation calling is unavailable for order ${order.reference ?? orderId}. Continue inside the order thread.`,
+                body: `Drapeon: consultation calling is unavailable for order ${order.reference ?? orderId}. Continue inside the order thread.`,
+              }),
+              enqueueOrderEventEmailJob(supabase, {
+                order,
+                recipientUserId: recipientId.toString(),
+                audience: recipientAudience(callerRole),
+                source: 'create-consultation-room',
+                subject: 'Drapeon consultation calling is temporarily unavailable',
+                headline: 'Continue your consultation in Messages',
+                body: `Calling is unavailable for order ${order.reference ?? orderId}. Continue in the protected order thread while Drapeon keeps the consultation record.`,
+                idempotencyKey: `consultation-call-fallback-email:${orderId}:${reason}:${recipientId}`,
+                ctaLabel: 'Open Messages',
+                priority: 12,
               }),
             ])
           }
@@ -262,45 +275,21 @@ Deno.serve(async (req) => {
 
     // Create a new Daily.co room
     const expiryTime = Math.floor(Date.now() / 1000) + ROOM_TTL_SECONDS
-    const roomName = `drape-${String(order.reference ?? order.id).toLowerCase()}-${Date.now()}`
-    let dailyApiKey = ''
-
-    try {
-      dailyApiKey = getDailyApiKey()
-    } catch {
-      return returnMessageFallback('DAILY_NOT_CONFIGURED')
-    }
-
-    const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${dailyApiKey}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'drape-consultation-room/1.0',
-      },
-      body: JSON.stringify({
-        name: roomName,
-        properties: {
-          exp: expiryTime,
-          max_participants: 2,
-          enable_chat: true,
-          enable_screenshare: false,
-          start_video_off: audioOnly,
-          start_audio_off: false,
-        },
-      }),
+    const roomName = `drapeon-${String(order.reference ?? order.id).toLowerCase()}-${Date.now()}`
+    const dailyRoom = await createDailyRoomWithObservability({
+      supabase,
+      functionName: 'create-consultation-room',
+      orderId,
+      actorId: caller.id,
+      actorRole: callerRole,
+      stage: order.stage,
+      callKind: 'CONSULTATION',
+      roomName,
+      expiresAt: expiryTime,
+      audioOnly,
     })
-
-    if (!dailyRes.ok) {
-      console.error('[create-consultation-room] Daily.co error', {
-        status: dailyRes.status,
-        contentType: dailyRes.headers.get('content-type'),
-      })
-      return returnMessageFallback('DAILY_UNAVAILABLE')
-    }
-
-    const room = await dailyRes.json()
-    const roomUrl: string = room.url
+    if (!dailyRoom.ok) return returnMessageFallback(dailyRoom.reason)
+    const roomUrl = dailyRoom.url
 
     // Atomic write: re-verify ownership + stage + no existing URL in one UPDATE.
     // The WHERE clause prevents TOCTOU: if another request already set the URL,
@@ -368,27 +357,6 @@ Deno.serve(async (req) => {
       },
     })
 
-    if (consultationMeta.status !== 'COMPLETED') {
-      EdgeRuntime.waitUntil(
-        (async () => {
-          await supabase
-            .from('orders')
-            .update({
-              special_note: serializeOrderSupportMeta({
-                ...supportMeta,
-                consultation: {
-                  ...consultationMeta,
-                  status: 'COMPLETED',
-                },
-              }),
-            })
-            .eq('id', orderId)
-            .eq('stage', 'CONSULTATION')
-            .eq('video_call_url', roomUrl)
-        })(),
-      )
-    }
-
     if (recipientId && notifyCounterpart) {
       EdgeRuntime.waitUntil(
         Promise.allSettled([
@@ -417,6 +385,18 @@ Deno.serve(async (req) => {
             idempotencyKey: `consultation-call-started:${orderId}:${recipientId}:${callType}`,
             priority: 10,
             body: consultationCallSmsBody(order.reference ?? null, callerRole, audioOnly),
+          }),
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: recipientId.toString(),
+            audience: recipientAudience(callerRole),
+            source: 'create-consultation-room',
+            subject: audioOnly ? 'Your Drapeon consultation audio is ready' : 'Your Drapeon consultation call is ready',
+            headline: 'Join your consultation now',
+            body: `Your ${callerRole === 'TAILOR' ? 'tailor' : 'customer'} opened the consultation for order ${order.reference ?? orderId}. Open Drapeon to join.`,
+            idempotencyKey: `consultation-call-started-email:${orderId}:${recipientId}:${callType}`,
+            ctaLabel: 'Open Drapeon',
+            priority: 10,
           }),
         ]),
       )

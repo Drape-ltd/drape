@@ -1,5 +1,6 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { log } from './logger.ts'
+import { normalizeDrapeonSender, renderDrapeonTransactionalEmail } from './email-template.ts'
 
 const FN = 'order-email'
 const RESEND_API = 'https://api.resend.com/emails'
@@ -33,20 +34,11 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drapeon <noreply@drapeon.co>'
+  return normalizeDrapeonSender(Deno.env.get('RESEND_FROM'))
 }
 
 function getResendApiKey() {
   return Deno.env.get('RESEND_API_KEY')?.trim() ?? ''
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
 }
 
 function moneySymbol(currency: string) {
@@ -101,45 +93,64 @@ function customerOrderConfirmationEmail(input: {
     input.phase === 'CONSULTATION'
       ? formatMoney(input.order.consultation_fee, currency)
       : input.phase === 'FULFILLMENT'
-      ? formatMoney(input.order.fulfillment_fee, currency)
-      : formatMoney(input.order.quoted_amount, currency)
+        ? formatMoney(input.order.fulfillment_fee, currency)
+        : formatMoney(input.order.quoted_amount, currency)
   const subject =
     input.phase === 'CONSULTATION'
       ? `Consultation payment confirmed - #${ref}`
       : input.phase === 'FULFILLMENT'
-      ? `${fulfillmentLabel(input.order.delivery_method)} payment confirmed - #${ref}`
-      : `Order confirmed - #${ref}`
+        ? `${fulfillmentLabel(input.order.delivery_method)} payment confirmed - #${ref}`
+        : `Order confirmed - #${ref}`
   const headline =
     input.phase === 'CONSULTATION'
       ? 'Consultation payment confirmed'
       : input.phase === 'FULFILLMENT'
-      ? `${fulfillmentLabel(input.order.delivery_method)} payment confirmed`
-      : 'Your order is confirmed'
+        ? `${fulfillmentLabel(input.order.delivery_method)} payment confirmed`
+        : 'Your order is confirmed'
   const nextStep =
     input.phase === 'CONSULTATION'
       ? 'Drapeon has received your consultation payment. Join from your order or messages when the scheduled time arrives.'
       : input.phase === 'FULFILLMENT'
-      ? `Drapeon has received your ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment and the order can move into dispatch once the handoff is arranged.`
-      : input.order.order_kind === 'READY_MADE'
-        ? 'Your order is now placed. You will keep seeing progress inside Drapeon as the tailor prepares it.'
-        : 'Your order is now funded. The tailor can continue production inside Drapeon and you will see updates in your timeline.'
+        ? `Drapeon has received your ${fulfillmentLabel(
+            input.order.delivery_method
+          ).toLowerCase()} payment and the order can move into dispatch once the handoff is arranged.`
+        : input.order.order_kind === 'READY_MADE'
+          ? 'Your order is now placed. You will keep seeing progress inside Drapeon as the tailor prepares it.'
+          : 'Your order is now funded. The tailor can continue production inside Drapeon and you will see updates in your timeline.'
 
   return {
     subject,
-    html: `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">${escapeHtml(headline)}</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Hi ${escapeHtml(input.customerName)},</p>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(nextStep)}</p>
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Order</td><td style="padding:8px 0;font-weight:600">#${escapeHtml(ref)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Item</td><td style="padding:8px 0;font-weight:600">${escapeHtml(label)}</td></tr>
-    ${input.order.item_size ? `<tr><td style="padding:8px 0;color:#6b7280">Size</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.order.item_size)}</td></tr>` : ''}
-    <tr><td style="padding:8px 0;color:#6b7280">${input.phase === 'CONSULTATION' ? 'Consultation fee' : input.phase === 'FULFILLMENT' ? fulfillmentLabel(input.order.delivery_method) : 'Amount'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(amount)}</td></tr>
-    ${input.phase === 'INITIAL_ORDER' && input.order.delivery_method ? `<tr><td style="padding:8px 0;color:#6b7280">Fulfillment</td><td style="padding:8px 0;font-weight:600">${escapeHtml(fulfillmentLabel(input.order.delivery_method))}</td></tr>` : ''}
-  </table>
-  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
-</div>`,
+    ...renderDrapeonTransactionalEmail({
+      preheader: `${headline} for order #${ref}.`,
+      eyebrow: 'Order update',
+      headline,
+      recipientName: input.customerName,
+      body: nextStep,
+      details: [
+        { label: 'Order', value: `#${ref}` },
+        { label: 'Item', value: label },
+        ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
+        {
+          label:
+            input.phase === 'CONSULTATION'
+              ? 'Consultation fee'
+              : input.phase === 'FULFILLMENT'
+                ? fulfillmentLabel(input.order.delivery_method)
+                : 'Amount',
+          value: amount,
+        },
+        ...(input.phase === 'INITIAL_ORDER' && input.order.delivery_method
+          ? [
+              {
+                label: 'Fulfillment',
+                value: fulfillmentLabel(input.order.delivery_method),
+              },
+            ]
+          : []),
+      ],
+      ctaLabel: 'Open order',
+      ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+    }),
   }
 }
 
@@ -157,49 +168,61 @@ function tailorOrderConfirmationEmail(input: {
     input.phase === 'CONSULTATION'
       ? formatMoney(input.order.consultation_fee, currency)
       : input.phase === 'FULFILLMENT'
-      ? formatMoney(input.order.fulfillment_fee, currency)
-      : formatMoney(input.order.quoted_amount, currency)
+        ? formatMoney(input.order.fulfillment_fee, currency)
+        : formatMoney(input.order.quoted_amount, currency)
   const subject =
     input.phase === 'CONSULTATION'
       ? `Consultation payment received - #${ref}`
       : input.phase === 'FULFILLMENT'
-      ? `${fulfillmentLabel(input.order.delivery_method)} payment received - #${ref}`
-      : input.order.order_kind === 'READY_MADE'
-        ? `New paid order - #${ref}`
-        : `Order funded - #${ref}`
+        ? `${fulfillmentLabel(input.order.delivery_method)} payment received - #${ref}`
+        : input.order.order_kind === 'READY_MADE'
+          ? `New paid order - #${ref}`
+          : `Order funded - #${ref}`
   const headline =
     input.phase === 'CONSULTATION'
       ? 'Consultation fee paid'
       : input.phase === 'FULFILLMENT'
-      ? `${fulfillmentLabel(input.order.delivery_method)} payment received`
-      : input.order.order_kind === 'READY_MADE'
-        ? 'A ready-made order is paid'
-        : 'A custom order is funded'
+        ? `${fulfillmentLabel(input.order.delivery_method)} payment received`
+        : input.order.order_kind === 'READY_MADE'
+          ? 'A ready-made order is paid'
+          : 'A custom order is funded'
   const nextStep =
     input.phase === 'CONSULTATION'
       ? 'The customer paid the consultation fee. Start the call from Drapeon at the scheduled time.'
       : input.phase === 'FULFILLMENT'
-      ? `Drapeon has received the ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment, so you can move the order forward once dispatch is arranged.`
-      : input.order.order_kind === 'READY_MADE'
-        ? 'This order is now paid and ready for fulfillment inside Drapeon.'
-        : 'This order is now paid and ready for production inside Drapeon.'
+        ? `Drapeon has received the ${fulfillmentLabel(
+            input.order.delivery_method
+          ).toLowerCase()} payment, so you can move the order forward once dispatch is arranged.`
+        : input.order.order_kind === 'READY_MADE'
+          ? 'This order is now paid and ready for fulfillment inside Drapeon.'
+          : 'This order is now paid and ready for production inside Drapeon.'
 
   return {
     subject,
-    html: `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">${escapeHtml(headline)}</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Hi ${escapeHtml(input.tailorName)},</p>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(nextStep)}</p>
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Order</td><td style="padding:8px 0;font-weight:600">#${escapeHtml(ref)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Customer</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.customerName)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Item</td><td style="padding:8px 0;font-weight:600">${escapeHtml(label)}</td></tr>
-    ${input.order.item_size ? `<tr><td style="padding:8px 0;color:#6b7280">Size</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.order.item_size)}</td></tr>` : ''}
-    <tr><td style="padding:8px 0;color:#6b7280">${input.phase === 'CONSULTATION' ? 'Consultation fee' : input.phase === 'FULFILLMENT' ? fulfillmentLabel(input.order.delivery_method) : 'Amount paid'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(amount)}</td></tr>
-  </table>
-  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
-</div>`,
+    ...renderDrapeonTransactionalEmail({
+      preheader: `${headline} for order #${ref}.`,
+      eyebrow: 'Order update',
+      headline,
+      recipientName: input.tailorName,
+      body: nextStep,
+      details: [
+        { label: 'Order', value: `#${ref}` },
+        { label: 'Customer', value: input.customerName },
+        { label: 'Item', value: label },
+        ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
+        {
+          label:
+            input.phase === 'CONSULTATION'
+              ? 'Consultation fee'
+              : input.phase === 'FULFILLMENT'
+                ? fulfillmentLabel(input.order.delivery_method)
+                : 'Amount paid',
+          value: amount,
+        },
+      ],
+      ctaLabel: 'Open order',
+      ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+    }),
   }
 }
 
@@ -207,7 +230,10 @@ async function lookupUserEmail(supabase: SupabaseClient, userId: string | null |
   if (!userId) return null
   const { data, error } = await supabase.auth.admin.getUserById(userId)
   if (error) {
-    log('warn', FN, 'auth.lookup_failed', { user_id: userId, error: error.message })
+    log('warn', FN, 'auth.lookup_failed', {
+      user_id: userId,
+      error: error.message,
+    })
     return null
   }
   return data.user?.email?.trim() || null
@@ -222,7 +248,10 @@ async function lookupCustomerName(supabase: SupabaseClient, userId: string | nul
     .maybeSingle()
 
   if (error) {
-    log('warn', FN, 'customer_profile.lookup_failed', { user_id: userId, error: error.message })
+    log('warn', FN, 'customer_profile.lookup_failed', {
+      user_id: userId,
+      error: error.message,
+    })
     return 'there'
   }
 
@@ -238,14 +267,17 @@ async function lookupTailorName(supabase: SupabaseClient, userId: string | null 
     .maybeSingle()
 
   if (error) {
-    log('warn', FN, 'tailor_profile.lookup_failed', { user_id: userId, error: error.message })
+    log('warn', FN, 'tailor_profile.lookup_failed', {
+      user_id: userId,
+      error: error.message,
+    })
     return 'there'
   }
 
   return data?.display_name?.trim() || data?.business_name?.trim() || 'there'
 }
 
-async function sendEmail(to: string, subject: string, html: string) {
+async function sendEmail(to: string, subject: string, html: string, text: string) {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     log('warn', FN, 'resend.missing_api_key')
@@ -264,12 +296,18 @@ async function sendEmail(to: string, subject: string, html: string) {
       to: [to],
       subject,
       html,
+      text,
     }),
   })
 
   if (!response.ok) {
     const body = await response.text()
-    log('warn', FN, 'resend.send_failed', { to, subject, status: response.status, body })
+    log('warn', FN, 'resend.send_failed', {
+      to,
+      subject,
+      status: response.status,
+      body,
+    })
     throw new Error(`Resend email failed with ${response.status}${body ? `: ${body}` : ''}`)
   }
 }
@@ -287,27 +325,22 @@ function orderEventEmail(input: {
   const appUrl = getSiteUrl()
   const ctaLabel = input.ctaLabel?.trim() || 'Open Drapeon'
   const evidenceImageUrl = input.evidenceImageUrl?.trim()
-  const evidenceImageBlock = evidenceImageUrl && /\.(jpe?g|png|webp|gif)(?:[?#].*)?$/iu.test(evidenceImageUrl)
-    ? `
-  <div style="margin:22px 0 4px">
-    <p style="font-size:13px;line-height:1.5;margin:0 0 8px;color:#6b7280">Latest production photo</p>
-    <img src="${escapeHtml(evidenceImageUrl)}" alt="Latest production photo for order #${escapeHtml(ref)}" style="display:block;width:100%;max-height:320px;object-fit:contain;border-radius:14px;background:#f4f1eb;border:1px solid #ece7df" />
-  </div>`
-    : ''
-
-  return `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">${escapeHtml(input.headline)}</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Hi ${escapeHtml(input.recipientName)},</p>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(input.body)}</p>
-  ${evidenceImageBlock}
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Order</td><td style="padding:8px 0;font-weight:600">#${escapeHtml(ref)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Item</td><td style="padding:8px 0;font-weight:600">${escapeHtml(label)}</td></tr>
-    ${input.order.item_size ? `<tr><td style="padding:8px 0;color:#6b7280">Size</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.order.item_size)}</td></tr>` : ''}
-  </table>
-  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">${escapeHtml(ctaLabel)}</a>
-</div>`
+  return renderDrapeonTransactionalEmail({
+    preheader: `${input.headline} for order #${ref}.`,
+    eyebrow: 'Order update',
+    headline: input.headline,
+    recipientName: input.recipientName,
+    body: input.body,
+    details: [
+      { label: 'Order', value: `#${ref}` },
+      { label: 'Item', value: label },
+      ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
+    ],
+    ctaLabel,
+    ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+    evidenceImageUrl,
+    evidenceImageAlt: `Latest production photo for order #${ref}`,
+  })
 }
 
 export async function sendOrderEventEmail(
@@ -321,33 +354,31 @@ export async function sendOrderEventEmail(
     body: string
     ctaLabel?: string
     evidenceImageUrl?: string | null
-  },
+  }
 ) {
   const email = await lookupUserEmail(supabase, input.recipientUserId)
   if (!email) return
 
-  const recipientName = input.audience === 'CUSTOMER'
-    ? await lookupCustomerName(supabase, input.recipientUserId)
-    : await lookupTailorName(supabase, input.recipientUserId)
+  const recipientName =
+    input.audience === 'CUSTOMER'
+      ? await lookupCustomerName(supabase, input.recipientUserId)
+      : await lookupTailorName(supabase, input.recipientUserId)
 
-  await sendEmail(
-    email,
-    input.subject,
-    orderEventEmail({
-      recipientName,
-      order: input.order,
-      headline: input.headline ?? input.subject,
-      body: input.body,
-      ctaLabel: input.ctaLabel,
-      evidenceImageUrl: input.evidenceImageUrl,
-    }),
-  )
+  const payload = orderEventEmail({
+    recipientName,
+    order: input.order,
+    headline: input.headline ?? input.subject,
+    body: input.body,
+    ctaLabel: input.ctaLabel,
+    evidenceImageUrl: input.evidenceImageUrl,
+  })
+  await sendEmail(email, input.subject, payload.html, payload.text)
 }
 
 export async function sendOrderConfirmationEmails(
   supabase: SupabaseClient,
   order: OrderEmailContext,
-  phase: PaymentPhase,
+  phase: PaymentPhase
 ) {
   const [customerEmail, tailorEmail, customerName, tailorName] = await Promise.all([
     lookupUserEmail(supabase, order.customer_id),
@@ -362,7 +393,12 @@ export async function sendOrderConfirmationEmails(
       order,
       phase,
     })
-    await sendEmail(customerEmail, customerEmailPayload.subject, customerEmailPayload.html)
+    await sendEmail(
+      customerEmail,
+      customerEmailPayload.subject,
+      customerEmailPayload.html,
+      customerEmailPayload.text
+    )
   }
 
   if (tailorEmail) {
@@ -372,6 +408,11 @@ export async function sendOrderConfirmationEmails(
       order,
       phase,
     })
-    await sendEmail(tailorEmail, tailorEmailPayload.subject, tailorEmailPayload.html)
+    await sendEmail(
+      tailorEmail,
+      tailorEmailPayload.subject,
+      tailorEmailPayload.html,
+      tailorEmailPayload.text
+    )
   }
 }

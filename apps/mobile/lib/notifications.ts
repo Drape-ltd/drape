@@ -19,13 +19,11 @@ function isCallJoinData(data: Record<string, unknown>) {
   return isUuid(data.orderId) && data.target === 'call-join'
 }
 
-// How foreground notifications look. Calls use the in-app invitation surface
-// below while still remaining visible in the notification list.
+// How foreground notifications look. Call invitations still use the in-app
+// surface below, but the system banner and sound must remain visible as backup.
 Notifications.setNotificationHandler({
-  handleNotification: async (notification) => ({
-    shouldShowBanner: !isCallJoinData(
-      (notification.request.content.data ?? {}) as Record<string, unknown>,
-    ),
+  handleNotification: async () => ({
+    shouldShowBanner: true,
     shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,

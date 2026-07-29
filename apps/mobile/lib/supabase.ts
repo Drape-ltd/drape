@@ -112,7 +112,7 @@ if (__DEV__) {
     : supabasePublishableKey.startsWith('sb_publishable_')
       ? 'publishable'
       : 'unknown'
-  console.log('[Drape auth] Supabase client ready', {
+  console.log('[Drapeon auth] Supabase client ready', {
     host: supabaseHost,
     keyKind,
     storageVersion: AUTH_STORAGE_VERSION,
@@ -209,7 +209,7 @@ const ExpoSecureStoreAdapter = {
       await AsyncStorage.removeItem(key).catch(() => {})
     } catch (error) {
       if (__DEV__) {
-        console.warn('[Drape auth] SecureStore auth write failed; falling back to AsyncStorage.', error)
+        console.warn('[Drapeon auth] SecureStore auth write failed; falling back to AsyncStorage.', error)
         await AsyncStorage.setItem(key, value).catch(() => {})
         return
       }

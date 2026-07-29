@@ -1,5 +1,5 @@
 /**
- * Drape Contact Leakage Prevention
+ * Drapeon Contact Leakage Prevention
  * Blocks phone numbers, social handles, URLs, and off-platform references
  * across all user-generated text inputs.
  */
@@ -11,7 +11,7 @@ export interface FilterResult {
 }
 
 const CONTACT_BLOCK_MESSAGE =
-  "Contact details can't be shared on Drape. This protects your payment, your measurements, and your order history — for both of you. Everything you need to complete this order is right here."
+  "Contact details can't be shared on Drapeon. This protects your payment, your measurements, and your order history — for both of you. Everything you need to complete this order is right here."
 
 const ABUSE_BLOCK_MESSAGE =
   "That message can't be sent. Keep all communication respectful — our team reviews flagged messages."

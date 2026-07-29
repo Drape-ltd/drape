@@ -213,7 +213,7 @@ export function buildOrderReviewRefundTerminalRequest(
 ): FinalizeOrderTerminalRequest {
   const reviewLabel = params.reviewType === 'CANCELLATION' ? 'cancellation review' : 'delivery review'
   const note =
-    `Drape approved the ${reviewLabel}. This order will be refunded.`
+    `Drapeon approved the ${reviewLabel}. This order will be refunded.`
     + (params.resolution?.trim() ? ` Note: ${params.resolution.trim()}` : '')
 
   return {

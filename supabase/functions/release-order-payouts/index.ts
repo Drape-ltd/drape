@@ -59,7 +59,7 @@ async function notifyTailorPayoutFailure(
     priority: 10,
     notification: {
       title: 'Payout needs review',
-      body: 'A payout release for this order needs Drape ops review before it can be retried.',
+      body: 'A payout release for this order needs Drapeon ops review before it can be retried.',
       preferenceKey: 'paymentReleased',
       data: {
         orderId: order.id,
@@ -872,7 +872,7 @@ Deno.serve(async (req) => {
             transfer = await createPaystackTransfer({
               amount: payoutMoney.amount,
               recipientCode: paystackRecipientCode!,
-              reason: `Drape payout for order ${order.reference ?? order.id}`,
+              reason: `Drapeon payout for order ${order.reference ?? order.id}`,
               reference: `DRAPE-PAYOUT-${order.id}`,
               currency: payoutMoney.currency,
             })

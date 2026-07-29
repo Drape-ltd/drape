@@ -258,7 +258,7 @@ async function logAuthDebugSnapshot(label: string, knownSession?: Session | null
   try {
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
     const session = knownSession ?? sessionData.session
-    console.log('[Drape auth]', label, {
+    console.log('[Drapeon auth]', label, {
       hasSession: !!session,
       sessionUserId: session?.user?.id ?? null,
       sessionRole: session?.user?.user_metadata?.role ?? null,
@@ -267,7 +267,7 @@ async function logAuthDebugSnapshot(label: string, knownSession?: Session | null
     })
 
     const { data: userData, error: userError } = await supabase.auth.getUser()
-    console.log('[Drape auth]', `${label} getUser`, {
+    console.log('[Drapeon auth]', `${label} getUser`, {
       hasUser: !!userData.user,
       userId: userData.user?.id ?? null,
       errorStatus: userError?.status ?? null,
@@ -281,7 +281,7 @@ async function logAuthDebugSnapshot(label: string, knownSession?: Session | null
         .select('id')
         .eq('user_id', userId)
         .maybeSingle()
-      console.log('[Drape auth]', `${label} customer profile probe`, {
+      console.log('[Drapeon auth]', `${label} customer profile probe`, {
         status,
         hasRow: !!data,
         errorCode: error?.code ?? null,
@@ -289,7 +289,7 @@ async function logAuthDebugSnapshot(label: string, knownSession?: Session | null
       })
     }
   } catch (error) {
-    console.warn('[Drape auth] debug snapshot failed', label, error)
+    console.warn('[Drapeon auth] debug snapshot failed', label, error)
   }
 }
 
@@ -398,7 +398,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return
       if (__DEV__) {
-        console.log('[Drape auth] auth state change', {
+        console.log('[Drapeon auth] auth state change', {
           event,
           hasSession: !!session,
           userId: session?.user?.id ?? null,

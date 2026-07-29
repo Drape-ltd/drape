@@ -11,7 +11,6 @@ import {
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
 import {
   blockConversation,
   getConversationAccessStatus,
@@ -26,6 +25,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
+import { ChatSafetyBar } from '@/components/ui/ChatSafetyBar'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { useKeyboardState } from '@/lib/useKeyboardState'
@@ -39,6 +39,11 @@ import type { OrderConversationAction } from '@drape/shared/order-negotiation'
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
 const ORDER_CALL_STAGES: OrderStage[] = [
+  'PENDING_QUOTE',
+  'CONSULTATION',
+  'QUOTE_SENT',
+  'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -51,6 +56,7 @@ const ORDER_CALL_STAGES: OrderStage[] = [
   'SHIPPED',
   'DELIVERED',
   'COLLECTED',
+  'IN_DISPUTE',
 ]
 
 function isOrderCallStage(stage: OrderStage | null | undefined) {
@@ -346,9 +352,12 @@ export default function TailorMessagesScreen() {
 
   const startCall = useCallback(async (callType: 'audio' | 'video') => {
     if (startingCall) return
+    const consultation =
+      orderInfo?.stage === 'CONSULTATION' &&
+      consultationMeta?.status === 'SCHEDULED' &&
+      !!consultationMeta.scheduledStartAt
     setStartingCall(true)
     try {
-      const consultation = orderInfo?.stage === 'CONSULTATION'
       const room = consultation
         ? await createConsultationRoom(orderId, callType)
         : await createOrderCallRoom(orderId, callType, 'tailor')
@@ -367,7 +376,7 @@ export default function TailorMessagesScreen() {
     } finally {
       setStartingCall(false)
     }
-  }, [fetchOrder, orderId, orderInfo, startingCall])
+  }, [consultationMeta, fetchOrder, orderId, orderInfo?.stage, startingCall])
 
   const showReadyMadeOrderCallOptions = useCallback(() => {
     if (!orderInfo || startingCall) return
@@ -382,7 +391,7 @@ export default function TailorMessagesScreen() {
     if (state === 'too-early') {
       Alert.alert(
         'Call is scheduled',
-        `This ready-made order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt)}. The room opens shortly before the scheduled time.`,
+        `This order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt)}. The room opens shortly before the scheduled time.`,
         [
           { text: 'Close', style: 'cancel' },
           { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
@@ -394,7 +403,7 @@ export default function TailorMessagesScreen() {
     if (state === 'expired') {
       Alert.alert(
         'Schedule a new call',
-        'That ready-made order call window has passed. Set a new time from Messages.',
+        'That order call window has passed. Set a new time from Messages.',
         [
           { text: 'Close', style: 'cancel' },
           { text: 'Schedule', onPress: () => setShowOrderCallScheduler(true) },
@@ -405,7 +414,7 @@ export default function TailorMessagesScreen() {
 
     Alert.alert(
       'Join order call',
-      'This ready-made call is free and stays inside Drapeon. Use it for pickup, delivery, sizing, or item-condition clarity; keep final decisions in Messages.',
+      'This scheduled call is free and stays inside Drapeon. Use it for order clarity and keep final decisions in Messages.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
@@ -427,9 +436,11 @@ export default function TailorMessagesScreen() {
 
   const showCallOptions = useCallback(() => {
     if (startingCall) return
-    const consultation = orderInfo?.stage === 'CONSULTATION'
-    const readyMade = orderInfo?.orderKind === 'READY_MADE'
-    if (readyMade && !consultation) {
+    const consultation =
+      orderInfo?.stage === 'CONSULTATION' &&
+      consultationMeta?.status === 'SCHEDULED' &&
+      !!consultationMeta.scheduledStartAt
+    if (!consultation) {
       showReadyMadeOrderCallOptions()
       return
     }
@@ -445,12 +456,8 @@ export default function TailorMessagesScreen() {
       return
     }
     Alert.alert(
-      consultation ? 'Consultation call' : readyMade ? 'Order call' : 'Drapeon call',
-      consultation
-        ? 'Start or join the scheduled consultation. Any fee must be the consultation fee already shown on the order; do not charge outside Drapeon.'
-        : readyMade
-          ? 'Start a Drapeon call for pickup, delivery, sizing, or item-condition questions. Do not request extra payment outside Drapeon.'
-        : 'Start a Drapeon call for fit, fabric, delivery, or timeline questions. Keep final decisions in Messages after the call.',
+      'Consultation call',
+      'Start or join the scheduled consultation. Any fee must be the consultation fee already shown on the order; do not charge outside Drapeon.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -467,10 +474,10 @@ export default function TailorMessagesScreen() {
         },
       ]
     )
-  }, [consultationPaymentBlocked, openConsultationOrderDetails, orderInfo?.orderKind, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
+  }, [consultationMeta, consultationPaymentBlocked, openConsultationOrderDetails, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
 
   const isConsultation = orderInfo?.stage === 'CONSULTATION'
-  const callAvailable = isConsultation || isOrderCallStage(orderInfo?.stage)
+  const callAvailable = isOrderCallStage(orderInfo?.stage)
 
   if (loading) {
     return (
@@ -553,8 +560,8 @@ export default function TailorMessagesScreen() {
   const scheduledConsultation = orderInfo.stage === 'CONSULTATION' &&
     consultationMeta?.status === 'SCHEDULED' &&
     consultationMeta.scheduledStartAt
-  const scheduledOrderCall = orderInfo.orderKind === 'READY_MADE' &&
-    orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
+  const consultationCallAvailable = Boolean(scheduledConsultation)
+  const scheduledOrderCall = orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
     orderInfo.supportMeta.orderCall.scheduledStartAt
   const callLifecycleEvent = scheduledConsultation
     ? {
@@ -575,7 +582,7 @@ export default function TailorMessagesScreen() {
       }
     : scheduledOrderCall
       ? {
-          kind: 'ready-made' as const,
+          kind: 'order' as const,
           scheduledStartAt: orderInfo.supportMeta.orderCall?.scheduledStartAt,
           timezone: orderInfo.supportMeta.orderCall?.timezone,
           status: orderInfo.supportMeta.orderCall?.status,
@@ -632,46 +639,14 @@ export default function TailorMessagesScreen() {
         </View>
       </View>
 
-      <View style={styles.safetyCard}>
-        <View style={styles.safetyIcon}>
-          <Feather name="shield" size={15} color={Colors.needleGreen} />
-        </View>
-        <View style={styles.safetyCopy}>
-          <Text style={styles.safetyTitle}>Protected chat</Text>
-          <Text style={styles.safetyText}>
-            Keep approvals, pickup details, and payments inside Drapeon.
-          </Text>
-          {conversationAccess.blocked ? (
-            <Text style={styles.safetyWarning}>
-              {conversationAccess.userMessage ??
-                'This conversation is paused while Drapeon reviews a safety concern.'}
-            </Text>
-          ) : null}
-          {orderInfo.stage === 'IN_DISPUTE' && !conversationAccess.blocked ? (
-            <Text style={styles.safetyWarning}>
-              Calls are paused while Drapeon reviews this concern. Keep updates and evidence in this thread.
-            </Text>
-          ) : null}
-          {loadingConversationAccess && !conversationAccess.blocked ? (
-            <Text style={styles.safetyMeta}>Checking safety status…</Text>
-          ) : null}
-        </View>
-        <TouchableOpacity
-          style={styles.safetyBtn}
-          onPress={openSafetyReportOptions}
-          disabled={reportingSafety}
-        >
-          <Text style={styles.safetyBtnText}>
-            {reportingSafety
-              ? conversationAccess.blocked
-                ? 'Pausing chat…'
-                : 'Sending report…'
-              : conversationAccess.blocked
-                ? 'Conversation paused'
-                : 'Report'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ChatSafetyBar
+        blocked={conversationAccess.blocked}
+        blockedMessage={conversationAccess.userMessage}
+        inDispute={orderInfo.stage === 'IN_DISPUTE'}
+        loading={loadingConversationAccess}
+        reporting={reportingSafety}
+        onPressReport={openSafetyReportOptions}
+      />
 
       <MessageThread
         orderId={orderId}
@@ -686,7 +661,10 @@ export default function TailorMessagesScreen() {
         focusedEventId={eventId}
         focusedMessageId={messageId}
         onConversationAction={openConversationAction}
-        callAvailable={callAvailable}
+        callAvailable={
+          consultationCallAvailable ||
+          callAvailable
+        }
         callLoading={startingCall}
         onPressCall={showCallOptions}
         callAccessibilityLabel={isConsultation ? 'Open consultation call options' : 'Schedule or join order call'}
@@ -695,6 +673,21 @@ export default function TailorMessagesScreen() {
         callGateActionLabel={consultationPaymentBlocked ? 'View order' : null}
         onPressCallGateAction={consultationPaymentBlocked ? openConsultationOrderDetails : undefined}
         callLifecycleEvent={callLifecycleEvent}
+        emptyConversationPrompt={
+          orderInfo.stage === 'CONSULTATION'
+            ? {
+                eyebrow: 'Consultation',
+                title: `Begin the consultation with ${orderInfo.customerName.split(' ')[0]}`,
+                body:
+                  'Clarify the details you need before quoting. Pick a starter below or write your own message.',
+                starters: [
+                  'Before I quote, I need to confirm your preferred fit and measurements.',
+                  'Let’s confirm the fabric, colour, and finish you want.',
+                  'I want to confirm the style details and delivery timing.',
+                ],
+              }
+            : undefined
+        }
         locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
         lockedMessage={
           conversationAccess.blocked

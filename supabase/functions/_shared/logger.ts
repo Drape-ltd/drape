@@ -1,7 +1,7 @@
 /**
  * _shared/logger.ts
  *
- * Structured JSON logger for Drape Edge Functions.
+ * Structured JSON logger for Drapeon Edge Functions.
  *
  * - log()   → writes JSON to stdout (captured by Supabase EF log dashboard)
  * - audit() → writes a row to audit_logs table via service-role client

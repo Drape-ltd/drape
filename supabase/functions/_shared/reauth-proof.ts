@@ -188,7 +188,7 @@ export async function verifyReauthProof(
     return {
       ok: false,
       code: 'REAUTH_PROOF_SECRET_MISSING',
-      message: 'Drape could not verify your recent password confirmation. Try again in a moment.',
+      message: 'Drapeon could not verify your recent password confirmation. Try again in a moment.',
     }
   }
 

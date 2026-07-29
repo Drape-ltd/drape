@@ -104,26 +104,26 @@ export function deriveCancellationPolicy(input: CancellationPolicyInput): Cancel
       customerRoute = 'REVIEW'
       tailorRoute = 'REVIEW'
       customerMessage =
-        'Use Drape review to cancel this order before dispatch starts. Item and standard fulfilment fees are usually refundable while the order is still with the seller.'
+        'Use Drapeon review to cancel this order before dispatch starts. Item and standard fulfilment fees are usually refundable while the order is still with the seller.'
       tailorMessage =
-        'If this ready-made order cannot move forward, open Drape review before pickup or dispatch starts.'
+        'If this ready-made order cannot move forward, open Drapeon review before pickup or dispatch starts.'
       pushUnique(refundableNow, 'ORDER_AMOUNT')
       pushUnique(refundableNow, 'STANDARD_FULFILLMENT_FEE', hasStandardFulfillmentFee)
       pushUnique(conditionalRefunds, 'PREMIUM_LOGISTICS_FEE', hasPremiumLogisticsFee)
     } else if (input.stage === 'READY_FOR_DRAPE_DISPATCH') {
       tailorRoute = 'REVIEW'
       customerMessage = dispatchBooked
-        ? 'Dispatch is already booked. Do not promise a cancellation here. Use Drape support if the order should not move forward.'
-        : 'This order is already packed for Drape dispatch. Customer self-cancel is closed at this point. If something is wrong, contact Drape.'
+        ? 'Dispatch is already booked. Do not promise a cancellation here. Use Drapeon support if the order should not move forward.'
+        : 'This order is already packed for Drapeon dispatch. Customer self-cancel is closed at this point. If something is wrong, contact Drapeon.'
       tailorMessage = dispatchBooked
-        ? 'Dispatch is already booked. Use Drape review so ops can decide whether refund, rebooking, or a deduction is appropriate.'
-        : 'If this packed order should not move forward, open Drape review before ops books dispatch.'
+        ? 'Dispatch is already booked. Use Drapeon review so ops can decide whether refund, rebooking, or a deduction is appropriate.'
+        : 'If this packed order should not move forward, open Drapeon review before ops books dispatch.'
       pushUnique(conditionalRefunds, 'ORDER_AMOUNT')
       pushUnique(conditionalRefunds, 'STANDARD_FULFILLMENT_FEE', hasStandardFulfillmentFee)
       pushUnique(conditionalRefunds, 'PREMIUM_LOGISTICS_FEE', hasPremiumLogisticsFee)
     } else if (dispatchBooked || ['OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'].includes(input.stage)) {
       customerMessage = 'Use the delivery-review path for dispatch failures or wrong-delivery issues. Standard cancellation is closed once dispatch is active.'
-      tailorMessage = 'Use the delivery-review path instead of cancellation once Drape dispatch is active.'
+      tailorMessage = 'Use the delivery-review path instead of cancellation once Drapeon dispatch is active.'
       pushUnique(conditionalRefunds, 'ORDER_AMOUNT')
       pushUnique(conditionalRefunds, 'STANDARD_FULFILLMENT_FEE', hasStandardFulfillmentFee)
       pushUnique(conditionalRefunds, 'PREMIUM_LOGISTICS_FEE', hasPremiumLogisticsFee)
@@ -180,9 +180,9 @@ export function deriveCancellationPolicy(input: CancellationPolicyInput): Cancel
       customerRoute = 'REVIEW'
       tailorRoute = 'REVIEW'
       customerMessage =
-        'Use Drape review to cancel this order before cutting starts. Quote amounts are usually refundable before irreversible work begins.'
+        'Use Drapeon review to cancel this order before cutting starts. Quote amounts are usually refundable before irreversible work begins.'
       tailorMessage =
-        'Use Drape review if this custom order cannot move forward cleanly before cutting starts.'
+        'Use Drapeon review if this custom order cannot move forward cleanly before cutting starts.'
       pushUnique(refundableNow, 'ORDER_AMOUNT')
       pushUnique(refundableNow, 'STANDARD_FULFILLMENT_FEE', hasStandardFulfillmentFee)
       pushUnique(conditionalRefunds, 'CONSULTATION_FEE', hasPaidConsultation)
@@ -192,10 +192,10 @@ export function deriveCancellationPolicy(input: CancellationPolicyInput): Cancel
         ? 'NONE'
         : 'REVIEW'
       customerMessage =
-        'Once cutting has started, standard cancellation is closed. Use concern or Drape support if something has gone wrong.'
+        'Once cutting has started, standard cancellation is closed. Use concern or Drapeon support if something has gone wrong.'
       tailorMessage =
         tailorRoute === 'REVIEW'
-          ? 'Irreversible work has started. If you truly cannot complete the order, ask Drape to review the order and any partial refund or payout impact.'
+          ? 'Irreversible work has started. If you truly cannot complete the order, ask Drapeon to review the order and any partial refund or payout impact.'
           : 'Handoff is already underway or complete. Use delivery review or support instead of cancellation.'
       pushUnique(conditionalRefunds, 'ORDER_AMOUNT')
       pushUnique(conditionalRefunds, 'STANDARD_FULFILLMENT_FEE', hasStandardFulfillmentFee)

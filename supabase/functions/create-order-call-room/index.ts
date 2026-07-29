@@ -3,11 +3,12 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
-import { enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
-import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
+import { enqueueOrderEventEmailJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { parseOrderSupportMeta } from '../_shared/order-support.ts'
+import { createDailyRoomWithObservability } from '../_shared/daily-observability.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -15,9 +16,14 @@ declare const EdgeRuntime: {
 
 const FN = 'create-order-call-room'
 const ROOM_TTL_SECONDS = 48 * 60 * 60
-const READY_MADE_JOIN_EARLY_MS = 5 * 60 * 1000
-const READY_MADE_JOIN_LATE_MS = 30 * 60 * 1000
+const ORDER_CALL_JOIN_EARLY_MS = 5 * 60 * 1000
+const ORDER_CALL_JOIN_LATE_MS = 30 * 60 * 1000
 const ORDER_CALL_STAGES = [
+  'PENDING_QUOTE',
+  'CONSULTATION',
+  'QUOTE_SENT',
+  'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -30,6 +36,7 @@ const ORDER_CALL_STAGES = [
   'SHIPPED',
   'DELIVERED',
   'COLLECTED',
+  'IN_DISPUTE',
 ] as const
 
 const BodySchema = z.object({
@@ -71,10 +78,6 @@ function isOrderCallStage(stage: string | null | undefined) {
   return typeof stage === 'string' && ORDER_CALL_STAGES.includes(stage as typeof ORDER_CALL_STAGES[number])
 }
 
-function isReadyMadeOrder(orderKind: string | null | undefined) {
-  return orderKind === 'READY_MADE'
-}
-
 function formatScheduledStart(startAt: string, timezone: string | null | undefined) {
   try {
     return new Date(startAt).toLocaleString('en-GB', {
@@ -90,14 +93,14 @@ function formatScheduledStart(startAt: string, timezone: string | null | undefin
   }
 }
 
-function readyMadeCallGate(specialNote: string | null | undefined) {
+function scheduledOrderCallGate(specialNote: string | null | undefined) {
   const supportMeta = parseOrderSupportMeta(specialNote ?? null)
   const orderCall = supportMeta.orderCall ?? null
   if (!orderCall || orderCall.status !== 'SCHEDULED' || !orderCall.scheduledStartAt) {
     return {
       ok: false as const,
       code: 'ORDER_CALL_NOT_SCHEDULED',
-      message: 'Schedule this ready-made order call from Messages first so both sides know when to join.',
+      message: 'Schedule this order call from Messages first so both sides know when to join.',
       supportMeta,
       orderCall,
     }
@@ -108,28 +111,28 @@ function readyMadeCallGate(specialNote: string | null | undefined) {
     return {
       ok: false as const,
       code: 'ORDER_CALL_INVALID_TIME',
-      message: 'This ready-made call time looks invalid. Schedule a new call from Messages.',
+      message: 'This order call time looks invalid. Schedule a new call from Messages.',
       supportMeta,
       orderCall,
     }
   }
 
   const nowMs = Date.now()
-  if (nowMs < startsAtMs - READY_MADE_JOIN_EARLY_MS) {
+  if (nowMs < startsAtMs - ORDER_CALL_JOIN_EARLY_MS) {
     return {
       ok: false as const,
       code: 'ORDER_CALL_TOO_EARLY',
-      message: `This ready-made call is scheduled for ${formatScheduledStart(orderCall.scheduledStartAt, orderCall.timezone)}. Join from Messages around the scheduled time.`,
+      message: `This order call is scheduled for ${formatScheduledStart(orderCall.scheduledStartAt, orderCall.timezone)}. Join from Messages around the scheduled time.`,
       supportMeta,
       orderCall,
     }
   }
 
-  if (nowMs > startsAtMs + READY_MADE_JOIN_LATE_MS) {
+  if (nowMs > startsAtMs + ORDER_CALL_JOIN_LATE_MS) {
     return {
       ok: false as const,
       code: 'ORDER_CALL_EXPIRED',
-      message: 'This ready-made call window has passed. Schedule a new call from Messages.',
+      message: 'This order call window has passed. Schedule a new call from Messages.',
       supportMeta,
       orderCall,
     }
@@ -140,8 +143,8 @@ function readyMadeCallGate(specialNote: string | null | undefined) {
 
 function callStartedStageNote(audioOnly: boolean) {
   return audioOnly
-    ? 'A Drape audio call is open for this order. Open now to join.'
-    : 'A Drape call is open for this order. Open now to join.'
+    ? 'A Drapeon audio call is open for this order. Open now to join.'
+    : 'A Drapeon call is open for this order. Open now to join.'
 }
 
 function counterpartPush(actorRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
@@ -149,16 +152,16 @@ function counterpartPush(actorRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
     return {
       title: audioOnly ? 'Tailor audio call ready' : 'Tailor call ready',
       body: audioOnly
-        ? 'Your tailor is trying to reach you on a Drape audio call. Tap to join now.'
-        : 'Your tailor is trying to reach you on a Drape call. Tap to join now.',
+        ? 'Your tailor is trying to reach you on a Drapeon audio call. Tap to join now.'
+        : 'Your tailor is trying to reach you on a Drapeon call. Tap to join now.',
     }
   }
 
   return {
     title: audioOnly ? 'Customer audio call ready' : 'Customer call ready',
     body: audioOnly
-      ? 'Your customer is trying to reach you on a Drape audio call. Tap to join now.'
-      : 'Your customer is trying to reach you on a Drape call. Tap to join now.',
+      ? 'Your customer is trying to reach you on a Drapeon audio call. Tap to join now.'
+      : 'Your customer is trying to reach you on a Drapeon call. Tap to join now.',
   }
 }
 
@@ -169,19 +172,19 @@ function counterpartAudience(actorRole: 'CUSTOMER' | 'TAILOR') {
 function orderCallSmsBody(reference: string | null, actorRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
   const actor = actorRole === 'TAILOR' ? 'tailor' : 'customer'
   const kind = audioOnly ? 'audio call' : 'call'
-  return `Drape: your ${actor} started a Drape ${kind} for order ${reference ?? 'your order'}. Open Drape to join.`;
+  return `Drapeon: your ${actor} started a Drapeon ${kind} for order ${reference ?? 'your order'}. Open Drapeon to join.`;
 }
 
 function fallbackMessage(audioOnly: boolean) {
   return audioOnly
-    ? 'Drape audio calling is unavailable right now. Continue inside Messages so the order record stays complete.'
-    : 'Drape video calling is unavailable right now. Continue inside Messages so the order record stays complete.'
+    ? 'Drapeon audio calling is unavailable right now. Continue inside Messages so the order record stays complete.'
+    : 'Drapeon video calling is unavailable right now. Continue inside Messages so the order record stays complete.'
 }
 
 function fallbackStageNote(audioOnly: boolean) {
   return audioOnly
-    ? 'Drape audio calling is unavailable. Continue this order conversation in Messages; Drape has logged the fallback.'
-    : 'Drape video calling is unavailable. Continue this order conversation in Messages; Drape has logged the fallback.'
+    ? 'Drapeon audio calling is unavailable. Continue this order conversation in Messages; Drapeon has logged the fallback.'
+    : 'Drapeon video calling is unavailable. Continue this order conversation in Messages; Drapeon has logged the fallback.'
 }
 
 Deno.serve(async (req) => {
@@ -190,7 +193,7 @@ Deno.serve(async (req) => {
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return jsonError(corsHeaders, 401, 'UNAUTHORIZED', 'You need to sign in again before starting a Drape call.')
+    if (!caller) return jsonError(corsHeaders, 401, 'UNAUTHORIZED', 'You need to sign in again before starting a Drapeon call.')
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) return jsonError(corsHeaders, 400, 'VALIDATION_FAILED', parsed.error)
@@ -216,18 +219,16 @@ Deno.serve(async (req) => {
 
     const isParticipant = order.tailor_id?.toString() === caller.id || order.customer_id?.toString() === caller.id
     if (!isParticipant) {
-      return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can start a Drape call.')
+      return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can start a Drapeon call.')
     }
 
     if (!isOrderCallStage(order.stage)) {
-      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Drape calls open after payment is confirmed and while the order is active.')
+      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Drapeon calls open after payment is confirmed and while the order is active.')
     }
 
-    const readyMadeGate = isReadyMadeOrder(order.order_kind)
-      ? readyMadeCallGate(order.special_note)
-      : null
-    if (readyMadeGate && !readyMadeGate.ok) {
-      return jsonError(corsHeaders, 409, readyMadeGate.code, readyMadeGate.message)
+    const orderCallGate = scheduledOrderCallGate(order.special_note)
+    if (!orderCallGate.ok) {
+      return jsonError(corsHeaders, 409, orderCallGate.code, orderCallGate.message)
     }
 
     const actorRole: 'CUSTOMER' | 'TAILOR' =
@@ -270,8 +271,8 @@ Deno.serve(async (req) => {
           if (counterpartId) {
             await Promise.allSettled([
               sendPushToUser(supabase, counterpartId, {
-                title: 'Drape call fallback active',
-                body: 'Calling is unavailable right now. Continue inside the order thread so Drape keeps the record.',
+                title: 'Drapeon call fallback active',
+                body: 'Calling is unavailable right now. Continue inside the order thread so Drapeon keeps the record.',
                 preferenceKey: 'messages',
                 data: { orderId },
               }),
@@ -283,7 +284,19 @@ Deno.serve(async (req) => {
                 event: 'order_call_fallback',
                 idempotencyKey: `order-call-fallback:${orderId}:${reason}:${counterpartId}`,
                 priority: 12,
-                body: `Drape: calling is unavailable for order ${order.reference ?? orderId}. Continue in the order thread so the record stays complete.`,
+                body: `Drapeon: calling is unavailable for order ${order.reference ?? orderId}. Continue in the order thread so the record stays complete.`,
+              }),
+              enqueueOrderEventEmailJob(supabase, {
+                order,
+                recipientUserId: counterpartId,
+                audience: counterpartAudience(actorRole),
+                source: FN,
+                subject: 'Drapeon calling is temporarily unavailable',
+                headline: 'Continue in Messages',
+                body: `Calling is unavailable for order ${order.reference ?? orderId}. Continue in the protected order thread while Drapeon keeps the order record.`,
+                idempotencyKey: `order-call-fallback-email:${orderId}:${reason}:${counterpartId}`,
+                ctaLabel: 'Open Messages',
+                priority: 12,
               }),
             ])
           }
@@ -307,83 +320,30 @@ Deno.serve(async (req) => {
     let existing = !!roomUrl && isFreshRoomUrl(roomUrl)
 
     if (!existing) {
-      let dailyApiKey = ''
-      try {
-        dailyApiKey = getDailyApiKey()
-      } catch {
-        return returnMessageFallback('DAILY_NOT_CONFIGURED')
-      }
-
       const expiryTime = Math.floor(Date.now() / 1000) + ROOM_TTL_SECONDS
-      const roomName = `drape-order-${String(order.reference ?? order.id).toLowerCase()}-${Date.now()}`
-      const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${dailyApiKey}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'drape-order-call-room/1.0',
-        },
-        body: JSON.stringify({
-          name: roomName,
-          properties: {
-            exp: expiryTime,
-            max_participants: 2,
-            enable_chat: true,
-            enable_screenshare: false,
-            start_video_off: audioOnly,
-            start_audio_off: false,
-          },
-        }),
+      const roomName = `drapeon-order-${String(order.reference ?? order.id).toLowerCase()}-${Date.now()}`
+      const dailyRoom = await createDailyRoomWithObservability({
+        supabase,
+        functionName: FN,
+        orderId,
+        actorId: caller.id,
+        actorRole,
+        stage: order.stage,
+        callKind: 'READY_MADE',
+        roomName,
+        expiresAt: expiryTime,
+        audioOnly,
       })
-
-      if (!dailyRes.ok) {
-        const errBody = await dailyRes.text()
-        log('error', FN, 'daily.error', { body: errBody })
-        return returnMessageFallback('DAILY_UNAVAILABLE')
-      }
-
-      const room = await dailyRes.json()
-      roomUrl = room.url
-
-      const updatePayload: Record<string, unknown> = { video_call_url: roomUrl }
-      if (readyMadeGate?.ok && !readyMadeGate.orderCall.completedAt) {
-        updatePayload.special_note = serializeOrderSupportMeta({
-          ...readyMadeGate.supportMeta,
-          orderCall: {
-            ...readyMadeGate.orderCall,
-            completedAt: new Date().toISOString(),
-          },
-        })
-      }
+      if (!dailyRoom.ok) return returnMessageFallback(dailyRoom.reason)
+      roomUrl = dailyRoom.url
 
       const { error: updateError } = await supabase
         .from('orders')
-        .update(updatePayload)
+        .update({ video_call_url: roomUrl })
         .eq('id', orderId)
 
       if (updateError) {
         return jsonError(corsHeaders, 500, 'ROOM_PERSIST_FAILED', 'The call room was created but could not be attached to this order cleanly.')
-      }
-    } else if (readyMadeGate?.ok && !readyMadeGate.orderCall.completedAt) {
-      const { error: updateCallMetaError } = await supabase
-        .from('orders')
-        .update({
-          special_note: serializeOrderSupportMeta({
-            ...readyMadeGate.supportMeta,
-            orderCall: {
-              ...readyMadeGate.orderCall,
-              completedAt: new Date().toISOString(),
-            },
-          }),
-        })
-        .eq('id', orderId)
-
-      if (updateCallMetaError) {
-        log('warn', FN, 'ready_made_call_meta_update_failed', {
-          actor_id: caller.id,
-          order_id: orderId,
-          error: updateCallMetaError.message,
-        })
       }
     }
 
@@ -442,6 +402,18 @@ Deno.serve(async (req) => {
             priority: 10,
             body: orderCallSmsBody(order.reference ?? null, actorRole, audioOnly),
           }),
+          enqueueOrderEventEmailJob(supabase, {
+            order,
+            recipientUserId: counterpartId,
+            audience: counterpartAudience(actorRole),
+            source: FN,
+            subject: audioOnly ? 'A Drapeon audio call is ready' : 'A Drapeon call is ready',
+            headline: 'Join the order call now',
+            body: `Your ${actorRole === 'TAILOR' ? 'tailor' : 'customer'} opened the call for order ${order.reference ?? orderId}. Open Drapeon to join.`,
+            idempotencyKey: `order-call-started-email:${orderId}:${counterpartId}:${callType}`,
+            ctaLabel: 'Open Drapeon',
+            priority: 10,
+          }),
         ]),
       )
     }
@@ -449,6 +421,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ url: roomUrl, existing }, 200, corsHeaders)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonError(corsHeaders, 500, 'INTERNAL_ERROR', 'Could not start the Drape call right now.')
+    return jsonError(corsHeaders, 500, 'INTERNAL_ERROR', 'Could not start the Drapeon call right now.')
   }
 })

@@ -137,7 +137,7 @@ export function OrderCallScheduleModal({
       {
         body: {
           orderId,
-          action: 'schedule-ready-made-call',
+          action: 'schedule-order-call',
           scheduledStartAt: scheduledAt.toISOString(),
           timezone: currentTimezone(),
           reason,
@@ -185,7 +185,7 @@ export function OrderCallScheduleModal({
         <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
           <View style={styles.header}>
             <View>
-              <Text style={styles.eyebrow}>Ready-made order</Text>
+              <Text style={styles.eyebrow}>Order call</Text>
               <Text style={styles.title}>{title}</Text>
             </View>
             <TouchableOpacity

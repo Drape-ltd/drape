@@ -13,7 +13,12 @@ const FN = 'order-call-action'
 const CALL_DURATION_MINUTES = 30
 const MIN_LEAD_MS = 30 * 60 * 1000
 const MAX_LEAD_MS = 30 * 24 * 60 * 60 * 1000
-const READY_MADE_CALL_STAGES = [
+const ORDER_CALL_STAGES = [
+  'PENDING_QUOTE',
+  'CONSULTATION',
+  'QUOTE_SENT',
+  'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -26,11 +31,12 @@ const READY_MADE_CALL_STAGES = [
   'SHIPPED',
   'DELIVERED',
   'COLLECTED',
+  'IN_DISPUTE',
 ] as const
 
 const BodySchema = z.object({
   orderId: uuid,
-  action: z.literal('schedule-ready-made-call'),
+  action: z.enum(['schedule-order-call', 'schedule-ready-made-call']),
   scheduledStartAt: isoDate,
   timezone: z.string().trim().max(80).optional(),
   reason: z.enum(['SIZE_OR_FIT', 'ITEM_CONDITION', 'PICKUP_OR_DELIVERY', 'TIMELINE', 'OTHER']).default('OTHER'),
@@ -109,7 +115,7 @@ Deno.serve(async (req) => {
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return jsonError(corsHeaders, 401, 'UNAUTHORIZED', 'Please sign in again before scheduling a Drape call.')
+    if (!caller) return jsonError(corsHeaders, 401, 'UNAUTHORIZED', 'Please sign in again before scheduling a Drapeon call.')
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) return jsonError(corsHeaders, 400, 'VALIDATION_FAILED', parsed.error)
@@ -136,12 +142,9 @@ Deno.serve(async (req) => {
 
     if (!order) return jsonError(corsHeaders, 404, 'ORDER_NOT_FOUND', 'That order could not be found anymore.')
     const actorRole = actorRoleForOrder(caller.id, order)
-    if (!actorRole) return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can schedule a Drape call.')
-    if (order.order_kind !== 'READY_MADE') {
-      return jsonError(corsHeaders, 409, 'CALL_TYPE_NOT_AVAILABLE', 'Use consultation calls for custom orders. Ready-made calls are scheduled from Messages.')
-    }
-    if (!READY_MADE_CALL_STAGES.includes(order.stage as typeof READY_MADE_CALL_STAGES[number])) {
-      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.')
+    if (!actorRole) return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can schedule a Drapeon call.')
+    if (!ORDER_CALL_STAGES.includes(order.stage as typeof ORDER_CALL_STAGES[number])) {
+      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Calls can be scheduled while an order is active. Keep using Messages on draft or closed orders.')
     }
 
     if (note?.trim()) {
@@ -153,7 +156,7 @@ Deno.serve(async (req) => {
         actorRole,
         surface: 'order_call_note',
         text: note,
-        message: 'Your note contains contact information not allowed outside Drape. Remove any phone numbers, handles, or links.',
+        message: 'Your note contains contact information not allowed outside Drapeon. Remove any phone numbers, handles, or links.',
         orderId,
       })
       if (contactBlock) return contactBlock
@@ -199,7 +202,7 @@ Deno.serve(async (req) => {
     }
 
     const startCopy = formatScheduledStart(scheduledStartAt, timezone)
-    const messageBody = `Drape order call scheduled for ${startCopy} about ${reasonLabel(reason)}. This ready-made call is free and stays inside Drape; keep final decisions in this thread.${note?.trim() ? ` Note: ${note.trim()}` : ''}`
+    const messageBody = `Drapeon order call scheduled for ${startCopy} about ${reasonLabel(reason)}. This call is free and stays inside Drapeon; keep final decisions in this thread.${note?.trim() ? ` Note: ${note.trim()}` : ''}`
 
     await Promise.allSettled([
       supabase.from('messages').insert({
@@ -234,8 +237,8 @@ Deno.serve(async (req) => {
           idempotencyKey: `order-call-scheduled:${orderId}:${scheduledStartAt}:${counterpartId}`,
           priority: 10,
           notification: {
-            title: 'Drape order call scheduled',
-            body: `A ready-made order call was scheduled for ${startCopy}. Open Messages for details.`,
+            title: 'Drapeon order call scheduled',
+            body: `An order call was scheduled for ${startCopy}. Open Messages for details.`,
             preferenceKey: 'messages',
             data: { orderId, target: 'messages' },
           },
@@ -248,7 +251,7 @@ Deno.serve(async (req) => {
           event: 'order_call_scheduled',
           idempotencyKey: `order-call-scheduled:${orderId}:${scheduledStartAt}:${counterpartId}`,
           priority: 10,
-          body: `Drape: ready-made order call scheduled for ${startCopy}. Open Messages for details.`,
+          body: `Drapeon: order call scheduled for ${startCopy}. Open Messages for details.`,
         }),
       ])
     }
@@ -256,6 +259,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, orderCall: nextOrderCall }, 200, corsHeaders)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonError(getCorsHeaders(req), 500, 'INTERNAL_ERROR', 'Could not schedule this Drape call right now.')
+    return jsonError(getCorsHeaders(req), 500, 'INTERNAL_ERROR', 'Could not schedule this Drapeon call right now.')
   }
 })

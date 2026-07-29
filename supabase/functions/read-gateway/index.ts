@@ -469,7 +469,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
     profile: {
       id: profileRow.id,
       userId: asString(profileRow.user_id),
-      displayName: asString(profileRow.display_name) ?? 'Drape tailor',
+      displayName: asString(profileRow.display_name) ?? 'Drapeon tailor',
       location: asString(profileRow.location) ?? 'Location not listed',
       sellerType: asString(profileRow.seller_type) ?? 'TAILOR',
       tier: asString(profileRow.tier) ?? 'BRONZE',

@@ -31,7 +31,12 @@ const POST_SLOT_FOLLOW_UP_MS = 10 * 60 * 1000;
 const REQUEST_FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
 const REQUEST_EXPIRE_MS = 48 * 60 * 60 * 1000;
 const ORDER_CALL_JOIN_LATE_MS = 30 * 60 * 1000;
-const READY_MADE_CALL_STAGES = [
+const ORDER_CALL_STAGES = [
+  "PENDING_QUOTE",
+  "CONSULTATION",
+  "QUOTE_SENT",
+  "PAYMENT_PENDING",
+  "PAYMENT_FAILED",
   "CONFIRMED",
   "DESIGNING",
   "SOURCING",
@@ -44,6 +49,7 @@ const READY_MADE_CALL_STAGES = [
   "SHIPPED",
   "DELIVERED",
   "COLLECTED",
+  "IN_DISPUTE",
 ] as const;
 
 type ReminderKind = "30" | "5" | "now";
@@ -132,17 +138,17 @@ function titleFor(kind: ReminderKind) {
 }
 
 function bodyFor(kind: ReminderKind) {
-  if (kind === "now") return "Your Drape consultation is starting now. Tap to join.";
+  if (kind === "now") return "Your Drapeon consultation is starting now. Tap to join.";
   return kind === "30"
-    ? "Your Drape consultation is coming up. Open the order when you are ready."
-    : "Your Drape consultation starts in 5 minutes. Open the order to join or start the call.";
+    ? "Your Drapeon consultation is coming up. Open the order when you are ready."
+    : "Your Drapeon consultation starts in 5 minutes. Open the order to join or start the call.";
 }
 
 function smsBodyFor(order: OrderRow, kind: ReminderKind) {
-  if (kind === "now") return `Drape: your consultation for order ${orderRef(order)} is starting now. Open Drape to join.`;
+  if (kind === "now") return `Drapeon: your consultation for order ${orderRef(order)} is starting now. Open Drapeon to join.`;
   return kind === "30"
-    ? `Drape: your consultation for order ${orderRef(order)} starts in 30 minutes. Open Drape to prepare.`
-    : `Drape: your consultation for order ${orderRef(order)} starts in 5 minutes. Open the order to join or start the call.`;
+    ? `Drapeon: your consultation for order ${orderRef(order)} starts in 30 minutes. Open Drapeon to prepare.`
+    : `Drapeon: your consultation for order ${orderRef(order)} starts in 5 minutes. Open the order to join or start the call.`;
 }
 
 function orderCallTitleFor(kind: ReminderKind) {
@@ -151,17 +157,17 @@ function orderCallTitleFor(kind: ReminderKind) {
 }
 
 function orderCallBodyFor(kind: ReminderKind) {
-  if (kind === "now") return "Your ready-made order call is starting now. Tap to join.";
+  if (kind === "now") return "Your scheduled order call is starting now. Tap to join.";
   return kind === "30"
-    ? "Your ready-made order call is coming up. Open Messages when you are ready."
-    : "Your ready-made order call starts in 5 minutes. Open Messages to join or start the call.";
+    ? "Your scheduled order call is coming up. Open Messages when you are ready."
+    : "Your scheduled order call starts in 5 minutes. Open Messages to join or start the call.";
 }
 
 function orderCallSmsBodyFor(order: OrderRow, kind: ReminderKind) {
-  if (kind === "now") return `Drape: your ready-made order call for ${orderRef(order)} is starting now. Open Drape to join.`;
+  if (kind === "now") return `Drapeon: your scheduled order call for ${orderRef(order)} is starting now. Open Drapeon to join.`;
   return kind === "30"
-    ? `Drape: your ready-made order call for ${orderRef(order)} starts in 30 minutes. Open Messages to prepare.`
-    : `Drape: your ready-made order call for ${orderRef(order)} starts in 5 minutes. Open Messages to join or start the call.`;
+    ? `Drapeon: your scheduled order call for ${orderRef(order)} starts in 30 minutes. Open Messages to prepare.`
+    : `Drapeon: your scheduled order call for ${orderRef(order)} starts in 5 minutes. Open Messages to join or start the call.`;
 }
 
 function requestAgeMs(meta: ConsultationMeta, nowMs: number) {
@@ -351,7 +357,7 @@ async function notifyBothByPushAndEmail(
       event: "consultation_followup",
       idempotencyKey: `consultation-followup:${order.id}:${payload.title}:customer:sms`,
       priority: 20,
-      body: `Drape: ${payload.customerBody}`,
+      body: `Drapeon: ${payload.customerBody}`,
     }));
   }
 
@@ -386,7 +392,7 @@ async function notifyBothByPushAndEmail(
       event: "consultation_followup",
       idempotencyKey: `consultation-followup:${order.id}:${payload.title}:tailor:sms`,
       priority: 20,
-      body: `Drape: ${payload.tailorBody}`,
+      body: `Drapeon: ${payload.tailorBody}`,
     }));
   }
 
@@ -472,7 +478,7 @@ async function handleConsultationLifecycle(
       await supabase.from("order_stage_updates").insert({
         order_id: order.id,
         stage: "PENDING_QUOTE",
-        note: "Drape expired the unanswered consultation request and returned the order to quote review.",
+        note: "Drapeon expired the unanswered consultation request and returned the order to quote review.",
       });
       await createConsultationOpsIssue(supabase, order, "HIGH", "EXPIRED");
       await notifyBothByPushAndEmail(supabase, order, {
@@ -598,15 +604,15 @@ async function handleConsultationLifecycle(
       order_id: order.id,
       stage: "PENDING_QUOTE",
       note: hadRoom
-        ? "Drape returned the order to quote review after the consultation window ended."
-        : "Drape expired the missed consultation slot and returned the order to quote review.",
+        ? "Drapeon returned the order to quote review after the consultation window ended."
+        : "Drapeon expired the missed consultation slot and returned the order to quote review.",
     });
     await createConsultationOpsIssue(supabase, order, hadRoom ? "HIGH" : "CRITICAL", "EXPIRED");
     await notifyBothByPushAndEmail(supabase, order, {
       title: hadRoom ? "Quote follow-up needed" : "Consultation slot expired",
       customerBody: hadRoom
         ? "The consultation window is complete. We are nudging the tailor to send a quote or next step."
-        : "The consultation slot expired without a call. The order is back in quote review and Drape has flagged it for follow-up.",
+        : "The consultation slot expired without a call. The order is back in quote review and Drapeon has flagged it for follow-up.",
       tailorBody: hadRoom
         ? "The consultation window is complete. Send a quote, reschedule, or decline the order now."
         : "The consultation slot expired without a call. Send a quote, reschedule, or decline the order so the customer has a next step.",
@@ -715,8 +721,7 @@ Deno.serve(async (req) => {
     const { data: readyMadeCallData, error: readyMadeCallError } = await supabase
       .from("orders")
       .select("id, reference, customer_id, tailor_id, stage, special_note, video_call_url, order_kind, garment_type, item_title, item_size")
-      .eq("order_kind", "READY_MADE")
-      .in("stage", READY_MADE_CALL_STAGES)
+      .in("stage", ORDER_CALL_STAGES)
       .not("special_note", "is", null);
 
     if (readyMadeCallError) {
