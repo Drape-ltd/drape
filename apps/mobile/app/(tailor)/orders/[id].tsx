@@ -7,8 +7,9 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import DateTimePicker from '@react-native-community/datetimepicker'
+import { DrapeDateTimePicker as DateTimePicker } from '@/components/ui/DrapeDateTimePicker'
 import { Feather } from '@expo/vector-icons'
+import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -26,7 +27,6 @@ import {
   openTrackingPage,
 } from '@/lib/shipping'
 import { stripExif } from '@/lib/stripExif'
-import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import {
   CANCELLATION_REVIEW_REASON_LABELS,
   CONSULTATION_EXPIRY_POLICY_LABELS,
@@ -84,8 +84,6 @@ import {
 import {
   Button,
   DrapeCapsuleButton,
-  DrapeFloatingActionDock,
-  DrapeIconButton,
   DrapeInlineActionCard,
   DrapeMediaMosaic,
   DrapeMediaViewer,
@@ -733,17 +731,8 @@ function defaultConsultationStart() {
   return value
 }
 
-function formatConsultationStart(value: string | Date | null | undefined) {
-  if (!value) return 'Choose a time'
-  const date = value instanceof Date ? value : new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'Choose a time'
-  return date.toLocaleString('en-GB', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+function formatConsultationStart(value: string | Date | null | undefined, timezone?: string | null) {
+  return formatExplicitZonedDateTime(value, { timeZone: timezone, fallback: 'Choose a time' }) ?? 'Choose a time'
 }
 
 function formatTimelineDate(value: string | null | undefined) {
@@ -918,10 +907,6 @@ export default function TailorOrderDetailScreen() {
   const capsuleNavScroll = useDrapeCapsuleNavScroll()
   const { user } = useAuth()
   const userId = user?.id ?? null
-
-  async function openCallUrl(url: string) {
-    await openConsultationCallUrl(url, 'tailor')
-  }
 
   function openOrderMessages() {
     if (!order) return
@@ -1625,8 +1610,8 @@ export default function TailorOrderDetailScreen() {
 
   const quotedHeadlineAmount = baseAmount(order)
   const conversationCtaLabel = isTerminalOrderStage(order.stage)
-    ? 'View conversation'
-    : `Message ${order.customerName.split(' ')[0]}`
+    ? 'Open order conversation'
+    : `Open order chat · ${order.customerName.split(' ')[0]}`
 
   async function confirmFabricReceived() {
     const currentOrderId = order?.id
@@ -1738,24 +1723,15 @@ export default function TailorOrderDetailScreen() {
     if (startingCall) return
     setStartingCall(callType)
     try {
-      const room = await createConsultationRoom(order.id, callType)
-      if (room?.fallback === 'MESSAGES') {
-        void fetchOrder()
-        openOrderMessages()
-        return
-      }
-      if (!room?.url) {
-        return
-      }
-      void fetchOrder()
-      await openCallUrl(room.url)
-    } catch (error) {
-      Alert.alert(
-        'Call unavailable',
-        isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. Keep the order thread updated and try starting the consultation again when the signal improves.'
-          : 'Could not start the consultation call. Keep using the order thread and try again in a moment.',
-      )
+      router.push({
+        pathname: '/call-join',
+        params: {
+          orderId: order.id,
+          callKind: 'consultation',
+          callType,
+          historyChain: appendToHistory(historyChain, `/(tailor)/orders/${order.id}`),
+        },
+      })
     } finally {
       setStartingCall(null)
     }
@@ -2038,7 +2014,7 @@ export default function TailorOrderDetailScreen() {
         style={styles.scroll}
         {...capsuleNavScroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 320, 420) }}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 48, 72) }}
       >
         <View style={styles.content}>
 
@@ -2069,6 +2045,16 @@ export default function TailorOrderDetailScreen() {
                 </Text>
               )}
             </View>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={conversationCtaLabel}
+              style={styles.messageAction}
+              onPress={openOrderMessages}
+            >
+              <Feather name="message-circle" size={17} color={Colors.needleGreenDark} />
+              <Text style={styles.messageActionText}>{conversationCtaLabel}</Text>
+              <Feather name="chevron-right" size={17} color={Colors.midGrey} />
+            </TouchableOpacity>
           </View>
 
           <SupportDisclosure
@@ -2212,9 +2198,9 @@ export default function TailorOrderDetailScreen() {
                   : "You've requested a consultation with this customer. Once done, send your quote or decline."}
               </Text>
               {consultationMeta?.proposedStartAt && customerRequestedConsultation ? (
-                <Text style={styles.supportHint}>Requested time: {formatConsultationStart(consultationMeta.proposedStartAt)}</Text>
+                <Text style={styles.supportHint}>Requested time: {formatConsultationStart(consultationMeta.proposedStartAt, consultationMeta.timezone)}</Text>
               ) : consultationMeta?.scheduledStartAt ? (
-                <Text style={styles.supportHint}>Scheduled: {formatConsultationStart(consultationMeta.scheduledStartAt)}</Text>
+                <Text style={styles.supportHint}>Scheduled: {formatConsultationStart(consultationMeta.scheduledStartAt, consultationMeta.timezone)}</Text>
               ) : null}
               {consultationPaymentRequired ? (
                 <Text style={styles.supportHint}>
@@ -2291,9 +2277,9 @@ export default function TailorOrderDetailScreen() {
                       <BriefRow label="Fee treatment" value={consultationMeta.feeCreditable ? 'Credits toward the final order' : 'Separate consultation fee'} />
                     ) : null}
                     {consultationMeta.scheduledStartAt ? (
-                      <BriefRow label="Scheduled for" value={formatConsultationStart(consultationMeta.scheduledStartAt)} />
+                      <BriefRow label="Scheduled for" value={formatConsultationStart(consultationMeta.scheduledStartAt, consultationMeta.timezone)} />
                     ) : consultationMeta.proposedStartAt ? (
-                      <BriefRow label="Requested time" value={formatConsultationStart(consultationMeta.proposedStartAt)} />
+                      <BriefRow label="Requested time" value={formatConsultationStart(consultationMeta.proposedStartAt, consultationMeta.timezone)} />
                     ) : null}
                     {consultationMeta.paymentTiming ? (
                       <BriefRow label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
@@ -2456,12 +2442,9 @@ export default function TailorOrderDetailScreen() {
                       : `Mark this order ready for Drapeon dispatch once it is packed and checked.`)}
               </Text>
               {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
-                <View style={styles.supportCard}>
-                  <Text style={styles.supportCardTitle}>Drapeon-managed dispatch</Text>
-                  <Text style={styles.supportHint}>
-                    Drapeon will manage the actual dispatch from ops once you mark this packed order ready. You only need to finish packing, quality-check the order, and hand it over cleanly.
-                  </Text>
-                </View>
+                <Text style={styles.stageCardHint}>
+                  Drapeon manages dispatch after this step; finish packing, quality-check the order, and hand it over cleanly.
+                </Text>
               ) : null}
               {order.deliveryMethod === 'LOCAL_COLLECTION' ? (
                 <Button
@@ -2488,7 +2471,7 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          {statusGuidance && (
+          {statusGuidance && order.stage !== 'FINISHING' && (
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               <Text style={styles.stageCardSub}>{statusGuidance}</Text>
@@ -2543,8 +2526,11 @@ export default function TailorOrderDetailScreen() {
           </SupportDisclosure>
 
           {showCancellationPolicyCard && (
-            <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Cancellation and refund review</Text>
+            <SupportDisclosure
+              title="Cancellation and refund review"
+              summary={cancellationReviewOpen ? 'Review open' : 'Policy and support options'}
+              defaultExpanded={cancellationReviewOpen}
+            >
               {cancellationReviewOpen ? (
                 <>
                   <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
@@ -2589,12 +2575,15 @@ export default function TailorOrderDetailScreen() {
                   ) : null}
                 </>
               )}
-            </View>
+            </SupportDisclosure>
           )}
 
           {(deliveryReviewOpen || canRequestDeliveryReview) && (
-            <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Dispatch and delivery review</Text>
+            <SupportDisclosure
+              title="Dispatch and delivery review"
+              summary={deliveryReviewOpen ? 'Review open' : 'Report a handoff problem'}
+              defaultExpanded={deliveryReviewOpen}
+            >
               {deliveryReviewOpen ? (
                 <>
                   <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
@@ -2622,7 +2611,7 @@ export default function TailorOrderDetailScreen() {
                   />
                 </>
               )}
-            </View>
+            </SupportDisclosure>
           )}
 
           {(scopeChangeOpen || canRequestScopeChange) && (
@@ -2864,8 +2853,21 @@ export default function TailorOrderDetailScreen() {
               ) : null}
 
               {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || fabricPolicy || materialIssue || fabricDescription || fabricApprovalStatus) && (
-                <View style={styles.supportCard}>
-                  <Text style={styles.supportCardTitle}>{order.fabricSource === 'TAILOR_SOURCES' ? 'Fabric sourcing' : 'Fabric handoff'}</Text>
+                <>
+                <SupportDisclosure
+                  title={order.fabricSource === 'TAILOR_SOURCES' ? 'Fabric sourcing' : 'Fabric handoff'}
+                  summary={
+                    order.supportMeta.fabricReceivedAt
+                      ? 'Received and recorded'
+                      : fabricApprovalStatus ?? fabricHandoffLabel ?? 'Source and handoff details'
+                  }
+                  defaultExpanded={
+                    canConfirmFabricReceived ||
+                    waitingOnTailorSourcing ||
+                    order.customDetail?.fabricApprovalStatus === 'PENDING_TAILOR_UPLOAD' ||
+                    order.customDetail?.fabricApprovalStatus === 'CHANGES_REQUESTED'
+                  }
+                >
                   <View style={styles.supportMetaList}>
                     <BriefRow
                       label="Fabric source"
@@ -2923,24 +2925,6 @@ export default function TailorOrderDetailScreen() {
                       onPress={() => openStageModal('SOURCING')}
                     />
                   ) : null}
-                  {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
-                    <Text style={styles.supportHint}>Tailor can reject before cutting for: {fabricPolicy.rejectionReasons.join(' · ')}</Text>
-                  ) : null}
-                  {fabricPolicy?.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
-                    <Text style={styles.supportHint}>Prep: {fabricPolicy.prepRequirements.join(' · ')}</Text>
-                  ) : null}
-                  {fabricPolicy?.lateFabricRule ? (
-                    <Text style={styles.supportHint}>If fabric is late: {fabricPolicy.lateFabricRule}</Text>
-                  ) : null}
-                  {fabricPolicy?.missingFabricRule ? (
-                    <Text style={styles.supportHint}>If fabric never arrives: {fabricPolicy.missingFabricRule}</Text>
-                  ) : null}
-                  {fabricPolicy?.replacementRule ? (
-                    <Text style={styles.supportHint}>Replacement rule: {fabricPolicy.replacementRule}</Text>
-                  ) : null}
-                  {fabricPolicy?.disagreementRule ? (
-                    <Text style={styles.supportHint}>Disagreement rule: {fabricPolicy.disagreementRule}</Text>
-                  ) : null}
                   {waitingOnTailorSourcing ? (
                     <View style={[styles.supportBadge, styles.supportBadgeSuccess]}>
                       <Text style={[styles.supportBadgeText, styles.supportBadgeTextSuccess]}>
@@ -2957,7 +2941,38 @@ export default function TailorOrderDetailScreen() {
                       disabled={confirmingFabricReceived}
                     />
                   ) : null}
-                </View>
+                </SupportDisclosure>
+                {fabricPolicy ? (
+                  <SupportDisclosure
+                    title="Fabric rules and exceptions"
+                    summary="Preparation, rejection, late fabric, replacements, and disputes"
+                    defaultExpanded={false}
+                  >
+                    {fabricPolicy.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
+                      <Text style={styles.supportHint}>
+                        Reject before cutting only for: {fabricPolicy.rejectionReasons.join(' · ')}
+                      </Text>
+                    ) : null}
+                    {fabricPolicy.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
+                      <Text style={styles.supportHint}>
+                        Preparation: {fabricPolicy.prepRequirements.join(' · ')}
+                      </Text>
+                    ) : null}
+                    {fabricPolicy.lateFabricRule ? (
+                      <Text style={styles.supportHint}>If fabric is late: {fabricPolicy.lateFabricRule}</Text>
+                    ) : null}
+                    {fabricPolicy.missingFabricRule ? (
+                      <Text style={styles.supportHint}>If fabric never arrives: {fabricPolicy.missingFabricRule}</Text>
+                    ) : null}
+                    {fabricPolicy.replacementRule ? (
+                      <Text style={styles.supportHint}>Replacement: {fabricPolicy.replacementRule}</Text>
+                    ) : null}
+                    {fabricPolicy.disagreementRule ? (
+                      <Text style={styles.supportHint}>If suitability is disputed: {fabricPolicy.disagreementRule}</Text>
+                    ) : null}
+                  </SupportDisclosure>
+                ) : null}
+                </>
               )}
 
               {order.orderKind === 'CUSTOM' && materialIssue ? (
@@ -3218,25 +3233,6 @@ export default function TailorOrderDetailScreen() {
 
         </View>
       </ScrollView>
-
-      <DrapeFloatingActionDock compactWidth={76} testID="tailor-order-message-dock">
-        {(compact) => compact ? (
-          <DrapeIconButton
-            icon="message-circle"
-            accessibilityLabel={conversationCtaLabel}
-            tone="primary"
-            onPress={openOrderMessages}
-          />
-        ) : (
-          <DrapeCapsuleButton
-            label={conversationCtaLabel}
-            tone="primary"
-            icon="message-circle"
-            style={{ flex: 1 }}
-            onPress={openOrderMessages}
-          />
-        )}
-      </DrapeFloatingActionDock>
 
       <HandoffSupportModal
         visible={showHandoffSupport}
@@ -6097,7 +6093,7 @@ function SupportDisclosure({
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
-    <View style={styles.supportCard}>
+    <View style={[styles.supportCard, styles.disclosureCard]}>
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityState={{ expanded }}
@@ -6220,6 +6216,25 @@ const styles = StyleSheet.create({
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginTop: Spacing.sm },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  messageAction: {
+    minHeight: 48,
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 11,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '30',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  messageActionText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.needleGreenDark,
+    fontWeight: FontWeight.semibold,
+  },
   orderTypePill: {
     marginTop: Spacing.sm,
     alignSelf: 'flex-start',
@@ -6255,12 +6270,11 @@ const styles = StyleSheet.create({
   },
 
   stageCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
     padding: 14,
     gap: 8,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.lightGrey,
-    ...Shadow.sm,
   },
   stageCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   stageCardSub: { fontSize: 13, color: Colors.inkLight, lineHeight: 19 },
@@ -6313,13 +6327,18 @@ const styles = StyleSheet.create({
   dossierMediaTile: { width: '31%', aspectRatio: 1, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
   dossierMediaImage: { width: '100%', height: '100%' },
   supportCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: 14,
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    paddingVertical: 12,
+    paddingHorizontal: 0,
     gap: 8,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderColor: Colors.midGrey + '55',
+  },
+  disclosureCard: {
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: Colors.boneDeep,
   },
   supportCardWarning: {
     borderWidth: 1,

@@ -37,7 +37,7 @@ describe('validatePhoneForProfile', () => {
   })
 
   it('rejects ambiguous numbers without a country code', () => {
-    expect(validatePhoneForProfile('6159642154')).toContain('country code')
+    expect(validatePhoneForProfile('6159642154')).toBe('Enter a valid phone number.')
   })
 
   it('rejects very short values', () => {
@@ -51,12 +51,12 @@ describe('validateDispatchPhoneForProfile', () => {
   })
 
   it('rejects ambiguous dispatch numbers without a country code', () => {
-    expect(validateDispatchPhoneForProfile('712345678')).toContain('country code')
+    expect(validateDispatchPhoneForProfile('712345678')).toBe('Enter a valid phone number.')
   })
 })
 
 describe('PHONE_STORAGE_HINT', () => {
   it('nudges users toward a country code', () => {
-    expect(PHONE_STORAGE_HINT).toContain('+2348012345678')
+    expect(PHONE_STORAGE_HINT).toContain('calling code')
   })
 })

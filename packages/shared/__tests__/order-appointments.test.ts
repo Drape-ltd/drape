@@ -1,5 +1,6 @@
 import {
   buildOrderAppointmentIcs,
+  buildGoogleCalendarEventUrl,
   deriveOrderAppointmentActions,
   normalizeOrderAppointmentSlots,
   validateOrderAppointmentProposal,
@@ -123,5 +124,18 @@ describe('order appointments', () => {
     expect(ics).toContain('BEGIN:VEVENT')
     expect(ics).toContain('DTSTART:20260728T130000Z')
     expect(ics).toContain('drapeon://orders/order-1?view=messages')
+  })
+
+  it('builds a Google Calendar URL for legacy scheduled calls', () => {
+    const url = buildGoogleCalendarEventUrl({
+      startsAt: '2026-07-28T13:00:00.000Z',
+      durationMinutes: 30,
+      title: 'Drapeon — Scheduled order call',
+      description: 'Item condition',
+    })
+
+    expect(url).toContain('calendar.google.com/calendar/render?')
+    expect(url).toContain('dates=20260728T130000Z%2F20260728T133000Z')
+    expect(url).toContain('Item%20condition')
   })
 })

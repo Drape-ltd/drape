@@ -1,5 +1,5 @@
 // Mobile aliases for the locked shared Drapeon design system.
-import { Appearance, useColorScheme } from 'react-native'
+import { useColorScheme } from 'react-native'
 import { colors, darkColors, shadows, typography } from '@drape/shared/design-system'
 
 const lightPalette = {
@@ -78,7 +78,9 @@ const darkPalette: DrapeColorPalette = {
 }
 
 function isDarkMode() {
-  return Appearance.getColorScheme() === 'dark'
+  // Drapeon is light-first while the dark palette is still being refined.
+  // Keep every legacy static StyleSheet and every hook-driven surface aligned.
+  return false
 }
 
 export function getDrapeColorScheme(): DrapeColorScheme {
@@ -90,13 +92,13 @@ export function getDrapeColors(scheme: DrapeColorScheme = getDrapeColorScheme())
 }
 
 export function useDrapeTheme() {
-  const colorScheme = useColorScheme()
-  const scheme: DrapeColorScheme = colorScheme === 'dark' ? 'dark' : 'light'
+  useColorScheme()
+  const scheme: DrapeColorScheme = 'light'
 
   return {
     scheme,
     colors: getDrapeColors(scheme),
-    isDark: scheme === 'dark',
+    isDark: false,
   } as const
 }
 

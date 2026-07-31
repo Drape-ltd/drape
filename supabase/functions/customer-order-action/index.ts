@@ -24,6 +24,7 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
+import { isSupportedTimeZone } from '../_shared/date-time.ts'
 import {
   buildCustomerOrderCancellationTerminalRequest,
   buildCustomerQuoteDeclineTerminalRequest,
@@ -45,6 +46,7 @@ import {
   SCOPE_CHANGE_TYPE_LABELS,
 } from '../_shared/order-support.ts'
 import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellation-policy.ts'
+import { notificationDestinationData } from '../../../packages/shared/src/notification-policy.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
 import { validateRecipientPhone } from '../_shared/phone.ts'
@@ -129,7 +131,7 @@ const BodySchema = z.object({
   scopeChangeDecision: z.enum(['ACCEPTED', 'DECLINED', 'CANCELLED']).optional(),
   scopeChangeResponseNote: z.string().trim().max(300).optional(),
   scheduledStartAt: isoDate.optional(),
-  timezone: z.string().trim().max(80).optional(),
+  timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
   quoteId: uuid.optional(),
   expectedQuoteVersion: z.number().int().positive().optional(),
   revisionRequestId: uuid.optional(),
@@ -369,7 +371,15 @@ async function sendPushToUser(
   const eventKey = notification.data?.event ?? notification.data?.type ?? notification.data?.stage ?? notification.preferenceKey ?? notification.title
   await enqueuePushJob(supabase, {
     userId,
-    notification,
+    notification: {
+      ...notification,
+      data: orderId
+        ? {
+            ...notification.data,
+            ...notificationDestinationData({ kind: 'ORDER', orderId }),
+          }
+        : notification.data,
+    },
     source: FN,
     orderId,
     idempotencyKey: `${FN}:${userId}:${orderId ?? 'user'}:${eventKey}:${notification.body}`,
@@ -1285,7 +1295,9 @@ Deno.serve(async (req) => {
           declinedBy: null,
           declineReason: null,
           reminder30SentAt: null,
+          reminder10SentAt: null,
           reminder5SentAt: null,
+          reminderStartSentAt: null,
         },
       }
 

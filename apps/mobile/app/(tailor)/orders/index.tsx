@@ -9,7 +9,6 @@ import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { Button, DrapeStatusChip, FeatureStateCard } from '@/components/ui'
 import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
-import { openConsultationCallUrl } from '@/lib/consultation'
 import { tailorOrderHint, tailorOrderPriority, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { supabase } from '@/lib/supabase'
@@ -134,16 +133,20 @@ export default function TailorOrdersScreen() {
     )
   })()
 
-  async function openCallUrl(url: string) {
-    await openConsultationCallUrl(url, 'tailor')
-  }
-
   async function handleConsultationCall(item: typeof orders[number]) {
     if (openingCallOrderId) return
     if (item.videoCallUrl) {
       setOpeningCallOrderId(item.id)
       try {
-        await openCallUrl(item.videoCallUrl)
+        router.push({
+          pathname: '/call-join',
+          params: {
+            orderId: item.id,
+            callKind: 'consultation',
+            callType: 'video',
+            historyChain: appendToHistory(undefined, '/(tailor)/orders'),
+          },
+        })
       } finally {
         setOpeningCallOrderId(null)
       }

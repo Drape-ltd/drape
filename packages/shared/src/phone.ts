@@ -1,3 +1,5 @@
+import { parsePhoneNumberFromString } from 'libphonenumber-js/min'
+
 const MIN_PHONE_DIGITS = 7
 const MAX_PHONE_DIGITS = 15
 const NIGERIAN_MOBILE_WITHOUT_ZERO_LENGTH = 10
@@ -65,10 +67,11 @@ export function validatePhoneForProfile(value: string): string | null {
   }
 
   if (normalized.startsWith('+')) {
-    return null
+    const parsed = parsePhoneNumberFromString(normalized)
+    return parsed?.isPossible() ? null : 'Enter a valid phone number.'
   }
 
-  return 'Add a full phone number with country code, for example +2348012345678. Nigerian mobile numbers starting with 0 also work.'
+  return 'Enter a valid phone number.'
 }
 
 export function validateDispatchPhoneForProfile(value: string): string | null {
@@ -80,11 +83,12 @@ export function validateDispatchPhoneForProfile(value: string): string | null {
   }
 
   if (normalized.startsWith('+')) {
-    return null
+    const parsed = parsePhoneNumberFromString(normalized)
+    return parsed?.isPossible() ? null : 'Enter a valid phone number.'
   }
 
-  return 'Add a full phone number with country code so the customer knows who is contacting them.'
+  return 'Enter a valid phone number.'
 }
 
 export const PHONE_STORAGE_HINT =
-  'Use a full phone number with country code, for example +2348012345678, +447700900123, or +14155550123. Nigerian mobile numbers starting with 0 also work.'
+  'Choose the calling code, then enter or paste the phone number.'

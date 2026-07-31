@@ -2,6 +2,7 @@ import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, ty
 import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet, Alert, Text, ScrollView, useColorScheme } from 'react-native'
 import { Stack, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { ContextualRouteSwipeBack } from '@/components/ui/ContextualRouteSwipeBack'
 import { Audio } from 'expo-av'
 import * as SplashScreen from 'expo-splash-screen'
 import { useFonts } from 'expo-font'
@@ -27,6 +28,8 @@ import { TailorProfileProvider } from '@/lib/tailorProfile'
 import { usePushNotifications } from '@/lib/notifications'
 import { ForegroundCallInviteSurface } from '@/components/ui/ForegroundCallInvite'
 import { ForegroundNotificationBanner } from '@/components/ui/ForegroundNotificationBanner'
+import { ActiveCallMiniDock } from '@/components/ui/ActiveCallMiniDock'
+import { ActiveCallProvider } from '@/lib/active-call'
 import { getStripePublishableKey } from '@/lib/payments'
 import { OptionalStripeProvider } from '@/lib/stripe-runtime'
 import { supabase } from '@/lib/supabase'
@@ -720,35 +723,40 @@ export default function RootLayout() {
             <AuthProvider>
               <CustomerProfileProvider>
                 <TailorProfileProvider>
+                  <ActiveCallProvider>
                   <RouteGuard appReady={appReady} />
                   <ForegroundCallInviteSurface />
                   <ForegroundNotificationBanner />
                   <ScreenAnalytics />
                   <BiometricGate />
                   <StatusBar style={statusBarStyle} />
-                  <Stack
-                    key={colorScheme ?? 'light'}
-                    screenOptions={{
-                      headerStyle: { backgroundColor: Colors.bone },
-                      headerTintColor: Colors.ink,
-                      headerTitleStyle: { fontFamily: Fonts.bodySemiBold, fontWeight: '600', color: Colors.ink },
-                      headerShadowVisible: false,
-                      contentStyle: { backgroundColor: Colors.bone },
-                      animation: 'slide_from_right',
-                    }}
-                  >
-                    <Stack.Screen name="index" options={{ headerShown: false }} />
-                    <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-                    <Stack.Screen name="(customer)" options={{ headerShown: false }} />
-                    <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
-                    <Stack.Screen name="passport" options={{ headerShown: false }} />
-                    <Stack.Screen name="group-invite/[code]" options={{ headerShown: false }} />
-                    <Stack.Screen name="referral/[code]" options={{ headerShown: false }} />
-                    <Stack.Screen name="vision" options={{ headerShown: false }} />
-                    <Stack.Screen name="call-join" options={{ headerShown: false }} />
-                    <Stack.Screen name="verify-handoff/[token]" options={{ headerShown: false }} />
-                    <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
-                  </Stack>
+                  <ContextualRouteSwipeBack>
+                    <Stack
+                      key={colorScheme ?? 'light'}
+                      screenOptions={{
+                        headerStyle: { backgroundColor: Colors.bone },
+                        headerTintColor: Colors.ink,
+                        headerTitleStyle: { fontFamily: Fonts.bodySemiBold, fontWeight: '600', color: Colors.ink },
+                        headerShadowVisible: false,
+                        contentStyle: { backgroundColor: Colors.bone },
+                        animation: 'slide_from_right',
+                      }}
+                    >
+                      <Stack.Screen name="index" options={{ headerShown: false }} />
+                      <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                      <Stack.Screen name="(customer)" options={{ headerShown: false }} />
+                      <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
+                      <Stack.Screen name="passport" options={{ headerShown: false }} />
+                      <Stack.Screen name="group-invite/[code]" options={{ headerShown: false }} />
+                      <Stack.Screen name="referral/[code]" options={{ headerShown: false }} />
+                      <Stack.Screen name="vision" options={{ headerShown: false }} />
+                      <Stack.Screen name="call-join" options={{ headerShown: false }} />
+                      <Stack.Screen name="verify-handoff/[token]" options={{ headerShown: false }} />
+                      <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
+                    </Stack>
+                  </ContextualRouteSwipeBack>
+                  <ActiveCallMiniDock />
+                  </ActiveCallProvider>
                 </TailorProfileProvider>
               </CustomerProfileProvider>
             </AuthProvider>

@@ -54,12 +54,14 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
+          "audio",
           "fetch",
-          "remote-notification"
+          "remote-notification",
+          "voip"
         ],
-        "NSCameraUsageDescription": "Drapeon uses your camera to upload reference photos, portfolio videos, progress updates, and Drapeon Vision scans.",
+        "NSCameraUsageDescription": "Drapeon uses your camera for protected order calls, reference photos, portfolio videos, progress updates, and Drapeon Vision scans.",
         "NSPhotoLibraryUsageDescription": "Drapeon accesses your photo library for order references and portfolio photos or videos.",
-        "NSMicrophoneUsageDescription": "Drapeon uses your microphone for voice note messages.",
+        "NSMicrophoneUsageDescription": "Drapeon uses your microphone for protected order calls and voice note messages.",
         "NSMotionUsageDescription": "Drapeon uses device motion to keep Drapeon Vision scans calibrated while you turn.",
         "NSFaceIDUsageDescription": "Drapeon uses Face ID to quickly and securely verify your identity when you return to the app."
       }
@@ -170,6 +172,25 @@
       [
         "@stripe/stripe-react-native",
         {}
+      ],
+      [
+        "@daily-co/config-plugin-rn-daily-js",
+        {
+          "enableCamera": true,
+          "enableMicrophone": true,
+          "enableScreenShare": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24
+          },
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
+        }
       ],
       "./plugins/with-vision-camera-ios-build-settings",
       "@react-native-community/datetimepicker",

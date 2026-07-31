@@ -10,6 +10,7 @@ type ConsultationRoomOptions = {
 
 type ConsultationRoomResponse = {
   url?: string | null
+  token?: string | null
   existing?: boolean
   fallback?: 'MESSAGES'
   message?: string
@@ -77,6 +78,7 @@ export async function createConsultationRoom(
   if (!error && data?.url) {
     return {
       url: data.url,
+      token: data.token ?? null,
       existing: data.existing === true,
     }
   }
@@ -126,6 +128,7 @@ export async function createConsultationRoom(
       Alert.alert('Call unavailable', payloadMessage ?? 'This consultation room is no longer available from this account.')
       return null
     case 'DAILY_UNAVAILABLE':
+    case 'DAILY_TOKEN_UNAVAILABLE':
       Alert.alert('Call unavailable', payloadMessage ?? 'Consultation calls are temporarily unavailable. Keep using messages and try again shortly.')
       return null
     case 'ROOM_PERSIST_FAILED':

@@ -31,6 +31,14 @@ const ALLOWED_JOB_TYPES = new Set<JobType>([
   'CREATE_OPS_ISSUE',
 ])
 
+type NotificationDeliveryResult = {
+  channel: 'PUSH' | 'EMAIL' | 'SMS'
+  status: 'DELIVERED' | 'SKIPPED'
+  reason?: string | null
+  provider?: string | null
+  providerReference?: string | null
+}
+
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
   return new Response(JSON.stringify(body), {
     status,
@@ -132,11 +140,16 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
           reason: result.reason,
         })
       }
-      return
+      return {
+        channel: 'PUSH',
+        status: result.status === 'SKIPPED' ? 'SKIPPED' : 'DELIVERED',
+        reason: result.status === 'SKIPPED' ? result.reason : null,
+        provider: 'EXPO_OR_WEB_PUSH',
+      } satisfies NotificationDeliveryResult
     }
 
     case 'SEND_SMS': {
-      await sendSmsToUser({
+      const result = await sendSmsToUser({
         supabase,
         userId: requireString(payload, 'userId'),
         audience: ensureAudience(asString(payload.audience), 'audience'),
@@ -145,11 +158,17 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         body: requireString(payload, 'body'),
         fallbackPhone: asString(payload.fallbackPhone),
       })
-      return
+      return {
+        channel: 'SMS',
+        status: result.status,
+        reason: 'reason' in result ? result.reason : null,
+        provider: result.provider,
+        providerReference: 'providerReference' in result ? result.providerReference : null,
+      } satisfies NotificationDeliveryResult
     }
 
     case 'SEND_ORDER_EVENT_EMAIL': {
-      await sendOrderEventEmail(supabase, {
+      const result = await sendOrderEventEmail(supabase, {
         order: asRecord(payload.order) as never,
         recipientUserId: requireString(payload, 'recipientUserId'),
         audience: ensureAudience(asString(payload.audience), 'audience'),
@@ -159,7 +178,13 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         ctaLabel: asString(payload.ctaLabel) ?? undefined,
         evidenceImageUrl: asString(payload.evidenceImageUrl),
       })
-      return
+      return {
+        channel: 'EMAIL',
+        status: result.status,
+        reason: 'reason' in result ? result.reason : null,
+        provider: 'provider' in result ? result.provider : 'RESEND',
+        providerReference: 'providerReference' in result ? result.providerReference : null,
+      } satisfies NotificationDeliveryResult
     }
 
     case 'SEND_ORDER_CONFIRMATION_EMAILS': {
@@ -168,7 +193,11 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         asRecord(payload.order) as never,
         ensurePaymentPhase(asString(payload.phase)) as never,
       )
-      return
+      return {
+        channel: 'EMAIL',
+        status: 'DELIVERED',
+        provider: 'RESEND',
+      } satisfies NotificationDeliveryResult
     }
 
     case 'SEND_OPS_VERIFICATION_EMAIL': {
@@ -191,7 +220,11 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
           `Ops verification email returned an invalid response: ${asString(response.error) ?? 'unknown error'}`,
         )
       }
-      return
+      return {
+        channel: 'EMAIL',
+        status: 'DELIVERED',
+        provider: 'RESEND',
+      } satisfies NotificationDeliveryResult
     }
 
     case 'CREATE_OPS_ISSUE': {
@@ -214,12 +247,62 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         dedupeKey: requireString(payload, 'dedupeKey'),
         metadata: asRecord(payload.metadata),
       } as never)
-      return
+      return null
     }
 
     default:
       throw new Error(`Unsupported job type: ${job.job_type}`)
   }
+}
+
+function notificationChannelForJob(jobType: string) {
+  if (jobType === 'SEND_PUSH') return 'PUSH'
+  if (jobType === 'SEND_SMS') return 'SMS'
+  if (jobType.includes('EMAIL')) return 'EMAIL'
+  return null
+}
+
+async function finishNotificationJob(
+  supabase: SupabaseClient,
+  job: JobRow,
+  workerId: string,
+  durationMs: number,
+  result: NotificationDeliveryResult | null,
+  deadReason?: string,
+) {
+  const channel = result?.channel ?? notificationChannelForJob(job.job_type)
+  if (!channel) {
+    await finishJob(supabase, {
+      jobId: job.id,
+      workerId,
+      succeeded: !deadReason,
+      error: deadReason ?? null,
+      durationMs,
+    })
+    return
+  }
+  const payload = asRecord(job.payload)
+  const recipientUserId =
+    asString(payload.userId) ?? asString(payload.recipientUserId)
+  const { error } = await supabase.rpc('finish_notification_job', {
+    p_job_id: job.id,
+    p_worker_id: workerId,
+    p_succeeded: !deadReason,
+    p_error: deadReason ?? null,
+    p_duration_ms: durationMs,
+    p_channel: channel,
+    p_outcome_status: deadReason ? 'DEAD' : result?.status ?? 'DEAD',
+    p_recipient_user_id: recipientUserId,
+    p_order_id: asString(payload.orderId) ?? asString(asRecord(payload.order).id),
+    p_reason: deadReason ?? result?.reason ?? null,
+    p_provider: result?.provider ?? null,
+    p_provider_reference: result?.providerReference ?? null,
+    p_metadata: {
+      job_type: job.job_type,
+      attempt_count: job.attempt_count,
+    },
+  })
+  if (error) throw new Error(`Could not finish notification job: ${error.message}`)
 }
 
 async function reportDeadJob(
@@ -332,13 +415,14 @@ Deno.serve(async (req) => {
   for (const job of jobs) {
     const startedAt = performance.now()
     try {
-      await processJob(supabase, job)
-      await finishJob(supabase, {
-        jobId: job.id,
+      const deliveryResult = await processJob(supabase, job)
+      await finishNotificationJob(
+        supabase,
+        job,
         workerId,
-        succeeded: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      })
+        Math.round(performance.now() - startedAt),
+        deliveryResult,
+      )
       results.push({ id: job.id, jobType: job.job_type, status: 'SUCCEEDED' })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -351,15 +435,25 @@ Deno.serve(async (req) => {
         error: message,
       })
 
-      await finishJob(supabase, {
-        jobId: job.id,
-        workerId,
-        succeeded: false,
-        error: message,
-        durationMs: Math.round(performance.now() - startedAt),
-      })
-
-      if (willDead) await reportDeadJob(supabase, job, message)
+      if (willDead) {
+        await finishNotificationJob(
+          supabase,
+          job,
+          workerId,
+          Math.round(performance.now() - startedAt),
+          null,
+          message,
+        )
+        await reportDeadJob(supabase, job, message)
+      } else {
+        await finishJob(supabase, {
+          jobId: job.id,
+          workerId,
+          succeeded: false,
+          error: message,
+          durationMs: Math.round(performance.now() - startedAt),
+        })
+      }
       results.push({ id: job.id, jobType: job.job_type, status: willDead ? 'DEAD' : 'RETRYABLE', error: message })
     }
   }

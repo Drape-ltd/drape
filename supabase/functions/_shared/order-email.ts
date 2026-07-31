@@ -4,6 +4,7 @@ import { normalizeDrapeonSender, renderDrapeonTransactionalEmail } from './email
 
 const FN = 'order-email'
 const RESEND_API = 'https://api.resend.com/emails'
+const EMAIL_MEDIA_TTL_SECONDS = 60 * 60
 
 type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
 type OrderEventAudience = 'CUSTOMER' | 'TAILOR'
@@ -80,6 +81,33 @@ function fulfillmentLabel(method: string | null | undefined) {
   return 'Shipping'
 }
 
+function orderPhotoStoragePath(value: string | null | undefined) {
+  const raw = value?.trim()
+  if (!raw || /^data:|^blob:/iu.test(raw)) return null
+  const publicMarker = '/storage/v1/object/public/order-photos/'
+  const signedMarker = '/storage/v1/object/sign/order-photos/'
+  if (raw.includes(publicMarker)) return raw.split(publicMarker)[1]?.split(/[?#]/u)[0] ?? null
+  if (raw.includes(signedMarker)) return raw.split(signedMarker)[1]?.split(/[?#]/u)[0] ?? null
+  if (/^https?:\/\//iu.test(raw)) return null
+  return raw.replace(/^\/+|^order-photos\//gu, '').split(/[?#]/u)[0] ?? null
+}
+
+async function signedEmailEvidenceUrl(
+  supabase: SupabaseClient,
+  value: string | null | undefined,
+) {
+  const path = orderPhotoStoragePath(value)
+  if (!path) return null
+  const { data, error } = await supabase.storage
+    .from('order-photos')
+    .createSignedUrl(path, EMAIL_MEDIA_TTL_SECONDS)
+  if (error || !data?.signedUrl) {
+    log('warn', FN, 'evidence.sign_failed', { path, error: error?.message ?? 'missing signed URL' })
+    return null
+  }
+  return data.signedUrl
+}
+
 function customerOrderConfirmationEmail(input: {
   customerName: string
   order: OrderEmailContext
@@ -150,6 +178,8 @@ function customerOrderConfirmationEmail(input: {
       ],
       ctaLabel: 'Open order',
       ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+      secondaryCtaLabel: 'Open in Drapeon',
+      secondaryCtaUrl: `drapeon://orders/${encodeURIComponent(input.order.id)}`,
     }),
   }
 }
@@ -222,6 +252,8 @@ function tailorOrderConfirmationEmail(input: {
       ],
       ctaLabel: 'Open order',
       ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+      secondaryCtaLabel: 'Open in Drapeon',
+      secondaryCtaUrl: `drapeon://orders/${encodeURIComponent(input.order.id)}`,
     }),
   }
 }
@@ -310,6 +342,11 @@ async function sendEmail(to: string, subject: string, html: string, text: string
     })
     throw new Error(`Resend email failed with ${response.status}${body ? `: ${body}` : ''}`)
   }
+  const payload = await response.json().catch(() => null)
+  return {
+    provider: 'RESEND' as const,
+    providerReference: typeof payload?.id === 'string' ? payload.id : null,
+  }
 }
 
 function orderEventEmail(input: {
@@ -338,8 +375,11 @@ function orderEventEmail(input: {
     ],
     ctaLabel,
     ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+    secondaryCtaLabel: 'Open in Drapeon',
+    secondaryCtaUrl: `drapeon://orders/${encodeURIComponent(input.order.id)}`,
     evidenceImageUrl,
     evidenceImageAlt: `Latest production photo for order #${ref}`,
+    evidenceLinkUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}#order-media`,
   })
 }
 
@@ -357,12 +397,13 @@ export async function sendOrderEventEmail(
   }
 ) {
   const email = await lookupUserEmail(supabase, input.recipientUserId)
-  if (!email) return
+  if (!email) return { status: 'SKIPPED' as const, reason: 'MISSING_EMAIL' }
 
   const recipientName =
     input.audience === 'CUSTOMER'
       ? await lookupCustomerName(supabase, input.recipientUserId)
       : await lookupTailorName(supabase, input.recipientUserId)
+  const evidenceImageUrl = await signedEmailEvidenceUrl(supabase, input.evidenceImageUrl)
 
   const payload = orderEventEmail({
     recipientName,
@@ -370,9 +411,10 @@ export async function sendOrderEventEmail(
     headline: input.headline ?? input.subject,
     body: input.body,
     ctaLabel: input.ctaLabel,
-    evidenceImageUrl: input.evidenceImageUrl,
+    evidenceImageUrl,
   })
-  await sendEmail(email, input.subject, payload.html, payload.text)
+  const result = await sendEmail(email, input.subject, payload.html, payload.text)
+  return { status: 'DELIVERED' as const, ...result }
 }
 
 export async function sendOrderConfirmationEmails(

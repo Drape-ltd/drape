@@ -146,6 +146,9 @@ verify_jwt = false
 [functions.message-action]
 verify_jwt = false
 
+[functions.message-translation]
+verify_jwt = false
+
 [functions.material-advance-action]
 verify_jwt = false
 
@@ -231,4 +234,10 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.seller-access-review-request]
+verify_jwt = false
+
+[functions.daily-call-webhook]
+verify_jwt = false
+
+[functions.daily-webhook-setup]
 verify_jwt = false

@@ -25,6 +25,7 @@ import {
 const FN = "send-consultation-reminders";
 const WINDOW_MS = 5 * 60 * 1000;
 const THIRTY_MIN_MS = 30 * 60 * 1000;
+const TEN_MIN_MS = 10 * 60 * 1000;
 const FIVE_MIN_MS = 5 * 60 * 1000;
 const CONSULTATION_DURATION_MS = 30 * 60 * 1000;
 const POST_SLOT_FOLLOW_UP_MS = 10 * 60 * 1000;
@@ -52,7 +53,7 @@ const ORDER_CALL_STAGES = [
   "IN_DISPUTE",
 ] as const;
 
-type ReminderKind = "30" | "5" | "now";
+type ReminderKind = "30" | "10" | "5" | "now";
 
 type OrderRow = {
   id: string;
@@ -86,16 +87,20 @@ function dueReminder(meta: ConsultationMeta, nowMs: number): ReminderKind | null
   const startsAt = new Date(meta.scheduledStartAt!).getTime();
   const msUntil = startsAt - nowMs;
 
-  if (!meta.reminder30SentAt && Math.abs(msUntil - THIRTY_MIN_MS) <= WINDOW_MS) {
-    return "30";
+  if (!meta.reminderStartSentAt && msUntil <= 0 && msUntil >= -WINDOW_MS) {
+    return "now";
   }
 
-  if (!meta.reminder5SentAt && Math.abs(msUntil - FIVE_MIN_MS) <= WINDOW_MS) {
+  if (msUntil > 0 && !meta.reminder5SentAt && msUntil <= FIVE_MIN_MS) {
     return "5";
   }
 
-  if (!meta.reminderStartSentAt && msUntil <= 0 && Math.abs(msUntil) <= WINDOW_MS) {
-    return "now";
+  if (msUntil > FIVE_MIN_MS && !meta.reminder10SentAt && msUntil <= TEN_MIN_MS) {
+    return "10";
+  }
+
+  if (msUntil > TEN_MIN_MS && !meta.reminder30SentAt && msUntil <= THIRTY_MIN_MS) {
+    return "30";
   }
 
   return null;
@@ -117,16 +122,20 @@ function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): ReminderKind 
   const startsAt = new Date(meta.scheduledStartAt!).getTime();
   const msUntil = startsAt - nowMs;
 
-  if (!meta.reminder30SentAt && Math.abs(msUntil - THIRTY_MIN_MS) <= WINDOW_MS) {
-    return "30";
+  if (!meta.reminderStartSentAt && msUntil <= 0 && msUntil >= -WINDOW_MS) {
+    return "now";
   }
 
-  if (!meta.reminder5SentAt && Math.abs(msUntil - FIVE_MIN_MS) <= WINDOW_MS) {
+  if (msUntil > 0 && !meta.reminder5SentAt && msUntil <= FIVE_MIN_MS) {
     return "5";
   }
 
-  if (!meta.reminderStartSentAt && msUntil <= 0 && Math.abs(msUntil) <= WINDOW_MS) {
-    return "now";
+  if (msUntil > FIVE_MIN_MS && !meta.reminder10SentAt && msUntil <= TEN_MIN_MS) {
+    return "10";
+  }
+
+  if (msUntil > TEN_MIN_MS && !meta.reminder30SentAt && msUntil <= THIRTY_MIN_MS) {
+    return "30";
   }
 
   return null;
@@ -134,40 +143,32 @@ function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): ReminderKind 
 
 function titleFor(kind: ReminderKind) {
   if (kind === "now") return "Consultation starting now";
-  return kind === "30" ? "Consultation in 30 minutes" : "Consultation starts soon";
+  return `Consultation in ${kind} minutes`;
 }
 
 function bodyFor(kind: ReminderKind) {
   if (kind === "now") return "Your Drapeon consultation is starting now. Tap to join.";
-  return kind === "30"
-    ? "Your Drapeon consultation is coming up. Open the order when you are ready."
-    : "Your Drapeon consultation starts in 5 minutes. Open the order to join or start the call.";
+  return `Your Drapeon consultation starts in ${kind} minutes. Open the order to prepare or join.`;
 }
 
 function smsBodyFor(order: OrderRow, kind: ReminderKind) {
   if (kind === "now") return `Drapeon: your consultation for order ${orderRef(order)} is starting now. Open Drapeon to join.`;
-  return kind === "30"
-    ? `Drapeon: your consultation for order ${orderRef(order)} starts in 30 minutes. Open Drapeon to prepare.`
-    : `Drapeon: your consultation for order ${orderRef(order)} starts in 5 minutes. Open the order to join or start the call.`;
+  return `Drapeon: your consultation for order ${orderRef(order)} starts in ${kind} minutes. Open Drapeon to prepare or join.`;
 }
 
 function orderCallTitleFor(kind: ReminderKind) {
   if (kind === "now") return "Order call starting now";
-  return kind === "30" ? "Order call in 30 minutes" : "Order call starts soon";
+  return `Order call in ${kind} minutes`;
 }
 
 function orderCallBodyFor(kind: ReminderKind) {
   if (kind === "now") return "Your scheduled order call is starting now. Tap to join.";
-  return kind === "30"
-    ? "Your scheduled order call is coming up. Open Messages when you are ready."
-    : "Your scheduled order call starts in 5 minutes. Open Messages to join or start the call.";
+  return `Your scheduled order call starts in ${kind} minutes. Open Messages to prepare or join.`;
 }
 
 function orderCallSmsBodyFor(order: OrderRow, kind: ReminderKind) {
   if (kind === "now") return `Drapeon: your scheduled order call for ${orderRef(order)} is starting now. Open Drapeon to join.`;
-  return kind === "30"
-    ? `Drapeon: your scheduled order call for ${orderRef(order)} starts in 30 minutes. Open Messages to prepare.`
-    : `Drapeon: your scheduled order call for ${orderRef(order)} starts in 5 minutes. Open Messages to join or start the call.`;
+  return `Drapeon: your scheduled order call for ${orderRef(order)} starts in ${kind} minutes. Open Drapeon to prepare or join.`;
 }
 
 function requestAgeMs(meta: ConsultationMeta, nowMs: number) {
@@ -202,7 +203,7 @@ async function sendReminder(
   order: OrderRow,
   kind: ReminderKind,
 ) {
-  const urgent = kind === "now";
+  const urgent = kind === "10" || kind === "5" || kind === "now";
   const data: Record<string, string> = urgent
     ? { orderId: order.id, target: "call-join", callKind: "consultation", callType: "video" }
     : { orderId: order.id };
@@ -214,7 +215,7 @@ async function sendReminder(
     ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "time-sensitive" as const } : {}),
   };
 
-  const sends: Promise<unknown>[] = [];
+  const sends: Promise<boolean>[] = [];
   if (order.customer_id) {
     sends.push(enqueuePushJob(supabase, {
       userId: order.customer_id,
@@ -233,6 +234,18 @@ async function sendReminder(
       idempotencyKey: `consultation-reminder:${order.id}:${kind}:customer:sms`,
       priority: 15,
       body: smsBodyFor(order, kind),
+    }));
+    sends.push(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.customer_id,
+      audience: "CUSTOMER",
+      subject: titleFor(kind),
+      headline: titleFor(kind),
+      body: bodyFor(kind),
+      ctaLabel: kind === "30" ? "Open order" : "Open Drapeon to join",
+      source: FN,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:customer:email`,
+      priority: 15,
     }));
   }
   if (order.tailor_id) {
@@ -254,8 +267,23 @@ async function sendReminder(
       priority: 15,
       body: smsBodyFor(order, kind),
     }));
+    sends.push(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.tailor_id,
+      audience: "TAILOR",
+      subject: titleFor(kind),
+      headline: titleFor(kind),
+      body: bodyFor(kind),
+      ctaLabel: kind === "30" ? "Open order" : "Open Drapeon to join",
+      source: FN,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:tailor:email`,
+      priority: 15,
+    }));
   }
-  await Promise.allSettled(sends);
+  const queued = await Promise.all(sends);
+  if (queued.some((result) => !result)) {
+    throw new Error(`Could not queue every consultation ${kind}-minute reminder delivery.`);
+  }
 }
 
 async function sendOrderCallReminder(
@@ -263,7 +291,7 @@ async function sendOrderCallReminder(
   order: OrderRow,
   kind: ReminderKind,
 ) {
-  const urgent = kind === "now";
+  const urgent = kind === "10" || kind === "5" || kind === "now";
   const data: Record<string, string> = urgent
     ? { orderId: order.id, target: "call-join", callKind: "ready-made", callType: "video" }
     : { orderId: order.id, target: "messages" };
@@ -275,7 +303,7 @@ async function sendOrderCallReminder(
     ...(urgent ? { channelId: "calls", sound: "default", interruptionLevel: "time-sensitive" as const } : {}),
   };
 
-  const sends: Promise<unknown>[] = [];
+  const sends: Promise<boolean>[] = [];
   if (order.customer_id) {
     sends.push(enqueuePushJob(supabase, {
       userId: order.customer_id,
@@ -294,6 +322,18 @@ async function sendOrderCallReminder(
       idempotencyKey: `order-call-reminder:${order.id}:${kind}:customer:sms`,
       priority: 15,
       body: orderCallSmsBodyFor(order, kind),
+    }));
+    sends.push(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.customer_id,
+      audience: "CUSTOMER",
+      subject: orderCallTitleFor(kind),
+      headline: orderCallTitleFor(kind),
+      body: orderCallBodyFor(kind),
+      ctaLabel: kind === "30" ? "Open order" : "Open Drapeon to join",
+      source: FN,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:customer:email`,
+      priority: 15,
     }));
   }
   if (order.tailor_id) {
@@ -315,9 +355,24 @@ async function sendOrderCallReminder(
       priority: 15,
       body: orderCallSmsBodyFor(order, kind),
     }));
+    sends.push(enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: order.tailor_id,
+      audience: "TAILOR",
+      subject: orderCallTitleFor(kind),
+      headline: orderCallTitleFor(kind),
+      body: orderCallBodyFor(kind),
+      ctaLabel: kind === "30" ? "Open order" : "Open Drapeon to join",
+      source: FN,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:tailor:email`,
+      priority: 15,
+    }));
   }
 
-  await Promise.allSettled(sends);
+  const queued = await Promise.all(sends);
+  if (queued.some((result) => !result)) {
+    throw new Error(`Could not queue every order-call ${kind}-minute reminder delivery.`);
+  }
 }
 
 async function notifyBothByPushAndEmail(
@@ -729,9 +784,11 @@ Deno.serve(async (req) => {
     }
 
     let sent30 = 0;
+    let sent10 = 0;
     let sent5 = 0;
     let sentNow = 0;
     let orderCallSent30 = 0;
+    let orderCallSent10 = 0;
     let orderCallSent5 = 0;
     let orderCallSentNow = 0;
     let followedUp = 0;
@@ -771,9 +828,22 @@ Deno.serve(async (req) => {
       const nextConsultation = {
         ...consultation!,
         reminder30SentAt: kind === "30" ? now.toISOString() : consultation!.reminder30SentAt ?? null,
+        reminder10SentAt: kind === "10" ? now.toISOString() : consultation!.reminder10SentAt ?? null,
         reminder5SentAt: kind === "5" ? now.toISOString() : consultation!.reminder5SentAt ?? null,
         reminderStartSentAt: kind === "now" ? now.toISOString() : consultation!.reminderStartSentAt ?? null,
       };
+
+      try {
+        await sendReminder(supabase, order, kind);
+      } catch (error) {
+        skipped += 1;
+        log("warn", FN, "consultation.reminder_enqueue_failed", {
+          order_id: order.id,
+          reminder: kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
 
       const { error: updateError } = await supabase
         .from("orders")
@@ -791,7 +861,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      await sendReminder(supabase, order, kind);
       await audit(supabase, {
         event: "consultation.reminder_sent",
         actor_role: "SYSTEM",
@@ -804,6 +873,7 @@ Deno.serve(async (req) => {
       });
 
       if (kind === "30") sent30 += 1;
+      else if (kind === "10") sent10 += 1;
       else if (kind === "5") sent5 += 1;
       else sentNow += 1;
     }
@@ -840,9 +910,22 @@ Deno.serve(async (req) => {
       const nextOrderCall = {
         ...orderCall!,
         reminder30SentAt: kind === "30" ? now.toISOString() : orderCall!.reminder30SentAt ?? null,
+        reminder10SentAt: kind === "10" ? now.toISOString() : orderCall!.reminder10SentAt ?? null,
         reminder5SentAt: kind === "5" ? now.toISOString() : orderCall!.reminder5SentAt ?? null,
         reminderStartSentAt: kind === "now" ? now.toISOString() : orderCall!.reminderStartSentAt ?? null,
       };
+
+      try {
+        await sendOrderCallReminder(supabase, order, kind);
+      } catch (error) {
+        skipped += 1;
+        log("warn", FN, "ready_made_order_call.reminder_enqueue_failed", {
+          order_id: order.id,
+          reminder: kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
 
       const { error: updateError } = await supabase
         .from("orders")
@@ -860,7 +943,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      await sendOrderCallReminder(supabase, order, kind);
       await audit(supabase, {
         event: "order_call.reminder_sent",
         actor_role: "SYSTEM",
@@ -873,11 +955,12 @@ Deno.serve(async (req) => {
       });
 
       if (kind === "30") orderCallSent30 += 1;
+      else if (kind === "10") orderCallSent10 += 1;
       else if (kind === "5") orderCallSent5 += 1;
       else orderCallSentNow += 1;
     }
 
-    return new Response(JSON.stringify({ ok: true, sent30, sent5, sentNow, orderCallSent30, orderCallSent5, orderCallSentNow, followedUp, expired, skipped }), {
+    return new Response(JSON.stringify({ ok: true, sent30, sent10, sent5, sentNow, orderCallSent30, orderCallSent10, orderCallSent5, orderCallSentNow, followedUp, expired, skipped }), {
       status: 200,
       headers: { ...cors, "Content-Type": "application/json" },
     });

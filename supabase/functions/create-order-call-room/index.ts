@@ -8,7 +8,12 @@ import { audit, log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { enqueueOrderEventEmailJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import { parseOrderSupportMeta } from '../_shared/order-support.ts'
-import { createDailyRoomWithObservability } from '../_shared/daily-observability.ts'
+import { formatExplicitZonedDateTime } from '../_shared/date-time.ts'
+import {
+  createDailyMeetingToken,
+  createDailyRoomWithObservability,
+  recordDailyCallRoom,
+} from '../_shared/daily-observability.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -78,21 +83,6 @@ function isOrderCallStage(stage: string | null | undefined) {
   return typeof stage === 'string' && ORDER_CALL_STAGES.includes(stage as typeof ORDER_CALL_STAGES[number])
 }
 
-function formatScheduledStart(startAt: string, timezone: string | null | undefined) {
-  try {
-    return new Date(startAt).toLocaleString('en-GB', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: timezone || undefined,
-    })
-  } catch {
-    return new Date(startAt).toLocaleString('en-GB', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  }
-}
-
 function scheduledOrderCallGate(specialNote: string | null | undefined) {
   const supportMeta = parseOrderSupportMeta(specialNote ?? null)
   const orderCall = supportMeta.orderCall ?? null
@@ -122,7 +112,7 @@ function scheduledOrderCallGate(specialNote: string | null | undefined) {
     return {
       ok: false as const,
       code: 'ORDER_CALL_TOO_EARLY',
-      message: `This order call is scheduled for ${formatScheduledStart(orderCall.scheduledStartAt, orderCall.timezone)}. Join from Messages around the scheduled time.`,
+      message: `This order call is scheduled for ${formatExplicitZonedDateTime(orderCall.scheduledStartAt, orderCall.timezone)}. Join from Messages around the scheduled time.`,
       supportMeta,
       orderCall,
     }
@@ -233,6 +223,8 @@ Deno.serve(async (req) => {
 
     const actorRole: 'CUSTOMER' | 'TAILOR' =
       order.tailor_id?.toString() === caller.id ? 'TAILOR' : 'CUSTOMER'
+    const callerName =
+      (caller as { user_metadata?: { display_name?: unknown } }).user_metadata?.display_name
     const counterpartId = actorRole === 'TAILOR'
       ? order.customer_id?.toString() ?? null
       : order.tailor_id?.toString() ?? null
@@ -347,6 +339,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    const roomCreatedAt = extractRoomCreatedAt(roomUrl) ?? Date.now()
+    await recordDailyCallRoom({
+      supabase,
+      orderId,
+      roomUrl,
+      callKind: 'ORDER',
+      callType,
+      scheduledStartAt: orderCallGate.orderCall.scheduledStartAt,
+      expiresAt: Math.floor(roomCreatedAt / 1000) + ROOM_TTL_SECONDS,
+      createdBy: caller.id,
+    })
+
     const { error: stageUpdateError } = await supabase.from('order_stage_updates').insert({
       order_id: orderId,
       stage: order.stage,
@@ -418,7 +422,18 @@ Deno.serve(async (req) => {
       )
     }
 
-    return jsonResponse({ url: roomUrl, existing }, 200, corsHeaders)
+    const token = await createDailyMeetingToken({
+      roomUrl,
+      userId: caller.id,
+      userName: typeof callerName === 'string' && callerName.trim()
+        ? callerName.trim()
+        : actorRole === 'TAILOR' ? 'Tailor' : 'Customer',
+      audioOnly,
+    })
+    if (!token) {
+      return jsonError(corsHeaders, 503, 'DAILY_TOKEN_UNAVAILABLE', 'The protected call pass could not be created. Try again shortly.')
+    }
+    return jsonResponse({ url: roomUrl, token, existing }, 200, corsHeaders)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
     return jsonError(corsHeaders, 500, 'INTERNAL_ERROR', 'Could not start the Drapeon call right now.')

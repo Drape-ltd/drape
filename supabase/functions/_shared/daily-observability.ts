@@ -33,6 +33,24 @@ type DailyRoomResult =
   | { ok: true; url: string }
   | { ok: false; reason: DailyRoomFailureReason }
 
+type DailyMeetingTokenInput = {
+  roomUrl: string
+  userId: string
+  userName: string
+  audioOnly: boolean
+}
+
+type DailyCallRoomRecordInput = {
+  supabase: SupabaseClient
+  orderId: string
+  roomUrl: string
+  callKind: 'CONSULTATION' | 'ORDER'
+  callType: 'audio' | 'video'
+  scheduledStartAt?: string | null
+  expiresAt: number
+  createdBy: string
+}
+
 type DailyFailureContext = {
   input: DailyRoomInput
   reason: DailyRoomFailureReason
@@ -172,10 +190,13 @@ export async function createDailyRoomWithObservability(
       },
       body: JSON.stringify({
         name: input.roomName,
+        privacy: 'private',
         properties: {
           exp: input.expiresAt,
           max_participants: 2,
-          enable_chat: true,
+          enable_chat: false,
+          enforce_unique_user_ids: true,
+          eject_at_room_exp: true,
           enable_screenshare: false,
           start_video_off: input.audioOnly,
           start_audio_off: false,
@@ -254,4 +275,114 @@ export async function createDailyRoomWithObservability(
   } finally {
     clearTimeout(timeout)
   }
+}
+
+export async function createDailyMeetingToken({
+  roomUrl,
+  userId,
+  userName,
+  audioOnly,
+}: DailyMeetingTokenInput): Promise<string | null> {
+  let dailyApiKey = ''
+  try {
+    dailyApiKey = getDailyApiKey()
+  } catch {
+    return null
+  }
+
+  let roomName = ''
+  try {
+    roomName = new URL(roomUrl).pathname.split('/').filter(Boolean).at(-1) ?? ''
+  } catch {
+    return null
+  }
+  if (!roomName) return null
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), DAILY_TIMEOUT_MS)
+  try {
+    const response = await fetch('https://api.daily.co/v1/meeting-tokens', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${dailyApiKey}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'drapeon-edge-calling/1.0',
+      },
+      body: JSON.stringify({
+        properties: {
+          room_name: roomName,
+          user_id: userId.slice(0, 36),
+          user_name: userName.slice(0, 80),
+          exp: Math.floor(Date.now() / 1000) + (2 * 60 * 60),
+          eject_at_token_exp: true,
+          is_owner: false,
+          enable_screenshare: false,
+          start_video_off: audioOnly,
+          start_audio_off: false,
+          permissions: {
+            canSend: audioOnly ? ['audio'] : ['audio', 'video'],
+            canReceive: { base: true },
+            canAdmin: false,
+          },
+        },
+      }),
+    })
+    if (!response.ok) return null
+    const payload = await response.json() as { token?: unknown }
+    return typeof payload.token === 'string' && payload.token.length > 0
+      ? payload.token
+      : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function recordDailyCallRoom({
+  supabase,
+  orderId,
+  roomUrl,
+  callKind,
+  callType,
+  scheduledStartAt = null,
+  expiresAt,
+  createdBy,
+}: DailyCallRoomRecordInput) {
+  let roomName = ''
+  try {
+    roomName = new URL(roomUrl).pathname.split('/').filter(Boolean).at(-1) ?? ''
+  } catch {
+    return null
+  }
+  if (!roomName) return null
+
+  const { data, error } = await supabase
+    .from('order_call_rooms')
+    .upsert({
+      order_id: orderId,
+      provider: 'DAILY',
+      provider_room_name: roomName,
+      call_kind: callKind,
+      call_type: callType,
+      scheduled_start_at: scheduledStartAt,
+      expires_at: new Date(expiresAt * 1000).toISOString(),
+      created_by: createdBy,
+    }, {
+      onConflict: 'provider,provider_room_name',
+      ignoreDuplicates: true,
+    })
+    .select('id')
+    .maybeSingle()
+
+  if (error) {
+    log('warn', 'daily-observability', 'call_room_history_failed', {
+      order_id: orderId,
+      room_name: roomName,
+      error: error.message,
+    })
+    return null
+  }
+  return data?.id ?? null
 }

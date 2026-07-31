@@ -315,3 +315,28 @@ export function buildOrderAppointmentIcs(input: {
     .filter(Boolean)
     .join('\r\n')
 }
+
+export function buildGoogleCalendarEventUrl(input: {
+  startsAt: string
+  endsAt?: string | null
+  durationMinutes?: number
+  title: string
+  description?: string | null
+}) {
+  const startMs = parseTimestamp(input.startsAt)
+  if (startMs == null) return null
+  const explicitEndMs = input.endsAt ? parseTimestamp(input.endsAt) : null
+  const endMs = explicitEndMs ?? startMs + (input.durationMinutes ?? 30) * 60_000
+  if (!Number.isFinite(endMs) || endMs <= startMs) return null
+
+  const query = ([
+    ['action', 'TEMPLATE'],
+    ['text', input.title],
+    ['dates', `${toIcsTimestamp(new Date(startMs).toISOString())}/${toIcsTimestamp(new Date(endMs).toISOString())}`],
+    ['details', input.description?.trim() ?? 'Open Drapeon near the scheduled time to start or join the protected call.'],
+  ] satisfies Array<[string, string]>)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&')
+
+  return `https://calendar.google.com/calendar/render?${query}`
+}

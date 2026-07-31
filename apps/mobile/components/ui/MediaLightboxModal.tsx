@@ -14,6 +14,12 @@ import {
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Image as ExpoImage } from 'expo-image'
+import { Gesture, GestureDetector } from 'react-native-gesture-handler'
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { isVideoMediaUrl } from '@drape/shared/media-policy'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
@@ -125,6 +131,53 @@ type LightboxMediaPageProps = {
   width: number
 }
 
+function ZoomablePhoto({
+  item,
+  resolvedUri,
+}: {
+  item: MediaLightboxItem
+  resolvedUri: string
+}) {
+  const scale = useSharedValue(1)
+  const startScale = useSharedValue(1)
+  const pinch = Gesture.Pinch()
+    .onBegin(() => {
+      startScale.value = scale.value
+    })
+    .onUpdate((event) => {
+      scale.value = Math.max(1, Math.min(4, startScale.value * event.scale))
+    })
+    .onEnd(() => {
+      if (scale.value < 1.05) scale.value = withTiming(1)
+    })
+  const doubleTap = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd(() => {
+      scale.value = withTiming(scale.value > 1 ? 1 : 2)
+    })
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }))
+
+  return (
+    <GestureDetector gesture={Gesture.Race(pinch, doubleTap)}>
+      <Animated.View style={[styles.media, animatedStyle]}>
+        <RemoteImage
+          uri={resolvedUri}
+          bucket={item.bucket}
+          containerStyle={styles.media}
+          style={styles.mediaImage}
+          contentFit="contain"
+          transition={120}
+          surface="lightbox_media"
+          placeholderColor={Colors.ink}
+          fallback={<View style={styles.mediaFallback} />}
+        />
+      </Animated.View>
+    </GestureDetector>
+  )
+}
+
 function LightboxMediaPage({
   item,
   isActive,
@@ -154,17 +207,7 @@ function LightboxMediaPage({
           showMuteToggle={false}
         />
       ) : (
-        <RemoteImage
-          uri={resolvedUri}
-          bucket={item.bucket}
-          containerStyle={styles.media}
-          style={styles.mediaImage}
-          contentFit="contain"
-          transition={120}
-          surface="lightbox_media"
-          placeholderColor={Colors.ink}
-          fallback={<View style={styles.mediaFallback} />}
-        />
+        <ZoomablePhoto item={item} resolvedUri={resolvedUri} />
       )}
     </View>
   )

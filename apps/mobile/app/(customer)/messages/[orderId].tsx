@@ -9,7 +9,8 @@ import {
   Platform,
   Alert,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/auth'
 import {
@@ -18,18 +19,19 @@ import {
   getEmptyConversationAccessState,
   type ConversationAccessState,
 } from '@/lib/conversation-access'
-import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
-import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { invokeFunction } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
 import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
 import { ChatSafetyBar } from '@/components/ui/ChatSafetyBar'
+import { ConversationDetailsSheet } from '@/components/ui/ConversationDetailsSheet'
+import { ContextualSwipeBack } from '@/components/ui/ContextualSwipeBack'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
-import { useKeyboardState } from '@/lib/useKeyboardState'
+import { useConversationTranslation } from '@/lib/message-translation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 import type { OrderConversationAction } from '@drape/shared/order-negotiation'
@@ -72,17 +74,8 @@ function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
   return 'expired' as const
 }
 
-function formatOrderCallTime(value: string | null | undefined) {
-  if (!value) return 'the scheduled time'
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'the scheduled time'
-  return date.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+function formatOrderCallTime(value: string | null | undefined, timezone?: string | null) {
+  return formatExplicitZonedDateTime(value, { timeZone: timezone, fallback: 'the scheduled time' }) ?? 'the scheduled time'
 }
 
 export default function CustomerMessagesScreen() {
@@ -96,7 +89,6 @@ export default function CustomerMessagesScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
-  const keyboard = useKeyboardState()
   const {
     data: orderInfo,
     isLoading,
@@ -112,9 +104,12 @@ export default function CustomerMessagesScreen() {
   const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(
     getEmptyConversationAccessState()
   )
-  const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
+  const [, setLoadingConversationAccess] = useState(false)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
   const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
+  const [showConversationDetails, setShowConversationDetails] = useState(false)
+  const [counterpartyOnline, setCounterpartyOnline] = useState(false)
+  const translation = useConversationTranslation(resolvedOrderId)
   const consultationMeta = orderInfo?.supportMeta.consultation ?? null
   const consultationPaymentBlocked =
     orderInfo?.stage === 'CONSULTATION' &&
@@ -142,6 +137,13 @@ export default function CustomerMessagesScreen() {
     void refreshConversationAccess()
   }, 0)
 
+  useFocusEffect(
+    useCallback(() => {
+      setShowConversationDetails(false)
+      setShowOrderCallScheduler(false)
+    }, [])
+  )
+
   useEffect(() => {
     const timer = setTimeout(() => {
       void refreshConversationAccess()
@@ -154,10 +156,6 @@ export default function CustomerMessagesScreen() {
   }
 
   useContextualBackHandler(goBack)
-
-  async function openCallUrl(url: string) {
-    await openConsultationCallUrl(url, 'customer')
-  }
 
   function openConsultationPayment() {
     if (!resolvedOrderId) return
@@ -184,25 +182,47 @@ export default function CustomerMessagesScreen() {
     })
   }, [historyChain, resolvedOrderId, router])
 
+  const openOrderControl = useCallback(() => {
+    if (!orderInfo) return
+    setShowConversationDetails(false)
+    if (
+      orderInfo.orderKind === 'READY_MADE' &&
+      orderInfo.stage === 'PENDING_QUOTE' &&
+      orderInfo.sellerItemId
+    ) {
+      router.push({
+        pathname: '/(customer)/tailor/item/[itemId]',
+        params: {
+          itemId: orderInfo.sellerItemId,
+          returnTo: `/(customer)/messages/${resolvedOrderId}`,
+          historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+        },
+      })
+      return
+    }
+    router.push({
+      pathname: '/(customer)/orders/[id]',
+      params: {
+        id: resolvedOrderId,
+        returnTo: `/(customer)/messages/${resolvedOrderId}`,
+        historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+      },
+    })
+  }, [historyChain, orderInfo, resolvedOrderId, router])
+
   async function startConsultationCall(callType: 'audio' | 'video') {
     if (startingCall) return
     setStartingCall(callType)
     try {
-      const room = await createConsultationRoom(resolvedOrderId, callType)
-      if (room?.fallback === 'MESSAGES') {
-        await refetch()
-        return
-      }
-      if (!room?.url) return
-      await refetch()
-      await openCallUrl(room.url)
-    } catch (error) {
-      Alert.alert(
-        'Call unavailable',
-        isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. Keep this thread updated and try the Drapeon call again when the signal improves.'
-          : 'Could not start the consultation call. Keep using Messages and try again in a moment.'
-      )
+      router.push({
+        pathname: '/call-join',
+        params: {
+          orderId: resolvedOrderId,
+          callKind: 'consultation',
+          callType,
+          historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+        },
+      })
     } finally {
       setStartingCall(null)
     }
@@ -212,14 +232,15 @@ export default function CustomerMessagesScreen() {
     if (startingCall) return
     setStartingCall(callType)
     try {
-      const room = await createOrderCallRoom(resolvedOrderId, callType, 'customer')
-      if (room?.fallback === 'MESSAGES') {
-        await refetch()
-        return
-      }
-      if (!room?.url) return
-      await refetch()
-      await openDrapeCallUrl(room.url, 'customer')
+      router.push({
+        pathname: '/call-join',
+        params: {
+          orderId: resolvedOrderId,
+          callKind: 'ready-made',
+          callType,
+          historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
+        },
+      })
     } finally {
       setStartingCall(null)
     }
@@ -279,7 +300,7 @@ export default function CustomerMessagesScreen() {
     if (state === 'too-early') {
       Alert.alert(
         'Call is scheduled',
-        `This order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt)}. The room opens shortly before the scheduled time.`,
+        `This order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt, orderCall?.timezone)}. The room opens shortly before the scheduled time.`,
         [
           { text: 'Close', style: 'cancel' },
           { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
@@ -322,11 +343,11 @@ export default function CustomerMessagesScreen() {
     )
   }
 
-  async function submitSafetyReport(category: SafetyReportCategory) {
+  async function submitSafetyReport(category: SafetyReportCategory, reportedMessageId?: string) {
     if (reportingSafety) return
     setReportingSafety(true)
     const { error } = await invokeFunction('conversation-safety-report', {
-      body: { orderId: resolvedOrderId, category, surface: 'messages' },
+      body: { orderId: resolvedOrderId, category, surface: 'messages', messageId: reportedMessageId },
     })
     setReportingSafety(false)
 
@@ -368,7 +389,7 @@ export default function CustomerMessagesScreen() {
     }
   }
 
-  function openSafetyReportOptions() {
+  function openSafetyReportOptions(reportedMessageId?: string) {
     if (reportingSafety) return
 
     Alert.alert('Safety in chat', 'Choose what best matches this conversation.', [
@@ -376,19 +397,19 @@ export default function CustomerMessagesScreen() {
       {
         text: 'Abusive language',
         onPress: () => {
-          void submitSafetyReport('ABUSIVE_LANGUAGE')
+          void submitSafetyReport('ABUSIVE_LANGUAGE', reportedMessageId)
         },
       },
       {
         text: 'Move off Drapeon',
         onPress: () => {
-          void submitSafetyReport('OFF_PLATFORM_PRESSURE')
+          void submitSafetyReport('OFF_PLATFORM_PRESSURE', reportedMessageId)
         },
       },
       {
         text: 'Unsafe behavior',
         onPress: () => {
-          void submitSafetyReport('UNSAFE_BEHAVIOR')
+          void submitSafetyReport('UNSAFE_BEHAVIOR', reportedMessageId)
         },
       },
       {
@@ -446,8 +467,13 @@ export default function CustomerMessagesScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={goBack}>
-            <Text style={styles.backText}>← Back</Text>
+          <TouchableOpacity
+            style={styles.headerBackBtn}
+            onPress={goBack}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Feather name="chevron-left" size={26} color={Colors.needleGreen} />
           </TouchableOpacity>
         </View>
         <View style={styles.stateWrap}>
@@ -477,9 +503,10 @@ export default function CustomerMessagesScreen() {
   const scheduledOrderCall = orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
     orderInfo.supportMeta.orderCall.scheduledStartAt
   const callLifecycleEvent = scheduledConsultation
-    ? {
-        kind: 'consultation' as const,
-        scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
+      ? {
+          kind: 'consultation' as const,
+          createdAt: consultationMeta?.requestedAt ?? consultationMeta?.approvedAt ?? consultationMeta?.scheduledStartAt ?? null,
+          scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
         timezone: consultationMeta?.timezone ?? null,
         status: consultationMeta?.status ?? null,
         paymentRequired: !!consultationMeta?.feeAmount && consultationMeta?.paymentTiming === 'BEFORE_CALL_STARTS',
@@ -496,6 +523,7 @@ export default function CustomerMessagesScreen() {
     : scheduledOrderCall
       ? {
           kind: 'order' as const,
+          createdAt: orderInfo.supportMeta.orderCall?.requestedAt ?? orderInfo.supportMeta.orderCall?.scheduledStartAt,
           scheduledStartAt: orderInfo.supportMeta.orderCall?.scheduledStartAt,
           timezone: orderInfo.supportMeta.orderCall?.timezone,
           status: orderInfo.supportMeta.orderCall?.status,
@@ -510,11 +538,11 @@ export default function CustomerMessagesScreen() {
       : null
 
   return (
+    <ContextualSwipeBack onBack={goBack}>
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        enabled={Platform.OS === 'ios' || keyboard.visible}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -522,55 +550,43 @@ export default function CustomerMessagesScreen() {
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
           <View style={styles.headerCenter}>
-            <AvatarImage
-              uri={orderInfo.tailorAvatarUrl}
-              initials={orderInfo.tailorName}
-              size={36}
-              borderColor={Colors.lightGrey}
-              borderWidth={1}
-            />
+            <View style={styles.headerAvatarWrap}>
+              <AvatarImage
+                uri={orderInfo.tailorAvatarUrl}
+                initials={orderInfo.tailorName}
+                size={36}
+                borderColor={Colors.lightGrey}
+                borderWidth={1}
+              />
+              {counterpartyOnline ? <View style={styles.headerPresenceDot} accessibilityLabel="Online" /> : null}
+            </View>
             <View style={styles.headerTextBlock}>
               <Text style={styles.headerName}>{orderInfo.tailorName}</Text>
               <Text style={styles.headerSub}>{orderInfo.garmentType}</Text>
             </View>
           </View>
           <View style={styles.headerActions}>
+            {(consultationCallAvailable || isOrderCallStage(orderInfo.stage)) ? (
+              <TouchableOpacity
+                style={styles.headerCallBtn}
+                onPress={showDrapeCallOptions}
+                disabled={!!startingCall || consultationPaymentBlocked}
+                accessibilityRole="button"
+                accessibilityLabel="Open Drapeon call options"
+              >
+                {startingCall
+                  ? <ActivityIndicator size="small" color={Colors.needleGreen} />
+                  : <Feather name="phone" size={17} color={Colors.needleGreen} />}
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.orderBtn}
-              onPress={() => {
-                if (
-                  orderInfo.orderKind === 'READY_MADE' &&
-                  orderInfo.stage === 'PENDING_QUOTE' &&
-                  orderInfo.sellerItemId
-                ) {
-                  router.push({
-                    pathname: '/(customer)/tailor/item/[itemId]',
-                    params: {
-                      itemId: orderInfo.sellerItemId,
-                      returnTo: `/(customer)/messages/${resolvedOrderId}`,
-                      historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
-                    },
-                  })
-                  return
-                }
-
-                router.push({
-                  pathname: '/(customer)/orders/[id]',
-                  params: {
-                    id: resolvedOrderId,
-                    returnTo: `/(customer)/messages/${resolvedOrderId}`,
-                    historyChain: appendToHistory(historyChain, `/(customer)/messages/${resolvedOrderId}`),
-                  },
-                })
-              }}
+              onPress={() => setShowConversationDetails(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Open conversation details and order controls"
             >
-              <Text style={styles.orderBtnText}>
-                {orderInfo.orderKind === 'READY_MADE' &&
-                orderInfo.stage === 'PENDING_QUOTE' &&
-                orderInfo.sellerItemId
-                  ? 'View item'
-                  : 'View order'}
-              </Text>
+              <Text style={styles.orderBtnText}>Details</Text>
+              <Feather name="chevron-down" size={14} color={Colors.needleGreen} />
             </TouchableOpacity>
           </View>
         </View>
@@ -579,9 +595,6 @@ export default function CustomerMessagesScreen() {
           blocked={conversationAccess.blocked}
           blockedMessage={conversationAccess.userMessage}
           inDispute={orderInfo.stage === 'IN_DISPUTE'}
-          loading={loadingConversationAccess}
-          reporting={reportingSafety}
-          onPressReport={openSafetyReportOptions}
         />
 
         <MessageThread
@@ -597,18 +610,10 @@ export default function CustomerMessagesScreen() {
           focusedEventId={eventId}
           focusedMessageId={messageId}
           onConversationAction={openConversationAction}
-          callAvailable={
-            consultationCallAvailable ||
-            isOrderCallStage(orderInfo.stage)
-          }
-          callLoading={!!startingCall}
-          onPressCall={showDrapeCallOptions}
-          callAccessibilityLabel={
-            orderInfo.stage === 'CONSULTATION'
-              ? 'Open consultation call options'
-              : 'Schedule or join order call'
-          }
-          callBlocked={consultationPaymentBlocked}
+          onReportMessage={openSafetyReportOptions}
+          onCounterpartyOnlineChange={setCounterpartyOnline}
+          translationPreference={translation.preference}
+          onTranslateMessage={translation.translateMessage}
           callGateMessage={consultationPaymentBlocked && !callLifecycleEvent ? 'Consultation fee required before the room can open' : null}
           callGateActionLabel={consultationPaymentBlocked ? 'Pay fee' : null}
           onPressCallGateAction={consultationPaymentBlocked ? openConsultationPayment : undefined}
@@ -647,8 +652,30 @@ export default function CustomerMessagesScreen() {
             void refetch()
           }}
         />
+        <ConversationDetailsSheet
+          visible={showConversationDetails}
+          orderId={resolvedOrderId}
+          orderLabel={orderInfo.garmentType}
+          orderStage={orderInfo.stage}
+          participants={[
+            { name: orderInfo.tailorName, role: 'Tailor', avatarUrl: orderInfo.tailorAvatarUrl },
+            { name: orderInfo.customerName || 'You', role: 'Customer', avatarUrl: orderInfo.customerAvatarUrl },
+          ]}
+          onClose={() => setShowConversationDetails(false)}
+          onOpenOrder={openOrderControl}
+          onReport={() => {
+            setShowConversationDetails(false)
+            setTimeout(openSafetyReportOptions, 220)
+          }}
+          translationPreference={translation.preference}
+          translationLanguages={translation.languages}
+          translationSaving={translation.saving}
+          translationError={translation.error}
+          onChangeTranslationPreference={translation.updatePreference}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </ContextualSwipeBack>
   )
 }
 
@@ -685,19 +712,46 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.lg,
     paddingVertical: 8,
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.needleGreenLight + '99',
     borderBottomWidth: 1,
-    borderBottomColor: Colors.lightGrey,
+    borderBottomColor: Colors.needleGreen + '18',
+  },
+  headerBackBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   backText: {
     color: Colors.needleGreen,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.medium,
-    width: 56,
   },
   headerCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
   headerTextBlock: { alignItems: 'center', maxWidth: 176 },
+  headerAvatarWrap: { position: 'relative' },
+  headerPresenceDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: Colors.needleGreen,
+    borderWidth: 2,
+    borderColor: Colors.needleGreenLight,
+  },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  headerCallBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white + 'B8',
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '14',
+  },
   headerName: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   headerSub: { fontSize: FontSize.xs, color: Colors.midGrey },
   contextBanner: {
@@ -798,6 +852,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     justifyContent: 'center',
   },
   orderBtnText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },

@@ -14,6 +14,7 @@ import {
   Banknote,
   BellRing,
   Briefcase,
+  CalendarDays,
   CheckCheck,
   ChevronDown,
   ChevronLeft,
@@ -23,6 +24,7 @@ import {
   ClipboardList,
   Heart,
   LoaderCircle,
+  Languages,
   LogOut,
   MapPin,
   Menu,
@@ -89,17 +91,28 @@ import {
   getOnboardingProofItemIssues,
   getCustomOrderFabricIssues,
   buildBriefDossier,
+  buildGoogleCalendarEventUrl,
   FABRIC_SUBSTITUTION_OPTIONS,
   BULK_FABRIC_MODE_OPTIONS,
   formatDatabaseEnumLabel,
+  conversationClusterPositionForMessage,
   groupMessageMediaClusters,
   deriveOrderConversationActions,
+  deriveConversationEventPresentation,
+  parseScheduledOrderCallMessage,
+  formatExplicitZonedDateTime,
   ORDER_EVENT_LABELS,
   QUOTE_REVISION_REASON_LABELS,
   type OrderConversationAction,
   type OrderEventType,
   validatePhoneForProfile,
   validatePasswordStrength,
+  FALLBACK_TRANSLATION_LANGUAGES,
+  languageName,
+  translationTargetFromLocale,
+  type ConversationTranslationPreference,
+  type MessageTranslation,
+  type TranslationLanguage,
 } from '@drape/shared'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
@@ -1522,24 +1535,7 @@ function parseOrderSupportMeta(value: string | null | undefined): OrderSupportMe
 }
 
 function formatDateTime(value: string | null | undefined, timezone?: string | null) {
-  const date = parseDateValue(value)
-  if (!date) return null
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      timeZone: timezone || undefined,
-    }).format(date)
-  } catch {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(date)
-  }
+  return formatExplicitZonedDateTime(value, { timeZone: timezone })
 }
 
 function dateTimeLocalInputValue(value: string | null | undefined) {
@@ -5365,15 +5361,15 @@ function BriefDossierRowView({ row }: { row: BriefDossierRow }) {
 
 function BriefDossierSectionCard({ section }: { section: BriefDossierSection }) {
   return (
-    <section className="rounded-[8px] border border-ui-border bg-ui-muted/45 p-4">
-      <div>
-        <h3 className="text-xl text-ink">{section.title}</h3>
-        {section.summary ? <p className="mt-1 text-sm leading-6 text-ink/58">{section.summary}</p> : null}
-      </div>
-      <div className="mt-4 grid gap-3">
+    <DisclosurePanel
+      title={section.title}
+      summary={section.summary ?? `${section.rows.length} ${section.rows.length === 1 ? 'detail' : 'details'}`}
+      defaultOpen={section.id === 'summary'}
+    >
+      <div className="grid gap-3">
         {section.rows.map((row) => <BriefDossierRowView key={row.id} row={row} />)}
       </div>
-    </section>
+    </DisclosurePanel>
   )
 }
 
@@ -7121,6 +7117,14 @@ function CallLifecycleEventCard({ event }: { event: WebCallLifecycleEvent }) {
     event.status === 'DECLINED' ||
     event.status === 'COMPLETED' ||
     lifecycle.status === 'expired'
+  const calendarUrl = event.scheduledStartAt
+    ? buildGoogleCalendarEventUrl({
+        startsAt: event.scheduledStartAt,
+        durationMinutes: 30,
+        title: `Drapeon — ${title}`,
+        description: `${reason}. Open Drapeon near the scheduled time to start or join the protected call.`,
+      })
+    : null
 
   return (
     <div className={`mb-3 grid gap-3 rounded-[8px] border p-3 shadow-sm ${isExpired ? 'border-ink/8 bg-bone/65' : 'border-needle/14 bg-white'}`}>
@@ -7178,6 +7182,18 @@ function CallLifecycleEventCard({ event }: { event: WebCallLifecycleEvent }) {
           {formatCallCountdown(lifecycle.msUntilOpen)}
         </Button>
       )}
+
+      {!isExpired && calendarUrl ? (
+        <a
+          href={calendarUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-9 items-center gap-2 justify-self-start px-1 text-xs font-semibold text-needle"
+        >
+          <CalendarDays className="size-4" aria-hidden="true" />
+          Add to calendar
+        </a>
+      ) : null}
     </div>
   )
 }
@@ -13147,12 +13163,19 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
   ) : (
     <OpenAppButton label="Open order in app" />
   )
-  const nextActionSecondary = customerCanCheckout ? (
-    <OpenAppButton label="Open order in app" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink" />
-  ) : (
-    <Link href="/account/support" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink">
-      Open support
-    </Link>
+  const nextActionSecondary = (
+    <>
+      <a href="#order-messages" className="inline-flex justify-center rounded-[8px] border border-needle/22 bg-needle/10 px-4 py-2.5 text-sm font-semibold text-needle">
+        Open order chat
+      </a>
+      {customerCanCheckout ? (
+        <OpenAppButton label="Open order in app" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink" />
+      ) : (
+        <Link href="/account/support" className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink">
+          Order support
+        </Link>
+      )}
+    </>
   )
 
   return (
@@ -13290,7 +13313,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
         </Surface>
       ) : null}
 
-      <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+      <section id="order-media" className="scroll-mt-24 rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
         <h2 className="text-2xl font-semibold text-ink">Timeline</h2>
         <div className="mt-5 grid gap-3">
           {updates.length === 0 ? (
@@ -13345,7 +13368,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
             )}
           </div>
         </div>
-        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
+        <div id="order-messages" className="scroll-mt-24 rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
           <h2 className="text-2xl font-semibold text-ink">Messages</h2>
           <div className="mt-5 grid gap-3">
             {messages.length === 0 ? (
@@ -13545,22 +13568,54 @@ function readArchivedMessageOrderIds(storageKey: string | null) {
 }
 
 function OrderConversationEventCard({ event }: { event: AccountOrderEvent }) {
-  const label = ORDER_EVENT_LABELS[event.event_type] ?? formatDatabaseEnumLabel(event.event_type)
+  const presentation = deriveConversationEventPresentation({
+    eventType: event.event_type,
+    title: event.title,
+    summary: event.summary,
+    quoteVersion: event.quote_version,
+    metadata: event.metadata,
+  })
+  const EventIcon = {
+    quote: ClipboardList,
+    payment: Banknote,
+    scope: Pencil,
+    fabric: SlidersHorizontal,
+    measurement: Ruler,
+    fulfillment: ShoppingBag,
+    remedy: CircleHelp,
+  }[presentation.icon]
   return (
-    <div className="mx-auto my-2 w-[min(92%,38rem)] rounded-[8px] border border-needle/18 bg-needle/6 px-4 py-3 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <StatusChip status={event.event_type} fallback={label} />
-        <time className="text-xs text-ink/44">{formatMessageRelative(event.created_at)}</time>
+    <article className="mx-auto my-3 grid w-[min(88%,34rem)] gap-3 rounded-[10px] border border-needle/18 bg-white px-4 py-3 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="grid size-9 shrink-0 place-items-center rounded-full bg-needle/10 text-needle">
+          <EventIcon className="size-4.5" aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-needle">{presentation.eyebrow}</p>
+            <time className="text-xs text-ink/44">{formatMessageRelative(event.created_at)}</time>
+          </div>
+          <h3 className="mt-0.5 text-sm font-semibold text-ink">{presentation.title}</h3>
+        </div>
       </div>
-      <p className="mt-2 text-sm font-semibold text-ink">{safeUserText(event.title, label)}</p>
       {event.summary ? (
-        <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(event.summary, '')}</p>
+        <p className="rounded-[8px] bg-ui-muted px-3 py-2 text-sm leading-5 text-ink/68">{safeUserText(event.summary, '')}</p>
       ) : null}
-      <p className="mt-2 text-xs text-ink/44">
-        {formatDatabaseEnumLabel(event.actor_role, 'Drapeon')}
-        {typeof event.quote_version === 'number' ? ` · Quote v${event.quote_version}` : ''}
-      </p>
-    </div>
+      {presentation.facts.length > 0 ? (
+        <dl className="divide-y divide-ink/8 border-y border-ink/8">
+          {presentation.facts.map((item) => (
+            <div key={`${item.label}:${item.value}`} className="grid grid-cols-[minmax(5rem,0.7fr)_minmax(0,1.3fr)] gap-4 py-2">
+              <dt className="text-xs font-semibold text-ink/46">{item.label}</dt>
+              <dd className="text-right text-sm font-semibold leading-5 text-ink">{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <StatusChip status={event.event_type} fallback={ORDER_EVENT_LABELS[event.event_type]} />
+        <p className="text-xs text-ink/44">{formatDatabaseEnumLabel(event.actor_role, 'Drapeon')}</p>
+      </div>
+    </article>
   )
 }
 
@@ -13650,6 +13705,19 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
   const [revisionNote, setRevisionNote] = useState('')
   const [revisionTargetAmount, setRevisionTargetAmount] = useState('')
   const [editingRevision, setEditingRevision] = useState(false)
+  const [translationPreference, setTranslationPreference] = useState<ConversationTranslationPreference>(() => ({
+    autoTranslate: false,
+    targetLanguage: typeof navigator === 'undefined' ? 'en' : translationTargetFromLocale(navigator.language),
+    sourceLanguage: null,
+  }))
+  const [translationLanguages, setTranslationLanguages] = useState<TranslationLanguage[]>(FALLBACK_TRANSLATION_LANGUAGES)
+  const [messageTranslations, setMessageTranslations] = useState<Record<string, MessageTranslation>>({})
+  const [translationLoadingIds, setTranslationLoadingIds] = useState<Set<string>>(new Set())
+  const [translationFailedIds, setTranslationFailedIds] = useState<Set<string>>(new Set())
+  const [showOriginalTranslationIds, setShowOriginalTranslationIds] = useState<Set<string>>(new Set())
+  const [translationSettingsBusy, setTranslationSettingsBusy] = useState(false)
+  const [translationError, setTranslationError] = useState<string | null>(null)
+  const [translationAvailable, setTranslationAvailable] = useState(false)
   const notificationPermissionRef = useRef<NotificationPermission | 'unsupported'>('unsupported')
   const markedReadRef = useRef<Set<string>>(new Set())
   const orderChannelRef = useRef<RealtimeChannel | null>(null)
@@ -13954,6 +14022,125 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
       : [],
     [selectedThread],
   )
+
+  useEffect(() => {
+    setMessageTranslations({})
+    setShowOriginalTranslationIds(new Set())
+    setTranslationFailedIds(new Set())
+  }, [translationPreference.sourceLanguage, translationPreference.targetLanguage])
+
+  useEffect(() => {
+    if (!selectedOrderId) {
+      setTranslationAvailable(false)
+      return
+    }
+    let active = true
+    setTranslationAvailable(false)
+    setTranslationError(null)
+    void Promise.all([
+      invokeAccountFunction<{ preference?: ConversationTranslationPreference }>('message-translation', {
+        action: 'settings',
+        orderId: selectedOrderId,
+      }),
+      invokeAccountFunction<{ languages?: TranslationLanguage[] }>('message-translation', {
+        action: 'languages',
+        orderId: selectedOrderId,
+      }).catch(() => ({ languages: FALLBACK_TRANSLATION_LANGUAGES })),
+    ]).then(([settings, languageResult]) => {
+      if (!active) return
+      setTranslationAvailable(true)
+      if (settings.preference) setTranslationPreference(settings.preference)
+      if (languageResult.languages?.length) setTranslationLanguages(languageResult.languages)
+    }).catch(() => {
+      if (!active) return
+      setTranslationAvailable(false)
+      setTranslationError(null)
+    })
+    return () => { active = false }
+  }, [selectedOrderId])
+
+  const saveTranslationPreference = useCallback(async (next: ConversationTranslationPreference) => {
+    if (!selectedOrderId) return
+    const previous = translationPreference
+    setTranslationPreference(next)
+    setTranslationSettingsBusy(true)
+    setTranslationError(null)
+    try {
+      const result = await invokeAccountFunction<{ preference?: ConversationTranslationPreference }>('message-translation', {
+        action: 'update-settings',
+        orderId: selectedOrderId,
+        ...next,
+      })
+      if (result.preference) setTranslationPreference(result.preference)
+    } catch (error) {
+      setTranslationPreference(previous)
+      setTranslationError(friendlyActionError(error, 'Could not save translation settings.'))
+    } finally {
+      setTranslationSettingsBusy(false)
+    }
+  }, [selectedOrderId, translationPreference])
+
+  const translateAccountMessage = useCallback(async (message: AccountMessage, announceError: boolean) => {
+    if (!selectedOrderId || message.type !== 'TEXT' || message.is_deleted || !message.body || parseScheduledOrderCallMessage(message.body)) return
+    if (messageTranslations[message.id] || translationLoadingIds.has(message.id)) return
+    if (announceError) {
+      setTranslationFailedIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    } else if (translationFailedIds.has(message.id)) {
+      return
+    }
+    setTranslationLoadingIds((current) => new Set(current).add(message.id))
+    try {
+      const result = await Promise.race([
+        invokeAccountFunction<{ translation?: MessageTranslation }>('message-translation', {
+          action: 'translate',
+          orderId: selectedOrderId,
+          messageId: message.id,
+          targetLanguage: translationPreference.targetLanguage,
+          sourceLanguage: translationPreference.sourceLanguage,
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Translation took too long. Please try again.')), 20_000)
+        }),
+      ])
+      if (!result.translation) throw new Error('This message could not be translated right now.')
+      setMessageTranslations((current) => ({ ...current, [message.id]: result.translation! }))
+      setShowOriginalTranslationIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    } catch (error) {
+      setTranslationFailedIds((current) => new Set(current).add(message.id))
+      if (announceError) setTranslationError(friendlyActionError(error, 'This message could not be translated right now.'))
+    } finally {
+      setTranslationLoadingIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    }
+  }, [messageTranslations, selectedOrderId, translationFailedIds, translationLoadingIds, translationPreference.sourceLanguage, translationPreference.targetLanguage])
+
+  useEffect(() => {
+    if (!translationAvailable || !translationPreference.autoTranslate) return
+    selectedMessages
+      .filter((message) =>
+        message.sender_id !== data.userId &&
+        message.type === 'TEXT' &&
+        !message.is_deleted &&
+        !!message.body &&
+        !parseScheduledOrderCallMessage(message.body) &&
+        !messageTranslations[message.id] &&
+        !translationFailedIds.has(message.id) &&
+        !translationLoadingIds.has(message.id)
+      )
+      .slice(-30)
+      .forEach((message) => { void translateAccountMessage(message, false) })
+  }, [data.userId, messageTranslations, selectedMessages, translateAccountMessage, translationAvailable, translationFailedIds, translationLoadingIds, translationPreference.autoTranslate])
   const selectedMessageGroups = useMemo(
     () => groupMessageMediaClusters(selectedMessages.map((message) => ({
       ...message,
@@ -13961,6 +14148,16 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     }))),
     [selectedMessages],
   )
+  const selectedConversationPositions = useMemo(() => {
+    const clusterable = selectedMessages.map((message) => ({
+      ...message,
+      sender_id: message.sender_id ?? '',
+    }))
+    return new Map(selectedMessages.map((message, index) => [
+      message.id,
+      conversationClusterPositionForMessage(clusterable, index),
+    ]))
+  }, [selectedMessages])
   const selectedOrderEvents = useMemo(
     () => selectedThread
       ? data.orderEvents.filter((event) => event.order_id === selectedThread.order.id)
@@ -14305,10 +14502,33 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
     const canEdit = mine && !isDeleted && message.type === 'TEXT'
     const isVoiceMessage = !isDeleted && (message.type === 'VOICE' || Boolean(message.voice_url))
     const hasMedia = Boolean(message.photo_url)
+    const scheduledCallMessage = message.type === 'TEXT' && !isDeleted
+      ? parseScheduledOrderCallMessage(message.body)
+      : null
+    const translation = messageTranslations[message.id] ?? null
+    const showingOriginal = showOriginalTranslationIds.has(message.id)
+    const canTranslate = translationAvailable && !mine && !isDeleted && message.type === 'TEXT' && !!message.body && !scheduledCallMessage
+    const clusterPosition = selectedConversationPositions.get(message.id) ?? 'isolated'
+    const showsTail = clusterPosition === 'isolated' || clusterPosition === 'end'
+    const clusterShape = mine
+      ? clusterPosition === 'start'
+        ? 'rounded-br-[8px]'
+        : clusterPosition === 'middle'
+          ? 'rounded-r-[8px]'
+          : clusterPosition === 'end'
+            ? 'rounded-tr-[8px] rounded-br-[5px]'
+            : 'rounded-br-[5px]'
+      : clusterPosition === 'start'
+        ? 'rounded-bl-[8px]'
+        : clusterPosition === 'middle'
+          ? 'rounded-l-[8px]'
+          : clusterPosition === 'end'
+            ? 'rounded-tl-[8px] rounded-bl-[5px]'
+            : 'rounded-bl-[5px]'
 
     return (
       <div
-        className={`group relative flex w-full px-3 py-1.5 sm:px-5 ${mine ? 'justify-end' : 'justify-start'}`}
+        className={`group relative flex w-full px-3 ${clusterPosition === 'isolated' || clusterPosition === 'start' ? 'pt-2' : 'pt-0.5'} pb-0.5 sm:px-5 ${mine ? 'justify-end' : 'justify-start'}`}
         onMouseEnter={() => setHoveredMessageId(message.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
       >
@@ -14317,6 +14537,17 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             <IconButton size="icon-sm" variant="ghost" label="Reply" onClick={() => setReplyingTo(message)}>
               <Reply />
             </IconButton>
+            {canTranslate ? (
+              <IconButton
+                size="icon-sm"
+                variant="ghost"
+                label="Translate message"
+                disabled={translationLoadingIds.has(message.id)}
+                onClick={() => { void translateAccountMessage(message, true) }}
+              >
+                {translationLoadingIds.has(message.id) ? <LoaderCircle className="animate-spin" /> : <Languages />}
+              </IconButton>
+            ) : null}
             {canEdit ? (
               <IconButton size="icon-sm" variant="ghost" label="Edit message" onClick={() => setEditingMessage(message)}>
                 <Pencil />
@@ -14331,8 +14562,14 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
         ) : null}
 
         <div
-          className={`${isVoiceMessage ? 'w-[22rem] max-w-[84%]' : hasMedia ? 'w-[28rem] max-w-[84%]' : 'w-fit max-w-[76%]'} min-w-0 ${mine ? 'rounded-[8px] rounded-br-[3px] bg-needle px-3.5 py-2.5' : 'rounded-[8px] rounded-bl-[3px] border border-ui-border bg-white px-3.5 py-2.5 shadow-sm'} ${isDeleted ? 'opacity-60' : ''}`}
+          className={`relative ${isVoiceMessage || scheduledCallMessage ? 'w-[22rem] max-w-[84%]' : hasMedia ? 'w-[28rem] max-w-[84%]' : 'w-fit max-w-[76%]'} min-w-0 rounded-[18px] px-3.5 py-2.5 ${clusterShape} ${mine ? 'bg-gradient-to-b from-needle to-[#12694d]' : 'bg-[#eef0ed]'} ${isDeleted ? 'opacity-60' : ''}`}
         >
+          {showsTail ? (
+            <span
+              aria-hidden="true"
+              className={`absolute bottom-1 h-3 w-3 rotate-45 ${mine ? '-right-1 bg-[#12694d]' : '-left-1 bg-[#eef0ed]'}`}
+            />
+          ) : null}
           {replyTarget ? (
             <div className={`mb-2 rounded-[6px] border-l-2 px-2 py-1.5 ${mine ? 'border-white/35 bg-white/10' : 'border-needle/45 bg-ui-muted'}`}>
               <p className={`text-[0.68rem] font-semibold ${mine ? 'text-white/78' : 'text-ink/62'}`}>
@@ -14354,8 +14591,52 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             <p className={`text-sm italic leading-6 ${mine ? 'text-white/64' : 'text-ui-subtle'}`}>This message was unsent.</p>
           ) : (
             <div className={mine ? '[&_p]:text-white/92 [&_a]:text-white [&_audio]:opacity-90' : ''}>
-              {mediaCluster.length > 1 ? (
+              {scheduledCallMessage ? (
+                <div className="grid gap-2" aria-label={`Order call scheduled for ${scheduledCallMessage.scheduledFor}`}>
+                  <div className={`flex items-center gap-2 text-[0.68rem] font-bold uppercase tracking-[0.12em] ${mine ? 'text-white/82' : 'text-needle'}`}>
+                    <CalendarDays className="size-4" aria-hidden="true" />
+                    Order call scheduled
+                  </div>
+                  <p className={`text-base font-semibold leading-6 ${mine ? 'text-white' : 'text-ink'}`}>
+                    {safeUserText(scheduledCallMessage.scheduledFor, '')}
+                  </p>
+                  <dl className={`divide-y ${mine ? 'divide-white/18 border-white/20' : 'divide-ink/8 border-ink/10'} border-y`}>
+                    <div className="grid grid-cols-[auto_1fr] gap-4 py-2">
+                      <dt className={`text-xs font-semibold ${mine ? 'text-white/68' : 'text-ink/48'}`}>Reason</dt>
+                      <dd className={`text-right text-sm font-semibold ${mine ? 'text-white' : 'text-ink'}`}>{safeUserText(scheduledCallMessage.reason, '')}</dd>
+                    </div>
+                  </dl>
+                  {scheduledCallMessage.note ? (
+                    <div className={`rounded-[8px] px-3 py-2 ${mine ? 'bg-white/12' : 'bg-white/80'}`}>
+                      <p className={`text-xs font-semibold ${mine ? 'text-white/68' : 'text-ink/48'}`}>Note</p>
+                      <p className={`mt-0.5 text-sm leading-5 ${mine ? 'text-white' : 'text-ink'}`}>{safeUserText(scheduledCallMessage.note, '')}</p>
+                    </div>
+                  ) : null}
+                  <p className={`text-[0.68rem] leading-4 ${mine ? 'text-white/68' : 'text-ink/46'}`}>Free in Drapeon · Keep decisions in chat</p>
+                </div>
+              ) : mediaCluster.length > 1 ? (
                 <MessageMediaMosaic messages={mediaCluster} onReply={setReplyingTo} />
+              ) : translation && message.type === 'TEXT' ? (
+                <div className="grid gap-1.5">
+                  <p className="whitespace-pre-wrap break-words text-sm leading-6 text-ink/72">
+                    {showingOriginal ? safeUserText(message.body, '') : translation.translatedText}
+                  </p>
+                  <button
+                    type="button"
+                    className={`inline-flex w-fit cursor-pointer items-center gap-1 text-[0.68rem] font-semibold transition-colors ${mine ? 'text-white/72 hover:text-white' : 'text-needle/75 hover:text-needle'}`}
+                    onClick={() => setShowOriginalTranslationIds((current) => {
+                      const next = new Set(current)
+                      if (next.has(message.id)) next.delete(message.id)
+                      else next.add(message.id)
+                      return next
+                    })}
+                  >
+                    <Languages className="size-3" aria-hidden="true" />
+                    {showingOriginal
+                      ? `View ${languageName(translation.targetLanguage)} translation`
+                      : `Translated from ${languageName(translation.sourceLanguage)} · View original`}
+                  </button>
+                </div>
               ) : (
                 <MessageContent message={message} />
               )}
@@ -14548,7 +14829,7 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
       ) : (
         <div className="flex min-h-[28rem] flex-1 flex-col lg:min-h-0">
           {/* Chat header */}
-          <div className="flex items-center gap-3 border-b border-ink/8 bg-white/70 px-3 py-2.5">
+          <div className="flex items-center gap-3 border-b border-needle/10 bg-needle/6 px-3 py-2.5">
             {/* Collapse toggle */}
             <IconButton
               label={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
@@ -14565,30 +14846,78 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
               const avatarSrc = partyAvatar(selectedThread.order, data.userId)
               return (
                 <>
-                  <div className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-needle/14 text-xs font-semibold text-needle">
-                    {avatarSrc ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={avatarSrc} alt="" className="h-full w-full object-cover" />
-                    ) : initialsForName(name)}
+                  <div className="relative h-8 w-8 shrink-0" aria-label={counterpartyPresence.online ? `${name} is online` : undefined}>
+                    <div className="grid h-8 w-8 place-items-center overflow-hidden rounded-full bg-needle/14 text-xs font-semibold text-needle">
+                      {avatarSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={avatarSrc} alt="" className="h-full w-full object-cover" />
+                      ) : initialsForName(name)}
+                    </div>
+                    {counterpartyPresence.online ? (
+                      <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-[#eef7f1] bg-needle" aria-hidden="true" />
+                    ) : null}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-ink">{name}</p>
-                    {counterpartyPresence.online ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-needle" />
-                        <p className="text-xs font-semibold text-needle">Active now</p>
-                      </div>
-                    ) : counterpartyPresence.lastSeen ? (
-                      <p className="truncate text-xs text-ink/44">Last viewed {formatMessageRelative(counterpartyPresence.lastSeen.toISOString())}</p>
-                    ) : (
-                      <p className="truncate text-xs text-ink/44">{orderTitle(selectedThread.order)}</p>
-                    )}
+                    <p className="truncate text-xs text-ink/44">{orderTitle(selectedThread.order)}</p>
                   </div>
                 </>
               )
             })()}
             {/* Actions */}
             <div className="flex shrink-0 items-center gap-1">
+              {translationAvailable ? <details className="relative">
+                <summary className="grid size-9 cursor-pointer list-none place-items-center rounded-full border border-needle/12 bg-white/75 text-needle transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35" aria-label="Translation settings">
+                  <Languages className="size-4" aria-hidden="true" />
+                </summary>
+                <div className="absolute right-0 top-11 z-40 grid w-72 gap-3 rounded-[8px] border border-ui-border bg-white p-4 shadow-xl">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">Message translation</p>
+                    <p className="mt-1 text-xs leading-5 text-ink/52">Original messages stay available for order and safety records.</p>
+                  </div>
+                  <label className="flex cursor-pointer items-start justify-between gap-3 rounded-[8px] bg-needle/5 p-3">
+                    <span>
+                      <span className="block text-sm font-semibold text-ink">Always translate</span>
+                      <span className="mt-0.5 block text-xs leading-4 text-ink/52">Translate incoming text automatically.</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={translationPreference.autoTranslate}
+                      disabled={translationSettingsBusy}
+                      onChange={(event) => { void saveTranslationPreference({ ...translationPreference, autoTranslate: event.target.checked }) }}
+                      className="mt-1 size-4 accent-needle"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-xs font-semibold text-ink/62">
+                    Translate messages to
+                    <select
+                      value={translationPreference.targetLanguage}
+                      disabled={translationSettingsBusy}
+                      onChange={(event) => { void saveTranslationPreference({ ...translationPreference, targetLanguage: event.target.value }) }}
+                      className="min-h-10 cursor-pointer rounded-[8px] border border-ui-border bg-white px-3 text-sm font-medium text-ink outline-none focus:border-needle focus:ring-2 focus:ring-needle/15"
+                    >
+                      {translationLanguages.map((language) => (
+                        <option key={language.code} value={language.code}>{language.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1.5 text-xs font-semibold text-ink/62">
+                    Message language
+                    <select
+                      value={translationPreference.sourceLanguage ?? ''}
+                      disabled={translationSettingsBusy}
+                      onChange={(event) => { void saveTranslationPreference({ ...translationPreference, sourceLanguage: event.target.value || null }) }}
+                      className="min-h-10 cursor-pointer rounded-[8px] border border-ui-border bg-white px-3 text-sm font-medium text-ink outline-none focus:border-needle focus:ring-2 focus:ring-needle/15"
+                    >
+                      <option value="">Detect automatically</option>
+                      {translationLanguages.map((language) => (
+                        <option key={language.code} value={language.code}>{language.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="text-[0.68rem] leading-4 text-ink/44">Detection is automatic. Dialects such as Nigerian Pidgin may be less exact.</p>
+                </div>
+              </details> : null}
               {selectedThread.order.video_call_url ? (
                 <Button asChild variant="outline" size="sm">
                   <a href={selectedThread.order.video_call_url} target="_blank" rel="noreferrer"><Video /> Join call</a>
@@ -14606,6 +14935,12 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
               <Button asChild size="sm"><Link href={`/account/orders/${selectedThread.order.id}`}><ClipboardList /> Order</Link></Button>
             </div>
           </div>
+
+          {translationError ? (
+            <div className="border-b border-rust/12 bg-rust/6 px-4 py-2 text-xs font-medium text-rust" role="status">
+              {translationError}
+            </div>
+          ) : null}
 
           {/* Messages area */}
           <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto bg-ui-canvas/70 py-3">
@@ -14646,16 +14981,6 @@ function RenderMessages({ data, onRefresh }: { data: MessagesRenderData; onRefre
             </div>
           ) : null}
 
-          {selectedConversationActions?.primary ? (
-            <ConversationActionBar
-              primary={selectedConversationActions.primary}
-              overflow={selectedConversationActions.overflow}
-              revisionRoundsUsed={selectedConversationActions.revisionRoundsUsed}
-              revisionRoundLimit={selectedConversationActions.revisionRoundLimit}
-              busy={conversationActionBusy}
-              onAction={(action) => { void handleConversationAction(action) }}
-            />
-          ) : null}
           {conversationActionError && !revisionDialogOpen ? (
             <div className="border-t border-rust/18 bg-rust/6 px-4 py-2 text-sm text-rust">
               {conversationActionError}

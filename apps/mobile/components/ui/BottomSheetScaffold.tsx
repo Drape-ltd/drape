@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import {
   ActivityIndicator,
+  BackHandler,
   Modal,
   Pressable,
   ScrollView,
@@ -233,6 +234,15 @@ export function BottomSheetScaffold({
       modal.dismiss?.()
     }
   }, [canUseNativeSheet, visible])
+
+  useEffect(() => {
+    if (!visible) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onDismiss()
+      return true
+    })
+    return () => subscription.remove()
+  }, [onDismiss, visible])
 
   function handleDismiss() {
     const wasPresented = presentedRef.current

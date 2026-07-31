@@ -47,6 +47,10 @@ describe('country phone helpers', () => {
     expect(getNationalPhoneInput('+442079460018', 'GB')).toBe('2079460018')
   })
 
+  it('keeps the editable selection when a shared calling code is ambiguous', () => {
+    expect(inferPhoneCountryCode('+1', 'CA')).toBe('CA')
+  })
+
   it('searches by country name, ISO code, native name, and calling code', () => {
     expect(searchPhoneCountries('Nigeria')[0]?.code).toBe('NG')
     expect(searchPhoneCountries('+233')[0]?.code).toBe('GH')

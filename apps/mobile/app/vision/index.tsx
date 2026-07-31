@@ -17,14 +17,13 @@ import {
   VisionShell,
 } from '@/components/drapeVision/DrapeVisionPrimitives'
 import {
-  DRAPE_VISION_COLORS,
   DRAPE_VISION_MODE_META,
   isDrapeVisionBodyScanMode,
   isDrapeVisionDeferredMode,
   isDrapeVisionMode,
   type DrapeVisionMode,
 } from '@/constants/drapeVision'
-import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing, useDrapeTheme } from '@/constants/theme'
 import { useFeatureFlags } from '@/lib/feature-flags'
 import { goBackOrReturnToIfNeeded, pickSafeReturnTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
@@ -153,6 +152,7 @@ function primaryFallbackLabelForParams(mode: DrapeVisionMode, params: VisionPara
 export default function DrapeVisionRoute() {
   const router = useRouter()
   const navigation = useNavigation()
+  const { colors } = useDrapeTheme()
   const visionExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visionExitInProgressRef = useRef(false)
   const rawParams = useLocalSearchParams<VisionParams>()
@@ -350,9 +350,9 @@ export default function DrapeVisionRoute() {
 
   if (NativeVisionScreen) {
     return (
-      <View style={styles.nativeMountLoading}>
-        <ActivityIndicator color={Colors.needleGreen} size="large" />
-        <Text style={styles.nativeMountLoadingText}>Starting Drapeon Vision</Text>
+      <View style={[styles.nativeMountLoading, { backgroundColor: colors.bone }]}>
+        <ActivityIndicator color={colors.needleGreen} size="large" />
+        <Text style={[styles.nativeMountLoadingText, { color: colors.inkLight }]}>Starting Drapeon Vision</Text>
       </View>
     )
   }
@@ -390,14 +390,14 @@ export default function DrapeVisionRoute() {
           <Feather name="aperture" size={28} color={Colors.needleGreen} />
         </View>
         <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-        <Text style={styles.title}>
+        <Text style={[styles.title, { color: colors.ink }]}>
           {deferred
             ? `${meta.eyebrow} is planned for a future release`
             : androidPaused
               ? 'Use manual measurements on Android'
               : 'Drapeon Vision is not available in this build'}
         </Text>
-        <Text style={styles.body}>
+        <Text style={[styles.body, { color: colors.inkLight }]}>
           {deferred
             ? 'This workflow is not part of the launch build because it has not completed product and real-device validation. The existing manual workflow remains available.'
             : androidPaused
@@ -406,11 +406,11 @@ export default function DrapeVisionRoute() {
         </Text>
       </View>
 
-      <View style={styles.noticeBand}>
-        <Feather name="tool" size={18} color={Colors.needleGreen} />
+      <View style={[styles.noticeBand, { backgroundColor: colors.surface, borderColor: colors.lightGrey }]}>
+        <Feather name="tool" size={18} color={colors.needleGreen} />
         <View style={styles.noticeCopy}>
-          <Text style={styles.noticeTitle}>{deferred ? 'Use the established workflow' : 'Manual path is still available'}</Text>
-          <Text style={styles.noticeText}>
+          <Text style={[styles.noticeTitle, { color: colors.ink }]}>{deferred ? 'Use the established workflow' : 'Manual path is still available'}</Text>
+          <Text style={[styles.noticeText, { color: colors.inkLight }]}>
             {deferred
               ? mode === 'tailor_client_scan'
                 ? 'Record and review client measurements directly in Diary. Every value remains editable before a passport invite is sent.'
@@ -455,14 +455,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FontSize.xxxl,
     lineHeight: 38,
-    color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.bold,
     fontFamily: Fonts.display,
   },
   body: {
     fontSize: FontSize.md,
     lineHeight: 23,
-    color: DRAPE_VISION_COLORS.textMuted,
   },
   noticeBand: {
     flexDirection: 'row',
@@ -470,9 +468,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     padding: Spacing.lg,
     borderRadius: Radius.md,
-    backgroundColor: DRAPE_VISION_COLORS.panel,
     borderWidth: 1,
-    borderColor: Colors.needleGreen + '55',
   },
   noticeCopy: {
     flex: 1,
@@ -480,13 +476,11 @@ const styles = StyleSheet.create({
   },
   noticeTitle: {
     fontSize: FontSize.md,
-    color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.semibold,
   },
   noticeText: {
     fontSize: FontSize.sm,
     lineHeight: 20,
-    color: DRAPE_VISION_COLORS.textMuted,
   },
   floatingActions: {
     flexDirection: 'row',
@@ -501,11 +495,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.md,
-    backgroundColor: DRAPE_VISION_COLORS.screen,
   },
   nativeMountLoadingText: {
     fontSize: FontSize.sm,
-    color: DRAPE_VISION_COLORS.textMuted,
     fontWeight: FontWeight.medium,
   },
 })

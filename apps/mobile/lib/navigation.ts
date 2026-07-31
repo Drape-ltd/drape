@@ -7,6 +7,7 @@ type BackNavigation = {
 }
 type ReturnNavigationOptions = {
   fromPath?: string
+  dismissToTarget?: boolean
 }
 type TabLayoutGroup = '(customer)' | '(tailor)'
 type TabRouteBranch = {
@@ -198,12 +199,19 @@ function applySafeReturn(
   fallback: ReplaceTarget,
   options?: ReturnNavigationOptions,
 ) {
+  const safeReturnTo = historyTargetToHref(historyTarget)
+  if (options?.dismissToTarget) {
+    scheduleRouteTransition(() => {
+      router.dismissTo(safeReturnTo as ReplaceTarget)
+    })
+    return
+  }
+
   if (shouldUseRootCrossoverNavigation(historyTarget.pathname, fallback, options)) {
     navigateWithHistory(router, historyTarget.pathname, historyTarget.remainingHistory)
     return
   }
 
-  const safeReturnTo = historyTargetToHref(historyTarget)
   if (shouldNavigateAcrossTabBranch(safeReturnTo, fallback)) {
     scheduleRouteTransition(() => {
       router.navigate(safeReturnTo as NavigateTarget)
@@ -248,13 +256,18 @@ export function goBackOrReturnTo(
     applySafeReturn(router, historyTarget, fallback, options)
     return
   }
+  if (options?.dismissToTarget) {
+    scheduleRouteTransition(() => {
+      router.dismissTo(fallback)
+    })
+    return
+  }
   if (shouldUseRootCrossoverNavigation(fallback, fallback, options)) {
     navigateToTarget(router, fallback)
     return
   }
-  dismissCurrentStack(router)
   scheduleRouteTransition(() => {
-    router.replace(fallback)
+    router.dismissTo(fallback)
   })
 }
 
@@ -274,8 +287,7 @@ export function goBackOrReturnToIfNeeded(
     navigateToTarget(router, fallback)
     return
   }
-  dismissCurrentStack(router)
   scheduleRouteTransition(() => {
-    router.replace(fallback)
+    router.dismissTo(fallback)
   })
 }

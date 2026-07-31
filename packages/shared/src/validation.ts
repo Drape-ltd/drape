@@ -1,6 +1,6 @@
 import type { OrderStage } from './order-machine'
 import { SUPPORTED_ACCOUNT_CURRENCIES } from './currency-config'
-import { normalizePhoneForStorage, validatePhoneForProfile } from './phone'
+import { validatePhoneForProfile } from './phone'
 
 export const VALID_ORDER_STATUSES = [
   'DRAFT',
@@ -32,8 +32,6 @@ export const VALID_ORDER_STATUSES = [
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const MIN_PHONE_DIGITS = 7
-const MAX_PHONE_DIGITS = 15
 
 export function validateCurrency(code: unknown): boolean {
   return (
@@ -73,20 +71,8 @@ export function validateUuid(value: unknown): value is string {
 
 export function validatePhoneNumber(phone: unknown, country?: string | null): boolean {
   if (typeof phone !== 'string') return false
-
-  const normalized = normalizePhoneForStorage(phone)
-  const digits = normalized.startsWith('+') ? normalized.slice(1) : normalized
-  const normalizedCountry = country?.trim().toUpperCase()
-
-  if (normalizedCountry === 'NG' || normalizedCountry === 'NGA' || normalizedCountry === 'NIGERIA') {
-    return validatePhoneForProfile(phone) === null
-  }
-
-  return (
-    /^\+?\d+$/.test(normalized) &&
-    digits.length >= MIN_PHONE_DIGITS &&
-    digits.length <= MAX_PHONE_DIGITS
-  )
+  void country
+  return validatePhoneForProfile(phone) === null
 }
 
 export function validateUrl(url: unknown, allowedDomains: readonly string[]): boolean {

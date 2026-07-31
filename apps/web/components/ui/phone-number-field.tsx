@@ -26,6 +26,7 @@ type PhoneNumberFieldProps = Omit<
   error?: React.ReactNode
   defaultCountryCode?: PhoneCountryCode
   containerClassName?: string
+  onClearError?: () => void
 }
 
 function prioritizedCountries(query: string): readonly PhoneCountryOption[] {
@@ -46,6 +47,7 @@ export function PhoneNumberField({
   required,
   defaultCountryCode = DEFAULT_PHONE_COUNTRY_CODE,
   containerClassName,
+  onClearError,
   className,
   placeholder = 'Phone number',
   onFocus,
@@ -98,6 +100,7 @@ export function PhoneNumberField({
   const countries = React.useMemo(() => prioritizedCountries(query), [query])
 
   function emitNationalValue(nextNationalValue: string, code = countryCode) {
+    if (error) onClearError?.()
     const normalizedValue = nextNationalValue.trim().replace(/^00/, '+')
     const nextCountryCode = normalizedValue.startsWith('+')
       ? inferPhoneCountryCode(normalizedValue, code)
@@ -108,7 +111,7 @@ export function PhoneNumberField({
 
     if (nextCountryCode !== countryCode) setCountryCode(nextCountryCode)
     setNationalValue(nextDisplayValue)
-    const nextValue = composeInternationalPhoneNumber(nextNationalValue, code)
+    const nextValue = composeInternationalPhoneNumber(nextNationalValue, nextCountryCode)
     lastEmittedValue.current = nextValue
     onValueChange(nextValue)
   }
@@ -156,7 +159,8 @@ export function PhoneNumberField({
           id={inputId}
           type="tel"
           inputMode="tel"
-          autoComplete="tel-national"
+          autoComplete="tel"
+          enterKeyHint={inputProps.enterKeyHint ?? 'next'}
           required={required}
           value={nationalValue}
           onChange={(event) => emitNationalValue(event.target.value)}
@@ -164,6 +168,7 @@ export function PhoneNumberField({
           onBlur={onBlur}
           placeholder={placeholder}
           aria-invalid={Boolean(error)}
+          aria-describedby={error || hint ? `${inputId}-support` : undefined}
           className={cn(
             'min-h-12 min-w-0 flex-1 rounded-r-[8px] bg-transparent px-3 text-base font-normal text-ink outline-none placeholder:text-ui-subtle',
             className,
@@ -235,9 +240,9 @@ export function PhoneNumberField({
       ) : null}
 
       {error ? (
-        <span className="text-xs leading-5 text-rust" role="alert">{error}</span>
+        <span id={`${inputId}-support`} className="text-xs leading-5 text-rust" role="alert">{error}</span>
       ) : hint ? (
-        <span className="text-xs leading-5 text-ui-subtle">{hint}</span>
+        <span id={`${inputId}-support`} className="text-xs leading-5 text-ui-subtle">{hint}</span>
       ) : null}
     </div>
   )

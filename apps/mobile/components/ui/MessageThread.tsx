@@ -4,11 +4,11 @@
  * Supports text, camera/library photo, and voice note messages.
  * Contact filter applied inline before send.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Keyboard,
-  PanResponder, Animated, Vibration, AppState,
+  PanResponder, Animated, Vibration, AppState, Linking, Platform,
 } from 'react-native'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Feather } from '@expo/vector-icons'
@@ -21,10 +21,12 @@ import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload } from '@/lib/storage-upload'
 import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
-import * as FileSystem from 'expo-file-system'
+import { hapticLight } from '@/lib/haptics'
+import * as FileSystem from 'expo-file-system/legacy'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import {
+  conversationClusterPositionForMessage,
   groupMessageMediaClusters,
   type ClusterPosition,
 } from '@drape/shared/message-thread-clusters'
@@ -33,8 +35,18 @@ import {
   formatCallCountdown,
   getCallLifecycleState,
 } from '@drape/shared/call-scheduling-policy'
+import { buildGoogleCalendarEventUrl } from '@drape/shared/order-appointments'
+import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
 import {
-  deriveOrderConversationActions,
+  languageName,
+  type ConversationTranslationPreference,
+  type MessageTranslation,
+} from '@drape/shared/message-translation'
+import {
+  deriveConversationEventPresentation,
+  parseScheduledOrderCallMessage,
+} from '@drape/shared/conversation-event-presentation'
+import {
   ORDER_EVENT_LABELS,
   type OrderConversationAction,
   type OrderEvent,
@@ -54,7 +66,6 @@ import { DrapeMediaMosaic, type DrapeMediaMosaicItem } from './DrapeMediaMosaic'
 import { DrapeVoicePlayer } from './DrapeVoicePlayer'
 import {
   DrapeCapsuleButton,
-  DrapeIconButton,
   DrapeInlineActionCard,
   DrapeSheet,
   DrapeStatusChip,
@@ -79,6 +90,7 @@ type EmptyConversationPrompt = {
 }
 type CallLifecycleEvent = {
   kind: 'consultation' | 'order'
+  createdAt: string | null | undefined
   scheduledStartAt: string | null | undefined
   timezone?: string | null
   reason?: string | null
@@ -127,6 +139,7 @@ type MessageMediaPreview = {
 type ThreadEntry =
   | { kind: 'messages'; key: string; createdAt: string; messages: Message[] }
   | { kind: 'event'; key: string; createdAt: string; event: OrderEvent }
+  | { kind: 'call'; key: string; createdAt: string; event: CallLifecycleEvent }
 
 type NegotiationState = {
   stage: OrderStage | null
@@ -146,11 +159,6 @@ interface Props {
   customerAvatarUrl?: string | null
   locked?: boolean
   lockedMessage?: string
-  callAvailable?: boolean
-  callLoading?: boolean
-  onPressCall?: () => void
-  callAccessibilityLabel?: string
-  callBlocked?: boolean
   callGateMessage?: string | null
   callGateActionLabel?: string | null
   onPressCallGateAction?: () => void
@@ -160,6 +168,10 @@ interface Props {
   focusedEventId?: string | null
   focusedMessageId?: string | null
   onConversationAction?: (action: OrderConversationAction) => void
+  onReportMessage?: (messageId: string) => void
+  onCounterpartyOnlineChange?: (online: boolean) => void
+  translationPreference?: ConversationTranslationPreference
+  onTranslateMessage?: (messageId: string) => Promise<MessageTranslation>
   emptyConversationPrompt?: EmptyConversationPrompt
 }
 
@@ -543,11 +555,6 @@ export function MessageThread({
   customerAvatarUrl,
   locked = false,
   lockedMessage,
-  callAvailable = false,
-  callLoading = false,
-  onPressCall,
-  callAccessibilityLabel = 'Open Drapeon call options',
-  callBlocked = false,
   callGateMessage,
   callGateActionLabel,
   onPressCallGateAction,
@@ -557,12 +564,17 @@ export function MessageThread({
   focusedEventId,
   focusedMessageId,
   onConversationAction,
+  onReportMessage,
+  onCounterpartyOnlineChange,
+  translationPreference = { autoTranslate: false, targetLanguage: 'en', sourceLanguage: null },
+  onTranslateMessage = async () => { throw new Error('Translation is unavailable right now.') },
   emptyConversationPrompt,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
   const [contextMenuMessage, setContextMenuMessage] = useState<Message | null>(null)
   const [mediaPreview, setMediaPreview] = useState<MessageMediaPreview | null>(null)
+  const [mediaSourceSheetVisible, setMediaSourceSheetVisible] = useState(false)
   const [orderEvents, setOrderEvents] = useState<OrderEvent[]>([])
   const [negotiationState, setNegotiationState] = useState<NegotiationState>({
     stage: orderStage ?? null,
@@ -571,7 +583,6 @@ export function MessageThread({
     roundsUsed: 0,
     roundLimit: 3,
   })
-  const [showConversationActions, setShowConversationActions] = useState(false)
   const [replyingTo, setReplyingTo] = useState<Message | null>(null)
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [reactions, setReactions] = useState<MessageReaction[]>([])
@@ -590,12 +601,17 @@ export function MessageThread({
   const [rateLimited, setRateLimited] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [showCancelHint, setShowCancelHint] = useState(false)
+  const [recordingLocked, setRecordingLocked] = useState(false)
+  const [recordingHolding, setRecordingHolding] = useState(false)
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0)
   const recordingRef = useRef<Audio.Recording | null>(null)
   const recordingStartingRef = useRef(false)
   const recordingStoppingRef = useRef(false)
   const recordingGestureActiveRef = useRef(false)
   const recordingStopRequestedRef = useRef(false)
   const recordingSessionRef = useRef(0)
+  const recordingLockedRef = useRef(false)
+  const recordingStartedAtRef = useRef(0)
   const isCancelledRef = useRef(false)
   const sendingRef = useRef(false)
   const channelRef = useRef<RealtimeChannel | null>(null)
@@ -604,6 +620,79 @@ export function MessageThread({
   const appStateRef = useRef(AppState.currentState)
   const [counterpartyIsTyping, setCounterpartyIsTyping] = useState(false)
   const [counterpartyPresence, setCounterpartyPresence] = useState<{ online: boolean; lastSeen: string | null }>({ online: false, lastSeen: null })
+  const [translations, setTranslations] = useState<Record<string, MessageTranslation>>({})
+  const [translationLoadingIds, setTranslationLoadingIds] = useState<Set<string>>(new Set())
+  const [translationFailedIds, setTranslationFailedIds] = useState<Set<string>>(new Set())
+  const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(new Set())
+  const [activeVoiceMessageId, setActiveVoiceMessageId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setTranslations({})
+    setShowOriginalIds(new Set())
+    setTranslationFailedIds(new Set())
+  }, [translationPreference.sourceLanguage, translationPreference.targetLanguage])
+
+  useEffect(() => {
+    onCounterpartyOnlineChange?.(counterpartyPresence.online)
+  }, [counterpartyPresence.online, onCounterpartyOnlineChange])
+
+  const requestTranslation = useCallback(async (message: Message, announceError: boolean) => {
+    if (message.type !== 'TEXT' || message.is_deleted || !message.body || parseScheduledOrderCallMessage(message.body)) return
+    if (translations[message.id] || translationLoadingIds.has(message.id)) return
+    if (announceError) {
+      setTranslationFailedIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    } else if (translationFailedIds.has(message.id)) {
+      return
+    }
+    setTranslationLoadingIds((current) => new Set(current).add(message.id))
+    try {
+      const translation = await Promise.race([
+        onTranslateMessage(message.id),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Translation took too long. Please try again.')), 20_000)
+        }),
+      ])
+      setTranslations((current) => ({ ...current, [message.id]: translation }))
+      setShowOriginalIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    } catch (error) {
+      setTranslationFailedIds((current) => new Set(current).add(message.id))
+      if (announceError) {
+        Alert.alert('Translation unavailable', error instanceof Error ? error.message : 'This message could not be translated right now.')
+      }
+    } finally {
+      setTranslationLoadingIds((current) => {
+        const next = new Set(current)
+        next.delete(message.id)
+        return next
+      })
+    }
+  }, [onTranslateMessage, translationFailedIds, translationLoadingIds, translations])
+
+  useEffect(() => {
+    if (!translationPreference.autoTranslate || loading) return
+    const candidates = messages
+      .filter((message) =>
+        message.sender_id !== currentUserId &&
+        message.type === 'TEXT' &&
+        !message.is_deleted &&
+        !!message.body &&
+        !parseScheduledOrderCallMessage(message.body) &&
+        !translations[message.id] &&
+        !translationFailedIds.has(message.id) &&
+        !translationLoadingIds.has(message.id)
+      )
+      .slice(-30)
+    candidates.forEach((message) => { void requestTranslation(message, false) })
+  }, [currentUserId, loading, messages, requestTranslation, translationFailedIds, translationLoadingIds, translationPreference.autoTranslate, translations])
+
   // PanResponder is created once; callbacks read only from refs so stale closures are safe
   const micPanResponder = useRef(
     PanResponder.create({
@@ -612,6 +701,7 @@ export function MessageThread({
       onPanResponderGrant: () => {
         recordingGestureActiveRef.current = true
         recordingStopRequestedRef.current = false
+        setRecordingHolding(true)
         void startRecording()
       },
       onPanResponderMove: (_, g) => {
@@ -619,18 +709,40 @@ export function MessageThread({
           isCancelledRef.current = true
           setShowCancelHint(true)
           Vibration.vibrate(40)
+          return
+        }
+        if (g.dy < -60 && !recordingLockedRef.current && !isCancelledRef.current) {
+          recordingLockedRef.current = true
+          setRecordingLocked(true)
+          setShowCancelHint(false)
+          Vibration.vibrate(40)
         }
       },
       onPanResponderRelease: () => {
         recordingGestureActiveRef.current = false
-        recordingStopRequestedRef.current = true
-        void stopRecording()
+        setRecordingHolding(false)
+        if (isCancelledRef.current) {
+          recordingStopRequestedRef.current = true
+          void stopRecording()
+          return
+        }
+        // Releasing exposes explicit send/discard controls. This also closes the
+        // Android race where the finger could lift before the recorder existed.
+        recordingLockedRef.current = true
+        recordingStopRequestedRef.current = false
+        setRecordingLocked(true)
       },
       onPanResponderTerminate: () => {
         recordingGestureActiveRef.current = false
-        recordingStopRequestedRef.current = true
-        isCancelledRef.current = true
-        void stopRecording()
+        setRecordingHolding(false)
+        if (isCancelledRef.current) {
+          recordingStopRequestedRef.current = true
+          void stopRecording()
+          return
+        }
+        recordingLockedRef.current = true
+        recordingStopRequestedRef.current = false
+        setRecordingLocked(true)
       },
     })
   ).current
@@ -639,6 +751,32 @@ export function MessageThread({
   const sendTimestamps = useRef<number[]>([])
   const insets = useSafeAreaInsets()
   const composerBottomPadding = Math.max(insets.bottom + Spacing.sm, Spacing.md)
+
+  useEffect(() => {
+    if (!isRecording) {
+      setRecordingElapsedSeconds(0)
+      return
+    }
+    const updateElapsed = () => {
+      setRecordingElapsedSeconds(Math.max(0, Math.floor((Date.now() - recordingStartedAtRef.current) / 1000)))
+    }
+    updateElapsed()
+    const interval = setInterval(updateElapsed, 250)
+    return () => clearInterval(interval)
+  }, [isRecording])
+
+  useEffect(() => () => {
+    // Fast Refresh, navigation, and role switches must not strand Expo AV's
+    // singleton recorder. A stranded instance blocks the next Android note.
+    recordingSessionRef.current += 1
+    const activeRecording = recordingRef.current
+    recordingRef.current = null
+    if (activeRecording) {
+      void activeRecording.stopAndUnloadAsync()
+        .catch(() => undefined)
+        .finally(() => Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => undefined))
+    }
+  }, [])
   const replyingToMediaUrl = useMessageMediaUrl(
     replyingTo?.type === 'PHOTO' ? replyingTo.photo_url : null,
   )
@@ -648,6 +786,13 @@ export function MessageThread({
   sendingRef.current = sending
 
   const messagesById = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
+  const conversationPositions = useMemo(
+    () => new Map(messages.map((message, index) => [
+      message.id,
+      conversationClusterPositionForMessage(messages, index),
+    ])),
+    [messages],
+  )
   const messageGroups = useMemo(() => groupMessageMediaClusters(messages), [messages])
   const timelineEntries = useMemo<ThreadEntry[]>(() => {
     const messageEntries: ThreadEntry[] = messageGroups
@@ -664,24 +809,75 @@ export function MessageThread({
       createdAt: event.createdAt,
       event,
     }))
-    return [...messageEntries, ...eventEntries].sort((left, right) =>
-      left.createdAt.localeCompare(right.createdAt),
-    )
-  }, [messageGroups, orderEvents])
-
-  const conversationActions = useMemo(() => {
-    const currentStage = negotiationState.stage ?? orderStage
-    if (!CHAT_ORDER_ACTIONS_ENABLED || !currentStage) return null
-    return deriveOrderConversationActions({
-      role: currentUserRole,
-      orderKind,
-      stage: currentStage,
-      activeQuote: negotiationState.activeQuote,
-      openRevision: negotiationState.openRevision,
-      negotiationRoundsUsed: negotiationState.roundsUsed,
-      negotiationRoundLimit: negotiationState.roundLimit,
+    const callAnchorMessage = callLifecycleEvent?.kind === 'order'
+      ? messages
+          .filter((message) => message.body?.startsWith('Drapeon order call scheduled for '))
+          .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
+      : null
+    const callTimelineAt = callAnchorMessage?.created_at ?? callLifecycleEvent?.createdAt
+    const callEntries: ThreadEntry[] = callLifecycleEvent && callTimelineAt
+      ? [{
+          kind: 'call',
+          key: `call:${callLifecycleEvent.kind}:${callTimelineAt}`,
+          createdAt: callTimelineAt,
+          event: callLifecycleEvent,
+        }]
+      : []
+    return [...messageEntries, ...eventEntries, ...callEntries].sort((left, right) => {
+      const timestampOrder = left.createdAt.localeCompare(right.createdAt)
+      if (timestampOrder !== 0) return timestampOrder
+      if (left.kind === 'call') return 1
+      if (right.kind === 'call') return -1
+      return 0
     })
-  }, [currentUserRole, negotiationState, orderKind, orderStage])
+  }, [callLifecycleEvent, messageGroups, messages, orderEvents])
+
+  const nextVoiceMessageIdById = useMemo(() => {
+    const nextById = new Map<string, string>()
+    for (let index = 0; index < timelineEntries.length - 1; index += 1) {
+      const current = timelineEntries[index]
+      const next = timelineEntries[index + 1]
+      if (current?.kind !== 'messages' || next?.kind !== 'messages') continue
+      const currentMessage = current.messages.length === 1 ? current.messages[0] : null
+      const nextMessage = next.messages.length === 1 ? next.messages[0] : null
+      if (
+        currentMessage?.type === 'VOICE' &&
+        nextMessage?.type === 'VOICE' &&
+        !currentMessage.is_deleted &&
+        !nextMessage.is_deleted &&
+        currentMessage.sender_id === nextMessage.sender_id
+      ) {
+        nextById.set(currentMessage.id, nextMessage.id)
+      }
+    }
+    return nextById
+  }, [timelineEntries])
+
+  const voiceSequenceCountByStartId = useMemo(() => {
+    const counts = new Map<string, number>()
+    let index = 0
+    while (index < timelineEntries.length) {
+      const entry = timelineEntries[index]
+      const first = entry?.kind === 'messages' && entry.messages.length === 1 ? entry.messages[0] : null
+      if (first?.type !== 'VOICE' || first.is_deleted) {
+        index += 1
+        continue
+      }
+      let end = index + 1
+      while (end < timelineEntries.length) {
+        const candidateEntry = timelineEntries[end]
+        const candidate = candidateEntry?.kind === 'messages' && candidateEntry.messages.length === 1
+          ? candidateEntry.messages[0]
+          : null
+        if (candidate?.type !== 'VOICE' || candidate.is_deleted || candidate.sender_id !== first.sender_id) break
+        end += 1
+      }
+      const count = end - index
+      if (count > 1) counts.set(first.id, count)
+      index = end
+    }
+    return counts
+  }, [timelineEntries])
 
   const reactionsByMessageId = useMemo(() => {
     const grouped = new Map<string, MessageReaction[]>()
@@ -1176,12 +1372,12 @@ export function MessageThread({
   }
 
   function openPhotoSourceSheet() {
-    Alert.alert('Send media', 'Take a photo, record a short video, or choose media from your library.', [
-      { text: 'Take photo', onPress: () => void sendMediaFromSource('camera-photo') },
-      { text: 'Record video', onPress: () => void sendMediaFromSource('camera-video') },
-      { text: 'Choose from library', onPress: () => void sendMediaFromSource('library') },
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    setMediaSourceSheetVisible(true)
+  }
+
+  function chooseMediaSource(source: MessageMediaSource) {
+    setMediaSourceSheetVisible(false)
+    setTimeout(() => { void sendMediaFromSource(source) }, 180)
   }
 
   async function pickMessageMedia(source: MessageMediaSource) {
@@ -1332,7 +1528,7 @@ export function MessageThread({
     }
   }
 
-  async function startRecording() {
+  async function startRecording(startLocked = false) {
     if (
       recordingStartingRef.current ||
       recordingStoppingRef.current ||
@@ -1343,7 +1539,12 @@ export function MessageThread({
     const sessionId = recordingSessionRef.current + 1
     recordingSessionRef.current = sessionId
     recordingStartingRef.current = true
+    recordingStopRequestedRef.current = false
     isCancelledRef.current = false
+    recordingLockedRef.current = startLocked
+    setRecordingLocked(startLocked)
+    setRecordingHolding(false)
+    setRecordingElapsedSeconds(0)
     setShowCancelHint(false)
     try {
       const currentPermission = await Audio.getPermissionsAsync()
@@ -1367,8 +1568,9 @@ export function MessageThread({
       }
 
       recordingRef.current = rec
+      recordingStartedAtRef.current = Date.now()
       setIsRecording(true)
-      if (recordingStopRequestedRef.current || !recordingGestureActiveRef.current) {
+      if (recordingStopRequestedRef.current || (!recordingGestureActiveRef.current && !recordingLockedRef.current)) {
         await stopRecording(sessionId)
       }
     } catch (error) {
@@ -1392,6 +1594,10 @@ export function MessageThread({
     recordingRef.current = null
     setIsRecording(false)
     setShowCancelHint(false)
+    setRecordingLocked(false)
+    setRecordingHolding(false)
+    recordingLockedRef.current = false
+    recordingStartedAtRef.current = 0
 
     let durationSeconds = 0
     let uri: string | null = null
@@ -1409,14 +1615,14 @@ export function MessageThread({
 
     // Cancelled via swipe: discard silently
     if (isCancelledRef.current) {
-      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true })
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined)
       return
     }
 
     // Too short: discard and show inline hint
     if (durationSeconds < 1) {
-      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true })
-      setThreadNotice({ tone: 'warning', text: 'Hold to record, swipe left to cancel.' })
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined)
+      setThreadNotice({ tone: 'warning', text: 'Keep recording for at least one second before sending.' })
       return
     }
 
@@ -1447,7 +1653,8 @@ export function MessageThread({
       })
       if (insertError) throw insertError
       setReplyingTo(null)
-      await fetchMessages()
+      await fetchMessages({ silent: true })
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
     } catch (error) {
       const failure = resolveMediaFailure('voice', error)
       if (failure.connectivity) {
@@ -1459,6 +1666,18 @@ export function MessageThread({
       Alert.alert(failure.title, failure.message)
     }
     setSending(false)
+  }
+
+  function cancelLockedRecording() {
+    isCancelledRef.current = true
+    recordingStopRequestedRef.current = true
+    void stopRecording()
+  }
+
+  function sendLockedRecording() {
+    isCancelledRef.current = false
+    recordingStopRequestedRef.current = true
+    void stopRecording()
   }
 
   async function toggleReaction(message: Message, emoji: string) {
@@ -1536,33 +1755,18 @@ export function MessageThread({
   }
 
   function openContextMenu(message: Message) {
+    hapticLight()
     setContextMenuMessage(message)
   }
 
   const otherName = currentUserRole === 'CUSTOMER' ? tailorName : customerName
   const otherAvatarUrl = currentUserRole === 'CUSTOMER' ? tailorAvatarUrl : customerAvatarUrl
-  const hasListHeader = hasEarlier || !!callLifecycleEvent
+  const hasListHeader = hasEarlier
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
 
   return (
     <View style={styles.container}>
-      {/* Presence bar — shown at top when counterparty is tracked in this thread */}
-      {(counterpartyPresence.online || counterpartyPresence.lastSeen) ? (
-        <View style={styles.presenceBar}>
-          {counterpartyPresence.online ? (
-            <>
-              <View style={styles.presenceDotOnline} />
-              <Text style={styles.presenceTextOnline}>Active now</Text>
-            </>
-          ) : (
-            <Text style={styles.presenceTextMuted}>
-              Last viewed {formatPresenceTime(counterpartyPresence.lastSeen!)}
-            </Text>
-          )}
-        </View>
-      ) : null}
-
       <FlashList
         ref={flatListRef}
         data={timelineEntries}
@@ -1585,7 +1789,6 @@ export function MessageThread({
                 }
               </TouchableOpacity>
             ) : null}
-            {callLifecycleEvent ? <CallLifecycleEventCard event={callLifecycleEvent} /> : null}
           </View>
         ) : null}
         ListEmptyComponent={
@@ -1640,6 +1843,9 @@ export function MessageThread({
           </View>
         }
         renderItem={({ item: entry }) => {
+          if (entry.kind === 'call') {
+            return <CallLifecycleEventCard event={entry.event} />
+          }
           if (entry.kind === 'event') {
             return (
               <OrderConversationEventCard
@@ -1665,6 +1871,7 @@ export function MessageThread({
                 messages={group}
                 isOwn={item.sender_id === currentUserId}
                 avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
+                clusterPosition={conversationPositions.get(item.id) ?? 'isolated'}
                 onOpenContextMenu={openContextMenu}
                 onOpenMedia={setMediaPreview}
                 replyMessage={item.reply_to_id ? (messagesById.get(item.reply_to_id) ?? null) : null}
@@ -1678,12 +1885,28 @@ export function MessageThread({
               avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
               reactions={reactionsByMessageId.get(item.id) ?? []}
               currentUserId={currentUserId}
-              reactionsAvailable={reactionsAvailable}
               onOpenContextMenu={() => openContextMenu(item)}
               onOpenMedia={setMediaPreview}
               onToggleReaction={(emoji) => { void toggleReaction(item, emoji) }}
               replyMessage={item.reply_to_id ? (messagesById.get(item.reply_to_id) ?? null) : null}
+              clusterPosition={conversationPositions.get(item.id) ?? 'isolated'}
               mediaClusterMessages={group}
+              translation={translations[item.id] ?? null}
+              translationLoading={translationLoadingIds.has(item.id)}
+              showingOriginal={showOriginalIds.has(item.id)}
+              voicePlaybackActive={activeVoiceMessageId === item.id}
+              onActivateVoicePlayback={() => setActiveVoiceMessageId(item.id)}
+              onDeactivateVoicePlayback={() => setActiveVoiceMessageId((current) => current === item.id ? null : current)}
+              onVoicePlaybackFinished={() => setActiveVoiceMessageId(nextVoiceMessageIdById.get(item.id) ?? null)}
+              voiceSequenceCount={voiceSequenceCountByStartId.get(item.id) ?? 0}
+              onToggleOriginal={() => {
+                setShowOriginalIds((current) => {
+                  const next = new Set(current)
+                  if (next.has(item.id)) next.delete(item.id)
+                  else next.add(item.id)
+                  return next
+                })
+              }}
             />
           )
         }}
@@ -1713,11 +1936,57 @@ export function MessageThread({
         onReply={() => openReplyComposer(contextMenuMessage!)}
         onEdit={() => openEditComposer(contextMenuMessage!)}
         onUnsend={() => { void performUnsend(contextMenuMessage!) }}
+        onReport={onReportMessage && contextMenuMessage
+          ? () => onReportMessage(contextMenuMessage.id)
+          : undefined}
+        onTranslate={contextMenuMessage && contextMenuMessage.sender_id !== currentUserId
+          ? () => { void requestTranslation(contextMenuMessage, true) }
+          : undefined}
+        translationLoading={contextMenuMessage ? translationLoadingIds.has(contextMenuMessage.id) : false}
         reactions={contextMenuMessage ? (reactionsByMessageId.get(contextMenuMessage.id) ?? []) : []}
         currentUserId={currentUserId}
         reactionsAvailable={reactionsAvailable}
         onToggleReaction={(emoji) => { if (contextMenuMessage) void toggleReaction(contextMenuMessage, emoji) }}
       />
+
+      <BottomSheetScaffold
+        visible={mediaSourceSheetVisible}
+        testID="message-media-source-sheet"
+        title="Send media"
+        subtitle="Choose what you want to add to this conversation."
+        onDismiss={() => setMediaSourceSheetVisible(false)}
+        scrollable
+        snapPoints={['44%']}
+        enableDynamicSizing={false}
+        secondaryAction={{
+          label: 'Cancel',
+          onPress: () => setMediaSourceSheetVisible(false),
+          accessibilityLabel: 'Cancel adding media',
+          tone: 'secondary',
+        }}
+      >
+        <View style={styles.sheetActionList}>
+          {([
+            ['image', 'Choose from library', 'library'],
+            ['camera', 'Take photo', 'camera-photo'],
+            ['video', 'Record video', 'camera-video'],
+          ] as const).map(([icon, label, source]) => (
+            <TouchableOpacity
+              key={source}
+              style={styles.mediaSourceAction}
+              onPress={() => chooseMediaSource(source)}
+              accessibilityRole="button"
+              accessibilityLabel={label}
+            >
+              <View style={styles.mediaSourceActionIcon}>
+                <Feather name={icon} size={19} color={Colors.needleGreen} />
+              </View>
+              <Text style={[styles.sheetActionLabel, styles.mediaSourceActionLabel]}>{label}</Text>
+              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </BottomSheetScaffold>
 
       <MessageMediaPreviewModal
         preview={mediaPreview}
@@ -1752,32 +2021,7 @@ export function MessageThread({
           ) : null}
 
           {/* Typing indicator */}
-          {counterpartyIsTyping ? (
-            <View style={styles.typingRow}>
-              <Text style={styles.typingText}>{otherName} is typing…</Text>
-            </View>
-          ) : null}
-
-          {/* Recording indicator */}
-          {isRecording && (
-            <View style={[styles.recordingBar, showCancelHint && styles.recordingBarCancel]}>
-              <View style={[styles.recordingDot, showCancelHint && styles.recordingDotCancel]} />
-              <Text style={[styles.recordingText, showCancelHint && styles.recordingTextCancel]}>
-                {showCancelHint ? 'Release to discard' : 'Recording — slide ← to cancel'}
-              </Text>
-            </View>
-          )}
-
-          {conversationActions?.primary && onConversationAction ? (
-            <OrderConversationActionStrip
-              primary={conversationActions.primary}
-              overflowCount={conversationActions.overflow.length}
-              revisionRoundsUsed={conversationActions.revisionRoundsUsed}
-              revisionRoundLimit={conversationActions.revisionRoundLimit}
-              onPressPrimary={() => onConversationAction(conversationActions.primary!)}
-              onPressMore={() => setShowConversationActions(true)}
-            />
-          ) : null}
+          <TypingIndicator visible={counterpartyIsTyping} name={otherName} />
 
           {/* Reply preview bar */}
           {replyingTo ? (
@@ -1840,6 +2084,53 @@ export function MessageThread({
 
           {/* Input bar */}
           <UILibView style={[styles.inputBar, { paddingBottom: composerBottomPadding }]}>
+            {isRecording ? (
+              <View style={[styles.recordingComposer, showCancelHint && styles.recordingComposerCancel]}>
+                <TouchableOpacity
+                  style={styles.recordingComposerAction}
+                  onPress={cancelLockedRecording}
+                  accessibilityRole="button"
+                  accessibilityLabel="Discard voice note"
+                >
+                  <Feather name="trash-2" size={19} color={Colors.kanteRust} />
+                </TouchableOpacity>
+                <View style={[styles.recordingDot, showCancelHint && styles.recordingDotCancel]} />
+                <Text style={[styles.recordingTimer, showCancelHint && styles.recordingTextCancel]}>
+                  {`${Math.floor(recordingElapsedSeconds / 60)}:${String(recordingElapsedSeconds % 60).padStart(2, '0')}`}
+                </Text>
+                <View style={styles.recordingWaveform} accessibilityLabel="Voice recording level">
+                  {[8, 15, 11, 20, 13, 17, 9, 19, 12, 16, 8, 14].map((height, index) => (
+                    <View
+                      key={`${height}:${index}`}
+                      style={[styles.recordingWaveBar, { height }, showCancelHint && styles.recordingWaveBarCancel]}
+                    />
+                  ))}
+                </View>
+                <View style={styles.recordingInstruction}>
+                  <Feather
+                    name={recordingLocked ? 'lock' : showCancelHint ? 'trash-2' : 'arrow-up'}
+                    size={14}
+                    color={showCancelHint ? Colors.kanteRust : Colors.needleGreen}
+                  />
+                  <Text style={[styles.recordingInstructionText, showCancelHint && styles.recordingTextCancel]} numberOfLines={1}>
+                    {showCancelHint
+                      ? 'Release to discard'
+                      : recordingHolding && !recordingLocked
+                        ? '↑ lock · ← cancel'
+                        : 'Recording · tap send'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.recordingSendAction}
+                  onPress={sendLockedRecording}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send voice note"
+                >
+                  <Feather name="arrow-up" size={18} color={Colors.textInverse} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
             <TouchableOpacity
               style={styles.iconBtn}
               onPress={openPhotoSourceSheet}
@@ -1879,21 +2170,6 @@ export function MessageThread({
             </View>
 
             <View style={styles.composerActions}>
-              {callAvailable && onPressCall ? (
-                <TouchableOpacity
-                  style={styles.callBtn}
-                  onPress={onPressCall}
-                  disabled={sending || callLoading || callBlocked}
-                  accessibilityRole="button"
-                  accessibilityLabel={callAccessibilityLabel}
-                >
-                  {callLoading
-                    ? <ActivityIndicator color={Colors.needleGreen} size="small" />
-                    : <Feather name="phone-call" size={18} color={Colors.needleGreen} />
-                  }
-                </TouchableOpacity>
-              ) : null}
-
               {text.trim() ? (
                 <TouchableOpacity
                   style={styles.sendBtn}
@@ -1907,21 +2183,31 @@ export function MessageThread({
                     : <Feather name="arrow-up" size={18} color={Colors.textInverse} />
                   }
                 </TouchableOpacity>
+              ) : Platform.OS === 'android' ? (
+                <TouchableOpacity
+                  onPress={() => void startRecording(true)}
+                  style={styles.voiceBtn}
+                  disabled={sending || rateLimited}
+                  accessibilityRole="button"
+                  accessibilityLabel="Record voice note"
+                  accessibilityHint="Tap to begin, then use the send or discard button"
+                >
+                  <Feather name="mic" size={20} color={Colors.needleGreen} />
+                </TouchableOpacity>
               ) : (
                 <Animated.View
                   {...micPanResponder.panHandlers}
-                  style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
+                  style={styles.voiceBtn}
                   accessibilityRole="button"
-                  accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
+                  accessibilityLabel="Hold to record voice note"
+                  accessibilityHint="While holding, slide up to lock or slide left to cancel"
                 >
-                  <Feather
-                    name="mic"
-                    size={20}
-                    color={isRecording ? Colors.textInverse : Colors.needleGreen}
-                  />
+                  <Feather name="mic" size={20} color={Colors.needleGreen} />
                 </Animated.View>
               )}
             </View>
+              </>
+            )}
           </UILibView>
 
           {callGateMessage ? (
@@ -1941,72 +2227,76 @@ export function MessageThread({
         </>
       )}
 
-      <DrapeSheet
-        visible={showConversationActions}
-        title="Order actions"
-        subtitle={conversationActions
-          ? `Revision ${conversationActions.revisionRoundsUsed} of ${conversationActions.revisionRoundLimit}`
-          : undefined}
-        onDismiss={() => setShowConversationActions(false)}
-        enableDynamicSizing
-      >
-        <View style={styles.conversationActionSheetList}>
-          {conversationActions?.overflow.map((action) => (
-            <DrapeCapsuleButton
-              key={action.kind}
-              label={action.label}
-              tone={action.emphasis === 'DESTRUCTIVE' ? 'destructive' : 'secondary'}
-              onPress={() => {
-                setShowConversationActions(false)
-                onConversationAction?.(action)
-              }}
-            />
-          ))}
-        </View>
-      </DrapeSheet>
     </View>
   )
 }
 
-function OrderConversationActionStrip({
-  primary,
-  overflowCount,
-  revisionRoundsUsed,
-  revisionRoundLimit,
-  onPressPrimary,
-  onPressMore,
-}: {
-  primary: OrderConversationAction
-  overflowCount: number
-  revisionRoundsUsed: number
-  revisionRoundLimit: number
-  onPressPrimary: () => void
-  onPressMore: () => void
-}) {
+function TypingIndicator({ visible, name }: { visible: boolean; name: string }) {
+  const [opacity] = useState(() => new Animated.Value(0))
+  const [height] = useState(() => new Animated.Value(0))
+  const [dots] = useState(() => [
+    new Animated.Value(0),
+    new Animated.Value(0),
+    new Animated.Value(0),
+  ])
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null)
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: false }),
+        Animated.spring(height, {
+          toValue: 34,
+          damping: 18,
+          stiffness: 220,
+          mass: 0.8,
+          useNativeDriver: false,
+        }),
+      ]).start()
+      const wave = Animated.loop(
+        Animated.stagger(115, dots.map((dot) => Animated.sequence([
+          Animated.timing(dot, { toValue: -4, duration: 170, useNativeDriver: true }),
+          Animated.spring(dot, {
+            toValue: 0,
+            damping: 9,
+            stiffness: 260,
+            mass: 0.6,
+            useNativeDriver: true,
+          }),
+          Animated.delay(260),
+        ]))),
+      )
+      loopRef.current = wave
+      wave.start()
+      return
+    }
+
+    loopRef.current?.stop()
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 0, duration: 420, useNativeDriver: false }),
+      Animated.timing(height, { toValue: 0, duration: 420, useNativeDriver: false }),
+    ]).start()
+  }, [dots, height, opacity, visible])
+
+  useEffect(() => () => loopRef.current?.stop(), [])
+
   return (
-    <View style={styles.conversationActionStrip}>
-      <View style={styles.conversationActionCopy}>
-        <Text style={styles.conversationActionEyebrow}>Order action</Text>
-        <Text style={styles.conversationActionMeta}>
-          Revision {revisionRoundsUsed} of {revisionRoundLimit}
-        </Text>
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.typingRow, { height, opacity }]}
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={visible ? `${name} is typing` : undefined}
+    >
+      <View style={styles.typingBubble}>
+        {dots.map((dot, index) => (
+          <Animated.View
+            key={index}
+            style={[styles.typingDot, { transform: [{ translateY: dot }] }]}
+          />
+        ))}
       </View>
-      <DrapeCapsuleButton
-        label={primary.label}
-        compact
-        tone={primary.emphasis === 'DESTRUCTIVE' ? 'destructive' : 'primary'}
-        onPress={onPressPrimary}
-        style={styles.conversationPrimaryAction}
-      />
-      {overflowCount > 0 ? (
-        <DrapeIconButton
-          icon="more-horizontal"
-          tone="secondary"
-          accessibilityLabel={`Open ${overflowCount} more order actions`}
-          onPress={onPressMore}
-        />
-      ) : null}
-    </View>
+      <Text style={styles.typingText}>{name}</Text>
+    </Animated.View>
   )
 }
 
@@ -2019,20 +2309,47 @@ function OrderConversationEventCard({
   focused: boolean
   onOpenQuote?: () => void
 }) {
-  const label = ORDER_EVENT_LABELS[event.eventType]
-  const versionLabel = event.quoteVersion ? `Quote v${event.quoteVersion}` : null
+  const presentation = deriveConversationEventPresentation({
+    eventType: event.eventType,
+    title: event.title,
+    summary: event.summary,
+    quoteVersion: event.quoteVersion,
+    metadata: event.metadata,
+  })
+  const icon = {
+    quote: 'file-text',
+    payment: 'check-circle',
+    scope: 'edit-3',
+    fabric: 'scissors',
+    measurement: 'maximize',
+    fulfillment: 'truck',
+    remedy: 'shield',
+  }[presentation.icon] as ComponentProps<typeof Feather>['name']
   return (
     <View style={[styles.orderEventWrap, focused && styles.orderEventWrapFocused]}>
       <DrapeInlineActionCard
-        eyebrow={[versionLabel, formatPresenceTime(event.createdAt)].filter(Boolean).join(' · ')}
-        title={label}
-        body={event.summary ? decodeDisplayText(event.summary) : null}
-        icon={event.eventType === 'PAYMENT_CONFIRMED' ? 'check-circle' : 'file-text'}
+        eyebrow={[presentation.eyebrow, formatPresenceTime(event.createdAt)].join(' · ')}
+        title={presentation.title}
+        body={presentation.summary ? decodeDisplayText(presentation.summary) : null}
+        icon={icon}
       >
+        {presentation.facts.length > 0 ? (
+          <View style={styles.orderEventFacts}>
+            {presentation.facts.map((item, index) => (
+              <View
+                key={`${item.label}:${item.value}`}
+                style={[styles.orderEventFactRow, index > 0 && styles.orderEventFactRowDivided]}
+              >
+                <Text style={styles.orderEventFactLabel}>{item.label}</Text>
+                <Text style={styles.orderEventFactValue}>{item.value}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         <View style={styles.orderEventFooter}>
           <DrapeStatusChip
-            label={label}
-            tone={event.eventType.includes('DECLINED') || event.eventType.includes('EXPIRED') ? 'danger' : 'info'}
+            label={ORDER_EVENT_LABELS[event.eventType]}
+            tone={presentation.tone === 'danger' ? 'danger' : presentation.tone === 'success' ? 'success' : 'info'}
           />
           {onOpenQuote ? (
             <DrapeCapsuleButton label="View quote" compact tone="secondary" onPress={onOpenQuote} />
@@ -2044,26 +2361,17 @@ function OrderConversationEventCard({
 }
 
 function formatLifecycleTime(value: string | null | undefined, timezone?: string | null) {
-  const date = parseDateValue(value)
-  if (!date) return 'Time not set'
-  try {
-    return date.toLocaleString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      timeZone: timezone || undefined,
-    })
-  } catch {
-    return date.toLocaleString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  }
+  return formatExplicitZonedDateTime(value, { timeZone: timezone, fallback: 'Time not set' }) ?? 'Time not set'
+}
+
+function googleCalendarUrl(event: CallLifecycleEvent, title: string, reason: string) {
+  if (!event.scheduledStartAt) return null
+  return buildGoogleCalendarEventUrl({
+    startsAt: event.scheduledStartAt,
+    durationMinutes: 30,
+    title: `Drapeon — ${title}`,
+    description: `${reason}. Open Drapeon Messages near the scheduled time to start or join the protected call.`,
+  })
 }
 
 function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
@@ -2088,38 +2396,60 @@ function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
     lifecycle.status === 'expired'
   const scheduledLabel = formatLifecycleTime(event.scheduledStartAt ?? null, event.timezone)
   const title = event.kind === 'consultation' ? 'Consultation call' : 'Scheduled order call'
+  const addToCalendar = async () => {
+    const url = googleCalendarUrl(event, title, reason)
+    if (!url) {
+      Alert.alert('Calendar unavailable', 'This call does not have a valid scheduled time yet.')
+      return
+    }
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Calendar unavailable', 'Drapeon could not open your calendar. Try again from this conversation.')
+    }
+  }
+  const calendarAction = !isExpired ? (
+    <TouchableOpacity
+      style={styles.callLifecycleCalendarAction}
+      onPress={() => { void addToCalendar() }}
+      accessibilityRole="button"
+      accessibilityLabel="Add this call to calendar"
+    >
+      <Feather name="calendar" size={16} color={Colors.needleGreen} />
+    </TouchableOpacity>
+  ) : null
 
   return (
     <View style={[styles.callLifecycleCard, isExpired && styles.callLifecycleCardExpired]}>
       <View style={styles.callLifecycleHeader}>
         <View style={styles.callLifecycleIcon}>
-          <Feather name="video" size={18} color={isExpired ? Colors.midGrey : Colors.needleGreen} />
+          <Feather name="video" size={16} color={isExpired ? Colors.midGrey : Colors.needleGreen} />
         </View>
         <View style={styles.callLifecycleTitleWrap}>
-          <Text style={styles.callLifecycleEyebrow}>Order lifecycle event</Text>
-          <Text style={styles.callLifecycleTitle}>{title}</Text>
-          <Text style={styles.callLifecycleMeta}>{scheduledLabel}</Text>
+          <Text style={styles.callLifecycleEyebrow}>
+            {event.kind === 'consultation' ? 'Consultation call' : 'Order call'}
+          </Text>
+          <Text style={styles.callLifecycleTitle}>{scheduledLabel}</Text>
+          <Text style={styles.callLifecycleMeta}>{reason}</Text>
         </View>
-      </View>
-
-      <View style={styles.callLifecycleReasonRow}>
-        <Text style={styles.callLifecycleReasonLabel}>Reason</Text>
-        <Text style={styles.callLifecycleReasonValue}>{reason}</Text>
       </View>
 
       {isPaymentBlocked ? (
-        <View style={styles.callLifecyclePaymentBlock}>
-          <Text style={styles.callLifecyclePaymentText}>Consultation fee required before the room can open</Text>
-          {event.paymentActionLabel && event.onPressPayment ? (
-            <TouchableOpacity
-              style={styles.callLifecyclePaymentAction}
-              onPress={event.onPressPayment}
-              accessibilityRole="button"
-            >
-              <Text style={styles.callLifecyclePaymentActionText}>{event.paymentActionLabel}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        <>
+          <View style={styles.callLifecyclePaymentBlock}>
+            <Text style={styles.callLifecyclePaymentText}>Fee required before the room opens</Text>
+            {event.paymentActionLabel && event.onPressPayment ? (
+              <TouchableOpacity
+                style={styles.callLifecyclePaymentAction}
+                onPress={event.onPressPayment}
+                accessibilityRole="button"
+              >
+                <Text style={styles.callLifecyclePaymentActionText}>{event.paymentActionLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {calendarAction}
+        </>
       ) : isExpired ? (
         <View style={styles.callLifecycleExpiredBlock}>
           <Text style={styles.callLifecycleExpiredText}>Call Missed / Window Expired</Text>
@@ -2134,24 +2464,30 @@ function CallLifecycleEventCard({ event }: { event: CallLifecycleEvent }) {
           ) : null}
         </View>
       ) : lifecycle.status === 'active' ? (
-        <TouchableOpacity
-          style={styles.callLifecyclePrimaryAction}
-          onPress={event.onJoinVideo}
-          disabled={event.actionLoading || !event.onJoinVideo}
-          accessibilityRole="button"
-          accessibilityLabel="Join video call now"
-        >
-          {event.actionLoading ? (
-            <ActivityIndicator size="small" color={Colors.textInverse} />
-          ) : (
-            <Text style={styles.callLifecyclePrimaryActionText}>Join Video Call Now</Text>
-          )}
-        </TouchableOpacity>
+        <View style={styles.callLifecycleActionsRow}>
+          <TouchableOpacity
+            style={styles.callLifecyclePrimaryAction}
+            onPress={event.onJoinVideo}
+            disabled={event.actionLoading || !event.onJoinVideo}
+            accessibilityRole="button"
+            accessibilityLabel="Join video call now"
+          >
+            {event.actionLoading ? (
+              <ActivityIndicator size="small" color={Colors.textInverse} />
+            ) : (
+              <Text style={styles.callLifecyclePrimaryActionText}>Join call</Text>
+            )}
+          </TouchableOpacity>
+          {calendarAction}
+        </View>
       ) : (
-        <View style={styles.callLifecycleDisabledAction}>
-          <Text style={styles.callLifecycleDisabledActionText}>
-            {formatCallCountdown(lifecycle.msUntilOpen)}
-          </Text>
+        <View style={styles.callLifecycleActionsRow}>
+          <View style={styles.callLifecycleDisabledAction}>
+            <Text style={styles.callLifecycleDisabledActionText}>
+              {formatCallCountdown(lifecycle.msUntilOpen)}
+            </Text>
+          </View>
+          {calendarAction}
         </View>
       )}
     </View>
@@ -2162,6 +2498,7 @@ function MediaMessageCluster({
   messages,
   isOwn,
   avatarUrl,
+  clusterPosition,
   onOpenContextMenu,
   onOpenMedia,
   replyMessage,
@@ -2169,6 +2506,7 @@ function MediaMessageCluster({
   messages: Message[]
   isOwn: boolean
   avatarUrl?: string | null
+  clusterPosition: ClusterPosition
   onOpenContextMenu: (message: Message) => void
   onOpenMedia: (preview: MessageMediaPreview) => void
   replyMessage: Message | null
@@ -2177,6 +2515,7 @@ function MediaMessageCluster({
   const firstMessage = messages[0]
   const lastMessage = messages[messages.length - 1]
   if (!firstMessage || !lastMessage) return null
+  const continuesSenderTurn = clusterPosition === 'middle' || clusterPosition === 'end'
   const mosaicItems: DrapeMediaMosaicItem[] = messages.map((message, index) => {
     const resolvedUri = mediaUrls.get(message.id) ?? null
     const isVideo = isVideoMediaUrl(message.photo_url) || isVideoMediaUrl(resolvedUri)
@@ -2197,7 +2536,11 @@ function MediaMessageCluster({
     : { text: '✓', label: 'Sent', style: styles.readReceiptDelivered }
 
   return (
-    <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+    <View style={[
+      styles.bubbleRow,
+      isOwn && styles.bubbleRowOwn,
+      continuesSenderTurn ? styles.bubbleRowClustered : styles.bubbleRowSenderTransition,
+    ]}>
       {!isOwn ? (
         <AvatarImage
           uri={avatarUrl}
@@ -2209,7 +2552,6 @@ function MediaMessageCluster({
         />
       ) : null}
       <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, styles.bubbleMedia, styles.mediaMosaicBubble]}>
-        {!isOwn ? <Text style={styles.senderName}>{firstMessage.sender_name}</Text> : null}
         {replyMessage ? (
           <View style={[styles.replyQuote, isOwn && styles.replyQuoteOwn]}>
             <Text style={[styles.replyQuoteAuthor, isOwn && styles.replyQuoteAuthorOwn]}>{replyMessage.sender_name}</Text>
@@ -2260,33 +2602,50 @@ function MessageBubble({
   avatarUrl,
   reactions,
   currentUserId,
-  reactionsAvailable,
   onOpenContextMenu,
   onOpenMedia,
   onToggleReaction,
   replyMessage,
   clusterPosition = 'isolated',
   mediaClusterMessages,
+  translation,
+  translationLoading,
+  showingOriginal,
+  onToggleOriginal,
+  voicePlaybackActive,
+  onActivateVoicePlayback,
+  onDeactivateVoicePlayback,
+  onVoicePlaybackFinished,
+  voiceSequenceCount,
 }: {
   message: Message
   isOwn: boolean
   avatarUrl?: string | null
   reactions: MessageReaction[]
   currentUserId: string
-  reactionsAvailable: boolean
   onOpenContextMenu: () => void
   onOpenMedia: (preview: MessageMediaPreview) => void
   onToggleReaction: (emoji: string) => void
   replyMessage: Message | null
   clusterPosition?: ClusterPosition
   mediaClusterMessages: Message[]
+  translation: MessageTranslation | null
+  translationLoading: boolean
+  showingOriginal: boolean
+  onToggleOriginal: () => void
+  voicePlaybackActive: boolean
+  onActivateVoicePlayback: () => void
+  onDeactivateVoicePlayback: () => void
+  onVoicePlaybackFinished: () => void
+  voiceSequenceCount: number
 }) {
   const photoUrl = useMessageMediaUrl(message.photo_url)
   const voiceUrl = useMessageMediaUrl(message.voice_url)
   const hasVideoAttachment = !!photoUrl && (isVideoMediaUrl(photoUrl) || isVideoMediaUrl(message.photo_url))
   const isMediaMessage = message.type === 'PHOTO' && !!message.photo_url
-  const showAvatar = !isOwn && (!isMediaMessage || clusterPosition === 'isolated' || clusterPosition === 'end')
-  const showSenderName = !isOwn && (!isMediaMessage || clusterPosition === 'isolated' || clusterPosition === 'start')
+  const showAvatar = !isOwn && (clusterPosition === 'isolated' || clusterPosition === 'end')
+  const showsTail = clusterPosition === 'isolated' || clusterPosition === 'end'
+  const continuesSenderTurn = clusterPosition === 'middle' || clusterPosition === 'end'
   const mediaPreviewItems = messageMediaPreviewItems(mediaClusterMessages, message.id, photoUrl)
   const mediaPreviewIndex = Math.max(
     0,
@@ -2310,12 +2669,11 @@ function MessageBubble({
 
   if (message.is_deleted) {
     return (
-      <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+      <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn, styles.bubbleRowSenderTransition]}>
         {!isOwn ? (
           <AvatarImage uri={avatarUrl} initials={message.sender_name} size={32} style={styles.messageAvatar} borderColor={Colors.white} borderWidth={2} />
         ) : null}
         <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, styles.bubbleDeleted]}>
-          {!isOwn && <Text style={styles.senderName}>{message.sender_name}</Text>}
           <Text style={[styles.bubbleDeletedText, isOwn && styles.bubbleDeletedTextOwn]}>This message was unsent.</Text>
           <View style={styles.bubbleMeta}>
             <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
@@ -2329,6 +2687,10 @@ function MessageBubble({
     ? { text: '✓✓', label: 'Read', style: styles.readReceiptRead }
     : { text: '✓', label: 'Sent', style: styles.readReceiptDelivered }
   const bodyText = decodeDisplayText(message.body ?? '')
+  const displayedBodyText = translation && !showingOriginal ? translation.translatedText : bodyText
+  const scheduledOrderCallMessage = message.type === 'TEXT'
+    ? parseScheduledOrderCallMessage(message.body)
+    : null
   const reactionCounts = MESSAGE_REACTION_OPTIONS.map((emoji) => {
     const matching = reactions.filter((reaction) => reaction.emoji === emoji)
     return {
@@ -2339,7 +2701,14 @@ function MessageBubble({
   }).filter(({ count }) => count > 0)
 
   return (
-    <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn, isMediaMessage && clusterPosition !== 'isolated' && styles.bubbleRowClustered]}>
+    <View
+      style={[
+        styles.bubbleRow,
+        isOwn && styles.bubbleRowOwn,
+        continuesSenderTurn ? styles.bubbleRowClustered : styles.bubbleRowSenderTransition,
+        reactionCounts.length > 0 && styles.bubbleRowWithReaction,
+      ]}
+    >
       {!isOwn ? (
         showAvatar ? (
           <AvatarImage
@@ -2357,10 +2726,21 @@ function MessageBubble({
         onLongPress={onOpenContextMenu}
         accessibilityRole="button"
         accessibilityHint="Long press for message options"
-        style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, mediaClusterStyle]}
+        style={[
+          styles.bubble,
+          isOwn ? styles.bubbleOwn : styles.bubbleOther,
+          clusterPosition === 'start' && (isOwn ? styles.clusterOwnStart : styles.clusterOtherStart),
+          clusterPosition === 'middle' && (isOwn ? styles.clusterOwnMiddle : styles.clusterOtherMiddle),
+          clusterPosition === 'end' && (isOwn ? styles.clusterOwnEnd : styles.clusterOtherEnd),
+          mediaClusterStyle,
+        ]}
       >
-        {showSenderName ? <Text style={styles.senderName}>{message.sender_name}</Text> : null}
-
+        {showsTail ? (
+          <View
+            pointerEvents="none"
+            style={[styles.bubbleTail, isOwn ? styles.bubbleTailOwn : styles.bubbleTailOther]}
+          />
+        ) : null}
         {replyMessage ? (
           <View style={[styles.replyQuote, isOwn && styles.replyQuoteOwn]}>
             <Text style={[styles.replyQuoteAuthor, isOwn && styles.replyQuoteAuthorOwn]}>{replyMessage.sender_name}</Text>
@@ -2377,7 +2757,76 @@ function MessageBubble({
         ) : null}
 
         {message.type === 'TEXT' && (
-          <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{bodyText}</Text>
+          scheduledOrderCallMessage ? (
+            <View
+              style={styles.scheduledCallMessage}
+              accessible
+              accessibilityLabel={`Order call scheduled for ${scheduledOrderCallMessage.scheduledFor}. Reason: ${scheduledOrderCallMessage.reason}.${scheduledOrderCallMessage.note ? ` Note: ${scheduledOrderCallMessage.note}.` : ''} Free in Drapeon.`}
+            >
+              <View style={styles.scheduledCallMessageHeader}>
+                <Feather
+                  name="calendar"
+                  size={14}
+                  color={isOwn ? Colors.textInverse : Colors.needleGreen}
+                />
+                <Text style={[styles.scheduledCallMessageEyebrow, isOwn && styles.scheduledCallMessageTextOwn]}>
+                  Order call scheduled
+                </Text>
+              </View>
+              <Text style={[styles.scheduledCallMessageDate, isOwn && styles.scheduledCallMessageTextOwn]}>
+                {scheduledOrderCallMessage.scheduledFor}
+              </Text>
+              <View style={[styles.scheduledCallMessageRule, isOwn && styles.scheduledCallMessageRuleOwn]} />
+              <View style={styles.scheduledCallMessageFactRow}>
+                <Text style={[styles.scheduledCallMessageLabel, isOwn && styles.scheduledCallMessageMutedOwn]}>Reason</Text>
+                <Text style={[styles.scheduledCallMessageValue, isOwn && styles.scheduledCallMessageTextOwn]}>
+                  {scheduledOrderCallMessage.reason}
+                </Text>
+              </View>
+              {scheduledOrderCallMessage.note ? (
+                <View style={[styles.scheduledCallMessageNote, isOwn && styles.scheduledCallMessageNoteOwn]}>
+                  <Text style={[styles.scheduledCallMessageLabel, isOwn && styles.scheduledCallMessageMutedOwn]}>Note</Text>
+                  <Text style={[styles.scheduledCallMessageNoteText, isOwn && styles.scheduledCallMessageTextOwn]}>
+                    {scheduledOrderCallMessage.note}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.scheduledCallMessageFooter}>
+                <Feather
+                  name="shield"
+                  size={12}
+                  color={isOwn ? 'rgba(255,255,255,0.72)' : Colors.midGrey}
+                />
+                <Text style={[styles.scheduledCallMessageFooterText, isOwn && styles.scheduledCallMessageMutedOwn]}>
+                  Free in Drapeon · Keep decisions in chat
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{displayedBodyText}</Text>
+              {translation ? (
+                <TouchableOpacity
+                  style={styles.translationMeta}
+                  onPress={onToggleOriginal}
+                  accessibilityRole="button"
+                  accessibilityLabel={showingOriginal ? 'View translated message' : 'View original message'}
+                >
+                  <Feather name="globe" size={11} color={isOwn ? 'rgba(255,255,255,0.68)' : Colors.needleGreen} />
+                  <Text style={[styles.translationMetaText, isOwn && styles.translationMetaTextOwn]}>
+                    {showingOriginal
+                      ? `View ${languageName(translation.targetLanguage)} translation`
+                      : `Translated from ${languageName(translation.sourceLanguage)} · View original`}
+                  </Text>
+                </TouchableOpacity>
+              ) : translationLoading ? (
+                <View style={styles.translationMeta} accessibilityLabel="Translating message">
+                  <ActivityIndicator size="small" color={isOwn ? Colors.textInverse : Colors.needleGreen} />
+                  <Text style={[styles.translationMetaText, isOwn && styles.translationMetaTextOwn]}>Translating…</Text>
+                </View>
+              ) : null}
+            </>
+          )
         )}
 
         {message.type === 'PHOTO' && message.photo_url && (
@@ -2429,35 +2878,48 @@ function MessageBubble({
         )}
 
         {message.type === 'VOICE' ? (
-          <DrapeVoicePlayer
-            uri={voiceUrl}
-            durationSeconds={voiceDurationSeconds}
-            inverse={isOwn}
-          />
+          <>
+            <DrapeVoicePlayer
+              uri={voiceUrl}
+              durationSeconds={voiceDurationSeconds}
+              inverse={isOwn}
+              isActive={voicePlaybackActive}
+              onActivate={onActivateVoicePlayback}
+              onDeactivate={onDeactivateVoicePlayback}
+              onFinished={onVoicePlaybackFinished}
+            />
+            {voiceSequenceCount > 1 ? (
+              <TouchableOpacity
+                style={styles.voiceSequenceAction}
+                onPress={onActivateVoicePlayback}
+                accessibilityRole="button"
+                accessibilityLabel={`Play all ${voiceSequenceCount} consecutive voice notes`}
+              >
+                <Feather name="play-circle" size={12} color={isOwn ? 'rgba(255,255,255,0.78)' : Colors.needleGreen} />
+                <Text style={[styles.voiceSequenceActionText, isOwn && styles.voiceSequenceActionTextOwn]}>
+                  Play all {voiceSequenceCount}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         ) : null}
 
-        <View style={styles.bubbleMeta}>
-          {message.edited_at ? (
-            <Text style={[styles.editedTag, isOwn && styles.editedTagOwn]}>(edited)</Text>
-          ) : null}
-          <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
-          {isOwn ? (
-            <Text
-              style={[styles.readReceipt, receipt.style]}
-              accessibilityLabel={'Message ' + receipt.label.toLowerCase()}
-            >
-              {receipt.text} {receipt.label}
-            </Text>
-          ) : null}
-          <TouchableOpacity
-            onPress={onOpenContextMenu}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Message options"
-          >
-            <Feather name="more-horizontal" size={13} color={isOwn ? 'rgba(255,255,255,0.72)' : Colors.midGrey} />
-          </TouchableOpacity>
-        </View>
+        {showsTail ? (
+          <View style={styles.bubbleMeta}>
+            {message.edited_at ? (
+              <Text style={[styles.editedTag, isOwn && styles.editedTagOwn]}>(edited)</Text>
+            ) : null}
+            <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
+            {isOwn ? (
+              <Text
+                style={[styles.readReceipt, receipt.style]}
+                accessibilityLabel={'Message ' + receipt.label.toLowerCase()}
+              >
+                {receipt.text} {receipt.label}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         {reactionCounts.length > 0 ? (
           <View style={[styles.reactionSummary, isOwn && styles.reactionSummaryOwn]}>
             {reactionCounts.map(({ emoji, count, selected }) => (
@@ -2512,6 +2974,9 @@ function MessageContextSheet({
   onReply,
   onEdit,
   onUnsend,
+  onReport,
+  onTranslate,
+  translationLoading,
   reactions,
   currentUserId,
   reactionsAvailable,
@@ -2524,6 +2989,9 @@ function MessageContextSheet({
   onReply: () => void
   onEdit: () => void
   onUnsend: () => void
+  onReport?: () => void
+  onTranslate?: () => void
+  translationLoading: boolean
   reactions: MessageReaction[]
   currentUserId: string
   reactionsAvailable: boolean
@@ -2534,7 +3002,8 @@ function MessageContextSheet({
   const canEdit = isOwn && !message.is_deleted && message.type === 'TEXT'
   const canReply = !message.is_deleted
   const canReact = reactionsAvailable && !message.is_deleted
-  const actionCount = Number(canReply) + Number(canEdit) + Number(canUnsend)
+  const canTranslate = Boolean(onTranslate) && !message.is_deleted && message.type === 'TEXT' && !parseScheduledOrderCallMessage(message.body)
+  const actionCount = Number(canReply) + Number(canEdit) + Number(canUnsend) + Number(Boolean(onReport)) + Number(canTranslate)
   const actionSheetSnapPoint = actionCount <= 1 ? '34%' : '46%'
   const previewLabel = message.is_deleted
     ? 'This message was unsent.'
@@ -2592,9 +3061,34 @@ function MessageContextSheet({
           </TouchableOpacity>
         ) : null}
 
+        {canTranslate ? (
+          <TouchableOpacity
+            style={styles.sheetActionRow}
+            onPress={() => { onTranslate?.(); onDismiss() }}
+            accessibilityRole="button"
+            accessibilityLabel="Translate this message"
+            disabled={translationLoading}
+          >
+            <View style={styles.sheetActionContent}>
+              <Feather name="globe" size={18} color={Colors.needleGreen} />
+              <Text style={styles.sheetActionLabel}>{translationLoading ? 'Translating…' : 'Translate'}</Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
+
         {canUnsend ? (
           <TouchableOpacity style={styles.sheetActionRow} onPress={() => { onUnsend(); onDismiss() }} accessibilityRole="button">
             <Text style={[styles.sheetActionLabel, styles.sheetActionLabelDestructive]}>Unsend</Text>
+          </TouchableOpacity>
+        ) : null}
+        {onReport ? (
+          <TouchableOpacity
+            style={styles.sheetActionRow}
+            onPress={() => { onReport(); onDismiss() }}
+            accessibilityRole="button"
+            accessibilityLabel="Report this message"
+          >
+            <Text style={[styles.sheetActionLabel, styles.sheetActionLabelDestructive]}>Report message</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -2604,7 +3098,7 @@ function MessageContextSheet({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
+  list: { paddingHorizontal: 12, paddingTop: Spacing.md, gap: 6, paddingBottom: Spacing.md },
   listHeaderStack: { gap: Spacing.sm },
 
   loadEarlierBtn: {
@@ -2613,12 +3107,16 @@ const styles = StyleSheet.create({
   },
   loadEarlierText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   callLifecycleCard: {
+    alignSelf: 'center',
+    width: '70%',
+    maxWidth: 240,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.needleGreen + '24',
-    padding: Spacing.lg,
-    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   callLifecycleCardExpired: {
@@ -2628,64 +3126,42 @@ const styles = StyleSheet.create({
   callLifecycleHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
   callLifecycleIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
   },
   callLifecycleTitleWrap: { flex: 1, gap: 2 },
   callLifecycleEyebrow: {
-    fontSize: FontSize.xs,
+    fontSize: 10,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   callLifecycleTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
   },
   callLifecycleMeta: {
     fontSize: FontSize.xs,
-    lineHeight: 18,
+    lineHeight: 16,
     color: Colors.inkLight,
   },
-  callLifecycleReasonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-    paddingTop: Spacing.sm,
-  },
-  callLifecycleReasonLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  callLifecycleReasonValue: {
-    flex: 1,
-    textAlign: 'right',
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
   callLifecyclePrimaryAction: {
-    minHeight: 46,
+    flex: 1,
+    minHeight: 40,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreen,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
   },
   callLifecyclePrimaryActionText: {
     fontSize: FontSize.sm,
@@ -2693,17 +3169,31 @@ const styles = StyleSheet.create({
     color: Colors.textInverse,
   },
   callLifecycleDisabledAction: {
-    minHeight: 46,
+    flex: 1,
+    minHeight: 38,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
   },
   callLifecycleDisabledActionText: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
+  },
+  callLifecycleCalendarAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  callLifecycleActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
   },
   callLifecyclePaymentBlock: {
     borderRadius: Radius.md,
@@ -2862,29 +3352,94 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
   },
 
-  recordingBar: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.needleGreenLight, paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+  recordingComposer: {
+    flex: 1,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+    backgroundColor: Colors.needleGreenLight,
   },
-  recordingBarCancel: { backgroundColor: Colors.kanteRustLight },
+  recordingComposerCancel: {
+    borderColor: Colors.kanteRust + '28',
+    backgroundColor: Colors.kanteRustLight,
+  },
   recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.error },
   recordingDotCancel: { backgroundColor: Colors.kanteRust },
-  recordingText: { fontSize: FontSize.sm, color: Colors.needleGreen },
   recordingTextCancel: { color: Colors.kanteRust },
+  recordingTimer: {
+    minWidth: 36,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    fontVariant: ['tabular-nums'],
+  },
+  recordingWaveform: {
+    flex: 1,
+    minWidth: 48,
+    height: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 2,
+  },
+  recordingWaveBar: { flex: 1, maxWidth: 3, borderRadius: 2, backgroundColor: Colors.needleGreen + '88' },
+  recordingWaveBarCancel: { backgroundColor: Colors.kanteRust + '88' },
+  recordingInstruction: { flexDirection: 'row', alignItems: 'center', gap: 3, maxWidth: 104 },
+  recordingInstructionText: { fontSize: 10, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  recordingComposerAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white + 'B8',
+  },
+  recordingSendAction: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  voiceSequenceAction: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 28,
+    paddingHorizontal: 2,
+  },
+  voiceSequenceActionText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  voiceSequenceActionTextOwn: { color: 'rgba(255,255,255,0.78)' },
 
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.sm,
-    paddingHorizontal: Spacing.md, paddingTop: Spacing.md,
-    backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 6,
+    paddingHorizontal: 8, paddingTop: 8,
+    backgroundColor: Colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.lightGrey,
   },
-  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
   textInputWrap: { flex: 1, gap: 3 },
   textInput: {
-    backgroundColor: Colors.bone, borderRadius: Radius.xl,
+    backgroundColor: Colors.surface, borderRadius: 20,
     borderWidth: 1, borderColor: Colors.lightGrey,
-    paddingHorizontal: Spacing.md, paddingVertical: 10,
+    paddingHorizontal: Spacing.md, paddingVertical: 9,
     fontSize: FontSize.md, lineHeight: 20, color: Colors.ink, maxHeight: 108,
   },
   composerCounter: {
@@ -2894,7 +3449,7 @@ const styles = StyleSheet.create({
     marginRight: Spacing.sm,
   },
   sendBtn: {
-    width: 44, height: 44, borderRadius: 22,
+    width: 40, height: 40, borderRadius: 20,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
   sendBtnText: { color: Colors.textInverse, fontSize: 18, fontWeight: FontWeight.bold },
@@ -2902,16 +3457,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs,
-  },
-  callBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '24',
   },
   callGateCard: {
     marginHorizontal: Spacing.lg,
@@ -2945,8 +3490,8 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
   },
   voiceBtn: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 22,
@@ -2956,15 +3501,17 @@ const styles = StyleSheet.create({
 
   bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: Spacing.xs },
   bubbleRowOwn: { justifyContent: 'flex-end' },
-  bubbleRowClustered: { marginTop: -Spacing.xs },
+  bubbleRowClustered: { marginTop: 5 },
+  bubbleRowSenderTransition: { marginTop: 12 },
+  bubbleRowWithReaction: { marginBottom: 14 },
   messageAvatar: { marginBottom: 2 },
   messageAvatarSpacer: { width: 32 },
   bubble: {
-    maxWidth: '82%',
+    maxWidth: '78%',
     minWidth: 0,
-    borderRadius: Radius.lg,
+    borderRadius: 18,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingVertical: 8,
     gap: 3,
   },
   bubbleMedia: {
@@ -2975,10 +3522,30 @@ const styles = StyleSheet.create({
     width: MESSAGE_MEDIA_TILE_SIZE + 12,
   },
   bubbleOther: {
-    backgroundColor: Colors.white, borderBottomLeftRadius: 4,
-    ...Shadow.sm,
+    backgroundColor: Colors.boneDeep,
   },
-  bubbleOwn: { backgroundColor: Colors.needleGreen, borderBottomRightRadius: 4 },
+  bubbleOwn: { backgroundColor: Colors.needleGreen },
+  clusterOtherStart: { borderBottomLeftRadius: 8 },
+  clusterOtherMiddle: { borderTopLeftRadius: 8, borderBottomLeftRadius: 8 },
+  clusterOtherEnd: { borderTopLeftRadius: 8, borderBottomLeftRadius: 6 },
+  clusterOwnStart: { borderBottomRightRadius: 8 },
+  clusterOwnMiddle: { borderTopRightRadius: 8, borderBottomRightRadius: 8 },
+  clusterOwnEnd: { borderTopRightRadius: 8, borderBottomRightRadius: 6 },
+  bubbleTail: {
+    position: 'absolute',
+    bottom: 1,
+    width: 12,
+    height: 12,
+    transform: [{ rotate: '45deg' }],
+  },
+  bubbleTailOther: {
+    left: -4,
+    backgroundColor: Colors.boneDeep,
+  },
+  bubbleTailOwn: {
+    right: -4,
+    backgroundColor: Colors.needleGreen,
+  },
   mediaClusterOtherStart: { borderBottomLeftRadius: 10, borderBottomRightRadius: Radius.md },
   mediaClusterOtherMiddle: { borderTopLeftRadius: 10, borderBottomLeftRadius: 10, borderTopRightRadius: Radius.md, borderBottomRightRadius: Radius.md },
   mediaClusterOtherEnd: { borderTopLeftRadius: 10, borderTopRightRadius: Radius.md },
@@ -2988,6 +3555,97 @@ const styles = StyleSheet.create({
   senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: Fonts.display },
   bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 20 },
   bubbleTextOwn: { color: Colors.textInverse },
+  translationMeta: {
+    marginTop: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 18,
+  },
+  translationMetaText: {
+    flexShrink: 1,
+    fontSize: 10,
+    lineHeight: 14,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  translationMetaTextOwn: { color: 'rgba(255,255,255,0.72)' },
+  scheduledCallMessage: {
+    minWidth: 214,
+    gap: 7,
+  },
+  scheduledCallMessageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  scheduledCallMessageEyebrow: {
+    color: Colors.needleGreen,
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  scheduledCallMessageDate: {
+    color: Colors.ink,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    lineHeight: 21,
+  },
+  scheduledCallMessageRule: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.midGrey + '55',
+  },
+  scheduledCallMessageRuleOwn: {
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  scheduledCallMessageFactRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  scheduledCallMessageLabel: {
+    color: Colors.midGrey,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  scheduledCallMessageValue: {
+    flex: 1,
+    color: Colors.ink,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 18,
+    textAlign: 'right',
+  },
+  scheduledCallMessageNote: {
+    gap: 2,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.white + '9A',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 7,
+  },
+  scheduledCallMessageNoteOwn: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  scheduledCallMessageNoteText: {
+    color: Colors.ink,
+    fontSize: FontSize.sm,
+    lineHeight: 18,
+  },
+  scheduledCallMessageFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  scheduledCallMessageFooterText: {
+    flex: 1,
+    color: Colors.midGrey,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  scheduledCallMessageTextOwn: { color: Colors.textInverse },
+  scheduledCallMessageMutedOwn: { color: 'rgba(255,255,255,0.72)' },
   bubbleMediaWrap: {
     position: 'relative',
     width: MESSAGE_MEDIA_TILE_SIZE,
@@ -3016,12 +3674,17 @@ const styles = StyleSheet.create({
   readReceiptDelivered: { color: 'rgba(255,255,255,0.72)' },
   readReceiptRead: { color: Colors.accentLight },
   reactionSummary: {
+    position: 'absolute',
+    left: 8,
+    bottom: -15,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 4,
-    marginTop: 2,
+    zIndex: 2,
   },
   reactionSummaryOwn: {
+    left: undefined,
+    right: 8,
     justifyContent: 'flex-end',
   },
   reactionChip: {
@@ -3048,52 +3711,44 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
   },
 
-  presenceBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.xs,
-    backgroundColor: Colors.bone,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.lightGrey,
-  },
-  presenceDotOnline: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: Colors.needleGreen,
-  },
-  presenceTextOnline: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-  },
-  presenceTextMuted: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-  },
   typingRow: {
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.xs,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.lightGrey,
-  },
-  typingText: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontStyle: 'italic',
-  },
-  conversationActionStrip: {
-    minHeight: 64,
+    overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.bone,
-    borderTopWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    backgroundColor: Colors.surface,
+  },
+  typingBubble: {
+    height: 24,
+    minWidth: 46,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: Colors.boneDeep,
+  },
+  typingDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Colors.midGrey,
+  },
+  typingText: {
+    fontSize: 11,
+    color: Colors.midGrey,
+  },
+  conversationActionStrip: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    backgroundColor: Colors.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.lightGrey,
   },
   conversationActionCopy: { flex: 1, gap: 2 },
@@ -3109,13 +3764,43 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.inkLight,
   },
-  conversationPrimaryAction: { flexShrink: 1, minWidth: 132 },
+  conversationPrimaryAction: { flexShrink: 1, minWidth: 112 },
   conversationActionSheetList: { gap: Spacing.sm, paddingBottom: Spacing.md },
   orderEventWrap: {
     width: '88%',
     maxWidth: 380,
     alignSelf: 'center',
     paddingVertical: Spacing.sm,
+  },
+  orderEventFacts: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.lightGrey,
+    marginTop: Spacing.xs,
+  },
+  orderEventFactRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  orderEventFactRowDivided: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.lightGrey,
+  },
+  orderEventFactLabel: {
+    color: Colors.midGrey,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  orderEventFactValue: {
+    flex: 1,
+    color: Colors.ink,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 18,
+    textAlign: 'right',
   },
   orderEventWrapFocused: {
     borderRadius: Radius.md,
@@ -3239,6 +3924,25 @@ const styles = StyleSheet.create({
   sheetEmojiText: { fontSize: 22 },
   sheetDivider: { height: 1, backgroundColor: Colors.lightGrey, marginVertical: Spacing.xs },
   sheetActionRow: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.md },
+  mediaSourceAction: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
+  },
+  mediaSourceActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  mediaSourceActionLabel: { flex: 1 },
+  sheetActionContent: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   sheetActionLabel: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
   sheetActionLabelDestructive: { color: Colors.kanteRust },
   sheetActionLabelMuted: { fontSize: FontSize.md, color: Colors.midGrey, fontWeight: FontWeight.medium },

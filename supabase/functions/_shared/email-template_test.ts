@@ -31,3 +31,23 @@ Deno.test('escapes user content and provides a plain-text fallback', () => {
   assertStringIncludes(email.html, '#DRP&lt;&amp;&gt;')
   assertStringIncludes(email.text, 'Open order: https://drapeon.co/account/orders/order-1')
 })
+
+Deno.test('renders secure media and app-open fallbacks without publicizing storage paths', () => {
+  const email = renderDrapeonTransactionalEmail({
+    preheader: 'New production proof',
+    headline: 'Review the latest order media',
+    recipientName: 'Anna',
+    body: 'A new image is ready.',
+    ctaLabel: 'View securely on web',
+    ctaUrl: 'https://drapeon.co/account/orders/order-1',
+    secondaryCtaLabel: 'Open in Drapeon',
+    secondaryCtaUrl: 'drapeon://orders/order-1',
+    evidenceImageUrl: 'https://signed.example/media.jpg?token=short-lived',
+    evidenceLinkUrl: 'https://drapeon.co/account/orders/order-1#order-media',
+  })
+
+  assertStringIncludes(email.html, 'View this media securely on Drapeon')
+  assertStringIncludes(email.html, 'https://drapeon.co/account/orders/order-1#order-media')
+  assertStringIncludes(email.html, 'Open in Drapeon')
+  assertStringIncludes(email.text, 'Open in Drapeon: drapeon://orders/order-1')
+})

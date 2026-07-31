@@ -99,14 +99,16 @@ async function safeEnqueue(
       priority: input.priority ?? 50,
       maxAttempts: input.maxAttempts ?? 6,
     })
+    return true
   } catch (error) {
     await captureEnqueueFailure(input.jobType, input.source, input.idempotencyKey, error)
+    return false
   }
 }
 
 export async function enqueuePushJob(supabase: SupabaseClient, input: PushJobInput) {
-  if (!input.userId || !input.notification.title.trim() || !input.notification.body.trim()) return
-  await safeEnqueue(supabase, {
+  if (!input.userId || !input.notification.title.trim() || !input.notification.body.trim()) return false
+  return await safeEnqueue(supabase, {
     jobType: 'SEND_PUSH',
     eventType: 'notification.push_requested',
     aggregateType: input.orderId ? 'order' : 'user',
@@ -123,8 +125,8 @@ export async function enqueuePushJob(supabase: SupabaseClient, input: PushJobInp
 }
 
 export async function enqueueSmsJob(supabase: SupabaseClient, input: SmsJobInput) {
-  if (!input.userId || !input.body?.trim()) return
-  await safeEnqueue(supabase, {
+  if (!input.userId || !input.body?.trim()) return false
+  return await safeEnqueue(supabase, {
     jobType: 'SEND_SMS',
     eventType: 'notification.sms_requested',
     aggregateType: input.orderId ? 'order' : 'user',
@@ -149,8 +151,8 @@ export async function enqueueOrderEventEmailJob(
   supabase: SupabaseClient,
   input: OrderEventEmailJobInput,
 ) {
-  if (!input.recipientUserId || !input.subject.trim() || !input.body.trim()) return
-  await safeEnqueue(supabase, {
+  if (!input.recipientUserId || !input.subject.trim() || !input.body.trim()) return false
+  return await safeEnqueue(supabase, {
     jobType: 'SEND_ORDER_EVENT_EMAIL',
     eventType: 'order.email_requested',
     aggregateType: 'order',

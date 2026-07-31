@@ -1,5 +1,6 @@
 import {
   clusterPositionForMessage,
+  conversationClusterPositionForMessage,
   groupMessageMediaClusters,
   mediaClusterBoundsForMessage,
 } from '../src/message-thread-clusters'
@@ -129,6 +130,36 @@ describe('message thread media clustering', () => {
       ['before'],
       ['m1', 'm2', 'm3'],
       ['after'],
+    ])
+  })
+})
+
+describe('conversation bubble clustering', () => {
+  it('clusters consecutive messages from the same sender across message types', () => {
+    const messages = [
+      text('first', 10),
+      photo('second', 11),
+      text('third', 12),
+    ]
+
+    expect(conversationClusterPositionForMessage(messages, 0)).toBe('start')
+    expect(conversationClusterPositionForMessage(messages, 1)).toBe('middle')
+    expect(conversationClusterPositionForMessage(messages, 2)).toBe('end')
+  })
+
+  it('breaks a cluster when the sender changes, time elapses, or a message is deleted', () => {
+    const messages = [
+      text('first', 10),
+      text('other', 11, { sender_id: 'sender-b' }),
+      text('later', 20),
+      text('deleted', 21, { is_deleted: true }),
+    ]
+
+    expect(messages.map((_, index) => conversationClusterPositionForMessage(messages, index))).toEqual([
+      'isolated',
+      'isolated',
+      'isolated',
+      'isolated',
     ])
   })
 })

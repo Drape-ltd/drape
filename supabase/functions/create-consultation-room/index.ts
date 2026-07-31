@@ -24,7 +24,11 @@ import { audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { parseOrderSupportMeta } from '../_shared/order-support.ts'
 import { enqueueOrderEventEmailJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
-import { createDailyRoomWithObservability } from '../_shared/daily-observability.ts'
+import {
+  createDailyMeetingToken,
+  createDailyRoomWithObservability,
+  recordDailyCallRoom,
+} from '../_shared/daily-observability.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -154,6 +158,32 @@ Deno.serve(async (req) => {
     if (!callerRole) {
       return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only the customer or tailor on this order can start the consultation room.')
     }
+    const callerName =
+      (caller as { user_metadata?: { display_name?: unknown } }).user_metadata?.display_name
+    const joinPayload = async (url: string, existing: boolean) => {
+      const roomCreatedAt = extractRoomCreatedAt(url) ?? Date.now()
+      await recordDailyCallRoom({
+        supabase,
+        orderId,
+        roomUrl: url,
+        callKind: 'CONSULTATION',
+        callType,
+        scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
+        expiresAt: Math.floor(roomCreatedAt / 1000) + ROOM_TTL_SECONDS,
+        createdBy: caller.id,
+      })
+      const token = await createDailyMeetingToken({
+        roomUrl: url,
+        userId: caller.id,
+        userName: typeof callerName === 'string' && callerName.trim()
+          ? callerName.trim()
+          : callerRole === 'TAILOR' ? 'Tailor' : 'Customer',
+        audioOnly,
+      })
+      return token
+        ? jsonResponse({ url, token, existing }, 200, corsHeaders)
+        : jsonError(corsHeaders, 503, 'DAILY_TOKEN_UNAVAILABLE', 'The protected call pass could not be created. Try again shortly.')
+    }
 
     if (order.stage !== 'CONSULTATION') {
       return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_READY', 'This order is no longer in the consultation stage.')
@@ -269,7 +299,7 @@ Deno.serve(async (req) => {
     // while the stale URL remains on the order record.
     if (order.video_call_url) {
       if (isFreshRoomUrl(order.video_call_url)) {
-        return jsonResponse({ url: order.video_call_url, existing: true }, 200, corsHeaders)
+        return await joinPayload(order.video_call_url, true)
       }
     }
 
@@ -335,7 +365,7 @@ Deno.serve(async (req) => {
       const { data: fresh } = await freshQuery.maybeSingle()
       const existingUrl = (fresh as any)?.video_call_url
       if (existingUrl) {
-        return jsonResponse({ url: existingUrl, existing: true }, 200, corsHeaders)
+        return await joinPayload(existingUrl, true)
       }
       return jsonError(
         corsHeaders,
@@ -402,7 +432,7 @@ Deno.serve(async (req) => {
       )
     }
 
-    return jsonResponse({ url: roomUrl, existing: false }, 200, corsHeaders)
+    return await joinPayload(roomUrl, false)
   } catch (err) {
     console.error('[create-consultation-room]', err)
     return jsonError(corsHeaders, 500, 'INTERNAL_ERROR', 'Could not start the consultation call right now.')

@@ -31,6 +31,7 @@ import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { isSupportedTimeZone } from '../_shared/date-time.ts'
 import {
   customerFulfillmentPaymentRequestedNotification,
   fulfillmentPaymentRequestedStageNote,
@@ -107,6 +108,7 @@ import {
   type CustomProductionStageKey,
 } from '../../../packages/shared/src/custom-order-flow.ts'
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
+import { notificationDestinationData } from '../../../packages/shared/src/notification-policy.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
 
 const MAX_MONEY_MINOR_UNITS = 999_999_999
@@ -184,7 +186,7 @@ const BodySchema = z.discriminatedUnion('action', [
     expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
     reminderEnabled: z.boolean().optional(),
     scheduledStartAt: isoDate.optional(),
-    timezone: z.string().trim().max(80).optional(),
+    timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
     note:            z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -199,7 +201,7 @@ const BodySchema = z.discriminatedUnion('action', [
     expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
     reminderEnabled: z.boolean().optional(),
     scheduledStartAt: isoDate,
-    timezone: z.string().trim().max(80).optional(),
+    timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
     note:            z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -611,7 +613,15 @@ async function sendPushToUser(
     notification.title
   await enqueuePushJob(supabase, {
     userId,
-    notification,
+    notification: {
+      ...notification,
+      data: orderId
+        ? {
+            ...notification.data,
+            ...notificationDestinationData({ kind: 'ORDER', orderId }),
+          }
+        : notification.data,
+    },
     source: FN,
     orderId,
     idempotencyKey: `${FN}:${userId}:${orderId ?? 'user'}:${eventKey}:${notification.body}`,
@@ -2552,7 +2562,9 @@ Deno.serve(async (req) => {
         declinedBy: null,
         declineReason: null,
         reminder30SentAt: null,
+        reminder10SentAt: null,
         reminder5SentAt: null,
+        reminderStartSentAt: null,
       }
 
       const { data: updatedOrder, error } = await supabase
@@ -2712,7 +2724,9 @@ Deno.serve(async (req) => {
         declinedBy: null,
         declineReason: null,
         reminder30SentAt: null,
+        reminder10SentAt: null,
         reminder5SentAt: null,
+        reminderStartSentAt: null,
       }
 
       const { data: updatedOrder, error } = await supabase

@@ -137,6 +137,7 @@ export type ConsultationMeta = {
   declinedBy?: string | null
   declineReason?: string | null
   reminder30SentAt?: string | null
+  reminder10SentAt?: string | null
   reminder5SentAt?: string | null
   reminderStartSentAt?: string | null
   followUpSentAt?: string | null
@@ -167,6 +168,7 @@ export type OrderCallMeta = {
   timezone?: string | null
   reminderEnabled?: boolean | null
   reminder30SentAt?: string | null
+  reminder10SentAt?: string | null
   reminder5SentAt?: string | null
   reminderStartSentAt?: string | null
   completedAt?: string | null

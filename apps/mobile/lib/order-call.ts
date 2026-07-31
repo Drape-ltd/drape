@@ -10,6 +10,7 @@ type OrderCallRoomOptions = {
 
 type OrderCallRoomResponse = {
   url?: string | null
+  token?: string | null
   existing?: boolean
   fallback?: 'MESSAGES'
   message?: string
@@ -102,6 +103,7 @@ export async function createOrderCallRoom(
   if (!error && data?.url) {
     return {
       url: data.url,
+      token: data.token ?? null,
       existing: data.existing === true,
     }
   }
@@ -149,6 +151,7 @@ export async function createOrderCallRoom(
       Alert.alert('Call unavailable', payloadMessage ?? 'This Drapeon call is no longer available from this account.')
       return null
     case 'DAILY_UNAVAILABLE':
+    case 'DAILY_TOKEN_UNAVAILABLE':
       Alert.alert('Call unavailable', payloadMessage ?? 'Drapeon calls are temporarily unavailable. Keep using messages and try again shortly.')
       return null
     case 'ROOM_PERSIST_FAILED':

@@ -22,6 +22,7 @@ interface InputProps extends TextInputProps {
   required?: boolean
   showCharacterCount?: boolean
   characterCountMax?: number
+  onClearError?: () => void
 }
 
 export function Input({
@@ -35,6 +36,7 @@ export function Input({
   showCharacterCount,
   characterCountMax,
   onChangeText,
+  onClearError,
   onFocus,
   onBlur,
   secureTextEntry,
@@ -45,6 +47,7 @@ export function Input({
   const [passwordVisible, setPasswordVisible] = useState(false)
 
   function handleChangeText(text: string) {
+    if (displayError) onClearError?.()
     if (filterContact && text.length > 3) {
       const result = filterContactInfo(text)
       setContactWarning(result.blocked ? result.userMessage : '')
@@ -85,6 +88,8 @@ export function Input({
             onBlur?.(event)
           }}
           onChangeText={handleChangeText}
+          returnKeyType={props.returnKeyType ?? (props.multiline ? 'default' : 'next')}
+          blurOnSubmit={props.blurOnSubmit ?? false}
           secureTextEntry={resolvedSecureTextEntry}
           autoCapitalize={isPasswordField ? 'none' : props.autoCapitalize}
           autoCorrect={isPasswordField ? false : props.autoCorrect}

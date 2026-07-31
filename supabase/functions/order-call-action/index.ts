@@ -5,9 +5,10 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
-import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { isoDate, parseBody, uuid, z } from '../_shared/validate.ts'
+import { formatExplicitZonedDateTime, isSupportedTimeZone } from '../_shared/date-time.ts'
 
 const FN = 'order-call-action'
 const CALL_DURATION_MINUTES = 30
@@ -38,7 +39,7 @@ const BodySchema = z.object({
   orderId: uuid,
   action: z.enum(['schedule-order-call', 'schedule-ready-made-call']),
   scheduledStartAt: isoDate,
-  timezone: z.string().trim().max(80).optional(),
+  timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
   reason: z.enum(['SIZE_OR_FIT', 'ITEM_CONDITION', 'PICKUP_OR_DELIVERY', 'TIMELINE', 'OTHER']).default('OTHER'),
   note: z.string().trim().max(300).optional(),
 })
@@ -91,21 +92,6 @@ function reasonLabel(reason: string) {
       return 'timing'
     default:
       return 'order clarity'
-  }
-}
-
-function formatScheduledStart(startAt: string, timezone: string | null | undefined) {
-  try {
-    return new Date(startAt).toLocaleString('en-GB', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: timezone || undefined,
-    })
-  } catch {
-    return new Date(startAt).toLocaleString('en-GB', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
   }
 }
 
@@ -176,7 +162,9 @@ Deno.serve(async (req) => {
       timezone: timezone?.trim() || null,
       reminderEnabled: true,
       reminder30SentAt: null,
+      reminder10SentAt: null,
       reminder5SentAt: null,
+      reminderStartSentAt: null,
       completedAt: null,
       expiredAt: null,
     }
@@ -201,7 +189,7 @@ Deno.serve(async (req) => {
       return jsonError(corsHeaders, 409, 'ORDER_CHANGED', 'This order changed while you were scheduling the call. Refresh and try again.')
     }
 
-    const startCopy = formatScheduledStart(scheduledStartAt, timezone)
+    const startCopy = formatExplicitZonedDateTime(scheduledStartAt, timezone)
     const messageBody = `Drapeon order call scheduled for ${startCopy} about ${reasonLabel(reason)}. This call is free and stays inside Drapeon; keep final decisions in this thread.${note?.trim() ? ` Note: ${note.trim()}` : ''}`
 
     await Promise.allSettled([
@@ -253,8 +241,33 @@ Deno.serve(async (req) => {
           priority: 10,
           body: `Drapeon: order call scheduled for ${startCopy}. Open Messages for details.`,
         }),
+        enqueueOrderEventEmailJob(supabase, {
+          order,
+          recipientUserId: counterpartId,
+          audience: actorRole === 'CUSTOMER' ? 'TAILOR' : 'CUSTOMER',
+          subject: 'Drapeon order call scheduled',
+          headline: 'Your order call is on the calendar',
+          body: `${messageBody} Drapeon will remind you again 30, 10, and 5 minutes before the call and when it starts.`,
+          ctaLabel: 'Open order messages',
+          source: FN,
+          idempotencyKey: `order-call-scheduled:${orderId}:${scheduledStartAt}:${counterpartId}:email`,
+          priority: 10,
+        }),
       ])
     }
+
+    await enqueueOrderEventEmailJob(supabase, {
+      order,
+      recipientUserId: caller.id,
+      audience: actorRole,
+      subject: 'Drapeon order call scheduled',
+      headline: 'Your order call is scheduled',
+      body: `${messageBody} Drapeon will remind you again 30, 10, and 5 minutes before the call and when it starts.`,
+      ctaLabel: 'Open order messages',
+      source: FN,
+      idempotencyKey: `order-call-scheduled:${orderId}:${scheduledStartAt}:${caller.id}:email`,
+      priority: 10,
+    })
 
     return jsonResponse({ ok: true, orderCall: nextOrderCall }, 200, corsHeaders)
   } catch (error) {

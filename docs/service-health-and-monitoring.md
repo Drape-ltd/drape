@@ -91,7 +91,7 @@ The app maintenance cron jobs are expected to call:
 
 - `expire-pending-payments` every 10 minutes
 - `expire-quotes` every 30 minutes
-- `send-consultation-reminders` every 5 minutes
+- `send-consultation-reminders` every minute so scheduled-call 30, 10, 5, and start reminders tolerate normal cron drift
 - `escalate-production-stalls` hourly
 - `release-order-payouts` hourly at `:15`
 - `auto-release` daily at 09:00

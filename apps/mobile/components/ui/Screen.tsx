@@ -23,6 +23,8 @@ export function Screen({ children, scroll = false, padded = true, style, content
     <ScrollView
       contentContainerStyle={[padded && styles.padded, contentStyle]}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       showsVerticalScrollIndicator={false}
     >
       {children}

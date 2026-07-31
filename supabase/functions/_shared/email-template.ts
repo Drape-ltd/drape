@@ -12,8 +12,11 @@ type TransactionalEmailInput = {
   details?: EmailDetail[]
   ctaLabel: string
   ctaUrl: string
+  secondaryCtaLabel?: string
+  secondaryCtaUrl?: string
   evidenceImageUrl?: string | null
   evidenceImageAlt?: string
+  evidenceLinkUrl?: string
 }
 
 function escapeHtml(value: string) {
@@ -89,12 +92,15 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0 0">
         <tr>
           <td>
-            <img
-              src="${escapeHtml(evidenceImageUrl)}"
-              alt="${escapeHtml(input.evidenceImageAlt ?? 'Order update photo')}"
-              width="552"
-              style="background:#f5f3ee;border:1px solid #e7e3da;border-radius:12px;display:block;height:auto;max-height:360px;max-width:100%;object-fit:contain;width:100%"
-            />
+            <a href="${escapeHtml(input.evidenceLinkUrl ?? input.ctaUrl)}" style="color:#2f7557;text-decoration:none">
+              <img
+                src="${escapeHtml(evidenceImageUrl)}"
+                alt="${escapeHtml(input.evidenceImageAlt ?? 'Order update media')}"
+                width="552"
+                style="background:#f5f3ee;border:1px solid #e7e3da;border-radius:12px;display:block;height:auto;max-height:360px;max-width:100%;object-fit:contain;width:100%"
+              />
+              <span style="display:block;font-family:Arial,sans-serif;font-size:13px;font-weight:700;line-height:20px;padding-top:9px">View this media securely on Drapeon</span>
+            </a>
           </td>
         </tr>
       </table>`
@@ -104,6 +110,13 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
         input.eyebrow.trim()
       )}</p>`
     : ''
+  const secondaryCta =
+    input.secondaryCtaLabel?.trim() && input.secondaryCtaUrl?.trim()
+      ? `
+                <p style="font-family:Arial,sans-serif;font-size:14px;line-height:22px;margin:16px 0 0">
+                  <a href="${escapeHtml(input.secondaryCtaUrl)}" style="color:#2f7557;font-weight:700;text-decoration:underline">${escapeHtml(input.secondaryCtaLabel)}</a>
+                </p>`
+      : ''
 
   const html = `<!doctype html>
 <html lang="en">
@@ -151,6 +164,7 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
                     </td>
                   </tr>
                 </table>
+                ${secondaryCta}
               </td>
             </tr>
             <tr>
@@ -184,6 +198,9 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
     textDetails,
     '',
     `${input.ctaLabel}: ${input.ctaUrl}`,
+    ...(input.secondaryCtaLabel?.trim() && input.secondaryCtaUrl?.trim()
+      ? [`${input.secondaryCtaLabel}: ${input.secondaryCtaUrl}`]
+      : []),
     '',
     'Need help? support@drapeon.co',
   ].join('\n')

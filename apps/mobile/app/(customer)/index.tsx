@@ -1074,17 +1074,34 @@ export default function CustomerHomeScreen() {
                   <Text style={styles.sectionLink}>See all →</Text>
                 </TouchableOpacity>
               </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.ordersScroll}
-                contentContainerStyle={styles.ordersRow}
-              >
-                {activeOrders.map((order) => {
-                  return (
-                    <TouchableOpacity
+              {activeOrders.length === 1 ? (
+                <View style={styles.ordersSingleRow}>
+                  <ActiveOrderCard
+                    order={activeOrders[0]}
+                    wide
+                    onPress={() =>
+                      router.push({
+                        pathname: '/(customer)/orders/[id]',
+                        params: {
+                          id: activeOrders[0].id,
+                          returnTo: '/(customer)',
+                          historyChain: appendToHistory(undefined, '/(customer)'),
+                        },
+                      })
+                    }
+                  />
+                </View>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.ordersScroll}
+                  contentContainerStyle={styles.ordersRow}
+                >
+                  {activeOrders.map((order) => (
+                    <ActiveOrderCard
                       key={order.id}
-                      style={styles.orderCard}
+                      order={order}
                       onPress={() =>
                         router.push({
                           pathname: '/(customer)/orders/[id]',
@@ -1095,31 +1112,10 @@ export default function CustomerHomeScreen() {
                           },
                         })
                       }
-                    >
-                      <DrapeStatusChip
-                        value={order.stage}
-                        label={customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
-                        domain="order"
-                      />
-                      <Text style={styles.orderGarment} numberOfLines={1}>
-                        {order.garmentType}
-                      </Text>
-                      <Text style={styles.orderTailor} numberOfLines={1}>
-                        {order.tailorName}
-                      </Text>
-                      {order.estimatedDate && (
-                        <Text style={styles.orderEta}>
-                          Ready{' '}
-                          {new Date(order.estimatedDate).toLocaleDateString('en-GB', {
-                            day: 'numeric',
-                            month: 'short',
-                          })}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )
-                })}
-              </ScrollView>
+                    />
+                  ))}
+                </ScrollView>
+              )}
             </View>
           ) : null}
 
@@ -1172,6 +1168,57 @@ export default function CustomerHomeScreen() {
 }
 
 // ─── Grid card ────────────────────────────────────────────────────────────────
+
+function ActiveOrderCard({
+  order,
+  onPress,
+  wide = false,
+}: {
+  order: ActiveOrder
+  onPress: () => void
+  wide?: boolean
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.orderCard, wide && styles.orderCardWide]}
+      onPress={onPress}
+      activeOpacity={0.88}
+      accessibilityRole="button"
+      accessibilityLabel={`Continue ${order.garmentType} order with ${order.tailorName}`}
+    >
+      <View style={styles.orderCardBody}>
+        <View style={styles.orderCardMeta}>
+          <DrapeStatusChip
+            value={order.stage}
+            label={customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+            domain="order"
+            style={styles.orderStatusChip}
+          />
+          {order.estimatedDate ? (
+            <Text style={styles.orderEta}>
+              Ready{' '}
+              {new Date(order.estimatedDate).toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+              })}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.orderCardCopy}>
+          <Text style={styles.orderGarment} numberOfLines={1}>
+            {order.garmentType}
+          </Text>
+          <Text style={styles.orderTailor} numberOfLines={1}>
+            {order.tailorName}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.orderCardNext}>
+        <Feather name="chevron-right" size={19} color={Colors.midGrey} />
+      </View>
+    </TouchableOpacity>
+  )
+}
 
 function GridCard({
   tailor,
@@ -1923,7 +1970,12 @@ const styles = StyleSheet.create({
   },
   // Section
   section: { paddingTop: Spacing.md },
-  tailorGridSection: { paddingTop: Spacing.lg },
+  tailorGridSection: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+  },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1968,7 +2020,7 @@ const styles = StyleSheet.create({
   // Orders
   continueSection: {
     paddingTop: Spacing.md,
-    paddingBottom: Spacing.xs,
+    paddingBottom: Spacing.sm,
   },
   continueSectionHeader: {
     flexDirection: 'row',
@@ -1979,14 +2031,36 @@ const styles = StyleSheet.create({
   },
   ordersScroll: {},
   ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.lg },
+  ordersSingleRow: { paddingHorizontal: Spacing.lg },
   orderCard: {
-    width: 154,
+    width: 242,
+    minHeight: 72,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 10,
-    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
+  orderCardWide: {
+    width: '100%',
+    minHeight: 72,
+  },
+  orderCardBody: { flex: 1, minWidth: 0, gap: 4 },
+  orderCardMeta: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  orderStatusChip: { minHeight: 24, paddingHorizontal: 9 },
+  orderCardCopy: { minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  orderCardNext: { justifyContent: 'center', paddingLeft: 6 },
   orderGarment: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: 14,

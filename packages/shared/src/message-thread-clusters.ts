@@ -10,6 +10,7 @@ export type ClusterableMessage = {
 }
 
 const CLUSTER_WINDOW_MS = 90 * 1000
+const CONVERSATION_CLUSTER_WINDOW_MS = 5 * 60 * 1000
 
 function parseTimestamp(value: string | null | undefined) {
   if (!value) return null
@@ -35,6 +36,42 @@ function canClusterTogether(a: ClusterableMessage | undefined, b: ClusterableMes
   if (aTime == null || bTime == null) return false
 
   return Math.abs(aTime - bTime) <= CLUSTER_WINDOW_MS
+}
+
+function canShareConversationCluster(
+  a: ClusterableMessage | undefined,
+  b: ClusterableMessage | undefined,
+) {
+  if (!a || !b) return false
+  if (a.is_deleted === true || b.is_deleted === true) return false
+  if (a.sender_id !== b.sender_id) return false
+
+  const aTime = parseTimestamp(a.created_at)
+  const bTime = parseTimestamp(b.created_at)
+  if (aTime == null || bTime == null) return false
+
+  return Math.abs(aTime - bTime) <= CONVERSATION_CLUSTER_WINDOW_MS
+}
+
+/**
+ * Describes the visual position of a message in a consecutive run from one
+ * sender. Unlike media clustering, this applies to text, voice, and media so
+ * every client can render the same organic bubble anatomy.
+ */
+export function conversationClusterPositionForMessage(
+  messages: ClusterableMessage[],
+  index: number,
+): ClusterPosition {
+  const current = messages[index]
+  if (!current || current.is_deleted === true) return 'isolated'
+
+  const beforeMatches = canShareConversationCluster(messages[index - 1], current)
+  const afterMatches = canShareConversationCluster(current, messages[index + 1])
+
+  if (beforeMatches && afterMatches) return 'middle'
+  if (beforeMatches) return 'end'
+  if (afterMatches) return 'start'
+  return 'isolated'
 }
 
 export function clusterPositionForMessage(

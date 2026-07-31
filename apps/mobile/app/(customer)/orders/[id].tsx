@@ -25,14 +25,14 @@ import {
   useNavigation,
 } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import DateTimePicker from '@react-native-community/datetimepicker'
+import { DrapeDateTimePicker as DateTimePicker } from '@/components/ui/DrapeDateTimePicker'
 import * as ImagePicker from 'expo-image-picker'
 import { Feather } from '@expo/vector-icons'
+import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { appendToHistory, goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
-import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { Sentry } from '@/lib/sentry'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { launchImagePickerSafely, preferCompatibleVideoRepresentation } from '@/lib/image-picker-safe'
@@ -962,17 +962,8 @@ function defaultConsultationStart() {
   return value
 }
 
-function formatConsultationStart(value: string | Date | null | undefined) {
-  if (!value) return 'Choose a time'
-  const date = value instanceof Date ? value : new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'Choose a time'
-  return date.toLocaleString('en-GB', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+function formatConsultationStart(value: string | Date | null | undefined, timezone?: string | null) {
+  return formatExplicitZonedDateTime(value, { timeZone: timezone, fallback: 'Choose a time' }) ?? 'Choose a time'
 }
 
 export default function OrderTrackingScreen() {
@@ -1071,10 +1062,6 @@ export default function OrderTrackingScreen() {
   }, [])
   const purgedTerminalOrderRef = useRef<string | null>(null)
 
-  async function openCallUrl(url: string) {
-    await openConsultationCallUrl(url, 'customer')
-  }
-
   function openOrderMessages() {
     if (!order) return
     router.navigate({
@@ -1091,23 +1078,15 @@ export default function OrderTrackingScreen() {
     if (!order || startingConsultationCall) return
     setStartingConsultationCall(callType)
     try {
-      const room = await createConsultationRoom(order.id, callType)
-      if (room?.fallback === 'MESSAGES') {
-        await fetchOrder()
-        openOrderMessages()
-        return
-      }
-      if (!room?.url) return
-      await openCallUrl(room.url)
-      await fetchOrder()
-    } catch (error) {
-      Sentry.captureException(error, {
-        extra: { context: 'customer_start_consultation', orderId: order.id, callType },
+      router.push({
+        pathname: '/call-join',
+        params: {
+          orderId: order.id,
+          callKind: 'consultation',
+          callType,
+          historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+        },
       })
-      const message = isLikelyConnectivityIssue(error)
-        ? 'Connection looks weak. Keep the order thread updated and try again when the signal improves.'
-        : await readFunctionErrorMessage(error, 'Could not start the consultation call right now.')
-      Alert.alert('Consultation unavailable', message)
     } finally {
       setStartingConsultationCall(null)
     }
@@ -2078,8 +2057,8 @@ export default function OrderTrackingScreen() {
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
   const progressIsTerminalComplete = CUSTOMER_COMPLETED_ORDER_STAGES.includes(order.stage)
   const conversationCtaLabel = isTerminalOrderStage(order.stage)
-    ? 'View conversation'
-    : `Message ${order.tailorName.split(' ')[0]}`
+    ? 'Open order conversation'
+    : `Open order chat · ${order.tailorName.split(' ')[0]}`
   const pickupDetailsUnlocked =
     isCollection &&
     ['READY_FOR_COLLECTION', 'COLLECTED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage)
@@ -2555,7 +2534,7 @@ export default function OrderTrackingScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: Math.max(insets.bottom + 360, 480) },
+          { paddingBottom: Math.max(insets.bottom + 48, 72) },
         ]}
         refreshControl={
           <RefreshControl
@@ -2577,6 +2556,25 @@ export default function OrderTrackingScreen() {
                 <Text style={styles.orderTypePillText}>Ready-made order</Text>
               </View>
             ) : null}
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={conversationCtaLabel}
+              style={styles.messageAction}
+              onPress={() =>
+                router.navigate({
+                  pathname: '/(customer)/messages/[orderId]',
+                  params: {
+                    orderId: order.id,
+                    returnTo: `/(customer)/orders/${order.id}`,
+                    historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+                  },
+                })
+              }
+            >
+              <Feather name="message-circle" size={17} color={Colors.needleGreenDark} />
+              <Text style={styles.messageActionText}>{conversationCtaLabel}</Text>
+              <Feather name="chevron-right" size={17} color={Colors.midGrey} />
+            </TouchableOpacity>
           </View>
 
           {justPlacedReadyMade ? (
@@ -3045,12 +3043,12 @@ export default function OrderTrackingScreen() {
                   {consultationMeta.scheduledStartAt ? (
                     <SummaryLine
                       label="Scheduled for"
-                      value={formatConsultationStart(consultationMeta.scheduledStartAt)}
+                      value={formatConsultationStart(consultationMeta.scheduledStartAt, consultationMeta.timezone)}
                     />
                   ) : consultationMeta.proposedStartAt ? (
                     <SummaryLine
                       label="Requested time"
-                      value={formatConsultationStart(consultationMeta.proposedStartAt)}
+                      value={formatConsultationStart(consultationMeta.proposedStartAt, consultationMeta.timezone)}
                     />
                   ) : null}
                   {consultationMeta.paymentTiming ? (
@@ -3707,12 +3705,12 @@ export default function OrderTrackingScreen() {
                     {consultationMeta.scheduledStartAt ? (
                       <SummaryLine
                         label="Scheduled for"
-                        value={formatConsultationStart(consultationMeta.scheduledStartAt)}
+                        value={formatConsultationStart(consultationMeta.scheduledStartAt, consultationMeta.timezone)}
                       />
                     ) : consultationMeta.proposedStartAt ? (
                       <SummaryLine
                         label="Requested time"
-                        value={formatConsultationStart(consultationMeta.proposedStartAt)}
+                        value={formatConsultationStart(consultationMeta.proposedStartAt, consultationMeta.timezone)}
                       />
                     ) : null}
                     {consultationMeta.paymentTiming ? (
@@ -3905,8 +3903,17 @@ export default function OrderTrackingScreen() {
             fabricPolicy ||
             materialIssue) && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Fabric handoff</Text>
-              <View style={styles.supportCard}>
+              <SupportDisclosure
+                title="Fabric handoff"
+                summary={
+                  order.supportMeta.fabricReceivedAt
+                    ? 'Received and recorded'
+                    : sourcedFabricPending
+                      ? 'Your approval is needed'
+                      : fabricHandoffLabel ?? (order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'You supply the fabric' : 'Tailor sources fabric')
+                }
+                defaultExpanded={Boolean(sourcedFabricPending || showFabricTrackingSection)}
+              >
                 <View style={styles.supportMetaList}>
                   <SummaryLine
                     label="Fabric source"
@@ -3945,6 +3952,48 @@ export default function OrderTrackingScreen() {
                       : ''}
                     .
                   </Text>
+                ) : showFabricTrackingSection ? (
+                  <View style={styles.fabricTrackingAction}>
+                    <Text style={styles.supportBodyText}>Add the shipping reference when the fabric is on its way.</Text>
+                    <View style={styles.fabricInputRow}>
+                      <TextInput
+                        style={styles.fabricInput}
+                        placeholder="Tracking or shipping reference"
+                        placeholderTextColor={Colors.midGrey}
+                        value={fabricTracking}
+                        onChangeText={setFabricTracking}
+                        editable={!savingFabric}
+                        autoCapitalize="characters"
+                        autoCorrect={false}
+                      />
+                      <TouchableOpacity
+                        style={[
+                          styles.fabricSaveBtn,
+                          (!fabricTracking.trim() || fabricTracking === order.fabricTracking) &&
+                            styles.fabricSaveBtnDisabled,
+                        ]}
+                        onPress={saveFabricTracking}
+                        disabled={
+                          !fabricTracking.trim() ||
+                          fabricTracking === order.fabricTracking ||
+                          savingFabric
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel="Save fabric tracking"
+                      >
+                        {savingFabric ? (
+                          <ActivityIndicator color={Colors.textInverse} size="small" />
+                        ) : (
+                          <Text style={styles.fabricSaveBtnText}>Save</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                    {order.fabricTracking ? (
+                      <Text style={styles.fabricSavedNote}>
+                        Saved: {order.fabricTracking}
+                      </Text>
+                    ) : null}
+                  </View>
                 ) : order.fabricSource === 'CUSTOMER_SUPPLIES' ? (
                   <Text style={styles.supportHint}>
                     Share dropoff photos, courier tracking, or a receipt in the order thread until the tailor confirms the fabric is in hand.
@@ -4031,38 +4080,46 @@ export default function OrderTrackingScreen() {
                     </View>
                   </View>
                 ) : null}
-                {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
-                  <Text style={styles.supportHint}>
-                    Tailor can reject before cutting for:{' '}
-                    {fabricPolicy.rejectionReasons.join(' · ')}
-                  </Text>
-                ) : null}
-                {fabricPolicy?.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
-                  <Text style={styles.supportHint}>
-                    Prep: {fabricPolicy.prepRequirements.join(' · ')}
-                  </Text>
-                ) : null}
-                {fabricPolicy?.lateFabricRule ? (
-                  <Text style={styles.supportHint}>
-                    If fabric is late: {fabricPolicy.lateFabricRule}
-                  </Text>
-                ) : null}
-                {fabricPolicy?.missingFabricRule ? (
-                  <Text style={styles.supportHint}>
-                    If fabric never arrives: {fabricPolicy.missingFabricRule}
-                  </Text>
-                ) : null}
-                {fabricPolicy?.replacementRule ? (
-                  <Text style={styles.supportHint}>
-                    Replacement rule: {fabricPolicy.replacementRule}
-                  </Text>
-                ) : null}
-                {fabricPolicy?.disagreementRule ? (
-                  <Text style={styles.supportHint}>
-                    If fabric suitability is disputed: {fabricPolicy.disagreementRule}
-                  </Text>
-                ) : null}
-              </View>
+              </SupportDisclosure>
+              {fabricPolicy ? (
+                <SupportDisclosure
+                  title="Fabric rules and exceptions"
+                  summary="Preparation, rejection, late fabric, replacements, and disputes"
+                  defaultExpanded={false}
+                >
+                  {fabricPolicy.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
+                    <Text style={styles.supportHint}>
+                      Tailor can reject before cutting for:{' '}
+                      {fabricPolicy.rejectionReasons.join(' · ')}
+                    </Text>
+                  ) : null}
+                  {fabricPolicy.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
+                    <Text style={styles.supportHint}>
+                      Preparation: {fabricPolicy.prepRequirements.join(' · ')}
+                    </Text>
+                  ) : null}
+                  {fabricPolicy.lateFabricRule ? (
+                    <Text style={styles.supportHint}>
+                      If fabric is late: {fabricPolicy.lateFabricRule}
+                    </Text>
+                  ) : null}
+                  {fabricPolicy.missingFabricRule ? (
+                    <Text style={styles.supportHint}>
+                      If fabric never arrives: {fabricPolicy.missingFabricRule}
+                    </Text>
+                  ) : null}
+                  {fabricPolicy.replacementRule ? (
+                    <Text style={styles.supportHint}>
+                      Replacement: {fabricPolicy.replacementRule}
+                    </Text>
+                  ) : null}
+                  {fabricPolicy.disagreementRule ? (
+                    <Text style={styles.supportHint}>
+                      If suitability is disputed: {fabricPolicy.disagreementRule}
+                    </Text>
+                  ) : null}
+                </SupportDisclosure>
+              ) : null}
             </View>
           )}
 
@@ -4262,6 +4319,7 @@ export default function OrderTrackingScreen() {
                     section={section}
                     onOpenLink={openDossierLink}
                     onOpenMedia={openMediaPreview}
+                    defaultExpanded={false}
                   />
                 ))}
               </View>
@@ -4412,55 +4470,6 @@ export default function OrderTrackingScreen() {
             </View>
           </View>
 
-          {/* Fabric tracking — editable when fabric is being shipped, or for older customer-supplied orders without a recorded handoff mode */}
-          {showFabricTrackingSection && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Fabric tracking</Text>
-              <Text style={styles.trackingHint}>
-                Save the shipping reference here so your tailor can follow the fabric's arrival.
-              </Text>
-              <View style={styles.fabricInputRow}>
-                <TextInput
-                  style={styles.fabricInput}
-                  placeholder="e.g. JD123456789GB"
-                  placeholderTextColor={Colors.midGrey}
-                  value={fabricTracking}
-                  onChangeText={setFabricTracking}
-                  editable={!savingFabric}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.fabricSaveBtn,
-                    (!fabricTracking.trim() || fabricTracking === order.fabricTracking) &&
-                      styles.fabricSaveBtnDisabled,
-                  ]}
-                  onPress={saveFabricTracking}
-                  disabled={
-                    !fabricTracking.trim() ||
-                    fabricTracking === order.fabricTracking ||
-                    savingFabric
-                  }
-                >
-                  {savingFabric ? (
-                    <ActivityIndicator color={Colors.textInverse} size="small" />
-                  ) : (
-                    <Text style={styles.fabricSaveBtnText}>Save</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-              {order.fabricTracking && (
-                <Text style={styles.fabricSavedNote}>
-                  Saved:{' '}
-                  <Text style={{ color: Colors.needleGreenDark, fontWeight: FontWeight.semibold }}>
-                    {order.fabricTracking}
-                  </Text>
-                </Text>
-              )}
-            </View>
-          )}
-
           {[
             'CONFIRMED',
             'DESIGNING',
@@ -4488,44 +4497,6 @@ export default function OrderTrackingScreen() {
           )}
         </View>
       </ScrollView>
-
-      <DrapeFloatingActionDock compactWidth={76} testID="customer-order-message-dock">
-        {(compact) => compact ? (
-          <DrapeIconButton
-            icon="message-circle"
-            accessibilityLabel={conversationCtaLabel}
-            tone="primary"
-            onPress={() =>
-              router.navigate({
-                pathname: '/(customer)/messages/[orderId]',
-                params: {
-                  orderId: order.id,
-                  returnTo: `/(customer)/orders/${order.id}`,
-                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
-                },
-              })
-            }
-          />
-        ) : (
-          <DrapeCapsuleButton
-            label={conversationCtaLabel}
-            tone="primary"
-            icon="message-circle"
-            style={{ flex: 1 }}
-            onPress={() =>
-              router.navigate({
-                pathname: '/(customer)/messages/[orderId]',
-                params: {
-                  orderId: order.id,
-                  returnTo: `/(customer)/orders/${order.id}`,
-                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
-                },
-              })
-            }
-            testID="message-tailor-btn"
-          />
-        )}
-      </DrapeFloatingActionDock>
 
       {showDispute ? (
         <DisputeModal
@@ -4732,15 +4703,21 @@ function BriefDossierCard({
   section,
   onOpenLink,
   onOpenMedia,
+  defaultExpanded = false,
 }: {
   section: BriefDossierSection
   onOpenLink: (href: string) => void
   onOpenMedia: (items: MediaLightboxItem[], index: number) => void
+  defaultExpanded?: boolean
 }) {
+  const rowCount = `${section.rows.length} ${section.rows.length === 1 ? 'detail' : 'details'}`
+  const summary = section.summary?.trim()
   return (
-    <View style={styles.supportCard}>
-      <Text style={styles.supportCardTitle}>{section.title}</Text>
-      {section.summary ? <Text style={styles.helperText}>{section.summary}</Text> : null}
+    <SupportDisclosure
+      title={section.title}
+      summary={summary && summary.length <= 84 ? summary : rowCount}
+      defaultExpanded={defaultExpanded}
+    >
       <View style={styles.supportMetaList}>
         {section.rows.map((row) => (
           <BriefDossierRowView
@@ -4751,7 +4728,7 @@ function BriefDossierCard({
           />
         ))}
       </View>
-    </View>
+    </SupportDisclosure>
   )
 }
 
@@ -4769,7 +4746,7 @@ function SupportDisclosure({
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
-    <View style={styles.supportCard}>
+    <View style={[styles.supportCard, styles.disclosureCard]}>
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityState={{ expanded }}
@@ -7132,6 +7109,25 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.display,
   },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
+  messageAction: {
+    minHeight: 48,
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 11,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '30',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  messageActionText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.needleGreenDark,
+    fontWeight: FontWeight.semibold,
+  },
   // Progress bar
   progressBar: { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
   progressStep: { flex: 1, alignItems: 'center', gap: 4, position: 'relative' },
@@ -7394,6 +7390,12 @@ const styles = StyleSheet.create({
     gap: 6,
     ...Shadow.sm,
   },
+  disclosureCard: {
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.boneDeep,
+    shadowOpacity: 0,
+  },
   disclosureHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -7538,6 +7540,12 @@ const styles = StyleSheet.create({
   // Fabric tracking input
   trackingHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   fabricInputRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
+  fabricTrackingAction: {
+    gap: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.lightGrey,
+  },
   fabricInput: {
     flex: 1,
     backgroundColor: Colors.white,

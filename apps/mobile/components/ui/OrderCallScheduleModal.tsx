@@ -11,10 +11,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import DateTimePicker from '@react-native-community/datetimepicker'
+import { DrapeDateTimePicker as DateTimePicker } from './DrapeDateTimePicker'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { formatExplicitZonedDateTime, resolvedLocalTimeZone } from '@drape/shared/date-time'
 import {
   CALL_SCHEDULING_POLICY,
   callSchedulingDefaultStartDate,
@@ -49,24 +50,11 @@ function minimumStartAt() {
 }
 
 function formatStart(value: Date | string | null | undefined) {
-  if (!value) return 'Choose a time'
-  const date = value instanceof Date ? value : new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'Choose a time'
-  return date.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  return formatExplicitZonedDateTime(value, { timeZone: resolvedLocalTimeZone(), fallback: 'Choose a time' }) ?? 'Choose a time'
 }
 
 function currentTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone
-  } catch {
-    return undefined
-  }
+  return resolvedLocalTimeZone() ?? undefined
 }
 
 export function OrderCallScheduleModal({

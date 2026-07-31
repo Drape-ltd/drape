@@ -231,7 +231,7 @@ export async function sendSmsDirect(to: string, body: string) {
 export async function sendSmsToUser(input: SendSmsToUserInput) {
   const { supabase, userId, audience, orderId, event, body, fallbackPhone } = input
 
-  if (!userId || !body.trim()) return
+  if (!userId || !body.trim()) return { status: 'SKIPPED' as const, reason: 'INVALID_PAYLOAD' }
 
   const provider = getSmsProvider()
   if (!hasSmsConfig(provider)) {
@@ -248,7 +248,11 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
         reason: provider === 'NONE' ? 'sms_disabled' : 'missing_provider_config',
       },
     })
-    return
+    return {
+      status: 'SKIPPED' as const,
+      reason: provider === 'NONE' ? 'SMS_DISABLED' : 'MISSING_PROVIDER_CONFIG',
+      provider,
+    }
   }
 
   const phoneCandidate = fallbackPhone?.trim() || await resolveUserPhone(supabase, audience, userId)
@@ -267,7 +271,7 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
         reason: 'missing_phone',
       },
     })
-    return
+    return { status: 'SKIPPED' as const, reason: 'MISSING_PHONE', provider }
   }
 
   try {
@@ -285,6 +289,11 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
         provider_sid: result.sid,
       },
     })
+    return {
+      status: 'DELIVERED' as const,
+      provider: result.provider,
+      providerReference: result.sid,
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     log('warn', FN, 'send.failed', {
@@ -308,5 +317,6 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
         error: message,
       },
     })
+    throw error
   }
 }

@@ -53,6 +53,7 @@ type PhoneNumberInputProps = Omit<
   containerStyle?: ViewStyle
   defaultCountryCode?: PhoneCountryCode
   rightElement?: ReactNode
+  onClearError?: () => void
 }
 
 function prioritizedCountries(
@@ -76,6 +77,7 @@ export function PhoneNumberInput({
   containerStyle,
   defaultCountryCode = DEFAULT_PHONE_COUNTRY_CODE,
   rightElement,
+  onClearError,
   onFocus,
   onBlur,
   placeholder = 'Phone number',
@@ -108,6 +110,7 @@ export function PhoneNumberInput({
   const hasError = Boolean(error)
 
   function emitNationalValue(nextNationalValue: string, code = countryCode) {
+    if (error) onClearError?.()
     const normalizedValue = nextNationalValue.trim().replace(/^00/, '+')
     const nextCountryCode = normalizedValue.startsWith('+')
       ? inferPhoneCountryCode(normalizedValue, code)
@@ -118,7 +121,7 @@ export function PhoneNumberInput({
 
     if (nextCountryCode !== countryCode) setCountryCode(nextCountryCode)
     setNationalValue(nextDisplayValue)
-    const nextValue = composeInternationalPhoneNumber(nextNationalValue, code)
+    const nextValue = composeInternationalPhoneNumber(nextNationalValue, nextCountryCode)
     lastEmittedValue.current = nextValue
     onChangeText(nextValue)
   }

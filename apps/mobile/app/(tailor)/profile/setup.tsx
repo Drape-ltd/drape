@@ -3209,6 +3209,7 @@ export default function TailorSetupScreen() {
             <DrapeCapsuleButton
               label={primaryCtaLabel}
               icon={step === 3 || setupView === 'hub' ? 'check' : 'arrow-right'}
+              style={styles.primaryDockButton}
               onPress={() => { void next() }}
               loading={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
               disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
@@ -4014,6 +4015,7 @@ function SheetOption({
 }
 
 const styles = StyleSheet.create({
+  primaryDockButton: { flex: 1 },
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row',

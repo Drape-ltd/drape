@@ -84,14 +84,20 @@ export function inferPhoneCountryCode(
   const fallbackCallingCode = getCountryCallingCode(fallback)
   if (digits.startsWith(fallbackCallingCode)) return fallback
 
-  const matchingCountry = PHONE_COUNTRIES
-    .filter((country) => digits.startsWith(country.callingCode.slice(1)))
-    .sort(
-      (left, right) =>
-        right.callingCode.length - left.callingCode.length,
-    )[0]
+  const candidates = PHONE_COUNTRIES.filter((country) =>
+    digits.startsWith(country.callingCode.slice(1)),
+  )
+  const longestCallingCodeLength = Math.max(
+    0,
+    ...candidates.map((country) => country.callingCode.length),
+  )
+  const matchingCountries = candidates.filter(
+    (country) => country.callingCode.length === longestCallingCodeLength,
+  )
 
-  return matchingCountry?.code ?? fallback
+  // Shared calling codes (notably +1) are not reliable country evidence.
+  // Preserve the user's editable selection until libphonenumber can resolve it.
+  return matchingCountries.length === 1 ? matchingCountries[0]!.code : fallback
 }
 
 export function getNationalPhoneInput(

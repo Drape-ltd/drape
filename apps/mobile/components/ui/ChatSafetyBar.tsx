@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, StyleSheet } from 'react-native'
+import { StyleSheet } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import Text from 'react-native-ui-lib/src/components/text'
 import View from 'react-native-ui-lib/src/components/view'
@@ -8,24 +8,18 @@ type Props = {
   blocked: boolean
   blockedMessage?: string | null
   inDispute: boolean
-  loading: boolean
-  reporting: boolean
-  onPressReport: () => void
 }
 
 export function ChatSafetyBar({
   blocked,
   blockedMessage,
   inDispute,
-  loading,
-  reporting,
-  onPressReport,
 }: Props) {
+  if (!blocked && !inDispute) return null
+
   const statusMessage = blocked
     ? blockedMessage ?? 'This conversation is paused while Drapeon reviews a safety concern.'
-    : inDispute
-      ? 'Calls are paused during review. Keep updates and evidence in this thread.'
-      : 'Payments, approvals, and decisions stay protected here.'
+    : 'Calls are paused during review. Keep updates and evidence in this thread.'
 
   return (
     <View style={[styles.card, (blocked || inDispute) && styles.cardWarning]}>
@@ -43,22 +37,6 @@ export function ChatSafetyBar({
             {statusMessage}
           </Text>
         </View>
-        <Pressable
-          style={styles.reportButton}
-          onPress={onPressReport}
-          disabled={reporting}
-          accessibilityRole="button"
-          accessibilityLabel={blocked ? 'View chat safety options' : 'Report a chat safety concern'}
-        >
-          {reporting || loading ? (
-            <ActivityIndicator size="small" color={Colors.kanteRust} />
-          ) : (
-            <>
-              <Feather name="flag" size={15} color={Colors.kanteRust} />
-              <Text style={styles.reportLabel}>Report</Text>
-            </>
-          )}
-        </Pressable>
       </View>
     </View>
   )
@@ -66,12 +44,13 @@ export function ChatSafetyBar({
 
 const styles = StyleSheet.create({
   card: {
-    marginHorizontal: Spacing.md,
-    marginVertical: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xs,
+    marginBottom: 0,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
-    minHeight: 72,
-    borderRadius: Radius.lg,
+    paddingVertical: Spacing.sm,
+    minHeight: 48,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.surface,
@@ -84,15 +63,15 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
   content: {
     flex: 1,
     minWidth: 0,
   },
   icon: {
-    width: 34,
-    height: 34,
+    width: 30,
+    height: 30,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -114,23 +93,6 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
   },
   messageWarning: {
-    color: Colors.kanteRust,
-  },
-  reportButton: {
-    minWidth: 74,
-    minHeight: 44,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 5,
-    backgroundColor: Colors.kanteRust + '12',
-    flexShrink: 0,
-  },
-  reportLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
     color: Colors.kanteRust,
   },
 })
