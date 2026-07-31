@@ -4,7 +4,9 @@
     "details": [
       {
         "appIDs": [
-          "W84Q46T4XF.co.drapeon.app"
+          "W84Q46T4XF.co.drapeon.app",
+          "W84Q46T4XF.co.drapeon.app.dev",
+          "W84Q46T4XF.co.drapeon.app.preview"
         ],
         "components": [
           {

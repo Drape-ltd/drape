@@ -14,7 +14,7 @@
     "prepare:native-dependencies": "node ./scripts/materialize-native-dependencies.mjs",
     "eas-build-post-install": "node ./scripts/prepare-google-services.mjs && node ./scripts/materialize-native-dependencies.mjs",
     "qa:android": "node ./scripts/android-qa-runner.mjs",
-    "lint": "eslint app components lib constants --max-warnings=999 && node scripts/check-navigation-usage.mjs && node scripts/check-build-profile-parity.mjs && node scripts/check-user-facing-brand.mjs",
+    "lint": "eslint app components lib constants --max-warnings=999 && node scripts/check-navigation-usage.mjs && node scripts/check-build-profile-parity.mjs && node scripts/check-app-identity.mjs && node scripts/check-user-facing-brand.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

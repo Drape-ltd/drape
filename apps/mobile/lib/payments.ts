@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser'
+import * as ExpoLinking from 'expo-linking'
 import {
   normalizeAccountCurrency,
   resolvePaymentProviderForCurrency,
@@ -15,8 +16,8 @@ import {
 
 WebBrowser.maybeCompleteAuthSession()
 
-const STRIPE_RETURN_URL = 'drape://stripe-redirect'
-const PAYSTACK_RETURN_URL = 'drape:///paystack-redirect'
+const STRIPE_RETURN_URL = ExpoLinking.createURL('stripe-redirect')
+const PAYSTACK_RETURN_URL = ExpoLinking.createURL('paystack-redirect')
 const STRIPE_MERCHANT_DISPLAY_NAME = 'Drapeon'
 
 function paymentProviderDisplayName(provider: PaymentRoutingProvider) {
