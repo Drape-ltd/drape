@@ -8,6 +8,7 @@ import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
+import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 
 const FN = 'review-action'
 const REVIEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
@@ -140,6 +141,47 @@ function validateReviewMediaUrls(input: string[] | undefined, params: { orderId:
   return { ok: true as const, urls: next }
 }
 
+async function completeReviewedOrder(
+  supabase: any,
+  order: { id: string; stage: string; customer_id?: string | null },
+) {
+  if (order.stage === 'COMPLETE') return { ok: true as const, duplicate: true }
+  if (!['DELIVERED', 'COLLECTED'].includes(order.stage)) {
+    return { ok: false as const, error: `Order stage ${order.stage} cannot be completed from a review.` }
+  }
+
+  const nowIso = new Date().toISOString()
+  const { error: handoffError } = await supabase
+    .from('orders')
+    .update({
+      handoff_completed_at: nowIso,
+      customer_handoff_confirmed_at: nowIso,
+      // Keep the persisted source inside the established payout/handoff
+      // contract. The audit event below preserves that the completion was
+      // specifically driven by a submitted review.
+      handoff_confirmation_source: 'CUSTOMER_COMPLETE',
+    })
+    .eq('id', order.id)
+    .eq('stage', order.stage)
+
+  if (handoffError) return { ok: false as const, error: handoffError.message }
+
+  try {
+    const result = await finalizeOrderTerminal(supabase, order.id, {
+      p_target_stage: 'COMPLETE',
+      p_actor_id: order.customer_id?.toString() ?? null,
+      p_actor_role: 'CUSTOMER',
+      p_event: 'order.completed_after_review',
+      p_note: 'Customer submitted their review and completed the order.',
+      p_payload: { completion_source: 'CUSTOMER_REVIEW' },
+      p_expected_stages: ['DELIVERED', 'COLLECTED'],
+    })
+    return { ok: true as const, duplicate: result.idempotent === true }
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -235,13 +277,42 @@ Deno.serve(async (req) => {
 
       const { data: existingReview, error: existingReviewError } = await supabase
         .from('reviews')
-        .select('id')
+        .select('id, flagged, published_at')
         .eq('order_id', body.orderId)
         .maybeSingle()
 
       if (existingReviewError) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: existingReviewError.message, surface: 'reviews.existing' })
         return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this order review right now.')
+      }
+
+      // Recover a prior half-finished attempt without creating a second review.
+      // This can happen when the review persisted but the old client made a
+      // separate completion request that timed out or was rate limited.
+      if (existingReview?.id) {
+        const completion = await completeReviewedOrder(supabase, order)
+        if (!completion.ok) {
+          log('error', FN, 'review.completion_failed', {
+            actor_id: caller.id,
+            order_id: body.orderId,
+            existing_review_id: existingReview.id,
+            error: completion.error,
+          })
+          return jsonError(cors, 500, 'ORDER_COMPLETION_FAILED', 'Your review is saved. Drapeon is still finishing the order record.')
+        }
+        await audit(supabase, {
+          event: 'order.completed_after_review',
+          actor_id: caller.id,
+          actor_role: 'CUSTOMER',
+          order_id: body.orderId,
+          payload: { review_id: existingReview.id, recovered: true },
+        })
+        return jsonResponse({
+          ok: true,
+          duplicate: true,
+          orderCompleted: true,
+          publicationStatus: existingReview.flagged ? 'held' : 'published',
+        }, 200, cors)
       }
 
       const reviewPreflight = runPreflight([
@@ -375,7 +446,30 @@ Deno.serve(async (req) => {
         payload: { rating: body.rating, tag_count: body.tags.length, media_count: mediaValidation.urls.length, publication_status: publicationStatus },
       })
 
-      return jsonResponse({ ok: true, publicationStatus }, 200, cors)
+      const completion = await completeReviewedOrder(supabase, order)
+      if (!completion.ok) {
+        log('error', FN, 'review.completion_failed', {
+          actor_id: caller.id,
+          order_id: body.orderId,
+          review_id: (savedReview as { id?: string } | null)?.id ?? null,
+          error: completion.error,
+        })
+        return jsonError(cors, 500, 'ORDER_COMPLETION_FAILED', 'Your review is saved. Drapeon is still finishing the order record.')
+      }
+
+      await audit(supabase, {
+        event: 'order.completed_after_review',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: body.orderId,
+        payload: {
+          review_id: (savedReview as { id?: string } | null)?.id ?? null,
+          recovered: false,
+          media_count: mediaValidation.urls.length,
+        },
+      })
+
+      return jsonResponse({ ok: true, publicationStatus, orderCompleted: true }, 200, cors)
     }
 
     const { data: order, error: orderError } = await supabase

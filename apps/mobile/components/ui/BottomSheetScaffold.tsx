@@ -1,14 +1,22 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ActivityIndicator,
   BackHandler,
+  Keyboard,
+  KeyboardAvoidingView,
+  findNodeHandle,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
+  type KeyboardEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type DimensionValue,
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
@@ -54,6 +62,22 @@ type SheetFrameProps = {
   standaloneNativeFrame?: boolean
   bottomInset: number
   testID?: string
+}
+
+type MeasurableInput = {
+  measureInWindow?: (callback: (x: number, y: number, width: number, height: number) => void) => void
+}
+
+type KeyboardScrollResponder = {
+  scrollResponderScrollNativeHandleToKeyboard?: (
+    nodeHandle: number,
+    additionalOffset?: number,
+    preventNegativeScrollOffset?: boolean,
+  ) => void
+}
+
+type KeyboardAwareScrollHandle = ScrollView & {
+  getScrollResponder?: () => KeyboardScrollResponder
 }
 
 function SheetActionButton({ action }: { action: BottomSheetScaffoldAction }) {
@@ -107,31 +131,121 @@ function SheetFrame({
 }: SheetFrameProps) {
   const RuntimeBottomSheetScrollView = bottomSheetRuntime?.BottomSheetScrollView
   const RuntimeBottomSheetView = bottomSheetRuntime?.BottomSheetView
+  const scrollRef = useRef<KeyboardAwareScrollHandle | null>(null)
+  const scrollOffsetRef = useRef(0)
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const keyboardEventRef = useRef<KeyboardEvent | null>(null)
+  const [keyboardInset, setKeyboardInset] = useState(0)
+
+  const revealFocusedInput = useCallback((event: KeyboardEvent) => {
+    if (!scrollable) return
+    keyboardEventRef.current = event
+    setKeyboardInset(event.endCoordinates.height)
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current)
+    focusTimerRef.current = setTimeout(() => {
+      const focused = TextInput.State.currentlyFocusedInput?.() as MeasurableInput | null
+      if (!focused?.measureInWindow) return
+
+      // BottomSheetScrollView does not consistently honour a plain `scrollTo`
+      // calculated from window coordinates on Android. Ask its native scroll
+      // responder to reveal the actual focused handle first, then retain the
+      // measured fallback below for regular ScrollView and older runtimes.
+      const nodeHandle = findNodeHandle(focused as never)
+      const scrollResponder = scrollRef.current?.getScrollResponder?.()
+      if (nodeHandle && scrollResponder?.scrollResponderScrollNativeHandleToKeyboard) {
+        scrollResponder.scrollResponderScrollNativeHandleToKeyboard(
+          nodeHandle,
+          Platform.OS === 'android' ? 132 : 104,
+          true,
+        )
+      }
+      focused.measureInWindow((_x, y, _width, height) => {
+        const keyboardTop = event.endCoordinates.screenY
+        // A field merely clearing the keyboard is not enough: its label,
+        // validation, and autocomplete choices must remain readable too.
+        // Keep a compact interaction lane above the keyboard for every sheet
+        // form instead of forcing each screen to invent its own offset.
+        const interactionClearance = Platform.OS === 'android' ? 132 : 104
+        const overlap = y + height + interactionClearance - keyboardTop
+        if (overlap <= 0) return
+        scrollRef.current?.scrollTo?.({
+          y: Math.max(0, scrollOffsetRef.current + overlap),
+          animated: true,
+        })
+      })
+    }, Platform.OS === 'android' ? 120 : 40)
+  }, [scrollable])
+
+  useEffect(() => {
+    if (!scrollable) return
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const frameEvent = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow'
+    const showSubscription = Keyboard.addListener(showEvent, revealFocusedInput)
+    const frameSubscription = frameEvent === showEvent
+      ? null
+      : Keyboard.addListener(frameEvent, revealFocusedInput)
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardEventRef.current = null
+      setKeyboardInset(0)
+    })
+    return () => {
+      showSubscription.remove()
+      frameSubscription?.remove()
+      hideSubscription.remove()
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current)
+    }
+  }, [revealFocusedInput, scrollable])
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOffsetRef.current = event.nativeEvent.contentOffset.y
+  }, [])
+
+  const handleDescendantFocus = useCallback(() => {
+    const keyboardEvent = keyboardEventRef.current
+    if (keyboardEvent) revealFocusedInput(keyboardEvent)
+  }, [revealFocusedInput])
+
+  const handleContentSizeChange = useCallback(() => {
+    const keyboardEvent = keyboardEventRef.current
+    if (keyboardEvent) revealFocusedInput(keyboardEvent)
+  }, [revealFocusedInput])
+
+  const sharedScrollProps = {
+    ref: scrollRef,
+    onScroll: handleScroll,
+    onFocus: handleDescendantFocus,
+    onContentSizeChange: handleContentSizeChange,
+    scrollEventThrottle: 16,
+    showsVerticalScrollIndicator: false,
+    keyboardShouldPersistTaps: 'handled' as const,
+    keyboardDismissMode: Platform.OS === 'ios' ? 'interactive' as const : 'on-drag' as const,
+    nestedScrollEnabled: true,
+  }
 
   const body = scrollable
     ? useNativeSheetBody && RuntimeBottomSheetScrollView
       ? (
         <RuntimeBottomSheetScrollView
+          {...sharedScrollProps}
           style={styles.scrollBody}
           contentContainerStyle={[
             styles.scrollContent,
             standaloneNativeFrame && styles.standaloneScrollContent,
-            { paddingBottom: Spacing.xl + bottomInset },
+            { paddingBottom: Spacing.xl + bottomInset + keyboardInset },
           ]}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          nestedScrollEnabled
         >
           {children}
         </RuntimeBottomSheetScrollView>
       )
       : (
         <ScrollView
+          {...sharedScrollProps}
           style={styles.scrollBody}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: Spacing.xl + bottomInset }]}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          nestedScrollEnabled
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: Spacing.xl + bottomInset + keyboardInset },
+          ]}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
           {children}
         </ScrollView>
@@ -259,7 +373,10 @@ export function BottomSheetScaffold({
         presentationStyle="overFullScreen"
         onRequestClose={onDismiss}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={onDismiss}
@@ -289,7 +406,7 @@ export function BottomSheetScaffold({
               </SheetFrame>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     )
   }
@@ -298,7 +415,11 @@ export function BottomSheetScaffold({
     <RuntimeBottomSheetModal
       ref={modalRef}
       onDismiss={handleDismiss}
-      bottomInset={insets.bottom}
+      containerStyle={styles.nativeModalContainer}
+      style={styles.nativeSheet}
+      // Let the sheet surface extend behind the system gesture area. SheetFrame
+      // already reserves the safe-area inset for content and actions.
+      bottomInset={0}
       enableDynamicSizing={shouldEnableDynamicSizing}
       snapPoints={shouldEnableDynamicSizing ? undefined : resolvedSnapPoints}
       backdropComponent={(props: unknown) => (
@@ -353,6 +474,14 @@ export function BottomSheetScaffold({
 }
 
 const styles = StyleSheet.create({
+  nativeModalContainer: {
+    zIndex: 1000,
+    elevation: 100,
+  },
+  nativeSheet: {
+    zIndex: 1001,
+    elevation: 101,
+  },
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',

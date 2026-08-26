@@ -143,6 +143,7 @@ enum Currency {
 enum PaymentProvider {
   STRIPE
   PAYSTACK
+  COVERAGE
 
   @@map("payment_provider")
 }
@@ -151,6 +152,9 @@ enum OrderPaymentPhase {
   INITIAL_ORDER
   CONSULTATION
   FULFILLMENT
+  MATERIAL_ADVANCE
+  ADJUSTMENT
+  TIP
 
   @@map("order_payment_phase")
 }
@@ -232,17 +236,17 @@ model CustomerProfile {
 }
 
 model PublicUser {
-  id                  String         @id
-  email               String         @unique
-  displayName         String         @map("display_name")
+  id                  String   @id
+  email               String   @unique
+  displayName         String   @map("display_name")
   role                UserRole
   phone               String?
-  defaultCurrency     Currency       @default(USD) @map("default_currency")
-  currencyConfirmedAt DateTime       @default(now()) @map("currency_confirmed_at")
-  currencySource      String         @default("UNSUPPORTED_FALLBACK") @map("currency_source")
-  regionCode          String         @default("ZZ") @map("region_code")
-  createdAt           DateTime       @default(now()) @map("created_at")
-  updatedAt           DateTime       @updatedAt @map("updated_at")
+  defaultCurrency     Currency @default(USD) @map("default_currency")
+  currencyConfirmedAt DateTime @default(now()) @map("currency_confirmed_at")
+  currencySource      String   @default("UNSUPPORTED_FALLBACK") @map("currency_source")
+  regionCode          String   @default("ZZ") @map("region_code")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@map("users")
 }
@@ -276,72 +280,81 @@ model TailorProfile {
   id     String @id @default(uuid())
   userId String @unique @map("user_id")
 
-  displayName          String             @map("display_name")
-  businessName         String?            @map("business_name")
-  sellerType           SellerType         @default(TAILOR) @map("seller_type")
-  bio                  String?
-  location             String             @default("")
-  languages            String[]
-  specialtyTags        String[]           @map("specialty_tags")
-  priceRangeMin        Int?               @map("price_range_min")
-  priceRangeMax        Int?               @map("price_range_max")
-  currency             Currency           @default(USD)
-  payoutCurrency       Currency           @default(USD) @map("payout_currency")
-  payoutProvider       PaymentProvider?   @map("payout_provider")
-  payoutReverificationRequired Boolean    @default(false) @map("payout_reverification_required")
-  payoutAccountType    PayoutAccountType? @map("payout_account_type")
-  payoutAccountVerified Boolean           @default(false) @map("payout_account_verified")
-  payoutBankName       String?            @map("payout_bank_name")
-  payoutBankCode       String?            @map("payout_bank_code")
-  payoutAccountName    String?            @map("payout_account_name")
-  payoutAccountMasked  String?            @map("payout_account_masked")
-  payoutCountryCode    String?            @map("payout_country_code")
-  manualBankEntry      Boolean            @default(false) @map("manual_bank_entry")
-  manualBankName       String?            @map("manual_bank_name")
-  manualBankCountryCode String?           @map("manual_bank_country_code")
-  manualBankCountryName String?           @map("manual_bank_country_name")
-  manualBankSwiftBic   String?            @map("manual_bank_swift_bic")
-  manualBankAccountNumber String?         @map("manual_bank_account_number")
-  manualBankAccountName String?           @map("manual_bank_account_name")
-  manualBankVerificationStatus String     @default("NOT_SUBMITTED") @map("manual_bank_verification_status")
-  manualBankSubmittedAt DateTime?         @map("manual_bank_submitted_at")
-  manualBankVerifiedAt DateTime?          @map("manual_bank_verified_at")
-  manualBankVerifiedBy String?            @map("manual_bank_verified_by")
-  paystackRecipientCode String?           @map("paystack_recipient_code")
-  stripeConnectAccountId String?          @map("stripe_connect_account_id")
-  payoutAccountVerifiedAt DateTime?       @map("payout_account_verified_at")
-  payoutAccountChangeCount Int            @default(0) @map("payout_account_change_count")
-  payoutAccountLastChangedAt DateTime?    @map("payout_account_last_changed_at")
-  payoutAccountChangeLockedUntil DateTime? @map("payout_account_change_locked_until")
-  payoutDestinationHoldUntil DateTime?    @map("payout_destination_hold_until")
-  tier                 TailorTier         @default(VERIFIED)
-  availability         AvailabilityStatus @default(OPEN)
-  isVerified           Boolean            @default(false) @map("is_verified")
-  isLive               Boolean            @default(false) @map("is_live")
-  avgRating            Float              @default(0) @map("avg_rating")
-  totalReviews         Int                @default(0) @map("total_reviews")
-  totalOrders          Int                @default(0) @map("total_orders")
-  avgResponseHours     Float?             @map("avg_response_hours")
-  supportsCustomOrders Boolean            @default(true) @map("supports_custom_orders")
-  supportsReadyMade    Boolean            @default(false) @map("supports_ready_made")
-  pickupAvailable      Boolean            @default(false) @map("pickup_available")
-  deliveryAvailable    Boolean            @default(false) @map("delivery_available")
-  shippingAvailable    Boolean            @default(false) @map("shipping_available")
-  deliveryFee          Int                @default(0) @map("delivery_fee")
-  shippingFee          Int                @default(0) @map("shipping_fee")
-  shipsInternationally Boolean            @default(false) @map("ships_internationally")
-  stripeAccountId      String?            @map("stripe_account_id")
-  paystackAccountId    String?            @map("paystack_account_id")
-  idVerificationStatus String             @default("NOT_SUBMITTED") @map("id_verification_status")
-  idDocumentPath       String?            @map("id_document_path")
-  idDocumentUrl        String?            @map("id_document_url")
-  idVerifiedAt         DateTime?          @map("id_verified_at")
+  displayName                    String             @map("display_name")
+  businessName                   String?            @map("business_name")
+  sellerType                     SellerType         @default(TAILOR) @map("seller_type")
+  bio                            String?
+  location                       String             @default("")
+  languages                      String[]
+  specialtyTags                  String[]           @map("specialty_tags")
+  priceRangeMin                  Int?               @map("price_range_min")
+  priceRangeMax                  Int?               @map("price_range_max")
+  currency                       Currency           @default(USD)
+  payoutCurrency                 Currency           @default(USD) @map("payout_currency")
+  payoutProvider                 PaymentProvider?   @map("payout_provider")
+  payoutReverificationRequired   Boolean            @default(false) @map("payout_reverification_required")
+  payoutAccountType              PayoutAccountType? @map("payout_account_type")
+  payoutAccountVerified          Boolean            @default(false) @map("payout_account_verified")
+  payoutBankName                 String?            @map("payout_bank_name")
+  payoutBankCode                 String?            @map("payout_bank_code")
+  payoutAccountName              String?            @map("payout_account_name")
+  payoutAccountMasked            String?            @map("payout_account_masked")
+  payoutCountryCode              String?            @map("payout_country_code")
+  manualBankEntry                Boolean            @default(false) @map("manual_bank_entry")
+  manualBankName                 String?            @map("manual_bank_name")
+  manualBankCountryCode          String?            @map("manual_bank_country_code")
+  manualBankCountryName          String?            @map("manual_bank_country_name")
+  manualBankSwiftBic             String?            @map("manual_bank_swift_bic")
+  manualBankAccountNumber        String?            @map("manual_bank_account_number")
+  manualBankAccountName          String?            @map("manual_bank_account_name")
+  manualBankVerificationStatus   String             @default("NOT_SUBMITTED") @map("manual_bank_verification_status")
+  manualBankSubmittedAt          DateTime?          @map("manual_bank_submitted_at")
+  manualBankVerifiedAt           DateTime?          @map("manual_bank_verified_at")
+  manualBankVerifiedBy           String?            @map("manual_bank_verified_by")
+  paystackRecipientCode          String?            @map("paystack_recipient_code")
+  stripeConnectAccountId         String?            @map("stripe_connect_account_id")
+  payoutAccountVerifiedAt        DateTime?          @map("payout_account_verified_at")
+  payoutAccountChangeCount       Int                @default(0) @map("payout_account_change_count")
+  payoutAccountLastChangedAt     DateTime?          @map("payout_account_last_changed_at")
+  payoutAccountChangeLockedUntil DateTime?          @map("payout_account_change_locked_until")
+  payoutDestinationHoldUntil     DateTime?          @map("payout_destination_hold_until")
+  tier                           TailorTier         @default(VERIFIED)
+  availability                   AvailabilityStatus @default(OPEN)
+  isVerified                     Boolean            @default(false) @map("is_verified")
+  isLive                         Boolean            @default(false) @map("is_live")
+  avgRating                      Float              @default(0) @map("avg_rating")
+  totalReviews                   Int                @default(0) @map("total_reviews")
+  totalOrders                    Int                @default(0) @map("total_orders")
+  avgResponseHours               Float?             @map("avg_response_hours")
+  supportsCustomOrders           Boolean            @default(true) @map("supports_custom_orders")
+  supportsReadyMade              Boolean            @default(false) @map("supports_ready_made")
+  pickupAvailable                Boolean            @default(false) @map("pickup_available")
+  deliveryAvailable              Boolean            @default(false) @map("delivery_available")
+  shippingAvailable              Boolean            @default(false) @map("shipping_available")
+  consultationMode               String             @default("FREE") @map("consultation_mode")
+  consultationRequirement        String             @default("OPTIONAL") @map("consultation_requirement")
+  consultationFeeAmount          Int?               @map("consultation_fee_amount")
+  consultationCurrency           Currency?          @map("consultation_currency")
+  consultationDurationMinutes    Int                @default(30) @map("consultation_duration_minutes")
+  consultationCallType           String             @default("VIDEO") @map("consultation_call_type")
+  consultationFeeCreditable      Boolean            @default(false) @map("consultation_fee_creditable")
+  consultationPolicyVersion      String             @default("consultation-2026-07-31-v1") @map("consultation_policy_version")
+  consultationPolicyPublishedAt  DateTime?          @map("consultation_policy_published_at")
+  deliveryFee                    Int                @default(0) @map("delivery_fee")
+  shippingFee                    Int                @default(0) @map("shipping_fee")
+  shipsInternationally           Boolean            @default(false) @map("ships_internationally")
+  stripeAccountId                String?            @map("stripe_account_id")
+  paystackAccountId              String?            @map("paystack_account_id")
+  idVerificationStatus           String             @default("NOT_SUBMITTED") @map("id_verification_status")
+  idDocumentPath                 String?            @map("id_document_path")
+  idDocumentUrl                  String?            @map("id_document_url")
+  idVerifiedAt                   DateTime?          @map("id_verified_at")
   // Flat URL array written by the setup wizard (source of truth for mobile)
-  portfolioPhotoUrls   String[]           @map("portfolio_photo_urls")
-  bypassAttempts       Int                @default(0) @map("bypass_attempts")
-  tierLostAt           DateTime?          @map("tier_lost_at")
-  createdAt            DateTime           @default(now()) @map("created_at")
-  updatedAt            DateTime           @updatedAt @map("updated_at")
+  portfolioPhotoUrls             String[]           @map("portfolio_photo_urls")
+  bypassAttempts                 Int                @default(0) @map("bypass_attempts")
+  tierLostAt                     DateTime?          @map("tier_lost_at")
+  createdAt                      DateTime           @default(now()) @map("created_at")
+  updatedAt                      DateTime           @updatedAt @map("updated_at")
 
   portfolioPhotos PortfolioPhoto[]
   sellerItems     SellerItem[]
@@ -354,30 +367,38 @@ model TailorProfile {
 }
 
 model TailorPickupDetail {
-  userId             String    @id @map("user_id")
-  pickupAddress      String?   @map("pickup_address")
-  pickupInstructions String?   @map("pickup_instructions")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  userId                              String    @id @map("user_id")
+  pickupAddress                       String?   @map("pickup_address")
+  pickupInstructions                  String?   @map("pickup_instructions")
+  pickupAddressLine1                  String?   @map("pickup_address_line1")
+  pickupCity                          String?   @map("pickup_city")
+  pickupRegion                        String?   @map("pickup_region")
+  pickupPostalCode                    String?   @map("pickup_postal_code")
+  pickupCountryCode                   String?   @map("pickup_country_code")
+  pickupLocationVerificationSource    String?   @map("pickup_location_verification_source")
+  pickupLocationVerificationReference String?   @map("pickup_location_verification_reference")
+  pickupLocationVerifiedAt            DateTime? @map("pickup_location_verified_at")
+  createdAt                           DateTime  @default(now()) @map("created_at")
+  updatedAt                           DateTime  @updatedAt @map("updated_at")
 
   @@map("tailor_pickup_details")
 }
 
 model OrderHandoffIssue {
-  id              String   @id @default(uuid())
-  orderId         String   @map("order_id")
-  reporterId      String   @map("reporter_id")
-  reporterRole    String   @map("reporter_role")
-  issueType       String   @map("issue_type")
-  description     String?
-  stageAtReport   String   @map("stage_at_report")
-  deliveryMethod  String?  @map("delivery_method")
-  status          String   @default("OPEN")
-  escalatedAt     DateTime? @map("escalated_at")
-  resolvedAt      DateTime? @map("resolved_at")
-  resolutionNote  String?  @map("resolution_note")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String    @id @default(uuid())
+  orderId        String    @map("order_id")
+  reporterId     String    @map("reporter_id")
+  reporterRole   String    @map("reporter_role")
+  issueType      String    @map("issue_type")
+  description    String?
+  stageAtReport  String    @map("stage_at_report")
+  deliveryMethod String?   @map("delivery_method")
+  status         String    @default("OPEN")
+  escalatedAt    DateTime? @map("escalated_at")
+  resolvedAt     DateTime? @map("resolved_at")
+  resolutionNote String?   @map("resolution_note")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   @@index([orderId, createdAt])
   @@index([status, createdAt])
@@ -457,7 +478,7 @@ model SellerItem {
 
 model TailorClientNote {
   id         String   @id @default(uuid())
-  tailorId   String   @map("tailor_id")   // tailor auth UUID
+  tailorId   String   @map("tailor_id") // tailor auth UUID
   customerId String   @map("customer_id") // customer auth UUID
   notes      String?
   createdAt  DateTime @default(now()) @map("created_at")
@@ -530,126 +551,207 @@ model Order {
   id         String @id @default(uuid())
   reference  String @unique @default(cuid())
   customerId String @map("customer_id") // customer auth UUID
-  tailorId   String @map("tailor_id")   // tailor auth UUID
+  tailorId   String @map("tailor_id") // tailor auth UUID
 
   // Optional FK to tailor_profiles for joins (populated on order creation)
-  tailorProfileId String?        @map("tailor_profile_id")
-  tailorProfile   TailorProfile? @relation(fields: [tailorProfileId], references: [id])
-  orderKind       OrderKind      @default(CUSTOM) @map("order_kind")
-  sellerItemId    String?        @map("seller_item_id")
-  fulfillmentOption String?      @map("fulfillment_option")
+  tailorProfileId   String?        @map("tailor_profile_id")
+  tailorProfile     TailorProfile? @relation(fields: [tailorProfileId], references: [id])
+  orderKind         OrderKind      @default(CUSTOM) @map("order_kind")
+  sellerItemId      String?        @map("seller_item_id")
+  fulfillmentOption String?        @map("fulfillment_option")
 
-  garmentType                  String          @map("garment_type")
-  garmentDescription           String?         @map("garment_description")
-  itemTitle                    String?         @map("item_title")
-  itemSize                     String?         @map("item_size")
-  itemQuantity                 Int             @default(1) @map("item_quantity")
-  itemUnitPrice                Int?            @map("item_unit_price")
-  itemSubtotal                 Int?            @map("item_subtotal")
-  fulfillmentFee               Int             @default(0) @map("fulfillment_fee")
-  occasion                     String?
-  deadline                     DateTime?
-  fabricSource                 FabricSource?   @map("fabric_source")
-  deliveryMethod               DeliveryMethod? @map("delivery_method")
-  deliveryAddress              String?         @map("delivery_address")
-  deliveryCity                 String?         @map("delivery_city")
-  deliveryRegion               String?         @map("delivery_region")
-  deliveryPostalCode           String?         @map("delivery_postal_code")
-  deliveryCountryCode          String?         @map("delivery_country_code")
-  recipientName                String?         @map("recipient_name")
-  recipientPhone               String?         @map("recipient_phone")
-  fulfillmentProvider          String?         @map("fulfillment_provider")
-  fulfillmentReference         String?         @map("fulfillment_reference")
-  fulfillmentContactName       String?         @map("fulfillment_contact_name")
-  fulfillmentContactPhone      String?         @map("fulfillment_contact_phone")
-  specialNote                  String?         @map("special_note")
-  fabricTracking               String?         @map("fabric_tracking")
-  trackingNumber               String?         @map("tracking_number")
-  carrier                      String?
-  referencePhotos              String[]        @default([]) @map("reference_photos")
-  customerMeasurementsSnapshot Json?           @map("customer_measurements_snapshot")
-  fitNote                      String?         @map("fit_note")
-  consultationFee              Int?            @map("consultation_fee")
-  quotedAmount                 Int?            @map("quoted_amount")
-  currency                     Currency        @default(USD)
-  quotedCompletionDate         DateTime?       @map("quoted_completion_date")
-  quoteNote                    String?         @map("quote_note")
-  quoteExpiresAt               DateTime?       @map("quote_expires_at")
-  stage                        OrderStage      @default(DRAFT)
-  stageUpdatedAt               DateTime        @default(now()) @map("stage_updated_at")
-  paymentProvider              PaymentProvider? @map("payment_provider")
-  paymentIntentId              String?         @map("payment_intent_id")
-  paymentCheckoutUrl           String?         @map("payment_checkout_url")
-  fulfillmentPaymentRequestedAt DateTime?      @map("fulfillment_payment_requested_at")
-  fulfillmentPaymentPaidAt      DateTime?      @map("fulfillment_payment_paid_at")
-  fulfillmentPaymentProvider    PaymentProvider? @map("fulfillment_payment_provider")
-  fulfillmentPaymentIntentId    String?        @map("fulfillment_payment_intent_id")
-  fulfillmentPaymentCheckoutUrl String?        @map("fulfillment_payment_checkout_url")
-  videoCallUrl                 String?         @map("video_call_url")
-  escrowReleased               Boolean         @default(false) @map("escrow_released")
-  escrowReleasedAt             DateTime?       @map("escrow_released_at")
-  autoReleaseAt                DateTime?       @map("auto_release_at")
-  handoffCompletedAt           DateTime?       @map("handoff_completed_at")
-  customerHandoffConfirmedAt   DateTime?       @map("customer_handoff_confirmed_at")
-  handoffConfirmationSource    String?         @map("handoff_confirmation_source")
-  collectionCode               String?         @map("collection_code")
-  collectionCodeExpiry         DateTime?       @map("collection_code_expiry")
-  collectionCodeUsed           Boolean         @default(false) @map("collection_code_used")
-  sourceCurrency               Currency?       @map("source_currency")
-  sourceAmount                 Int?            @map("source_amount")
-  tailorPayoutCurrencyLocked   Currency?       @map("tailor_payout_currency_locked")
-  tailorPayoutProviderLocked   PaymentProvider? @map("tailor_payout_provider_locked")
-  tailorPaystackRecipientCodeLocked String?    @map("tailor_paystack_recipient_code_locked")
-  tailorStripeConnectAccountIdLocked String?   @map("tailor_stripe_connect_account_id_locked")
-  opsPayoutResolutionMode      String?         @map("ops_payout_resolution_mode")
-  opsPayoutOverrideCurrency    Currency?       @map("ops_payout_override_currency")
-  opsPayoutOverrideProvider    PaymentProvider? @map("ops_payout_override_provider")
-  opsPayoutOverrideAmount      Int?            @map("ops_payout_override_amount")
-  opsPayoutOverrideFxRate      Decimal?        @db.Decimal(18, 8) @map("ops_payout_override_fx_rate")
-  opsPayoutOverrideFxRateTimestamp DateTime?   @map("ops_payout_override_fx_rate_timestamp")
-  opsPayoutOverrideNote        String?         @map("ops_payout_override_note")
-  opsPayoutOverrideSetAt       DateTime?       @map("ops_payout_override_set_at")
-  opsPayoutOverrideSetBy       String?         @map("ops_payout_override_set_by")
-  fxRate                       Decimal?        @db.Decimal(18, 8) @map("fx_rate")
-  fxRateTimestamp              DateTime?       @map("fx_rate_timestamp")
-  subtotalAmount               Int             @default(0) @map("subtotal_amount")
-  platformFeeAmount            Int             @default(0) @map("platform_fee_amount")
-  taxAmount                    Int             @default(0) @map("tax_amount")
-  taxRateBps                   Int             @default(0) @map("tax_rate_bps")
-  taxRegion                    String          @default("Tax") @map("tax_region")
-  taxFallback                  Boolean         @default(false) @map("tax_fallback")
-  taxFallbackReason            String?         @map("tax_fallback_reason")
-  shippingAmount               Int             @default(0) @map("shipping_amount")
-  totalAmount                  Int             @default(0) @map("total_amount")
-  createdAt                    DateTime        @default(now()) @map("created_at")
-  updatedAt                    DateTime        @updatedAt @map("updated_at")
+  garmentType                        String           @map("garment_type")
+  garmentDescription                 String?          @map("garment_description")
+  itemTitle                          String?          @map("item_title")
+  itemSize                           String?          @map("item_size")
+  itemQuantity                       Int              @default(1) @map("item_quantity")
+  itemUnitPrice                      Int?             @map("item_unit_price")
+  itemSubtotal                       Int?             @map("item_subtotal")
+  fulfillmentFee                     Int              @default(0) @map("fulfillment_fee")
+  occasion                           String?
+  deadline                           DateTime?
+  fabricSource                       FabricSource?    @map("fabric_source")
+  deliveryMethod                     DeliveryMethod?  @map("delivery_method")
+  deliveryAddress                    String?          @map("delivery_address")
+  deliveryCity                       String?          @map("delivery_city")
+  deliveryRegion                     String?          @map("delivery_region")
+  deliveryPostalCode                 String?          @map("delivery_postal_code")
+  deliveryCountryCode                String?          @map("delivery_country_code")
+  fulfillmentContractVersion         String?          @map("fulfillment_contract_version")
+  fulfillmentPolicyVersion           String?          @map("fulfillment_policy_version")
+  fulfillmentClassification          String?          @map("fulfillment_classification")
+  fulfillmentOriginSnapshot          Json?            @map("fulfillment_origin_snapshot")
+  fulfillmentDestinationSnapshot     Json?            @map("fulfillment_destination_snapshot")
+  fulfillmentCorridorControlId       String?          @map("fulfillment_corridor_control_id")
+  fulfillmentCollectionMode          String?          @map("fulfillment_collection_mode")
+  fulfillmentFingerprint             String?          @map("fulfillment_fingerprint")
+  fulfillmentResolvedAt              DateTime?        @map("fulfillment_resolved_at")
+  pricingInvalidatedAt               DateTime?        @map("pricing_invalidated_at")
+  pricingInvalidationReason          String?          @map("pricing_invalidation_reason")
+  recipientName                      String?          @map("recipient_name")
+  recipientPhone                     String?          @map("recipient_phone")
+  fulfillmentProvider                String?          @map("fulfillment_provider")
+  fulfillmentReference               String?          @map("fulfillment_reference")
+  fulfillmentContactName             String?          @map("fulfillment_contact_name")
+  fulfillmentContactPhone            String?          @map("fulfillment_contact_phone")
+  specialNote                        String?          @map("special_note")
+  fabricTracking                     String?          @map("fabric_tracking")
+  trackingNumber                     String?          @map("tracking_number")
+  carrier                            String?
+  referencePhotos                    String[]         @default([]) @map("reference_photos")
+  customerMeasurementsSnapshot       Json?            @map("customer_measurements_snapshot")
+  fitNote                            String?          @map("fit_note")
+  consultationFee                    Int?             @map("consultation_fee")
+  quotedAmount                       Int?             @map("quoted_amount")
+  currency                           Currency         @default(USD)
+  quotedCompletionDate               DateTime?        @map("quoted_completion_date")
+  quoteNote                          String?          @map("quote_note")
+  quoteExpiresAt                     DateTime?        @map("quote_expires_at")
+  stage                              OrderStage       @default(DRAFT)
+  stageUpdatedAt                     DateTime         @default(now()) @map("stage_updated_at")
+  paymentProvider                    PaymentProvider? @map("payment_provider")
+  paymentIntentId                    String?          @map("payment_intent_id")
+  paymentCheckoutUrl                 String?          @map("payment_checkout_url")
+  fulfillmentPaymentRequestedAt      DateTime?        @map("fulfillment_payment_requested_at")
+  fulfillmentPaymentPaidAt           DateTime?        @map("fulfillment_payment_paid_at")
+  fulfillmentPaymentProvider         PaymentProvider? @map("fulfillment_payment_provider")
+  fulfillmentPaymentIntentId         String?          @map("fulfillment_payment_intent_id")
+  fulfillmentPaymentCheckoutUrl      String?          @map("fulfillment_payment_checkout_url")
+  videoCallUrl                       String?          @map("video_call_url")
+  escrowReleased                     Boolean          @default(false) @map("escrow_released")
+  escrowReleasedAt                   DateTime?        @map("escrow_released_at")
+  autoReleaseAt                      DateTime?        @map("auto_release_at")
+  handoffCompletedAt                 DateTime?        @map("handoff_completed_at")
+  customerHandoffConfirmedAt         DateTime?        @map("customer_handoff_confirmed_at")
+  handoffConfirmationSource          String?          @map("handoff_confirmation_source")
+  collectionCode                     String?          @map("collection_code")
+  collectionCodeExpiry               DateTime?        @map("collection_code_expiry")
+  collectionCodeUsed                 Boolean          @default(false) @map("collection_code_used")
+  sourceCurrency                     Currency?        @map("source_currency")
+  sourceAmount                       Int?             @map("source_amount")
+  tailorPayoutCurrencyLocked         Currency?        @map("tailor_payout_currency_locked")
+  tailorPayoutProviderLocked         PaymentProvider? @map("tailor_payout_provider_locked")
+  tailorPaystackRecipientCodeLocked  String?          @map("tailor_paystack_recipient_code_locked")
+  tailorStripeConnectAccountIdLocked String?          @map("tailor_stripe_connect_account_id_locked")
+  opsPayoutResolutionMode            String?          @map("ops_payout_resolution_mode")
+  opsPayoutOverrideCurrency          Currency?        @map("ops_payout_override_currency")
+  opsPayoutOverrideProvider          PaymentProvider? @map("ops_payout_override_provider")
+  opsPayoutOverrideAmount            Int?             @map("ops_payout_override_amount")
+  opsPayoutOverrideFxRate            Decimal?         @map("ops_payout_override_fx_rate") @db.Decimal(18, 8)
+  opsPayoutOverrideFxRateTimestamp   DateTime?        @map("ops_payout_override_fx_rate_timestamp")
+  opsPayoutOverrideNote              String?          @map("ops_payout_override_note")
+  opsPayoutOverrideSetAt             DateTime?        @map("ops_payout_override_set_at")
+  opsPayoutOverrideSetBy             String?          @map("ops_payout_override_set_by")
+  fxRate                             Decimal?         @map("fx_rate") @db.Decimal(18, 8)
+  fxRateTimestamp                    DateTime?        @map("fx_rate_timestamp")
+  subtotalAmount                     Int              @default(0) @map("subtotal_amount")
+  platformFeeAmount                  Int              @default(0) @map("platform_fee_amount")
+  taxAmount                          Int              @default(0) @map("tax_amount")
+  taxRateBps                         Int              @default(0) @map("tax_rate_bps")
+  taxRegion                          String           @default("Tax") @map("tax_region")
+  taxFallback                        Boolean          @default(false) @map("tax_fallback")
+  taxFallbackReason                  String?          @map("tax_fallback_reason")
+  shippingAmount                     Int              @default(0) @map("shipping_amount")
+  totalAmount                        Int              @default(0) @map("total_amount")
+  commercialPolicyVersion            String           @default("commercial-2026-07-31-v1") @map("commercial_policy_version")
+  fabricFundingPolicyVersion         String           @default("legacy-material-add-on-v1") @map("fabric_funding_policy_version")
+  createdAt                          DateTime         @default(now()) @map("created_at")
+  updatedAt                          DateTime         @updatedAt @map("updated_at")
 
-  stageHistory OrderStageUpdate[]
-  orderPhotos  OrderPhoto[]
-  customDetail CustomOrderDetail?
-  productionEvidence OrderProductionEvidence[]
-  messages     Message[]
-  review       Review?
-  dispute      Dispute?
-  payments     OrderPayment[]
-  webhookEvents PaymentWebhookEvent[]
-  consultationBookings ConsultationBooking[]
+  stageHistory            OrderStageUpdate[]
+  orderPhotos             OrderPhoto[]
+  customDetail            CustomOrderDetail?
+  productionEvidence      OrderProductionEvidence[]
+  messages                Message[]
+  review                  Review?
+  dispute                 Dispute?
+  financialCases          FinancialCase[]
+  moneyDeskRequests       MoneyDeskRequest[]
+  payments                OrderPayment[]
+  webhookEvents           PaymentWebhookEvent[]
+  consultationBookings    ConsultationBooking[]
+  commercialReceipts      CommercialReceipt[]
+  commercialAdjustments   CommercialAdjustment[]
+  materialAdvances        OrderMaterialAdvance[]
+  fabricFundingAllocation OrderFabricFundingAllocation?
 
   @@map("orders")
 }
 
+model CustomOrderBriefDraft {
+  id                             String          @id @default(uuid())
+  customerId                     String          @map("customer_id")
+  tailorProfileId                String          @map("tailor_profile_id")
+  version                        String
+  currentStep                    Int             @default(0) @map("current_step")
+  fields                         Json            @default("{}")
+  hasDeviceOnlyAttachments       Boolean         @default(false) @map("has_device_only_attachments")
+  fulfillmentContractVersion     String?         @map("fulfillment_contract_version")
+  fulfillmentPolicyVersion       String?         @map("fulfillment_policy_version")
+  fulfillmentMethod              DeliveryMethod? @map("fulfillment_method")
+  fulfillmentStatus              String?         @map("fulfillment_status")
+  fulfillmentBlockedReason       String?         @map("fulfillment_blocked_reason")
+  fulfillmentOriginSnapshot      Json?           @map("fulfillment_origin_snapshot")
+  fulfillmentDestinationSnapshot Json?           @map("fulfillment_destination_snapshot")
+  fulfillmentCorridorControlId   String?         @map("fulfillment_corridor_control_id")
+  fulfillmentCollectionMode      String?         @map("fulfillment_collection_mode")
+  fulfillmentFingerprint         String?         @map("fulfillment_fingerprint")
+  fulfillmentResolvedAt          DateTime?       @map("fulfillment_resolved_at")
+  pricingInvalidatedAt           DateTime?       @map("pricing_invalidated_at")
+  pricingInvalidationReason      String?         @map("pricing_invalidation_reason")
+  createdAt                      DateTime        @default(now()) @map("created_at")
+  updatedAt                      DateTime        @updatedAt @map("updated_at")
+
+  @@unique([customerId, tailorProfileId])
+  @@index([customerId, updatedAt])
+  @@map("custom_order_brief_drafts")
+}
+
+model FulfillmentSelectionEvent {
+  id                  String         @id @default(uuid())
+  customerId          String         @map("customer_id")
+  tailorProfileId     String         @map("tailor_profile_id")
+  draftId             String?        @map("draft_id")
+  orderId             String?        @map("order_id")
+  eventType           String         @map("event_type")
+  method              DeliveryMethod
+  status              String
+  blockedReason       String?        @map("blocked_reason")
+  previousFingerprint String?        @map("previous_fingerprint")
+  nextFingerprint     String?        @map("next_fingerprint")
+  policyVersion       String?        @map("policy_version")
+  corridorControlId   String?        @map("corridor_control_id")
+  correlationId       String         @default(uuid()) @map("correlation_id")
+  metadata            Json           @default("{}")
+  createdAt           DateTime       @default(now()) @map("created_at")
+
+  @@index([draftId, createdAt])
+  @@index([orderId, createdAt])
+  @@map("fulfillment_selection_events")
+}
+
 model ConsultationBooking {
-  id               String   @id @default(uuid())
-  orderId          String   @map("order_id")
-  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  tailorId         String   @map("tailor_id")
-  customerId       String   @map("customer_id")
-  scheduledStartAt DateTime @map("scheduled_start_at")
-  scheduledEndAt   DateTime @map("scheduled_end_at")
-  status           String   @default("CONFIRMED")
-  source           String   @default("ORDER_CONSULTATION")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                         String    @id @default(uuid())
+  orderId                    String    @map("order_id")
+  order                      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tailorId                   String    @map("tailor_id")
+  customerId                 String    @map("customer_id")
+  scheduledStartAt           DateTime  @map("scheduled_start_at")
+  scheduledEndAt             DateTime  @map("scheduled_end_at")
+  status                     String    @default("CONFIRMED")
+  source                     String    @default("ORDER_CONSULTATION")
+  policyVersion              String    @default("consultation-2026-07-31-v1") @map("policy_version")
+  feeMode                    String    @default("FREE") @map("fee_mode")
+  feeAmount                  Int?      @map("fee_amount")
+  feeCurrency                Currency? @map("fee_currency")
+  feeCreditable              Boolean   @default(false) @map("fee_creditable")
+  paymentStatus              String    @default("NOT_REQUIRED") @map("payment_status")
+  paidAt                     DateTime? @map("paid_at")
+  cancellationPolicy         Json      @default("{}") @map("cancellation_policy")
+  attendancePolicy           Json      @default("{}") @map("attendance_policy")
+  commercialSnapshotLockedAt DateTime? @map("commercial_snapshot_locked_at")
+  createdAt                  DateTime  @default(now()) @map("created_at")
+  updatedAt                  DateTime  @updatedAt @map("updated_at")
 
   @@map("consultation_bookings")
 }
@@ -690,30 +792,30 @@ model OrderPhoto {
 // ─────────────────────────────────────────────
 
 model CustomOrderDetail {
-  id                              String    @id @default(uuid())
-  orderId                         String    @unique @map("order_id")
-  order                           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  garmentTypeOther                String?   @map("garment_type_other")
-  genderPresentation              String?   @map("gender_presentation")
-  socialReferenceLinks            String[]  @default([]) @map("social_reference_links")
-  styleNotes                      String?   @map("style_notes")
-  bodyNote                        String?   @map("body_note")
-  fabricDescription               String?   @map("fabric_description")
-  fabricBudgetAmount              Int?      @map("fabric_budget_amount")
-  fabricBudgetCurrency            Currency? @map("fabric_budget_currency")
-  fabricSourcingDeadlineDays      Int?      @map("fabric_sourcing_deadline_days")
-  fabricSourcingDeadlineAt        DateTime? @map("fabric_sourcing_deadline_at")
-  fabricApprovalRequired          Boolean   @default(false) @map("fabric_approval_required")
-  fabricApprovalStatus            String    @default("NOT_REQUIRED") @map("fabric_approval_status")
-  fabricApprovalRequestedAt       DateTime? @map("fabric_approval_requested_at")
-  fabricApprovedAt                DateTime? @map("fabric_approved_at")
-  fabricChangesRequestedAt        DateTime? @map("fabric_changes_requested_at")
-  fabricMarkedUnsuitableAt        DateTime? @map("fabric_marked_unsuitable_at")
-  shippingPreference              String?   @map("shipping_preference")
-  deliveryInstructions            String?   @map("delivery_instructions")
-  targetDeliveryDate              DateTime? @map("target_delivery_date")
-  createdAt                       DateTime  @default(now()) @map("created_at")
-  updatedAt                       DateTime  @updatedAt @map("updated_at")
+  id                         String    @id @default(uuid())
+  orderId                    String    @unique @map("order_id")
+  order                      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  garmentTypeOther           String?   @map("garment_type_other")
+  genderPresentation         String?   @map("gender_presentation")
+  socialReferenceLinks       String[]  @default([]) @map("social_reference_links")
+  styleNotes                 String?   @map("style_notes")
+  bodyNote                   String?   @map("body_note")
+  fabricDescription          String?   @map("fabric_description")
+  fabricBudgetAmount         Int?      @map("fabric_budget_amount")
+  fabricBudgetCurrency       Currency? @map("fabric_budget_currency")
+  fabricSourcingDeadlineDays Int?      @map("fabric_sourcing_deadline_days")
+  fabricSourcingDeadlineAt   DateTime? @map("fabric_sourcing_deadline_at")
+  fabricApprovalRequired     Boolean   @default(false) @map("fabric_approval_required")
+  fabricApprovalStatus       String    @default("NOT_REQUIRED") @map("fabric_approval_status")
+  fabricApprovalRequestedAt  DateTime? @map("fabric_approval_requested_at")
+  fabricApprovedAt           DateTime? @map("fabric_approved_at")
+  fabricChangesRequestedAt   DateTime? @map("fabric_changes_requested_at")
+  fabricMarkedUnsuitableAt   DateTime? @map("fabric_marked_unsuitable_at")
+  shippingPreference         String?   @map("shipping_preference")
+  deliveryInstructions       String?   @map("delivery_instructions")
+  targetDeliveryDate         DateTime? @map("target_delivery_date")
+  createdAt                  DateTime  @default(now()) @map("created_at")
+  updatedAt                  DateTime  @updatedAt @map("updated_at")
 
   @@map("custom_order_details")
 }
@@ -743,18 +845,18 @@ model OrderProductionEvidence {
 // ─────────────────────────────────────────────
 
 model Message {
-  id          String      @id @default(uuid())
-  orderId     String      @map("order_id")
-  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  senderId    String      @map("sender_id") // auth UUID
-  senderRole  String      @map("sender_role") // CUSTOMER | TAILOR
-  senderName  String      @map("sender_name")
-  type        MessageType @default(TEXT)
-  body        String?
-  photoUrl    String?     @map("photo_url")
-  voiceUrl    String?     @map("voice_url")
-  readAt      DateTime?   @map("read_at")
-  createdAt   DateTime    @default(now()) @map("created_at")
+  id         String      @id @default(uuid())
+  orderId    String      @map("order_id")
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  senderId   String      @map("sender_id") // auth UUID
+  senderRole String      @map("sender_role") // CUSTOMER | TAILOR
+  senderName String      @map("sender_name")
+  type       MessageType @default(TEXT)
+  body       String?
+  photoUrl   String?     @map("photo_url")
+  voiceUrl   String?     @map("voice_url")
+  readAt     DateTime?   @map("read_at")
+  createdAt  DateTime    @default(now()) @map("created_at")
 
   @@map("messages")
 }
@@ -764,15 +866,15 @@ model Message {
 // ─────────────────────────────────────────────
 
 model Review {
-  id              String  @id @default(uuid())
-  orderId         String  @unique @map("order_id")
-  order           Order   @relation(fields: [orderId], references: [id])
-  tailorProfileId String? @map("tailor_profile_id")
+  id              String         @id @default(uuid())
+  orderId         String         @unique @map("order_id")
+  order           Order          @relation(fields: [orderId], references: [id])
+  tailorProfileId String?        @map("tailor_profile_id")
   tailorProfile   TailorProfile? @relation(fields: [tailorProfileId], references: [id])
-  tailorId        String? @map("tailor_id") // tailor auth UUID for simple queries
+  tailorId        String?        @map("tailor_id") // tailor auth UUID for simple queries
 
   rating            Int
-  body              String?   // written review text
+  body              String? // written review text
   tags              String[]
   reviewerName      String?   @map("reviewer_name") // "First L."
   tailorResponse    String?   @map("tailor_response")
@@ -789,21 +891,238 @@ model Review {
 // ─────────────────────────────────────────────
 
 model Dispute {
-  id      String @id @default(uuid())
-  orderId String @unique @map("order_id")
-  order   Order  @relation(fields: [orderId], references: [id])
+  id         String @id @default(uuid())
+  orderId    String @unique @map("order_id")
+  order      Order  @relation(fields: [orderId], references: [id])
+  customerId String @map("customer_id")
 
-  reason       String
-  description  String
-  evidenceUrls String[]      @default([]) @map("evidence_urls")
-  status       DisputeStatus @default(OPEN)
-  resolution   String?
-  resolvedAt   DateTime?     @map("resolved_at")
-  resolvedBy   String?       @map("resolved_by")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  reason        String
+  description   String
+  evidenceUrls  String[]       @default([]) @map("evidence_urls")
+  status        DisputeStatus  @default(OPEN)
+  resolution    String?
+  resolvedAt    DateTime?      @map("resolved_at")
+  resolvedBy    String?        @map("resolved_by")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  financialCase FinancialCase?
 
   @@map("disputes")
+}
+
+model FinancialCase {
+  id                              String                  @id @default(uuid())
+  reference                       String                  @unique
+  idempotencyKey                  String                  @unique @map("idempotency_key")
+  requestHash                     String                  @map("request_hash")
+  orderId                         String                  @map("order_id")
+  order                           Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  legacyDisputeId                 String?                 @unique @map("legacy_dispute_id")
+  legacyDispute                   Dispute?                @relation(fields: [legacyDisputeId], references: [id], onDelete: Restrict)
+  caseType                        String                  @map("case_type")
+  status                          String                  @default("SUBMITTED")
+  openedBy                        String?                 @map("opened_by")
+  openedByRole                    String                  @map("opened_by_role")
+  counterpartyId                  String?                 @map("counterparty_id")
+  reasonCode                      String                  @map("reason_code")
+  summary                         String
+  claimDetails                    Json                    @default("{}") @map("claim_details")
+  requestedOutcome                String?                 @map("requested_outcome")
+  requestedAmount                 Int?                    @map("requested_amount")
+  requestedCurrency               Currency?               @map("requested_currency")
+  moneyMovementBlocked            Boolean                 @default(true) @map("money_movement_blocked")
+  eligibilityStatus               String                  @default("NOT_EVALUATED") @map("eligibility_status")
+  eligibilitySnapshot             Json                    @default("{}") @map("eligibility_snapshot")
+  policyVersion                   String                  @map("policy_version")
+  correlationId                   String                  @map("correlation_id")
+  firstResponseDueAt              DateTime                @map("first_response_due_at")
+  resolutionDueAt                 DateTime                @map("resolution_due_at")
+  counterpartyResponseRequestedAt DateTime?               @map("counterparty_response_requested_at")
+  counterpartyRespondedAt         DateTime?               @map("counterparty_responded_at")
+  resolvedAt                      DateTime?               @map("resolved_at")
+  resolvedBy                      String?                 @map("resolved_by")
+  resolutionCode                  String?                 @map("resolution_code")
+  resolutionSummary               String?                 @map("resolution_summary")
+  createdAt                       DateTime                @default(now()) @map("created_at")
+  updatedAt                       DateTime                @updatedAt @map("updated_at")
+  events                          FinancialCaseEvent[]
+  evidence                        FinancialCaseEvidence[]
+  moneyDeskRequests               MoneyDeskRequest[]
+  commercialAdjustment            CommercialAdjustment?
+  materialReconciliations         OrderMaterialAdvance[]
+
+  @@index([orderId, createdAt])
+  @@index([status, firstResponseDueAt, resolutionDueAt])
+  @@map("financial_cases")
+}
+
+model FinancialCaseEvent {
+  id            String        @id @default(uuid())
+  caseId        String        @map("case_id")
+  financialCase FinancialCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  eventType     String        @map("event_type")
+  actorId       String?       @map("actor_id")
+  actorRole     String        @map("actor_role")
+  visibility    String        @default("PARTIES")
+  payload       Json          @default("{}")
+  correlationId String        @map("correlation_id")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  @@index([caseId, createdAt])
+  @@map("financial_case_events")
+}
+
+model FinancialCaseEvidence {
+  id                 String        @id @default(uuid())
+  caseId             String        @map("case_id")
+  financialCase      FinancialCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  evidenceType       String        @map("evidence_type")
+  source             String
+  evidenceTier       String?       @map("evidence_tier")
+  verificationStatus String        @default("CLAIMED") @map("verification_status")
+  visibility         String        @default("PARTIES")
+  storageBucket      String?       @map("storage_bucket")
+  storageObjectPath  String?       @map("storage_object_path")
+  externalReference  String?       @map("external_reference")
+  sourceTable        String?       @map("source_table")
+  sourceRecordId     String?       @map("source_record_id")
+  contentSha256      String?       @map("content_sha256")
+  mimeType           String?       @map("mime_type")
+  metadata           Json          @default("{}")
+  submittedBy        String?       @map("submitted_by")
+  submittedByRole    String        @map("submitted_by_role")
+  capturedAt         DateTime      @default(now()) @map("captured_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+
+  @@index([caseId, createdAt])
+  @@index([source, sourceRecordId])
+  @@map("financial_case_evidence")
+}
+
+model MoneyDeskJitGrant {
+  id                    String                      @id @default(uuid())
+  actorEmail            String                      @map("actor_email")
+  actorSubject          String                      @map("actor_subject")
+  actorRole             String                      @map("actor_role")
+  assuranceSource       String                      @map("assurance_source")
+  authenticationMethods String[]                    @default([]) @map("authentication_methods")
+  actionScopes          String[]                    @map("action_scopes")
+  reason                String
+  issuedAt              DateTime                    @default(now()) @map("issued_at")
+  expiresAt             DateTime                    @map("expires_at")
+  revokedAt             DateTime?                   @map("revoked_at")
+  revokedBy             String?                     @map("revoked_by")
+  correlationId         String                      @default(uuid()) @map("correlation_id")
+  metadata              Json                        @default("{}")
+  requestedActions      MoneyDeskRequest[]
+  decisions             MoneyDeskDecision[]
+  executionAttempts     MoneyDeskExecutionAttempt[]
+
+  @@index([actorEmail, expiresAt])
+  @@map("money_desk_jit_grants")
+}
+
+model MoneyDeskRequest {
+  id                    String                      @id @default(uuid())
+  reference             String                      @unique
+  idempotencyKey        String                      @unique @map("idempotency_key")
+  requestHash           String                      @map("request_hash")
+  actionType            String                      @map("action_type")
+  status                String                      @default("PENDING_APPROVAL")
+  targetType            String                      @map("target_type")
+  targetId              String                      @map("target_id")
+  orderId               String?                     @map("order_id")
+  order                 Order?                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  caseId                String?                     @map("case_id")
+  financialCase         FinancialCase?              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  amount                Int?
+  currency              Currency?
+  amountUsdEquivalent   Int?                        @map("amount_usd_equivalent")
+  usdEquivalentSource   String?                     @map("usd_equivalent_source")
+  reason                String
+  actionPayload         Json                        @default("{}") @map("action_payload")
+  requesterEmail        String                      @map("requester_email")
+  requesterSubject      String                      @map("requester_subject")
+  requesterRole         String                      @map("requester_role")
+  requesterJitGrantId   String                      @map("requester_jit_grant_id")
+  requesterJitGrant     MoneyDeskJitGrant           @relation(fields: [requesterJitGrantId], references: [id], onDelete: Restrict)
+  riskLevel             String                      @map("risk_level")
+  riskReasons           String[]                    @default([]) @map("risk_reasons")
+  requiredApprovalCount Int                         @map("required_approval_count")
+  approvalCount         Int                         @default(0) @map("approval_count")
+  policyVersion         String                      @default("commercial-2026-07-31-v1") @map("policy_version")
+  correlationId         String                      @default(uuid()) @map("correlation_id")
+  approvedAt            DateTime?                   @map("approved_at")
+  rejectedAt            DateTime?                   @map("rejected_at")
+  executingAt           DateTime?                   @map("executing_at")
+  terminalAt            DateTime?                   @map("terminal_at")
+  executionOutcome      String?                     @map("execution_outcome")
+  providerReference     String?                     @map("provider_reference")
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
+  decisions             MoneyDeskDecision[]
+  executionAttempts     MoneyDeskExecutionAttempt[]
+  events                MoneyDeskEvent[]
+
+  @@index([status, riskLevel, createdAt])
+  @@index([orderId, createdAt])
+  @@map("money_desk_requests")
+}
+
+model MoneyDeskDecision {
+  id                 String            @id @default(uuid())
+  requestId          String            @map("request_id")
+  request            MoneyDeskRequest  @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  decision           String
+  approverEmail      String            @map("approver_email")
+  approverSubject    String            @map("approver_subject")
+  approverRole       String            @map("approver_role")
+  approverJitGrantId String            @map("approver_jit_grant_id")
+  approverJitGrant   MoneyDeskJitGrant @relation(fields: [approverJitGrantId], references: [id], onDelete: Restrict)
+  reason             String
+  correlationId      String            @map("correlation_id")
+  createdAt          DateTime          @default(now()) @map("created_at")
+
+  @@unique([requestId, approverEmail])
+  @@index([requestId, createdAt])
+  @@map("money_desk_decisions")
+}
+
+model MoneyDeskExecutionAttempt {
+  id                 String            @id @default(uuid())
+  requestId          String            @map("request_id")
+  request            MoneyDeskRequest  @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  idempotencyKey     String            @unique @map("idempotency_key")
+  executorEmail      String            @map("executor_email")
+  executorSubject    String            @map("executor_subject")
+  executorRole       String            @map("executor_role")
+  executorJitGrantId String            @map("executor_jit_grant_id")
+  executorJitGrant   MoneyDeskJitGrant @relation(fields: [executorJitGrantId], references: [id], onDelete: Restrict)
+  status             String            @default("PROCESSING")
+  providerReference  String?           @map("provider_reference")
+  failureCode        String?           @map("failure_code")
+  failureSummary     String?           @map("failure_summary")
+  correlationId      String            @map("correlation_id")
+  startedAt          DateTime          @default(now()) @map("started_at")
+  completedAt        DateTime?         @map("completed_at")
+
+  @@index([requestId, startedAt])
+  @@map("money_desk_execution_attempts")
+}
+
+model MoneyDeskEvent {
+  id            String           @id @default(uuid())
+  requestId     String           @map("request_id")
+  request       MoneyDeskRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  eventType     String           @map("event_type")
+  actorEmail    String           @map("actor_email")
+  actorRole     String           @map("actor_role")
+  payload       Json             @default("{}")
+  correlationId String           @map("correlation_id")
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@index([requestId, createdAt])
+  @@map("money_desk_events")
 }
 
 // ─────────────────────────────────────────────
@@ -815,21 +1134,177 @@ model Payout {
   tailorProfileId String        @map("tailor_profile_id")
   tailorProfile   TailorProfile @relation(fields: [tailorProfileId], references: [id])
 
-  amount           Int
-  currency         Currency
-  provider         PaymentProvider
-  status           PayoutStatus    @default(PAID)
-  providerPayoutId String?         @map("provider_payout_id")
-  sourcePaymentId  String?         @map("source_payment_id")
-  providerResponse Json            @default("{}") @map("provider_response")
-  orderId          String?         @map("order_id")
-  blockedReason    String?         @map("blocked_reason")
-  initiatedAt      DateTime        @default(now()) @map("initiated_at")
-  completedAt      DateTime?       @map("completed_at")
-  failedAt         DateTime?       @map("failed_at")
-  processedAt      DateTime        @default(now()) @map("processed_at")
+  amount              Int
+  currency            Currency
+  provider            PaymentProvider
+  status              PayoutStatus    @default(PAID)
+  payoutPurpose       String          @default("ORDER_EARNING") @map("payout_purpose")
+  providerPayoutId    String?         @map("provider_payout_id")
+  sourcePaymentId     String?         @map("source_payment_id")
+  providerResponse    Json            @default("{}") @map("provider_response")
+  providerTransferStatus String       @default("NOT_STARTED") @map("provider_transfer_status")
+  bankSettlementStatus String         @default("UNKNOWN") @map("bank_settlement_status")
+  providerDestinationId String?       @map("provider_destination_id")
+  providerBankPayoutId String?        @map("provider_bank_payout_id")
+  bankSettlementExpectedAt DateTime?  @map("bank_settlement_expected_at")
+  bankSettlementCompletedAt DateTime? @map("bank_settlement_completed_at")
+  bankSettlementFailedAt DateTime?    @map("bank_settlement_failed_at")
+  bankSettlementFailureCode String?   @map("bank_settlement_failure_code")
+  orderId             String?         @map("order_id")
+  blockedReason       String?         @map("blocked_reason")
+  initiatedAt         DateTime        @default(now()) @map("initiated_at")
+  completedAt         DateTime?       @map("completed_at")
+  failedAt            DateTime?       @map("failed_at")
+  processedAt         DateTime        @default(now()) @map("processed_at")
+  settlementTrancheId String?         @map("settlement_tranche_id")
+  materialAdvanceId   String?         @unique @map("material_advance_id")
+  fabricCandidateId   String?         @unique @map("fabric_candidate_id")
 
   @@map("payouts")
+}
+
+model PayoutDestinationCorrection {
+  id                                String          @id @default(uuid())
+  moneyDeskRequestId                String          @unique @map("money_desk_request_id")
+  orderId                           String          @map("order_id")
+  failedPayoutId                    String          @unique @map("failed_payout_id")
+  tailorProfileId                   String          @map("tailor_profile_id")
+  provider                          PaymentProvider
+  previousDestinationFingerprint    String          @map("previous_destination_fingerprint")
+  replacementDestinationFingerprint String         @map("replacement_destination_fingerprint")
+  appliedBy                         String          @map("applied_by")
+  appliedAt                         DateTime        @default(now()) @map("applied_at")
+  correlationId                     String          @map("correlation_id")
+
+  @@index([orderId, appliedAt])
+  @@map("payout_destination_corrections")
+}
+
+model OrderSettlementPlan {
+  id                            String   @id @default(uuid())
+  orderId                       String   @unique @map("order_id")
+  customerId                    String   @map("customer_id")
+  tailorId                      String   @map("tailor_id")
+  sourcePaymentId               String   @map("source_payment_id")
+  method                        String
+  policyVersion                 String   @default("settlement-2026-08-01-v1") @map("policy_version")
+  currency                      Currency
+  entitlementAmount             Int      @map("entitlement_amount")
+  sellerSubtotalAmount          Int?     @map("seller_subtotal_amount")
+  excludedFabricAllowanceAmount Int      @default(0) @map("excluded_fabric_allowance_amount")
+  materialRecoveryOffsetAmount  Int      @default(0) @map("material_recovery_offset_amount")
+  status                        String   @default("ACTIVE")
+  frozenReason                  String?  @map("frozen_reason")
+  correlationId                 String   @map("correlation_id")
+  createdAt                     DateTime @default(now()) @map("created_at")
+  updatedAt                     DateTime @updatedAt @map("updated_at")
+
+  @@map("order_settlement_plans")
+}
+
+model OrderSettlementTranche {
+  id                             String    @id @default(uuid())
+  planId                         String    @map("plan_id")
+  orderId                        String    @map("order_id")
+  code                           String
+  sequence                       Int
+  basisPoints                    Int       @map("basis_points")
+  amount                         Int
+  currency                       Currency
+  status                         String    @default("LOCKED")
+  eligibleAt                     DateTime? @map("eligible_at")
+  releasedAt                     DateTime? @map("released_at")
+  blockedReason                  String?   @map("blocked_reason")
+  eligibilityLedgerTransactionId String?   @map("eligibility_ledger_transaction_id")
+  releaseLedgerTransactionId     String?   @map("release_ledger_transaction_id")
+  payoutId                       String?   @map("payout_id")
+  moneyDeskRequestId             String?   @map("money_desk_request_id")
+  providerReference              String?   @map("provider_reference")
+  correlationId                  String    @map("correlation_id")
+  createdAt                      DateTime  @default(now()) @map("created_at")
+  updatedAt                      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([planId, code])
+  @@unique([orderId, sequence])
+  @@map("order_settlement_tranches")
+}
+
+model OrderSettlementEvidence {
+  id                String   @id @default(uuid())
+  planId            String   @map("plan_id")
+  orderId           String   @map("order_id")
+  evidenceKind      String   @map("evidence_kind")
+  source            String
+  occurredAt        DateTime @map("occurred_at")
+  externalReference String?  @map("external_reference")
+  recordedBy        String?  @map("recorded_by")
+  metadata          Json     @default("{}")
+  correlationId     String   @map("correlation_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([planId, evidenceKind])
+  @@map("order_settlement_evidence")
+}
+
+model ProviderDispute {
+  id                   String          @id @default(uuid())
+  provider             PaymentProvider
+  providerDisputeId    String          @map("provider_dispute_id")
+  providerChargeId     String?         @map("provider_charge_id")
+  providerPaymentId    String?         @map("provider_payment_id")
+  paymentId            String?         @map("payment_id")
+  orderId              String?         @map("order_id")
+  customerId           String?         @map("customer_id")
+  tailorId             String?         @map("tailor_id")
+  amount               Int
+  currency             Currency
+  status               String
+  reason               String?
+  evidenceDueAt        DateTime?       @map("evidence_due_at")
+  moneyMovementBlocked Boolean         @default(true) @map("money_movement_blocked")
+  providerEventId      String          @map("provider_event_id")
+  correlationId        String          @map("correlation_id")
+  metadata             Json            @default("{}")
+  openedAt             DateTime        @default(now()) @map("opened_at")
+  closedAt             DateTime?       @map("closed_at")
+  updatedAt            DateTime        @updatedAt @map("updated_at")
+
+  @@unique([provider, providerDisputeId])
+  @@index([orderId, status, updatedAt])
+  @@map("provider_disputes")
+}
+
+model ProviderTransferReversal {
+  id                   String          @id @default(uuid())
+  payoutId             String          @map("payout_id")
+  moneyDeskRequestId   String          @unique @map("money_desk_request_id")
+  provider             PaymentProvider
+  providerTransferId   String          @map("provider_transfer_id")
+  providerReversalId   String?         @map("provider_reversal_id")
+  amount               Int
+  currency             Currency
+  reasonCode           String          @map("reason_code")
+  status               String          @default("APPROVED")
+  providerResponse     Json            @default("{}") @map("provider_response")
+  failureCode          String?         @map("failure_code")
+  correlationId        String          @map("correlation_id")
+  createdAt            DateTime        @default(now()) @map("created_at")
+  completedAt          DateTime?       @map("completed_at")
+
+  @@map("provider_transfer_reversals")
+}
+
+model OrderSettlementEvent {
+  id            String   @id @default(uuid())
+  planId        String   @map("plan_id")
+  trancheId     String?  @map("tranche_id")
+  eventType     String   @map("event_type")
+  actorRole     String   @map("actor_role")
+  payload       Json     @default("{}")
+  correlationId String   @map("correlation_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("order_settlement_events")
 }
 
 model TaxRateCache {
@@ -849,30 +1324,199 @@ model TaxRateCache {
   @@map("tax_rate_cache")
 }
 
-model OrderPayment {
-  id                  String             @id @default(uuid())
-  orderId             String             @map("order_id")
-  order               Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  phase               OrderPaymentPhase
-  provider            PaymentProvider
-  currency            Currency
-  amount              Int
-  status              OrderPaymentStatus @default(INITIATED)
-  idempotencyKey      String             @unique @map("idempotency_key")
-  providerPaymentId   String?            @map("provider_payment_id")
-  providerCheckoutUrl String?            @map("provider_checkout_url")
-  providerResponse    Json               @default("{}") @map("provider_response")
-  refundedAmount      Int                @default(0) @map("refunded_amount")
-  partialRefundCount  Int                @default(0) @map("partial_refund_count")
-  lastRefundAmount    Int?               @map("last_refund_amount")
-  lastRefundAt        DateTime?          @map("last_refund_at")
-  createdAt           DateTime           @default(now()) @map("created_at")
-  updatedAt           DateTime           @updatedAt @map("updated_at")
-  confirmedAt         DateTime?          @map("confirmed_at")
-  failedAt            DateTime?          @map("failed_at")
-  refundedAt          DateTime?          @map("refunded_at")
+model TaxPolicyVersion {
+  policyVersion           String                     @id @map("policy_version")
+  status                  String
+  effectiveFrom           DateTime                   @map("effective_from")
+  effectiveTo             DateTime?                  @map("effective_to")
+  reviewedAt              DateTime                   @map("reviewed_at")
+  reviewDueAt             DateTime                   @map("review_due_at")
+  legalReviewer           String                     @map("legal_reviewer")
+  financeApprover         String                     @map("finance_approver")
+  engineeringApprover     String                     @map("engineering_approver")
+  sourceUrls              String[]                   @map("source_urls")
+  changeReason            String                     @map("change_reason")
+  supersedesPolicyVersion String?                    @map("supersedes_policy_version")
+  supersedesPolicy        TaxPolicyVersion?          @relation("TaxPolicySupersession", fields: [supersedesPolicyVersion], references: [policyVersion], onDelete: Restrict)
+  supersededByPolicies    TaxPolicyVersion[]         @relation("TaxPolicySupersession")
+  createdAt               DateTime                   @default(now()) @map("created_at")
+  registrationControls    TaxRegistrationControl[]
+  responsibilityControls  TaxResponsibilityControl[]
+  corridorControls        TaxCorridorControl[]
+  events                  TaxPolicyControlEvent[]
 
-  webhookEvents PaymentWebhookEvent[]
+  @@map("tax_policy_versions")
+}
+
+model TaxRegistrationControl {
+  id                           String                     @id @default(uuid())
+  controlKey                   String                     @map("control_key")
+  policyVersion                String                     @map("policy_version")
+  policy                       TaxPolicyVersion           @relation(fields: [policyVersion], references: [policyVersion], onDelete: Restrict)
+  status                       String
+  jurisdictionCountryCode      String                     @map("jurisdiction_country_code")
+  jurisdictionRegionCode       String?                    @map("jurisdiction_region_code")
+  taxTransactionType           String                     @map("tax_transaction_type")
+  responsibleParty             String                     @map("responsible_party")
+  registrationSubject          String                     @map("registration_subject")
+  ruleType                     String                     @map("rule_type")
+  thresholdAmountMinor         BigInt?                    @map("threshold_amount_minor")
+  thresholdCurrency            String?                    @map("threshold_currency")
+  measurementPeriod            String?                    @map("measurement_period")
+  decisionEvidenceRequirements Json                       @default("[]") @map("decision_evidence_requirements")
+  effectiveFrom                DateTime                   @map("effective_from")
+  effectiveTo                  DateTime?                  @map("effective_to")
+  reviewedAt                   DateTime                   @map("reviewed_at")
+  reviewDueAt                  DateTime                   @map("review_due_at")
+  legalReviewer                String                     @map("legal_reviewer")
+  financeApprover              String                     @map("finance_approver")
+  engineeringApprover          String                     @map("engineering_approver")
+  sourceUrls                   String[]                   @map("source_urls")
+  changeReason                 String                     @map("change_reason")
+  supersedesControlId          String?                    @map("supersedes_control_id")
+  supersedesControl            TaxRegistrationControl?    @relation("TaxRegistrationSupersession", fields: [supersedesControlId], references: [id], onDelete: Restrict)
+  supersededByControls         TaxRegistrationControl[]   @relation("TaxRegistrationSupersession")
+  createdAt                    DateTime                   @default(now()) @map("created_at")
+  responsibilityControls       TaxResponsibilityControl[]
+
+  @@unique([policyVersion, controlKey])
+  @@index([policyVersion, jurisdictionCountryCode, jurisdictionRegionCode, taxTransactionType, status])
+  @@map("tax_registration_controls")
+}
+
+model TaxResponsibilityControl {
+  id                            String                     @id @default(uuid())
+  controlKey                    String                     @map("control_key")
+  policyVersion                 String                     @map("policy_version")
+  policy                        TaxPolicyVersion           @relation(fields: [policyVersion], references: [policyVersion], onDelete: Restrict)
+  status                        String
+  jurisdictionCountryCode       String                     @map("jurisdiction_country_code")
+  jurisdictionRegionCode        String?                    @map("jurisdiction_region_code")
+  taxTransactionType            String                     @map("tax_transaction_type")
+  fulfillmentClassification     String                     @map("fulfillment_classification")
+  taxSupplyCharacterization     String                     @map("tax_supply_characterization")
+  liabilityGranularity          String                     @map("liability_granularity")
+  responsibleParty              String                     @map("responsible_party")
+  statutoryRole                 String                     @map("statutory_role")
+  registrationSubject           String                     @map("registration_subject")
+  registrationControlId         String                     @map("registration_control_id")
+  registrationControl           TaxRegistrationControl     @relation(fields: [registrationControlId], references: [id], onDelete: Restrict)
+  marketplaceFacilitatorApplies Boolean                    @map("marketplace_facilitator_applies")
+  collectionMode                String                     @map("collection_mode")
+  calculationStrategy           String                     @map("calculation_strategy")
+  providerReference             String?                    @map("provider_reference")
+  invoiceTreatment              String                     @map("invoice_treatment")
+  filingLiabilityAccount        String                     @map("filing_liability_account")
+  amendmentMayInherit           Boolean                    @default(false) @map("amendment_may_inherit")
+  effectiveFrom                 DateTime                   @map("effective_from")
+  effectiveTo                   DateTime?                  @map("effective_to")
+  reviewedAt                    DateTime                   @map("reviewed_at")
+  reviewDueAt                   DateTime                   @map("review_due_at")
+  legalReviewer                 String                     @map("legal_reviewer")
+  financeApprover               String                     @map("finance_approver")
+  engineeringApprover           String                     @map("engineering_approver")
+  sourceUrls                    String[]                   @map("source_urls")
+  changeReason                  String                     @map("change_reason")
+  supersedesControlId           String?                    @map("supersedes_control_id")
+  supersedesControl             TaxResponsibilityControl?  @relation("TaxResponsibilitySupersession", fields: [supersedesControlId], references: [id], onDelete: Restrict)
+  supersededByControls          TaxResponsibilityControl[] @relation("TaxResponsibilitySupersession")
+  createdAt                     DateTime                   @default(now()) @map("created_at")
+
+  @@unique([policyVersion, controlKey])
+  @@index([policyVersion, jurisdictionCountryCode, jurisdictionRegionCode, taxTransactionType, fulfillmentClassification, status])
+  @@map("tax_responsibility_controls")
+}
+
+model TaxCorridorControl {
+  id                        String               @id @default(uuid())
+  controlKey                String               @map("control_key")
+  policyVersion             String               @map("policy_version")
+  policy                    TaxPolicyVersion     @relation(fields: [policyVersion], references: [policyVersion], onDelete: Restrict)
+  status                    String
+  originCountryCode         String               @map("origin_country_code")
+  destinationCountryCode    String               @map("destination_country_code")
+  taxTransactionType        String               @map("tax_transaction_type")
+  fulfillmentClassification String               @map("fulfillment_classification")
+  collectionMode            String               @map("collection_mode")
+  responsibleImporter       String               @map("responsible_importer")
+  exportTreatment           String               @map("export_treatment")
+  importTreatment           String               @map("import_treatment")
+  shippingTaxability        String               @map("shipping_taxability")
+  carrierConstraints        Json                 @default("[]") @map("carrier_constraints")
+  effectiveFrom             DateTime             @map("effective_from")
+  effectiveTo               DateTime?            @map("effective_to")
+  reviewedAt                DateTime             @map("reviewed_at")
+  reviewDueAt               DateTime             @map("review_due_at")
+  legalReviewer             String               @map("legal_reviewer")
+  financeApprover           String               @map("finance_approver")
+  engineeringApprover       String               @map("engineering_approver")
+  sourceUrls                String[]             @map("source_urls")
+  changeReason              String               @map("change_reason")
+  supersedesControlId       String?              @map("supersedes_control_id")
+  supersedesControl         TaxCorridorControl?  @relation("TaxCorridorSupersession", fields: [supersedesControlId], references: [id], onDelete: Restrict)
+  supersededByControls      TaxCorridorControl[] @relation("TaxCorridorSupersession")
+  createdAt                 DateTime             @default(now()) @map("created_at")
+
+  @@unique([policyVersion, controlKey])
+  @@unique([policyVersion, originCountryCode, destinationCountryCode, taxTransactionType])
+  @@index([policyVersion, originCountryCode, destinationCountryCode, taxTransactionType, status])
+  @@map("tax_corridor_controls")
+}
+
+model TaxPolicyControlEvent {
+  id            String           @id @default(uuid())
+  policyVersion String           @map("policy_version")
+  policy        TaxPolicyVersion @relation(fields: [policyVersion], references: [policyVersion], onDelete: Restrict)
+  controlType   String           @map("control_type")
+  controlId     String           @map("control_id")
+  eventType     String           @map("event_type")
+  actorEmail    String           @map("actor_email")
+  actorRole     String           @map("actor_role")
+  reason        String
+  sourceUrls    String[]         @default([]) @map("source_urls")
+  correlationId String           @default(uuid()) @map("correlation_id")
+  payload       Json             @default("{}")
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@index([policyVersion, controlType, controlId, createdAt])
+  @@map("tax_policy_control_events")
+}
+
+model OrderPayment {
+  id                   String                        @id @default(uuid())
+  orderId              String                        @map("order_id")
+  order                Order                         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  phase                OrderPaymentPhase
+  provider             PaymentProvider
+  currency             Currency
+  amount               Int
+  status               OrderPaymentStatus            @default(INITIATED)
+  idempotencyKey       String                        @unique @map("idempotency_key")
+  providerPaymentId    String?                       @map("provider_payment_id")
+  providerCheckoutUrl  String?                       @map("provider_checkout_url")
+  providerResponse     Json                          @default("{}") @map("provider_response")
+  refundedAmount       Int                           @default(0) @map("refunded_amount")
+  partialRefundCount   Int                           @default(0) @map("partial_refund_count")
+  lastRefundAmount     Int?                          @map("last_refund_amount")
+  lastRefundAt         DateTime?                     @map("last_refund_at")
+  createdAt            DateTime                      @default(now()) @map("created_at")
+  updatedAt            DateTime                      @updatedAt @map("updated_at")
+  confirmedAt          DateTime?                     @map("confirmed_at")
+  failedAt             DateTime?                     @map("failed_at")
+  refundedAt           DateTime?                     @map("refunded_at")
+  policyVersion        String                        @default("commercial-2026-07-31-v1") @map("policy_version")
+  pricingVersion       Int                           @default(1) @map("pricing_version")
+  correlationId        String                        @default(uuid()) @map("correlation_id")
+  commercialBreakdown  Json                          @default("{}") @map("commercial_breakdown")
+  ledgerRecordedAt     DateTime?                     @map("ledger_recorded_at")
+  pricingReservationId String?                       @map("pricing_reservation_id")
+  fabricCandidateId    String?                       @map("fabric_candidate_id")
+  pricingReservation   CommercialPricingReservation? @relation(fields: [pricingReservationId], references: [id], onDelete: SetNull)
+
+  webhookEvents        PaymentWebhookEvent[]
+  ledgerTransactions   CommercialLedgerTransaction[]
+  commercialReceipt    CommercialReceipt?
+  commercialAdjustment CommercialAdjustment?
 
   @@index([orderId, createdAt])
   @@index([provider, providerPaymentId])
@@ -880,21 +1524,431 @@ model OrderPayment {
   @@map("order_payments")
 }
 
+model CommercialAdjustment {
+  id                String                      @id @default(uuid())
+  reference         String                      @unique
+  idempotencyKey    String                      @unique @map("idempotency_key")
+  requestHash       String                      @map("request_hash")
+  orderId           String                      @map("order_id")
+  order             Order                       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customerId        String                      @map("customer_id")
+  tailorId          String?                     @map("tailor_id")
+  financialCaseId   String?                     @unique @map("financial_case_id")
+  financialCase     FinancialCase?              @relation(fields: [financialCaseId], references: [id], onDelete: Restrict)
+  adjustmentType    String                      @map("adjustment_type")
+  status            String                      @default("PROPOSED")
+  proposedBy        String?                     @map("proposed_by")
+  proposedByRole    String                      @map("proposed_by_role")
+  counterpartyId    String?                     @map("counterparty_id")
+  summary           String
+  reason            String
+  responsibility    String
+  amountDelta       Int                         @default(0) @map("amount_delta")
+  currency          Currency
+  originalDeadline  DateTime?                   @map("original_deadline")
+  proposedDeadline  DateTime?                   @map("proposed_deadline")
+  evidenceIds       String[]                    @default([]) @map("evidence_ids")
+  requiresPayment   Boolean                     @default(false) @map("requires_payment")
+  paymentId         String?                     @unique @map("payment_id")
+  payment           OrderPayment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  policyVersion     String                      @map("policy_version")
+  adjustmentVersion Int                         @default(1) @map("adjustment_version")
+  correlationId     String                      @default(uuid()) @map("correlation_id")
+  proposedAt        DateTime                    @default(now()) @map("proposed_at")
+  decidedAt         DateTime?                   @map("decided_at")
+  decidedBy         String?                     @map("decided_by")
+  completedAt       DateTime?                   @map("completed_at")
+  createdAt         DateTime                    @default(now()) @map("created_at")
+  updatedAt         DateTime                    @updatedAt @map("updated_at")
+  events            CommercialAdjustmentEvent[]
+
+  @@index([orderId, createdAt])
+  @@index([status, createdAt])
+  @@map("commercial_adjustments")
+}
+
+model CommercialAdjustmentEvent {
+  id            String               @id @default(uuid())
+  adjustmentId  String               @map("adjustment_id")
+  adjustment    CommercialAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Restrict)
+  eventType     String               @map("event_type")
+  actorId       String?              @map("actor_id")
+  actorRole     String               @map("actor_role")
+  visibility    String               @default("PARTIES")
+  payload       Json                 @default("{}")
+  correlationId String               @map("correlation_id")
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  @@index([adjustmentId, createdAt])
+  @@map("commercial_adjustment_events")
+}
+
+model FabricReleaseAdjustmentLink {
+  adjustmentId               String    @id @map("adjustment_id")
+  allocationId               String    @map("allocation_id")
+  orderId                    String    @map("order_id")
+  requestedReleaseAmount     Int       @map("requested_release_amount")
+  remainingAllowanceSnapshot Int       @map("remaining_allowance_snapshot")
+  shortfallAmount            Int       @map("shortfall_amount")
+  title                      String
+  description                String
+  estimateStorageBucket      String    @map("estimate_storage_bucket")
+  estimateStoragePath        String    @map("estimate_storage_path")
+  materialAdvanceId          String?   @unique @map("material_advance_id")
+  correlationId              String    @map("correlation_id")
+  activatedAt                DateTime? @map("activated_at")
+  createdAt                  DateTime  @default(now()) @map("created_at")
+
+  @@map("fabric_release_adjustment_links")
+}
+
+model OrderMaterialAdvance {
+  id                               String         @id @default(uuid())
+  orderId                          String         @map("order_id")
+  order                            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId                       String         @map("customer_id")
+  tailorId                         String         @map("tailor_id")
+  requestedBy                      String         @map("requested_by")
+  title                            String
+  description                      String
+  amount                           Int
+  currency                         Currency
+  status                           String         @default("REQUESTED")
+  releaseStatus                    String         @default("NOT_REQUESTED") @map("release_status")
+  estimatePhotoUrl                 String?        @map("estimate_photo_url")
+  estimateStorageBucket            String?        @map("estimate_storage_bucket")
+  estimateStoragePath              String?        @map("estimate_storage_path")
+  receiptUrl                       String?        @map("receipt_url")
+  receiptStorageBucket             String?        @map("receipt_storage_bucket")
+  receiptStoragePath               String?        @map("receipt_storage_path")
+  receiptNote                      String?        @map("receipt_note")
+  actualSpentAmount                Int?           @map("actual_spent_amount")
+  reconciliationStatus             String         @default("PENDING") @map("reconciliation_status")
+  reconciliationDelta              Int?           @map("reconciliation_delta")
+  reconciledAt                     DateTime?      @map("reconciled_at")
+  reconciliationCaseId             String?        @map("reconciliation_case_id")
+  reconciliationCase               FinancialCase? @relation(fields: [reconciliationCaseId], references: [id], onDelete: Restrict)
+  reconciliationCorrelationId      String?        @map("reconciliation_correlation_id")
+  acquiredStorageBucket            String?        @map("acquired_storage_bucket")
+  acquiredStoragePath              String?        @map("acquired_storage_path")
+  acquiredUploadedAt               DateTime?      @map("acquired_uploaded_at")
+  reconciliationOutcome            String?        @map("reconciliation_outcome")
+  customerRefundAmount             Int            @default(0) @map("customer_refund_amount")
+  protectedAllowanceRefundAmount   Int            @default(0) @map("protected_allowance_refund_amount")
+  settlementRecoveryAmount         Int            @default(0) @map("settlement_recovery_amount")
+  unapprovedOverageAmount          Int            @default(0) @map("unapproved_overage_amount")
+  reconciliationResolution         String?        @map("reconciliation_resolution")
+  reconciliationResolvedAt         DateTime?      @map("reconciliation_resolved_at")
+  reconciliationMoneyDeskRequestId String?        @map("reconciliation_money_desk_request_id")
+  refundProviderStartedAt          DateTime?      @map("refund_provider_started_at")
+  refundProviderCompletedAt        DateTime?      @map("refund_provider_completed_at")
+  refundProviderReference          String?        @map("refund_provider_reference")
+  customerResponseReason           String?        @map("customer_response_reason")
+  paymentId                        String?        @map("payment_id")
+  fundingSource                    String         @default("LEGACY_SEPARATE_PAYMENT") @map("funding_source")
+  fabricAllocationId               String?        @map("fabric_allocation_id")
+  fabricApprovalEvidenceId         String?        @map("fabric_approval_evidence_id")
+  moneyDeskRequestId               String?        @map("money_desk_request_id")
+  payoutId                         String?        @unique @map("payout_id")
+  providerReleaseStatus            String         @default("NOT_REQUESTED") @map("provider_release_status")
+  providerReleaseConfirmedAt       DateTime?      @map("provider_release_confirmed_at")
+  correlationId                    String         @default(uuid()) @map("correlation_id")
+  idempotencyKey                   String?        @unique @map("idempotency_key")
+  requestedAt                      DateTime       @default(now()) @map("requested_at")
+  paidAt                           DateTime?      @map("paid_at")
+  releasedAt                       DateTime?      @map("released_at")
+  createdAt                        DateTime       @default(now()) @map("created_at")
+  updatedAt                        DateTime       @updatedAt @map("updated_at")
+
+  @@index([orderId, createdAt])
+  @@map("order_material_advances")
+}
+
+model CommercialPricingReservation {
+  id                         String              @id @default(uuid())
+  reservationToken           String              @unique @default(uuid()) @map("reservation_token")
+  idempotencyKey             String              @unique @map("idempotency_key")
+  requestHash                String              @map("request_hash")
+  customerId                 String?             @map("customer_id")
+  orderId                    String?             @map("order_id")
+  quoteId                    String?             @map("quote_id")
+  purpose                    String
+  policyVersion              String              @default("commercial-2026-07-31-v1") @map("policy_version")
+  pricingVersion             Int                 @default(1) @map("pricing_version")
+  currency                   Currency
+  subtotalAmount             Int                 @map("subtotal_amount")
+  platformFeeAmount          Int                 @default(0) @map("platform_fee_amount")
+  taxAmount                  Int                 @default(0) @map("tax_amount")
+  shippingAmount             Int                 @default(0) @map("shipping_amount")
+  totalAmount                Int                 @map("total_amount")
+  taxJurisdiction            String?             @map("tax_jurisdiction")
+  taxSource                  String              @default("UNRESOLVED") @map("tax_source")
+  taxFallback                Boolean             @default(false) @map("tax_fallback")
+  fabricFundingPolicyVersion String              @default("legacy-material-add-on-v1") @map("fabric_funding_policy_version")
+  fabricSourceSnapshot       String?             @map("fabric_source_snapshot")
+  tailoringAmount            Int?                @map("tailoring_amount")
+  fabricAllowanceAmount      Int?                @map("fabric_allowance_amount")
+  fabricAllowanceCoverage    Json?               @map("fabric_allowance_coverage")
+  fabricSourcingAssumptions  String?             @map("fabric_sourcing_assumptions")
+  breakdown                  Json                @default("{}")
+  status                     String              @default("ACTIVE")
+  correlationId              String              @default(uuid()) @map("correlation_id")
+  expiresAt                  DateTime            @map("expires_at")
+  consumedAt                 DateTime?           @map("consumed_at")
+  createdAt                  DateTime            @default(now()) @map("created_at")
+  payments                   OrderPayment[]
+  receipts                   CommercialReceipt[]
+
+  @@index([customerId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([status, expiresAt])
+  @@map("commercial_pricing_reservations")
+}
+
+model OrderFabricFundingAllocation {
+  id                    String    @id @default(uuid())
+  orderId               String    @unique @map("order_id")
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quoteId               String    @unique @map("quote_id")
+  quoteVersion          Int       @map("quote_version")
+  customerId            String    @map("customer_id")
+  tailorId              String    @map("tailor_id")
+  fabricSource          String    @map("fabric_source")
+  currency              Currency
+  sellerSubtotalAmount  Int       @map("seller_subtotal_amount")
+  tailoringAmount       Int       @map("tailoring_amount")
+  baseAllowanceAmount   Int       @map("base_allowance_amount")
+  paidAdjustmentAmount  Int       @default(0) @map("paid_adjustment_amount")
+  fundedAmount          Int       @default(0) @map("funded_amount")
+  releasedAmount        Int       @default(0) @map("released_amount")
+  refundedAmount        Int       @default(0) @map("refunded_amount")
+  recoveredAmount       Int       @default(0) @map("recovered_amount")
+  reconciledSpendAmount Int?      @map("reconciled_spend_amount")
+  coverage              Json      @default("[]")
+  sourcingAssumptions   String?   @map("sourcing_assumptions")
+  status                String    @default("ACCEPTED_AWAITING_PAYMENT")
+  policyVersion         String    @map("policy_version")
+  pricingVersion        Int       @map("pricing_version")
+  correlationId         String    @default(uuid()) @map("correlation_id")
+  lockedAt              DateTime  @default(now()) @map("locked_at")
+  fundedAt              DateTime? @map("funded_at")
+  reconciledAt          DateTime? @map("reconciled_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, updatedAt])
+  @@index([tailorId, updatedAt])
+  @@map("order_fabric_funding_allocations")
+}
+
+model OrderFabricCandidate {
+  id                      String   @id @default(uuid())
+  orderId                 String   @map("order_id")
+  allocationId            String   @map("allocation_id")
+  customerId              String   @map("customer_id")
+  tailorId                String   @map("tailor_id")
+  componentCode           String   @map("component_code")
+  candidateVersion        Int      @default(1) @map("candidate_version")
+  supplierCostAmount      Int      @map("supplier_cost_amount")
+  currency                Currency
+  allowanceAppliedAmount  Int      @default(0) @map("allowance_applied_amount")
+  shortfallSubtotalAmount Int      @default(0) @map("shortfall_subtotal_amount")
+  shortfallTaxAmount      Int      @default(0) @map("shortfall_tax_amount")
+  shortfallFeeAmount      Int      @default(0) @map("shortfall_fee_amount")
+  estimateStorageBucket   String   @default("commercial-evidence") @map("estimate_storage_bucket")
+  estimateStoragePath     String   @map("estimate_storage_path")
+  customerMedia           Json     @default("[]") @map("customer_media")
+  availabilityNote        String   @map("availability_note")
+  quantitySpecification   String   @map("quantity_specification")
+  deadlineImpact          String   @map("deadline_impact")
+  deadlineImpactNote      String?  @map("deadline_impact_note")
+  status                  String   @default("DRAFT")
+  customerDecision        String?  @map("customer_decision")
+  customerReasonCode      String?  @map("customer_reason_code")
+  customerNote            String?  @map("customer_note")
+  shortfallPaymentId      String?  @map("shortfall_payment_id")
+  payoutId                String?  @map("payout_id")
+  provider                String?
+  providerStatus          String   @default("NOT_REQUESTED") @map("provider_status")
+  providerReference       String?  @map("provider_reference")
+  providerResponse        Json     @default("{}") @map("provider_response")
+  receiptStorageBucket    String?  @map("receipt_storage_bucket")
+  receiptStoragePath      String?  @map("receipt_storage_path")
+  acquiredMedia           Json     @default("[]") @map("acquired_media")
+  actualSpendAmount       Int?     @map("actual_spend_amount")
+  reconciliationStatus    String   @default("PENDING") @map("reconciliation_status")
+  policyVersion           String   @map("policy_version")
+  correlationId           String   @default(uuid()) @map("correlation_id")
+  idempotencyKey          String   @unique @map("idempotency_key")
+  submittedAt             DateTime @default(now()) @map("submitted_at")
+  customerDecidedAt       DateTime? @map("customer_decided_at")
+  releaseQueuedAt         DateTime? @map("release_queued_at")
+  releaseConfirmedAt      DateTime? @map("release_confirmed_at")
+  reconciledAt            DateTime? @map("reconciled_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@unique([orderId, componentCode, candidateVersion])
+  @@index([orderId, status, submittedAt])
+  @@map("order_fabric_candidates")
+}
+
+model OrderFabricHandoff {
+  id                  String    @id @default(uuid())
+  orderId             String    @unique @map("order_id")
+  customerId          String    @map("customer_id")
+  tailorId            String    @map("tailor_id")
+  mode                 String
+  status               String   @default("AWAITING_HANDOFF")
+  carrier              String?
+  trackingNumber       String?  @map("tracking_number")
+  trackingUrl          String?  @map("tracking_url")
+  scheduledAt          DateTime? @map("scheduled_at")
+  timezone             String?
+  handoffLocation      String?  @map("handoff_location")
+  receivedMedia        Json      @default("[]") @map("received_media")
+  suitabilityOutcome   String?   @map("suitability_outcome")
+  issueNote            String?   @map("issue_note")
+  customerResolution   String?   @map("customer_resolution")
+  resolutionNote       String?   @map("resolution_note")
+  correlationId        String    @default(uuid()) @map("correlation_id")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@index([tailorId, status, updatedAt])
+  @@map("order_fabric_handoffs")
+}
+
+model OrderFabricEvent {
+  id            String   @id @default(uuid())
+  orderId       String   @map("order_id")
+  candidateId   String?  @map("candidate_id")
+  handoffId     String?  @map("handoff_id")
+  eventType     String   @map("event_type")
+  actorId       String?  @map("actor_id")
+  actorRole     String?  @map("actor_role")
+  payload       Json     @default("{}")
+  correlationId String   @default(uuid()) @map("correlation_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([orderId, createdAt])
+  @@map("order_fabric_events")
+}
+
+model CommercialLedgerTransaction {
+  id                      String                        @id @default(uuid())
+  idempotencyKey          String                        @unique @map("idempotency_key")
+  requestHash             String                        @map("request_hash")
+  transactionKind         String                        @map("transaction_kind")
+  purpose                 String
+  orderId                 String?                       @map("order_id")
+  paymentId               String?                       @map("payment_id")
+  payment                 OrderPayment?                 @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  reversalOfTransactionId String?                       @map("reversal_of_transaction_id")
+  reversalOfTransaction   CommercialLedgerTransaction?  @relation("CommercialLedgerReversal", fields: [reversalOfTransactionId], references: [id], onDelete: Restrict)
+  reversals               CommercialLedgerTransaction[] @relation("CommercialLedgerReversal")
+  policyVersion           String                        @map("policy_version")
+  pricingVersion          Int                           @default(1) @map("pricing_version")
+  correlationId           String                        @map("correlation_id")
+  actorId                 String?                       @map("actor_id")
+  actorRole               String                        @default("SYSTEM") @map("actor_role")
+  originalCurrency        Currency                      @map("original_currency")
+  originalAmount          Int                           @map("original_amount")
+  settlementCurrency      Currency                      @map("settlement_currency")
+  settlementAmount        Int                           @map("settlement_amount")
+  fxRate                  Decimal                       @default(1) @map("fx_rate") @db.Decimal(18, 8)
+  providerFeeAmount       Int                           @default(0) @map("provider_fee_amount")
+  providerReference       String?                       @map("provider_reference")
+  metadata                Json                          @default("{}")
+  occurredAt              DateTime                      @default(now()) @map("occurred_at")
+  createdAt               DateTime                      @default(now()) @map("created_at")
+  entries                 CommercialLedgerEntry[]
+  receipt                 CommercialReceipt?
+
+  @@index([orderId, createdAt])
+  @@index([paymentId, createdAt])
+  @@map("commercial_ledger_transactions")
+}
+
+model CommercialReceipt {
+  id                         String                       @id @default(uuid())
+  receiptNumber              String                       @unique @map("receipt_number")
+  receiptVersion             Int                          @default(1) @map("receipt_version")
+  orderId                    String                       @map("order_id")
+  order                      Order                        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderReference             String                       @map("order_reference")
+  paymentId                  String                       @unique @map("payment_id")
+  payment                    OrderPayment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  pricingReservationId       String                       @map("pricing_reservation_id")
+  pricingReservation         CommercialPricingReservation @relation(fields: [pricingReservationId], references: [id], onDelete: Restrict)
+  ledgerTransactionId        String                       @unique @map("ledger_transaction_id")
+  ledgerTransaction          CommercialLedgerTransaction  @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  quoteId                    String?                      @map("quote_id")
+  customerId                 String                       @map("customer_id")
+  tailorId                   String?                      @map("tailor_id")
+  purpose                    String
+  provider                   PaymentProvider
+  providerReference          String                       @map("provider_reference")
+  currency                   Currency
+  subtotalAmount             Int                          @map("subtotal_amount")
+  consultationCreditAmount   Int                          @default(0) @map("consultation_credit_amount")
+  promotionAmount            Int                          @default(0) @map("promotion_amount")
+  platformFeeAmount          Int                          @default(0) @map("platform_fee_amount")
+  taxAmount                  Int                          @default(0) @map("tax_amount")
+  shippingAmount             Int                          @default(0) @map("shipping_amount")
+  totalAmount                Int                          @map("total_amount")
+  taxJurisdiction            String?                      @map("tax_jurisdiction")
+  taxSource                  String                       @map("tax_source")
+  merchantLabel              String                       @default("Drapeon") @map("merchant_label")
+  protectedTailorAmount      Int                          @map("protected_tailor_amount")
+  fabricFundingPolicyVersion String?                      @map("fabric_funding_policy_version")
+  fabricSourceSnapshot       String?                      @map("fabric_source_snapshot")
+  tailoringAmount            Int?                         @map("tailoring_amount")
+  fabricAllowanceAmount      Int?                         @map("fabric_allowance_amount")
+  fabricAllowanceCoverage    Json?                        @map("fabric_allowance_coverage")
+  fabricSourcingAssumptions  String?                      @map("fabric_sourcing_assumptions")
+  policyVersion              String                       @map("policy_version")
+  pricingVersion             Int                          @map("pricing_version")
+  correlationId              String                       @map("correlation_id")
+  paidAt                     DateTime                     @map("paid_at")
+  issuedAt                   DateTime                     @default(now()) @map("issued_at")
+
+  @@index([customerId, issuedAt])
+  @@index([orderId, issuedAt])
+  @@index([tailorId, issuedAt])
+  @@map("commercial_receipts")
+}
+
+model CommercialLedgerEntry {
+  id            String                      @id @default(uuid())
+  transactionId String                      @map("transaction_id")
+  transaction   CommercialLedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  orderId       String?                     @map("order_id")
+  accountCode   String                      @map("account_code")
+  accountScope  String                      @map("account_scope")
+  direction     String
+  amount        Int
+  currency      Currency
+  createdAt     DateTime                    @default(now()) @map("created_at")
+
+  @@index([accountCode, accountScope, currency, createdAt])
+  @@index([orderId, createdAt])
+  @@map("commercial_ledger_entries")
+}
+
 model PaymentWebhookEvent {
-  id              String          @id @default(uuid())
-  provider        PaymentProvider
-  providerEventId String          @map("provider_event_id")
-  eventType       String          @map("event_type")
-  idempotencyKey  String?         @map("idempotency_key")
-  orderId         String?         @map("order_id")
-  order           Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  paymentId       String?         @map("payment_id")
-  payment         OrderPayment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  signatureValid  Boolean         @default(false) @map("signature_valid")
-  payload         Json            @default("{}")
-  processedAt     DateTime?       @map("processed_at")
-  processingResult String?        @map("processing_result")
-  createdAt       DateTime        @default(now()) @map("created_at")
+  id               String          @id @default(uuid())
+  provider         PaymentProvider
+  providerEventId  String          @map("provider_event_id")
+  eventType        String          @map("event_type")
+  idempotencyKey   String?         @map("idempotency_key")
+  orderId          String?         @map("order_id")
+  order            Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  paymentId        String?         @map("payment_id")
+  payment          OrderPayment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  signatureValid   Boolean         @default(false) @map("signature_valid")
+  payload          Json            @default("{}")
+  processedAt      DateTime?       @map("processed_at")
+  processingResult String?         @map("processing_result")
+  createdAt        DateTime        @default(now()) @map("created_at")
 
   @@unique([provider, providerEventId])
   @@index([orderId, createdAt])
@@ -907,13 +1961,13 @@ model PaymentWebhookEvent {
 // ─────────────────────────────────────────────
 
 model AccountDeletionRequest {
-  id             String   @id @default(uuid())
-  userId         String   @map("user_id")
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
   email          String?
   role           String
-  status         String   @default("PENDING")
+  status         String    @default("PENDING")
   reason         String?
-  requestedAt    DateTime @default(now()) @map("requested_at")
+  requestedAt    DateTime  @default(now()) @map("requested_at")
   acknowledgedAt DateTime? @map("acknowledged_at")
   processedAt    DateTime? @map("processed_at")
   metadata       Json?

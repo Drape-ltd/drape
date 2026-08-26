@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
 import type { Session } from '@supabase/supabase-js'
-import { formatDatabaseEnumLabel } from '@drape/shared'
+import { formatDatabaseEnumLabel, formatOrderPaymentPhase } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import { safeEntityName, safeUserText } from '../lib/safe-display'
 import { OpenAppButton } from './open-app-button'
@@ -1176,7 +1176,7 @@ export function AccountDashboard(): React.JSX.Element {
               <Link key={payment.id} href={orderDetailRoute(payment.order_id)} className="block rounded-[8px] border border-ink/6 bg-white p-4 shadow-sm transition hover:border-needle/24 hover:bg-white">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-lg font-semibold text-ink">{cleanLabel(payment.phase, 'Order payment')}</h3>
+                    <h3 className="text-lg font-semibold text-ink">{formatOrderPaymentPhase(payment.phase)}</h3>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink/62">
                       <StatusChip status={payment.status} fallback="Pending" />
                       <span>{cleanLabel(payment.provider, 'Provider')}</span>

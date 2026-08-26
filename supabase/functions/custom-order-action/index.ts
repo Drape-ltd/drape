@@ -31,10 +31,13 @@ import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 import { resolveDeadlineContextWarning } from '../../../packages/shared/src/deadline-context.ts'
 import { getCustomOrderFabricIssues } from '../../../packages/shared/src/custom-order-fabric.ts'
+import { FABRIC_FUNDING_POLICY_V2_VERSION } from '../../../packages/shared/src/fabric-funding.ts'
 import {
   hasCustomOrderMeasurementFallback,
   missingCustomOrderMeasurements,
 } from '../../../packages/shared/src/measurement-profile.ts'
+import { fulfillmentEligibilityCopy } from '../../../packages/shared/src/fulfillment-eligibility.ts'
+import { resolveAuthoritativeFulfillmentEligibility } from '../_shared/fulfillment-eligibility.ts'
 
 const FN = 'custom-order-action'
 const STALE_MEASUREMENT_MONTHS = 6
@@ -106,6 +109,9 @@ const BodySchema = z.object({
   deliveryRegion: z.string().trim().max(120).optional().nullable(),
   deliveryPostalCode: z.string().trim().max(40).optional().nullable(),
   deliveryCountryCode: z.string().trim().max(32).optional().nullable(),
+  deliveryVerificationSource: z.string().trim().max(80).optional().nullable(),
+  deliveryVerificationReference: z.string().trim().max(180).optional().nullable(),
+  deliveryVerifiedAt: z.string().datetime().optional().nullable(),
   recipientName: z.string().trim().max(120).optional().nullable(),
   recipientPhone: z.string().trim().max(40).optional().nullable(),
   cancellationPolicyAcknowledged: z.boolean().optional(),
@@ -652,6 +658,32 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'SELLER_ON_BREAK', 'This seller is not accepting custom orders right now.')
     }
 
+    const fulfillmentEligibility = await resolveAuthoritativeFulfillmentEligibility({
+      supabase,
+      tailorProfileId: body.tailorProfileId,
+      method: body.deliveryMethod,
+      destination: needsRecipientDeliveryDetails
+        ? {
+            countryCode: normalizedDeliveryCountryCode,
+            regionCode: normalizedDeliveryRegion || null,
+            postalCode: normalizedDeliveryPostalCode || null,
+            city: normalizedDeliveryCity || null,
+            addressLine1: normalizedDeliveryAddress,
+            verificationSource: body.deliveryVerificationSource ?? null,
+            verificationReference: body.deliveryVerificationReference ?? null,
+            verifiedAt: body.deliveryVerifiedAt ?? null,
+          }
+        : null,
+    })
+    if (fulfillmentEligibility.status === 'BLOCKED') {
+      return jsonError(
+        cors,
+        409,
+        fulfillmentEligibility.reason,
+        fulfillmentEligibilityCopy(fulfillmentEligibility),
+      )
+    }
+
     if (body.deliveryMethod === 'LOCAL_COLLECTION') {
       const { data: pickupDetails, error: pickupDetailsError } = await supabase
         .from('tailor_pickup_details')
@@ -876,6 +908,7 @@ Deno.serve(async (req) => {
         customer_measurements_snapshot: measurementSnapshot ?? null,
         fit_note: normalizedBodyNote,
         fabric_source: body.fabricSource,
+        fabric_funding_policy_version: FABRIC_FUNDING_POLICY_V2_VERSION,
         special_note: serializeOrderSupportMeta(nextSupportMeta as any),
         delivery_method: body.deliveryMethod,
         delivery_address: needsRecipientDeliveryDetails ? normalizedDeliveryAddress || null : null,
@@ -883,6 +916,15 @@ Deno.serve(async (req) => {
         delivery_region: needsRecipientDeliveryDetails ? normalizedDeliveryRegion || null : null,
         delivery_postal_code: needsRecipientDeliveryDetails ? normalizedDeliveryPostalCode || null : null,
         delivery_country_code: needsRecipientDeliveryDetails ? normalizedDeliveryCountryCode || null : null,
+        fulfillment_contract_version: fulfillmentEligibility.contractVersion,
+        fulfillment_policy_version: fulfillmentEligibility.policyVersion,
+        fulfillment_classification: fulfillmentEligibility.fulfillmentClassification,
+        fulfillment_origin_snapshot: fulfillmentEligibility.origin,
+        fulfillment_destination_snapshot: fulfillmentEligibility.destination,
+        fulfillment_corridor_control_id: fulfillmentEligibility.corridorControlId,
+        fulfillment_collection_mode: fulfillmentEligibility.collectionMode,
+        fulfillment_fingerprint: fulfillmentEligibility.fingerprint,
+        fulfillment_resolved_at: new Date().toISOString(),
         recipient_name: needsRecipientDeliveryDetails ? normalizedRecipientName || null : null,
         recipient_phone: needsRecipientDeliveryDetails ? normalizedRecipientPhone || null : null,
         currency: orderCurrency,
@@ -907,6 +949,33 @@ Deno.serve(async (req) => {
     if (createError || !created?.id) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: createError?.message ?? 'create failed' })
       return jsonError(cors, 500, 'ORDER_CREATE_FAILED', 'Could not submit your order right now.')
+    }
+
+    const { error: fulfillmentEventError } = await supabase.from('fulfillment_selection_events').insert({
+      customer_id: caller.id,
+      tailor_profile_id: body.tailorProfileId,
+      order_id: created.id,
+      event_type: 'RESOLVED',
+      method: body.deliveryMethod,
+      status: 'ELIGIBLE',
+      next_fingerprint: fulfillmentEligibility.fingerprint,
+      policy_version: fulfillmentEligibility.policyVersion,
+      corridor_control_id: fulfillmentEligibility.corridorControlId,
+      metadata: {
+        contractVersion: fulfillmentEligibility.contractVersion,
+        classification: fulfillmentEligibility.fulfillmentClassification,
+        collectionMode: fulfillmentEligibility.collectionMode,
+      },
+    })
+    if (fulfillmentEventError) {
+      log('error', FN, 'db.error', {
+        actor_id: caller.id,
+        order_id: created.id,
+        error: fulfillmentEventError.message,
+        surface: 'fulfillment_selection_events',
+      })
+      await supabase.from('orders').delete().eq('id', created.id)
+      return jsonError(cors, 500, 'FULFILLMENT_AUDIT_FAILED', 'Could not record fulfillment eligibility for this order.')
     }
 
     const fabricApprovalRequired = body.fabricSource === 'TAILOR_SOURCES'
@@ -1044,6 +1113,20 @@ Deno.serve(async (req) => {
         wearer_mode: wearerContext.mode,
       },
     })
+
+    const { error: draftCleanupError } = await supabase
+      .from('custom_order_brief_drafts')
+      .delete()
+      .eq('customer_id', caller.id)
+      .eq('tailor_profile_id', body.tailorProfileId)
+    if (draftCleanupError) {
+      log('warn', FN, 'custom_order.draft_cleanup_failed', {
+        actor_id: caller.id,
+        order_id: created.id,
+        tailor_profile_id: body.tailorProfileId,
+        error: draftCleanupError.message,
+      })
+    }
 
     const orderNotificationContext = {
       id: created.id,

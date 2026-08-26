@@ -15,8 +15,6 @@ const CALL_DURATION_MINUTES = 30
 const MIN_LEAD_MS = 30 * 60 * 1000
 const MAX_LEAD_MS = 30 * 24 * 60 * 60 * 1000
 const ORDER_CALL_STAGES = [
-  'PENDING_QUOTE',
-  'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
   'PAYMENT_FAILED',
@@ -57,6 +55,12 @@ function jsonError(corsHeaders: HeadersInit, status: number, code: string, error
 
 function scheduledEndAt(startAt: string) {
   return new Date(new Date(startAt).getTime() + CALL_DURATION_MINUTES * 60 * 1000).toISOString()
+}
+
+function recommendedStartAt() {
+  const intervalMs = 15 * 60 * 1000
+  const minimumMs = Date.now() + MIN_LEAD_MS + 60 * 1000
+  return new Date(Math.ceil(minimumMs / intervalMs) * intervalMs).toISOString()
 }
 
 function validateScheduledStartAt(startAt: string) {
@@ -113,7 +117,7 @@ Deno.serve(async (req) => {
     const { orderId, scheduledStartAt, timezone, note } = parsed.data
     const reason = parsed.data.reason ?? 'OTHER'
     const scheduledError = validateScheduledStartAt(scheduledStartAt)
-    if (scheduledError) return jsonError(corsHeaders, 400, 'INVALID_CALL_TIME', scheduledError)
+    if (scheduledError) return jsonResponse({ code: 'INVALID_CALL_TIME', error: scheduledError, recommendedStartAt: recommendedStartAt() }, 400, corsHeaders)
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
@@ -129,8 +133,14 @@ Deno.serve(async (req) => {
     if (!order) return jsonError(corsHeaders, 404, 'ORDER_NOT_FOUND', 'That order could not be found anymore.')
     const actorRole = actorRoleForOrder(caller.id, order)
     if (!actorRole) return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can schedule a Drapeon call.')
+    if (order.stage === 'CONSULTATION') {
+      return jsonError(corsHeaders, 409, 'CONSULTATION_CALL_REQUIRED', 'Use the scheduled consultation on this order. Regular order calls are unavailable until the consultation is complete.')
+    }
+    if (order.stage === 'PENDING_QUOTE') {
+      return jsonError(corsHeaders, 409, 'QUOTE_REQUIRED_FOR_ORDER_CALL', 'Keep using Messages while the tailor reviews the brief. Regular scheduled calls unlock after the quote is sent.')
+    }
     if (!ORDER_CALL_STAGES.includes(order.stage as typeof ORDER_CALL_STAGES[number])) {
-      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Calls can be scheduled while an order is active. Keep using Messages on draft or closed orders.')
+      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Regular scheduled calls are unavailable for this order right now. Keep the conversation in Messages.')
     }
 
     if (note?.trim()) {

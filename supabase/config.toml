@@ -74,6 +74,9 @@ secret = "env(APPLE_CLIENT_SECRET)"
 [functions.tailor-order-action]
 verify_jwt = false
 
+[functions.monitor-tax-controls]
+verify_jwt = false
+
 [functions.customer-order-action]
 verify_jwt = false
 
@@ -240,4 +243,64 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.daily-webhook-setup]
+verify_jwt = false
+
+[functions.consultation-attendance-action]
+verify_jwt = false
+
+[functions.consultation-attendance-resolution]
+verify_jwt = false
+
+[functions.consultation-reschedule-action]
+verify_jwt = false
+
+[functions.consultation-lifecycle-action]
+verify_jwt = false
+
+[functions.release-consultation-earning]
+verify_jwt = false
+
+[functions.commercial-adjustment-action]
+verify_jwt = false
+
+[functions.settlement-action]
+verify_jwt = false
+
+[functions.release-settlement-tranche]
+verify_jwt = false
+
+[functions.reverse-stripe-transfer]
+verify_jwt = false
+
+[functions.release-order-tip]
+verify_jwt = false
+
+[functions.monitor-settlements]
+verify_jwt = false
+
+[functions.monitor-material-reconciliation]
+verify_jwt = false
+
+[functions.monitor-payout-changes]
+verify_jwt = false
+
+[functions.return-resolution-action]
+verify_jwt = false
+
+[functions.commercial-benefit-action]
+verify_jwt = false
+
+[functions.order-tip-action]
+verify_jwt = false
+
+[functions.custom-order-draft-action]
+verify_jwt = false
+
+[functions.tailor-quote-draft-action]
+verify_jwt = false
+
+[functions.drapeon-dispatch-action]
+verify_jwt = false
+
+[functions.fabric-workflow-action]
 verify_jwt = false

@@ -47,6 +47,7 @@ type DailyCallRoomRecordInput = {
   callKind: 'CONSULTATION' | 'ORDER'
   callType: 'audio' | 'video'
   scheduledStartAt?: string | null
+  consultationBookingId?: string | null
   expiresAt: number
   createdBy: string
 }
@@ -347,6 +348,7 @@ export async function recordDailyCallRoom({
   callKind,
   callType,
   scheduledStartAt = null,
+  consultationBookingId = null,
   expiresAt,
   createdBy,
 }: DailyCallRoomRecordInput) {
@@ -367,6 +369,7 @@ export async function recordDailyCallRoom({
       call_kind: callKind,
       call_type: callType,
       scheduled_start_at: scheduledStartAt,
+      consultation_booking_id: consultationBookingId,
       expires_at: new Date(expiresAt * 1000).toISOString(),
       created_by: createdBy,
     }, {

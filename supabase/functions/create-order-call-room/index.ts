@@ -24,8 +24,6 @@ const ROOM_TTL_SECONDS = 48 * 60 * 60
 const ORDER_CALL_JOIN_EARLY_MS = 5 * 60 * 1000
 const ORDER_CALL_JOIN_LATE_MS = 30 * 60 * 1000
 const ORDER_CALL_STAGES = [
-  'PENDING_QUOTE',
-  'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
   'PAYMENT_FAILED',
@@ -212,8 +210,15 @@ Deno.serve(async (req) => {
       return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only people on this order can start a Drapeon call.')
     }
 
+    if (order.stage === 'CONSULTATION') {
+      return jsonError(corsHeaders, 409, 'CONSULTATION_CALL_REQUIRED', 'Use the scheduled consultation on this order. Regular order calls are unavailable until the consultation is complete.')
+    }
+    if (order.stage === 'PENDING_QUOTE') {
+      return jsonError(corsHeaders, 409, 'QUOTE_REQUIRED_FOR_ORDER_CALL', 'Keep using Messages while the tailor reviews the brief. Regular scheduled calls unlock after the quote is sent.')
+    }
+
     if (!isOrderCallStage(order.stage)) {
-      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Drapeon calls open after payment is confirmed and while the order is active.')
+      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Regular scheduled calls are unavailable for this order right now. Keep the conversation in Messages.')
     }
 
     const orderCallGate = scheduledOrderCallGate(order.special_note)

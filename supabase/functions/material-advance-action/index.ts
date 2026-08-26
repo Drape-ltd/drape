@@ -14,7 +14,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getPaystackCallbackUrl, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
-import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { createOrRefreshOpsIssue, resolveOpsIssueByDedupeKey } from '../_shared/ops-issues.ts'
 import { initializePaystackTransaction, verifyPaystackTransaction, createPaystackTransfer } from '../_shared/paystack.ts'
 import { createStripePaymentIntent, retrieveStripePaymentIntent, createStripeTransfer } from '../_shared/stripe.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
@@ -24,6 +24,13 @@ import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../
 import { getProviderCircuit, recordProviderHealth } from '../_shared/provider-health.ts'
 import { markPaymentAttemptStatus, upsertPreparedPaymentAttempt } from '../_shared/payment-ledger.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency, type AccountCurrencyCode } from '../../../packages/shared/src/currency-config.ts'
+import {
+  isMaterialAdvanceDeclineReason,
+  materialFundingDestinationData,
+  materialAdvanceDeclineReasonLabel,
+  type MaterialFundingEvent,
+} from '../../../packages/shared/src/material-advances.ts'
+import { Sentry } from '../_shared/sentry.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'material-advance-action'
@@ -48,11 +55,15 @@ const BodySchema = z.discriminatedUnion('action', [
     amount: z.number().int().positive().max(MAX_MONEY_MINOR_UNITS),
     currency: z.string().trim().min(2).max(5),
     estimatePhotoUrl: z.string().trim().url().optional(),
+    estimateStorageBucket: z.string().trim().min(2).max(100),
+    estimateStoragePath: z.string().trim().min(3).max(500),
+    idempotencyKey: z.string().trim().min(8).max(200).optional(),
   }),
   z.object({
     action: z.literal('respond-advance'),
     advanceId: uuid,
     decision: z.enum(['APPROVE', 'DECLINE']),
+    declineReason: z.string().trim().max(50).optional(),
     note: z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -67,12 +78,37 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('upload-receipt'),
     advanceId: uuid,
-    receiptUrl: z.string().trim().url(),
+    receiptUrl: z.string().trim().url().optional(),
+    receiptStorageBucket: z.string().trim().min(2).max(100),
+    receiptStoragePath: z.string().trim().min(3).max(500),
+    acquiredStorageBucket: z.string().trim().min(2).max(100).optional(),
+    acquiredStoragePath: z.string().trim().min(3).max(500).optional(),
+    actualSpentAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS),
     note: z.string().trim().max(500).optional(),
   }),
   z.object({
     action: z.literal('release-advance'),
     advanceId: uuid,
+    moneyDeskRequestId: uuid,
+    note: z.string().trim().max(500).optional(),
+  }),
+  z.object({
+    action: z.literal('finalize-unused-refund'),
+    advanceId: uuid,
+    moneyDeskRequestId: uuid,
+    actorRef: z.string().trim().min(3).max(320),
+  }),
+  z.object({
+    action: z.literal('resolve-overage'),
+    advanceId: uuid,
+    actorRef: z.string().trim().min(3).max(320),
+    note: z.string().trim().min(10).max(500),
+  }),
+  z.object({
+    action: z.literal('record-release-rejection'),
+    advanceId: uuid,
+    moneyDeskRequestId: uuid,
+    actorRef: z.string().trim().min(3).max(320),
     note: z.string().trim().max(500).optional(),
   }),
 ])
@@ -101,6 +137,8 @@ type OrderRow = {
   quoted_amount?: number | null
   total_amount?: number | null
   escrow_released?: boolean | null
+  fabric_funding_policy_version?: string | null
+  fabric_source?: string | null
 }
 
 type MaterialAdvanceRow = {
@@ -123,6 +161,25 @@ type MaterialAdvanceRow = {
   payment_id?: string | null
   paid_at?: string | null
   released_at?: string | null
+  actual_spent_amount?: number | null
+  reconciliation_status?: string | null
+  reconciliation_delta?: number | null
+  reconciled_at?: string | null
+  reconciliation_case_id?: string | null
+  acquired_storage_bucket?: string | null
+  acquired_storage_path?: string | null
+  reconciliation_outcome?: 'EXACT' | 'UNUSED_VALUE' | 'OVERAGE' | null
+  customer_refund_amount?: number | null
+  unapproved_overage_amount?: number | null
+  reconciliation_resolution?: string | null
+  funding_source?: 'LEGACY_SEPARATE_PAYMENT' | 'FUNDED_FABRIC_ALLOWANCE'
+  fabric_allocation_id?: string | null
+  fabric_approval_evidence_id?: string | null
+  money_desk_request_id?: string | null
+  payout_id?: string | null
+  provider_release_status?: string | null
+  correlation_id?: string | null
+  ops_issue_id?: string | null
 }
 
 type TailorProfileRow = {
@@ -175,7 +232,7 @@ function releaseReference(advanceId: string) {
 async function fetchOrder(supabase: any, orderId: string) {
   const { data, error } = await supabase
     .from('orders')
-    .select('id, reference, stage, order_kind, customer_id, tailor_id, currency, quoted_currency, quoted_amount, total_amount, escrow_released')
+    .select('id, reference, stage, order_kind, customer_id, tailor_id, currency, quoted_currency, quoted_amount, total_amount, escrow_released, fabric_funding_policy_version, fabric_source')
     .eq('id', orderId)
     .maybeSingle()
   if (error) throw error
@@ -185,7 +242,7 @@ async function fetchOrder(supabase: any, orderId: string) {
 async function fetchAdvance(supabase: any, advanceId: string) {
   const { data, error } = await supabase
     .from('order_material_advances')
-    .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at')
+    .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at, actual_spent_amount, reconciliation_status, reconciliation_delta, reconciled_at, reconciliation_case_id, acquired_storage_bucket, acquired_storage_path, reconciliation_outcome, customer_refund_amount, unapproved_overage_amount, reconciliation_resolution, funding_source, fabric_allocation_id, fabric_approval_evidence_id, money_desk_request_id, payout_id, provider_release_status, correlation_id, ops_issue_id')
     .eq('id', advanceId)
     .maybeSingle()
   if (error) throw error
@@ -212,6 +269,19 @@ async function hasOpenDispute(supabase: any, orderId: string) {
     .select('id')
     .eq('order_id', orderId)
     .in('status', ['OPEN', 'UNDER_REVIEW'])
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return !!data?.id
+}
+
+async function hasUnreconciledReleasedAdvance(supabase: any, orderId: string) {
+  const { data, error } = await supabase
+    .from('order_material_advances')
+    .select('id, reconciliation_status, reconciled_at')
+    .eq('order_id', orderId)
+    .eq('release_status', 'RELEASED')
+    .or('reconciled_at.is.null,reconciliation_status.in.(OPS_REVIEW,UNUSED_VALUE,OVERAGE)')
     .limit(1)
     .maybeSingle()
   if (error) throw error
@@ -260,6 +330,27 @@ async function createMaterialAdvanceOpsIssue(
     reason: string
   },
 ) {
+  let fundingDetails: Record<string, unknown> = {}
+  if (input.advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE' && input.advance.fabric_allocation_id) {
+    const { data: allocation } = await supabase.from('order_fabric_funding_allocations')
+      .select('id,funded_amount,released_amount,refunded_amount,currency,status,policy_version,pricing_version')
+      .eq('id', input.advance.fabric_allocation_id).maybeSingle()
+    if (allocation?.id) {
+      fundingDetails = {
+        funding_source: input.advance.funding_source,
+        fabric_allocation_id: allocation.id,
+        fabric_approval_evidence_id: input.advance.fabric_approval_evidence_id ?? null,
+        funded_amount: allocation.funded_amount,
+        released_amount: allocation.released_amount,
+        refunded_amount: allocation.refunded_amount,
+        remaining_amount: Math.max(allocation.funded_amount - allocation.released_amount - allocation.refunded_amount, 0),
+        allocation_status: allocation.status,
+        policy_version: allocation.policy_version,
+        pricing_version: allocation.pricing_version,
+        correlation_id: input.advance.correlation_id ?? null,
+      }
+    }
+  }
   const issue = await createOrRefreshOpsIssue(supabase, {
     issueType: input.reason === 'release_failed' ? 'PAYOUT_FAILED' : 'ORDER_REVIEW',
     severity: input.severity,
@@ -280,6 +371,11 @@ async function createMaterialAdvanceOpsIssue(
       currency: input.advance.currency,
       status: input.advance.status,
       release_status: input.advance.release_status,
+      reconciliation_outcome: input.advance.reconciliation_outcome ?? null,
+      reconciliation_delta: input.advance.reconciliation_delta ?? null,
+      customer_refund_amount: input.advance.customer_refund_amount ?? 0,
+      unapproved_overage_amount: input.advance.unapproved_overage_amount ?? 0,
+      ...fundingDetails,
     },
   })
 
@@ -299,31 +395,37 @@ async function notifyCustomer(
   subject: string,
   body: string,
   idempotencyKey: string,
+  context?: { advanceId?: string; action?: MaterialFundingEvent },
 ) {
-  await enqueuePushJob(supabase, {
+  const pushQueued = await enqueuePushJob(supabase, {
     userId: order.customer_id,
     notification: {
       title: subject,
       body,
       preferenceKey: 'orderUpdates',
-      data: { orderId: order.id },
+      data: context?.advanceId && context.action
+        ? materialFundingDestinationData(order.id, context.advanceId, context.action)
+        : { destination: 'ORDER', orderId: order.id },
     },
     source: FN,
     idempotencyKey,
     orderId: order.id,
     priority: 20,
   })
-  await enqueueOrderEventEmailJob(supabase, {
+  const emailQueued = await enqueueOrderEventEmailJob(supabase, {
     order,
     recipientUserId: order.customer_id,
     audience: 'CUSTOMER',
     subject,
     headline: subject,
     body,
+    materialAdvanceId: context?.advanceId ?? null,
+    action: context?.action ?? null,
     source: FN,
     idempotencyKey,
     priority: 25,
   })
+  return { pushQueued, emailQueued }
 }
 
 async function notifyTailor(
@@ -332,31 +434,38 @@ async function notifyTailor(
   subject: string,
   body: string,
   idempotencyKey: string,
+  context?: { advanceId?: string; action?: MaterialFundingEvent },
 ) {
-  await enqueuePushJob(supabase, {
+  const pushQueued = await enqueuePushJob(supabase, {
     userId: order.tailor_id,
     notification: {
       title: subject,
       body,
-      preferenceKey: 'newOrders',
-      data: { orderId: order.id },
+      preferenceKey: 'orderUpdates',
+      data: context?.advanceId && context.action
+        ? materialFundingDestinationData(order.id, context.advanceId, context.action)
+        : { destination: 'ORDER', orderId: order.id },
     },
     source: FN,
     idempotencyKey,
     orderId: order.id,
     priority: 20,
   })
-  await enqueueOrderEventEmailJob(supabase, {
+  const emailQueued = await enqueueOrderEventEmailJob(supabase, {
     order,
     recipientUserId: order.tailor_id,
     audience: 'TAILOR',
     subject,
     headline: subject,
     body,
+    ctaLabel: 'Open material request',
+    materialAdvanceId: context?.advanceId ?? null,
+    action: context?.action ?? null,
     source: FN,
     idempotencyKey,
     priority: 25,
   })
+  return { pushQueued, emailQueued }
 }
 
 async function markAdvancePaid(
@@ -439,36 +548,56 @@ Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
+  let activeAction = 'unknown'
+  let activeOrderId: string | null = null
+  let activeAdvanceId: string | null = null
+  let activeCorrelationId: string | null = null
+  let activeSupabase: any = null
+  let activeOrder: OrderRow | null = null
+  let activeAdvance: MaterialAdvanceRow | null = null
+  let activeActorRole: 'CUSTOMER' | 'TAILOR' | 'OPS' | 'SYSTEM' = 'SYSTEM'
   try {
     const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    activeSupabase = supabase
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       return jsonError(cors, 400, 'VALIDATION_FAILED', 'Check the material advance details and try again.', {
         details: parsed.error,
       })
     }
+    activeAction = parsed.data.action
 
-    const isOpsRelease = parsed.data.action === 'release-advance'
+    const isOpsRelease = ['release-advance', 'finalize-unused-refund', 'resolve-overage', 'record-release-rejection'].includes(parsed.data.action)
     const isServiceRole = serviceRoleRequest(req)
     const caller = isServiceRole ? null : await getAuthUser(req)
+    activeActorRole = isServiceRole ? 'OPS' : 'SYSTEM'
 
     if (!caller && !isServiceRole) {
       return jsonError(cors, 401, 'AUTH_REQUIRED', 'Please sign in again before continuing.')
     }
 
     const rateKey = caller?.id ?? req.headers.get('x-forwarded-for') ?? 'service'
-    const allowed = await checkRateLimit(supabase, `${FN}:${parsed.data.action}:${rateKey}`, 3600, isOpsRelease ? 60 : 20)
+    const allowed = isServiceRole
+      ? true
+      : await checkRateLimit(supabase, `${FN}:${parsed.data.action}:${rateKey}`, 3600, isOpsRelease ? 60 : 20)
     if (!allowed) return rateLimitExceededResponse(cors)
 
     if (parsed.data.action === 'request-advance') {
+      if (parsed.data.estimateStorageBucket !== 'commercial-evidence') {
+        return jsonError(cors, 409, 'PRIVATE_ESTIMATE_REQUIRED', 'Supplier proof must use Drapeon private evidence storage.')
+      }
       const order = await fetchOrder(supabase, parsed.data.orderId)
       if (!order?.id) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order could not be found.')
+      activeOrderId = order.id
+      activeActorRole = 'TAILOR'
 
       const currency = normalizedCurrency(parsed.data.currency)
       const orderCurrency = normalizedCurrency(order.currency ?? order.quoted_currency)
       const settledPayment = await fetchSettledInitialPayment(supabase, order.id)
       const openDispute = await hasOpenDispute(supabase, order.id)
+      const unreconciledAdvance = await hasUnreconciledReleasedAdvance(supabase, order.id)
       const maxAdvance = Math.max(Math.floor((settledPayment?.amount ?? order.total_amount ?? order.quoted_amount ?? 0) * 0.5), 0)
+      const fundedFabricClaim = order.fabric_funding_policy_version === 'fabric-funding-2026-08-01-v1'
 
       const preflight = runPreflight([
         {
@@ -517,6 +646,15 @@ Deno.serve(async (req) => {
           actual: { openDispute },
         },
         {
+          name: 'previous_advances_reconciled',
+          condition: !unreconciledAdvance,
+          errorCode: 'MATERIAL_ADVANCE_RECONCILIATION_REQUIRED',
+          message: 'Reconcile the released material advance and resolve any unused value or overage before requesting another one.',
+          field: 'order_material_advances',
+          severity: 'BLOCKING',
+          actual: { unreconciledAdvance },
+        },
+        {
           name: 'escrow_not_released',
           condition: order.escrow_released !== true,
           errorCode: 'ESCROW_ALREADY_RELEASED',
@@ -536,7 +674,7 @@ Deno.serve(async (req) => {
         },
         {
           name: 'amount_within_launch_guardrail',
-          condition: maxAdvance > 0 && parsed.data.amount <= maxAdvance,
+          condition: fundedFabricClaim || (maxAdvance > 0 && parsed.data.amount <= maxAdvance),
           errorCode: 'MATERIAL_ADVANCE_TOO_LARGE',
           message: 'This material request is too large for automatic customer approval. Contact Drapeon support for ops review.',
           field: 'amount',
@@ -558,6 +696,25 @@ Deno.serve(async (req) => {
         return preflightFailureResponse(preflight, cors, 409)
       }
 
+      if (fundedFabricClaim) {
+        const { data: allocation, error: allocationError } = await supabase
+          .from('order_fabric_funding_allocations')
+          .select('funded_amount,released_amount,refunded_amount,currency')
+          .eq('order_id', order.id)
+          .maybeSingle()
+        if (allocationError) throw allocationError
+        if (!allocation) return jsonError(cors, 409, 'FABRIC_FUNDING_ALLOCATION_NOT_FOUND', 'The protected fabric allowance is not ready yet.')
+        const remainingAmount = Math.max(allocation.funded_amount - allocation.released_amount - allocation.refunded_amount, 0)
+        if (parsed.data.amount > remainingAmount) {
+          return jsonError(cors, 409, 'FABRIC_RELEASE_ADJUSTMENT_REQUIRED', 'This supplier cost is above the protected allowance. Send the prefilled fabric funding change for customer approval.', {
+            requestedReleaseAmount: parsed.data.amount,
+            remainingAllowanceAmount: remainingAmount,
+            shortfallAmount: parsed.data.amount - remainingAmount,
+            currency: allocation.currency,
+          })
+        }
+      }
+
       const blockedDescription = await rejectIfBlockedContact({
         supabase,
         fn: FN,
@@ -572,21 +729,37 @@ Deno.serve(async (req) => {
       })
       if (blockedDescription) return blockedDescription
 
-      const { data: advance, error } = await supabase
-        .from('order_material_advances')
-        .insert({
-          order_id: order.id,
-          customer_id: order.customer_id,
-          tailor_id: order.tailor_id,
-          requested_by: caller!.id,
-          title: parsed.data.title.trim(),
-          description: parsed.data.description.trim(),
-          amount: parsed.data.amount,
-          currency,
-          estimate_photo_url: parsed.data.estimatePhotoUrl ?? null,
-        })
-        .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at')
-        .maybeSingle()
+      const claimWrite = fundedFabricClaim
+        ? await supabase.rpc('create_funded_fabric_release_claim', {
+            p_order_id: order.id,
+            p_tailor_id: caller!.id,
+            p_title: parsed.data.title.trim(),
+            p_description: parsed.data.description.trim(),
+            p_amount: parsed.data.amount,
+            p_currency: currency,
+            p_estimate_storage_bucket: parsed.data.estimateStorageBucket,
+            p_estimate_storage_path: parsed.data.estimateStoragePath,
+            p_estimate_photo_url: parsed.data.estimatePhotoUrl ?? null,
+            p_idempotency_key: parsed.data.idempotencyKey ?? `funded-fabric:${order.id}:${parsed.data.estimateStoragePath}:${parsed.data.amount}`,
+          })
+        : await supabase
+            .from('order_material_advances')
+            .insert({
+              order_id: order.id,
+              customer_id: order.customer_id,
+              tailor_id: order.tailor_id,
+              requested_by: caller!.id,
+              title: parsed.data.title.trim(),
+              description: parsed.data.description.trim(),
+              amount: parsed.data.amount,
+              currency,
+              estimate_photo_url: parsed.data.estimatePhotoUrl ?? null,
+              estimate_storage_bucket: parsed.data.estimateStorageBucket ?? null,
+              estimate_storage_path: parsed.data.estimateStoragePath ?? null,
+            })
+            .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at, actual_spent_amount, reconciliation_status, reconciliation_delta, reconciled_at, reconciliation_case_id, funding_source, fabric_allocation_id, fabric_approval_evidence_id, money_desk_request_id, payout_id, provider_release_status, correlation_id')
+            .maybeSingle()
+      const { data: advance, error } = claimWrite
 
       if (error) {
         if (error.code === '23505') {
@@ -605,9 +778,12 @@ Deno.serve(async (req) => {
       await notifyCustomer(
         supabase,
         order,
-        'Material approval requested',
-        `Your tailor requested a material advance for ${row.title}. Review the cost before paying; the main order escrow stays protected.`,
+        fundedFabricClaim ? 'Fabric release approval requested' : 'Material approval requested',
+        fundedFabricClaim
+          ? `Your tailor requested ${row.currency} ${(row.amount / 100).toFixed(2)} from the fabric allowance you already funded. Review the supplier proof; approving this does not charge you again.`
+          : `Your tailor requested a material advance for ${row.title}. Review the cost before paying; the main order funds stay protected.`,
         `material-advance-requested:${row.id}`,
+        { advanceId: row.id, action: 'RELEASE_REQUESTED' },
       )
 
       await audit(supabase, {
@@ -616,7 +792,7 @@ Deno.serve(async (req) => {
         actor_role: 'TAILOR',
         order_id: order.id,
         severity: 'warn',
-        payload: { function: FN, advance_id: row.id, amount: row.amount, currency: row.currency },
+        payload: { function: FN, advance_id: row.id, amount: row.amount, currency: row.currency, funding_source: row.funding_source ?? 'LEGACY_SEPARATE_PAYMENT' },
       })
 
       return jsonResponse({ ok: true, advance: row }, 200, cors)
@@ -627,6 +803,96 @@ Deno.serve(async (req) => {
 
     const order = await fetchOrder(supabase, advance.order_id)
     if (!order?.id) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order could not be found.')
+    activeOrderId = order.id
+    activeAdvanceId = advance.id
+    activeCorrelationId = advance.correlation_id ?? null
+    activeOrder = order
+    activeAdvance = advance
+    if (!isServiceRole && caller?.id) {
+      activeActorRole = caller.id === advance.customer_id ? 'CUSTOMER' : caller.id === advance.tailor_id ? 'TAILOR' : 'SYSTEM'
+    }
+
+    if (parsed.data.action === 'finalize-unused-refund') {
+      if (!isServiceRole) return jsonError(cors, 403, 'OPS_ONLY', 'Only Drapeon ops can finalize a material refund.')
+      const { data: finalized, error } = await supabase.rpc('finalize_material_unused_value_refund', {
+        p_advance_id: advance.id,
+        p_money_desk_request_id: parsed.data.moneyDeskRequestId,
+        p_actor_email: parsed.data.actorRef,
+      })
+      if (error) throw error
+      await supabase.from('order_stage_updates').insert({
+        order_id: order.id,
+        stage: order.stage,
+        note: 'Drapeon completed the customer refund for unused approved fabric value. The settlement recovery and provider outcome are recorded.',
+      })
+      await Promise.all([
+        notifyCustomer(supabase, order, 'Unused fabric value refunded', 'The unused approved fabric amount was sent back through your original payment method. Provider timing may vary.', `material-unused-refund:customer:${advance.id}`, { advanceId: advance.id, action: 'CUSTOMER_REFUND_COMPLETED' }),
+        notifyTailor(supabase, order, 'Fabric reconciliation completed', 'Drapeon refunded the unused approved fabric value to the customer and recorded the matching settlement deduction.', `material-unused-refund:tailor:${advance.id}`, { advanceId: advance.id, action: 'CUSTOMER_REFUND_COMPLETED' }),
+      ])
+      await resolveOpsIssueByDedupeKey(supabase, `material-advance:reconciliation_review:${advance.id}`, { resolution: 'CUSTOMER_REFUNDED', moneyDeskRequestId: parsed.data.moneyDeskRequestId })
+      await audit(supabase, {
+        event: 'material_advance.unused_value_refund_finalized',
+        actor_role: 'OPS',
+        order_id: order.id,
+        payload: { function: FN, advance_id: advance.id, money_desk_request_id: parsed.data.moneyDeskRequestId, correlation_id: advance.correlation_id, policy_version: order.fabric_funding_policy_version, provider: advance.payment_provider },
+      })
+      return jsonResponse({ ok: true, advance: finalized }, 200, cors)
+    }
+
+    if (parsed.data.action === 'resolve-overage') {
+      if (!isServiceRole) return jsonError(cors, 403, 'OPS_ONLY', 'Only Drapeon ops can resolve a material overage.')
+      const { data: resolved, error } = await supabase.rpc('resolve_material_overage_as_tailor_absorbed', {
+        p_advance_id: advance.id,
+        p_actor_email: parsed.data.actorRef,
+        p_note: parsed.data.note,
+      })
+      if (error) throw error
+      await supabase.from('order_stage_updates').insert({
+        order_id: order.id,
+        stage: order.stage,
+        note: 'Drapeon resolved the supplier overage without charging the customer. The amount above approval remains the tailor’s responsibility.',
+      })
+      await Promise.all([
+        notifyCustomer(supabase, order, 'Fabric overage resolved', 'The supplier overage is resolved. You were not charged for the amount above your approval.', `material-overage-resolved:customer:${advance.id}`, { advanceId: advance.id, action: 'OVERAGE_RESOLVED' }),
+        notifyTailor(supabase, order, 'Fabric overage resolved', 'The amount above customer approval is your responsibility and will not be included in customer charges or earnings.', `material-overage-resolved:tailor:${advance.id}`, { advanceId: advance.id, action: 'OVERAGE_RESOLVED' }),
+      ])
+      await resolveOpsIssueByDedupeKey(supabase, `material-advance:reconciliation_review:${advance.id}`, { resolution: 'TAILOR_ABSORBS' })
+      await audit(supabase, {
+        event: 'material_advance.overage_resolved',
+        actor_role: 'OPS',
+        order_id: order.id,
+        payload: { function: FN, advance_id: advance.id, correlation_id: advance.correlation_id, policy_version: order.fabric_funding_policy_version, provider: advance.payment_provider, note_recorded: true },
+      })
+      return jsonResponse({ ok: true, advance: resolved }, 200, cors)
+    }
+
+    if (parsed.data.action === 'record-release-rejection') {
+      if (!isServiceRole) return jsonError(cors, 403, 'OPS_ONLY', 'Only Drapeon ops can record a release rejection.')
+      if (advance.money_desk_request_id !== parsed.data.moneyDeskRequestId) {
+        return jsonError(cors, 409, 'MONEY_DESK_REQUEST_MISMATCH', 'This rejection does not match the linked Money Desk review.')
+      }
+      const { data: moneyRequest, error: moneyRequestError } = await supabase.from('money_desk_requests')
+        .select('id,status,action_type,target_id').eq('id', parsed.data.moneyDeskRequestId).maybeSingle()
+      if (moneyRequestError) throw moneyRequestError
+      if (!moneyRequest?.id || moneyRequest.status !== 'REJECTED' || moneyRequest.action_type !== 'MATERIAL_ADVANCE_RELEASE' || moneyRequest.target_id !== advance.id) {
+        return jsonError(cors, 409, 'MONEY_DESK_REJECTION_REQUIRED', 'The linked Money Desk request has not reached a recorded rejection.')
+      }
+      const { data: updated, error } = await supabase.from('order_material_advances').update({
+        status: 'BLOCKED',
+        release_status: 'BLOCKED',
+        release_blocked_reason: parsed.data.note?.trim() || 'MONEY_DESK_REJECTED',
+        blocked_at: new Date().toISOString(),
+      }).eq('id', advance.id).in('status', ['OPS_REVIEW', 'BLOCKED']).select('id,status,release_status').maybeSingle()
+      if (error) throw error
+      await supabase.from('order_stage_updates').insert({ order_id: order.id, stage: order.stage, note: 'Drapeon did not approve this fabric release. No provider transfer was made; the protected balance remains on the order.' })
+      await Promise.all([
+        notifyCustomer(supabase, order, 'Fabric release was not approved', 'Drapeon did not release this supplier amount. No extra charge or transfer was made, and the protected balance remains on your order.', `material-release-rejected:customer:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+        notifyTailor(supabase, order, 'Fabric release was not approved', 'Drapeon did not release this supplier amount. Review the order and submit corrected proof or a new supported request before purchasing.', `material-release-rejected:tailor:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+      ])
+      await resolveOpsIssueByDedupeKey(supabase, `material-advance:funded_release_review:${advance.id}`, { resolution: 'MONEY_DESK_REJECTED', moneyDeskRequestId: parsed.data.moneyDeskRequestId })
+      await audit(supabase, { event: 'material_advance.release_rejected', actor_role: 'OPS', order_id: order.id, severity: 'warn', payload: { function: FN, advance_id: advance.id, money_desk_request_id: parsed.data.moneyDeskRequestId, correlation_id: advance.correlation_id, actor_ref: parsed.data.actorRef, note_recorded: Boolean(parsed.data.note?.trim()) } })
+      return jsonResponse({ ok: true, advance: updated }, 200, cors)
+    }
 
     if (parsed.data.action === 'respond-advance') {
       const preflight = runPreflight([
@@ -681,19 +947,37 @@ Deno.serve(async (req) => {
       }
 
       const approved = parsed.data.decision === 'APPROVE'
-      const nextStatus = approved ? 'PAYMENT_PENDING' : 'DECLINED'
-      const { data: updated, error } = await supabase
-        .from('order_material_advances')
-        .update({
-          status: nextStatus,
-          customer_response_note: note || null,
-          customer_approved_at: approved ? new Date().toISOString() : null,
-          customer_declined_at: approved ? null : new Date().toISOString(),
-        })
-        .eq('id', advance.id)
-        .eq('status', 'REQUESTED')
-        .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at')
-        .maybeSingle()
+      const declineReason = approved
+        ? null
+        : isMaterialAdvanceDeclineReason(parsed.data.declineReason)
+          ? parsed.data.declineReason
+          : 'NOT_SPECIFIED'
+      if (!approved && declineReason === 'OTHER' && note.length < 5) {
+        return jsonError(cors, 400, 'DECLINE_NOTE_REQUIRED', 'Add a short note explaining why you are declining this material request.')
+      }
+      const declineReasonLabel = materialAdvanceDeclineReasonLabel(declineReason)
+      const fundedFabricClaim = advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE'
+      const nextStatus = approved ? (fundedFabricClaim ? 'OPS_REVIEW' : 'PAYMENT_PENDING') : 'DECLINED'
+      const responseWrite = approved && fundedFabricClaim
+        ? await supabase.rpc('approve_funded_fabric_release_claim', {
+            p_advance_id: advance.id,
+            p_customer_id: caller!.id,
+            p_note: note || null,
+          })
+        : await supabase
+            .from('order_material_advances')
+            .update({
+              status: nextStatus,
+              customer_response_note: note || null,
+              customer_response_reason: declineReason,
+              customer_approved_at: approved ? new Date().toISOString() : null,
+              customer_declined_at: approved ? null : new Date().toISOString(),
+            })
+            .eq('id', advance.id)
+            .eq('status', 'REQUESTED')
+            .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, customer_response_reason, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at, funding_source, fabric_allocation_id, fabric_approval_evidence_id, money_desk_request_id, payout_id, provider_release_status, correlation_id')
+            .maybeSingle()
+      const { data: updated, error } = responseWrite
 
       if (error) throw error
       if (!updated?.id) return jsonError(cors, 409, 'MATERIAL_ADVANCE_NOT_OPEN', 'This material request is no longer open.')
@@ -702,18 +986,26 @@ Deno.serve(async (req) => {
         order_id: order.id,
         stage: order.stage,
         note: approved
-          ? `Customer approved the material advance for ${advance.title}. Payment is now required before ops can release it.`
-          : `Customer declined the material advance for ${advance.title}.`,
+          ? fundedFabricClaim
+            ? `Customer approved ${advance.currency} ${(advance.amount / 100).toFixed(2)} from the protected fabric allowance for ${advance.title}. Drapeon Money Desk review is required before provider release.`
+            : `Customer approved the material advance for ${advance.title}. Payment is now required before ops can release it.`
+          : `Customer declined the material advance for ${advance.title}.${declineReasonLabel ? ` Reason: ${declineReasonLabel}.` : ''}${note ? ` ${note}` : ''}`,
       })
 
-      await notifyTailor(
+      const notificationJobs = await notifyTailor(
         supabase,
         order,
         approved ? 'Material advance approved' : 'Material advance declined',
         approved
-          ? 'The customer approved the material advance. It still needs payment and ops release before funds move.'
-          : 'The customer declined the material advance. Keep the next step inside Drapeon.',
+          ? fundedFabricClaim
+            ? 'The customer approved this exact fabric release from the funded allowance. Drapeon Money Desk review is next; no second customer payment is required.'
+            : 'The customer approved the material advance. It still needs payment and ops release before funds move.'
+          : `The customer declined the material advance${declineReasonLabel ? `: ${declineReasonLabel.toLowerCase()}` : ''}. Keep the next step inside Drapeon.`,
         `material-advance-response:${advance.id}:${parsed.data.decision}`,
+        {
+          advanceId: advance.id,
+          action: approved ? 'CUSTOMER_APPROVED' : 'CUSTOMER_DECLINED',
+        },
       )
 
       await audit(supabase, {
@@ -722,13 +1014,39 @@ Deno.serve(async (req) => {
         actor_role: 'CUSTOMER',
         order_id: order.id,
         severity: approved ? 'warn' : 'info',
-        payload: { function: FN, advance_id: advance.id, decision: parsed.data.decision },
+        payload: {
+          function: FN,
+          advance_id: advance.id,
+          decision: parsed.data.decision,
+          decline_reason: declineReason,
+          has_note: note.length > 0,
+          funding_source: advance.funding_source ?? 'LEGACY_SEPARATE_PAYMENT',
+        },
       })
 
-      return jsonResponse({ ok: true, advance: updated as MaterialAdvanceRow }, 200, cors)
+      if (approved && fundedFabricClaim) {
+        await createMaterialAdvanceOpsIssue(supabase, {
+          order,
+          advance: updated as MaterialAdvanceRow,
+          severity: 'HIGH',
+          title: 'Funded fabric release awaiting Money Desk',
+          description: `Customer approved ${advance.currency} ${(advance.amount / 100).toFixed(2)} against the captured fabric allowance for ${advance.title}.`,
+          recommendedAction: 'Review the accepted allocation, private supplier estimate, exact approved fabric evidence, remaining balance, duplicate risk, and payout readiness. Prepare a JIT Money Desk release; do not charge the customer again.',
+          reason: 'funded_release_review',
+        })
+      }
+
+      return jsonResponse({
+        ok: true,
+        advance: updated as MaterialAdvanceRow,
+        notificationJobs,
+      }, 200, cors)
     }
 
     if (parsed.data.action === 'prepare-payment') {
+      if (advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE') {
+        return jsonError(cors, 409, 'FABRIC_ALLOWANCE_ALREADY_FUNDED', 'This release uses the protected fabric allowance already paid at checkout. No second payment is allowed.')
+      }
       const currency = normalizedCurrency(advance.currency)
       if (!currency) return jsonError(cors, 409, 'CURRENCY_UNSUPPORTED', 'This material advance currency is not supported.')
       const provider = providerForCurrency(currency)
@@ -925,6 +1243,9 @@ Deno.serve(async (req) => {
     }
 
     if (parsed.data.action === 'confirm-payment') {
+      if (advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE') {
+        return jsonError(cors, 409, 'FABRIC_ALLOWANCE_ALREADY_FUNDED', 'This release does not have a separate customer payment to confirm.')
+      }
       const currency = normalizedCurrency(advance.currency)
       if (!currency) return jsonError(cors, 409, 'CURRENCY_UNSUPPORTED', 'This material advance currency is not supported.')
       const provider = advance.payment_provider ?? providerForCurrency(currency)
@@ -1010,6 +1331,14 @@ Deno.serve(async (req) => {
     }
 
     if (parsed.data.action === 'upload-receipt') {
+      if (parsed.data.receiptStorageBucket !== 'commercial-evidence') {
+        return jsonError(cors, 409, 'PRIVATE_RECEIPT_REQUIRED', 'Final receipts must use Drapeon private evidence storage.')
+      }
+      if (advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE' && (
+        parsed.data.acquiredStorageBucket !== 'commercial-evidence' || !parsed.data.acquiredStoragePath
+      )) {
+        return jsonError(cors, 409, 'ACQUIRED_FABRIC_PROOF_REQUIRED', 'Add a separate photo of the acquired fabric alongside the final supplier receipt.')
+      }
       const preflight = runPreflight([
         {
           name: 'tailor_owns_order',
@@ -1022,9 +1351,9 @@ Deno.serve(async (req) => {
         },
         {
           name: 'advance_paid_or_released',
-          condition: ['PAID', 'OPS_REVIEW', 'RELEASED', 'BLOCKED'].includes(advance.status),
+          condition: advance.status === 'RELEASED' && advance.release_status === 'RELEASED',
           errorCode: 'MATERIAL_ADVANCE_RECEIPT_NOT_READY',
-          message: 'Receipt proof can be uploaded after the material advance is paid.',
+          message: 'Final receipt and actual spend can be reconciled after Drapeon releases the approved advance.',
           field: 'status',
           severity: 'BLOCKING',
           actual: { status: advance.status },
@@ -1060,38 +1389,204 @@ Deno.serve(async (req) => {
         if (blockedNote) return blockedNote
       }
 
-      const { data: updated, error } = await supabase
-        .from('order_material_advances')
-        .update({
-          receipt_url: parsed.data.receiptUrl,
-          receipt_note: note || null,
-          receipt_uploaded_at: new Date().toISOString(),
-        })
-        .eq('id', advance.id)
-        .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at')
-        .maybeSingle()
+      const correlationId = crypto.randomUUID()
+      const { data: reconciliation, error } = await supabase.rpc('reconcile_material_advance_v2', {
+        p_advance_id: advance.id,
+        p_tailor_id: caller!.id,
+        p_actual_spent_amount: parsed.data.actualSpentAmount,
+        p_receipt_storage_bucket: parsed.data.receiptStorageBucket,
+        p_receipt_storage_path: parsed.data.receiptStoragePath,
+        p_acquired_storage_bucket: parsed.data.acquiredStorageBucket ?? null,
+        p_acquired_storage_path: parsed.data.acquiredStoragePath ?? null,
+        p_receipt_url: parsed.data.receiptUrl ?? null,
+        p_note: note || null,
+        p_correlation_id: correlationId,
+      })
       if (error) throw error
+      const updated = await fetchAdvance(supabase, advance.id)
 
       await supabase.from('order_stage_updates').insert({
         order_id: order.id,
         stage: order.stage,
-        note: `Tailor uploaded material receipt proof for ${advance.title}.`,
+        note: reconciliation.outcome === 'EXACT'
+          ? `Tailor reconciled the material purchase for ${advance.title} exactly to the approved amount.`
+          : `Tailor submitted final material spend for ${advance.title}. Drapeon ops is reviewing the ${reconciliation.outcome === 'UNUSED_VALUE' ? 'unused value' : 'overage'}.`,
       })
 
       await notifyCustomer(
         supabase,
         order,
         'Material receipt uploaded',
-        'Your tailor uploaded proof for the approved material purchase. You can review it from the order timeline.',
-        `material-advance-receipt:${advance.id}`,
+        reconciliation.outcome === 'EXACT'
+          ? 'Your tailor uploaded the final receipt and the purchase matches the exact amount you approved.'
+          : 'Your tailor uploaded the final receipt. Drapeon is reviewing the difference before this material advance closes.',
+        `material-advance-receipt:customer:${advance.id}:${reconciliation.outcome}`,
+        { advanceId: advance.id, action: reconciliation.outcome === 'EXACT' ? 'RECONCILED_EXACT' : reconciliation.outcome === 'UNUSED_VALUE' ? 'RECONCILIATION_UNUSED_VALUE' : 'RECONCILIATION_OVERAGE' },
       )
 
-      return jsonResponse({ ok: true, advance: updated as MaterialAdvanceRow }, 200, cors)
+      await notifyTailor(
+        supabase,
+        order,
+        reconciliation.outcome === 'EXACT' ? 'Fabric purchase reconciled' : 'Fabric receipt under review',
+        reconciliation.outcome === 'EXACT'
+          ? 'Your final receipt matches the released amount. This fabric reconciliation is complete.'
+          : reconciliation.outcome === 'UNUSED_VALUE'
+            ? 'Your receipt shows unused approved value. Drapeon Money Desk must complete the customer refund before this closes.'
+            : 'Your receipt is above the approved amount. The customer is not charged unless a separate change is approved and paid.',
+        `material-advance-receipt:tailor:${advance.id}:${reconciliation.outcome}`,
+        { advanceId: advance.id, action: reconciliation.outcome === 'EXACT' ? 'RECONCILED_EXACT' : reconciliation.outcome === 'UNUSED_VALUE' ? 'RECONCILIATION_UNUSED_VALUE' : 'RECONCILIATION_OVERAGE' },
+      )
+
+      await audit(supabase, {
+        event: 'material_advance.receipt_reconciled',
+        actor_id: caller!.id,
+        actor_role: 'TAILOR',
+        order_id: order.id,
+        severity: reconciliation.outcome === 'EXACT' ? 'info' : 'warn',
+        payload: { function: FN, advance_id: advance.id, outcome: reconciliation.outcome, delta_amount: reconciliation.deltaAmount, correlation_id: correlationId, policy_version: order.fabric_funding_policy_version, provider: advance.payment_provider, receipt_bucket: parsed.data.receiptStorageBucket, acquired_bucket: parsed.data.acquiredStorageBucket ?? null },
+      })
+
+      await resolveOpsIssueByDedupeKey(supabase, `material-advance:receipt_overdue:${advance.id}`, { receiptSubmitted: true, reconciliationOutcome: reconciliation.outcome })
+
+      if (reconciliation.outcome !== 'EXACT') {
+        await createMaterialAdvanceOpsIssue(supabase, {
+          order,
+          advance: updated as MaterialAdvanceRow,
+          severity: 'HIGH',
+          title: reconciliation.outcome === 'UNUSED_VALUE' ? 'Material advance has unused value' : 'Material receipt exceeds approved amount',
+          description: `The final material receipt differs from the approved advance by ${Math.abs(reconciliation.deltaAmount)} ${advance.currency} minor units.`,
+          recommendedAction: reconciliation.outcome === 'UNUSED_VALUE'
+            ? 'Reconcile recovery and customer refund through Money Desk before closing the advance.'
+            : 'Review supplier proof. The customer is not charged again unless a separate amendment is approved and paid.',
+          reason: 'reconciliation_review',
+        })
+      }
+
+      return jsonResponse({ ok: true, advance: updated as MaterialAdvanceRow, reconciliation }, 200, cors)
     }
 
     if (parsed.data.action === 'release-advance') {
       if (!isServiceRole) {
         return jsonError(cors, 403, 'OPS_ONLY', 'Only Drapeon ops can release a material advance.')
+      }
+
+      if (advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE') {
+        if (!advance.money_desk_request_id || advance.money_desk_request_id !== parsed.data.moneyDeskRequestId) {
+          return jsonError(cors, 409, 'MONEY_DESK_REQUEST_REQUIRED', 'This funded fabric release must use its exact approved Money Desk request.')
+        }
+        const { data: moneyRequest } = await supabase.from('money_desk_requests')
+          .select('id,status,action_type,target_id,order_id,amount,currency')
+          .eq('id', parsed.data.moneyDeskRequestId).maybeSingle()
+        if (!moneyRequest?.id || moneyRequest.status !== 'EXECUTING' || moneyRequest.action_type !== 'MATERIAL_ADVANCE_RELEASE'
+          || moneyRequest.target_id !== advance.id || moneyRequest.order_id !== order.id
+          || moneyRequest.amount !== advance.amount || moneyRequest.currency !== advance.currency) {
+          return jsonError(cors, 409, 'MONEY_DESK_REQUEST_MISMATCH', 'The approved Money Desk authority does not match this fabric release exactly.')
+        }
+
+        const profile = await fetchTailorProfile(supabase, advance.tailor_id)
+        const currency = normalizedCurrency(advance.currency)
+        const provider = currency ? providerForCurrency(currency) : null
+        const paystackRecipient = profile?.paystack_recipient_code?.trim() || null
+        const stripeAccount = profile?.stripe_connect_account_id?.trim() || null
+        if (!profile?.id || profile.payout_account_verified !== true || profile.payout_reverification_required === true) {
+          return jsonError(cors, 409, 'TAILOR_PAYOUT_NOT_VERIFIED', 'Tailor payout readiness must be verified before releasing funded fabric.')
+        }
+        if (!provider || (provider === 'PAYSTACK' ? !paystackRecipient : !stripeAccount)) {
+          return jsonError(cors, 409, 'PAYOUT_DESTINATION_MISSING', 'The tailor payout destination is missing for this currency.')
+        }
+
+        let { data: payout } = await supabase.from('payouts')
+          .select('id,status,provider_payout_id')
+          .eq('material_advance_id', advance.id).maybeSingle()
+        if (!payout?.id) {
+          const inserted = await supabase.from('payouts').insert({
+            tailor_profile_id: profile.id,
+            order_id: order.id,
+            material_advance_id: advance.id,
+            amount: advance.amount,
+            currency,
+            provider,
+            status: 'PROCESSING',
+            payout_purpose: 'MATERIAL_ADVANCE',
+            provider_payout_id: provider === 'PAYSTACK' ? releaseReference(advance.id) : null,
+            provider_response: { function: FN, funding_source: advance.funding_source, money_desk_request_id: moneyRequest.id },
+          }).select('id,status,provider_payout_id').single()
+          if (inserted.error) throw inserted.error
+          payout = inserted.data
+        }
+        if (payout.status === 'PAID' && advance.provider_release_status === 'SUCCEEDED') {
+          return jsonResponse({ ok: true, existing: true, pending: false, providerReference: payout.provider_payout_id, advance }, 200, cors)
+        }
+
+        let providerReference = payout.provider_payout_id || releaseReference(advance.id)
+        let providerResponse: Record<string, unknown>
+        let providerReleaseConfirmed = false
+        if (provider === 'PAYSTACK') {
+          const transfer = await createPaystackTransfer({
+            amount: advance.amount,
+            recipientCode: paystackRecipient!,
+            reason: `Drapeon funded fabric release ${order.reference ?? order.id}`,
+            reference: releaseReference(advance.id),
+            currency,
+          })
+          providerReference = transfer.reference ?? transfer.transfer_code ?? providerReference
+          providerResponse = transfer as unknown as Record<string, unknown>
+          providerReleaseConfirmed = String(transfer.status ?? '').toLowerCase() === 'success'
+        } else {
+          const transfer = await createStripeTransfer({
+            amount: advance.amount,
+            currency: currency!,
+            destinationAccountId: stripeAccount!,
+            idempotencyKey: releaseReference(advance.id),
+            transferGroup: `order:${order.id}`,
+            metadata: { order_id: order.id, material_advance_id: advance.id, payout_id: payout.id, money_desk_request_id: moneyRequest.id },
+          })
+          providerReference = transfer.id
+          providerResponse = transfer as unknown as Record<string, unknown>
+          providerReleaseConfirmed = true
+        }
+
+        await supabase.from('payouts').update({
+          provider_payout_id: providerReference,
+          provider_response: providerResponse,
+          provider_destination_id: provider === 'STRIPE' ? stripeAccount : paystackRecipient,
+          provider_transfer_status: providerReleaseConfirmed
+            ? provider === 'STRIPE' ? 'AVAILABLE_IN_PROVIDER_BALANCE' : 'PAID_TO_BANK'
+            : 'PROCESSING',
+          bank_settlement_status: providerReleaseConfirmed
+            ? provider === 'STRIPE' ? 'PENDING' : 'PAID'
+            : 'PENDING',
+          status: providerReleaseConfirmed ? provider === 'STRIPE' ? 'PROCESSING' : 'PAID' : 'PROCESSING',
+          completed_at: providerReleaseConfirmed && provider === 'PAYSTACK' ? new Date().toISOString() : null,
+        }).eq('id', payout.id)
+        await supabase.from('order_material_advances').update({
+          payout_id: payout.id,
+          provider_release_id: providerReference,
+          provider_release_response: providerResponse,
+          provider_release_status: providerReleaseConfirmed ? 'SUCCEEDED' : 'PENDING',
+        }).eq('id', advance.id)
+
+        if (!providerReleaseConfirmed) {
+          await audit(supabase, { event: 'material_advance.provider_release_pending', actor_role: 'OPS', order_id: order.id, payload: { function: FN, advance_id: advance.id, payout_id: payout.id, provider, provider_reference: providerReference, money_desk_request_id: moneyRequest.id, correlation_id: advance.correlation_id } })
+          return jsonResponse({ ok: true, pending: true, advanceId: advance.id, payoutId: payout.id, providerReference }, 202, cors)
+        }
+
+        const { data: released, error: releaseError } = await supabase.rpc('record_funded_fabric_provider_outcome', {
+          p_advance_id: advance.id,
+          p_payout_id: payout.id,
+          p_provider_reference: providerReference,
+          p_outcome: 'SUCCEEDED',
+          p_provider_response: providerResponse,
+        })
+        if (releaseError) throw releaseError
+        await supabase.from('order_stage_updates').insert({ order_id: order.id, stage: order.stage, note: `Drapeon released ${advance.currency} ${(advance.amount / 100).toFixed(2)} from the protected fabric allowance for ${advance.title}. Final receipt and acquired-fabric proof are still required.` })
+        await audit(supabase, { event: 'material_advance.funded_release_confirmed', actor_role: 'OPS', order_id: order.id, payload: { function: FN, advance_id: advance.id, payout_id: payout.id, provider, provider_reference: providerReference, money_desk_request_id: moneyRequest.id, correlation_id: advance.correlation_id } })
+        await Promise.all([
+          notifyTailor(supabase, order, provider === 'STRIPE' ? 'Fabric funds released to Stripe' : 'Fabric funds paid', provider === 'STRIPE' ? 'The approved fabric amount is now in your Stripe balance. Stripe will send a separate update when its bank payout moves or arrives. Upload the final receipt and acquired-fabric proof after purchase.' : 'Drapeon released the approved amount to your verified bank destination. Upload the final receipt and acquired-fabric proof after purchase.', `funded-fabric-released:tailor:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_CONFIRMED' }),
+          notifyCustomer(supabase, order, 'Fabric allowance updated', provider === 'STRIPE' ? 'The approved fabric amount was released to the tailor’s verified Stripe account. Bank arrival is tracked separately; any remaining fabric allowance stays protected.' : 'The provider confirmed the approved fabric release to the tailor’s verified bank destination. Any remaining fabric allowance stays protected.', `funded-fabric-released:customer:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_CONFIRMED' }),
+        ])
+        await resolveOpsIssueByDedupeKey(supabase, `material-advance:funded_release_review:${advance.id}`, { providerReference, payoutId: payout.id })
+        return jsonResponse({ ok: true, pending: false, advance: released, payoutId: payout.id, providerReference }, 200, cors)
       }
 
       const profile = await fetchTailorProfile(supabase, advance.tailor_id)
@@ -1176,12 +1671,52 @@ Deno.serve(async (req) => {
           recommendedAction: 'Fix the payout destination or account verification issue, then retry release from ops.',
           reason: 'release_failed',
         })
+        await Promise.all([
+          notifyTailor(supabase, order, 'Material release needs attention', 'Drapeon could not complete this release. Ops is reviewing the payout setup; do not make the purchase yet.', `material-release-blocked:tailor:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+          notifyCustomer(supabase, order, 'Material release under review', 'Drapeon could not complete the approved material release. Your main order funds remain protected while Ops reviews it.', `material-release-blocked:customer:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+        ])
         return preflightFailureResponse(preflight, cors, 409)
+      }
+
+      // The authoritative preflight proves the payout profile exists. Keep a
+      // narrowed primitive for the provider release and its retry ledger row.
+      const verifiedTailorProfileId = profile?.id
+      if (!verifiedTailorProfileId) {
+        throw new Error('Verified tailor payout profile is missing after preflight.')
       }
 
       try {
         let providerReleaseId: string | null = null
         let providerReleaseResponse: Record<string, unknown> = {}
+        const { data: existingPayout, error: existingPayoutError } = await supabase
+          .from('payouts')
+          .select('id')
+          .eq('material_advance_id', advance.id)
+          .maybeSingle()
+        if (existingPayoutError) throw existingPayoutError
+        let payoutId = existingPayout?.id ?? null
+        if (!payoutId) {
+          const { data: insertedPayout, error: insertPayoutError } = await supabase
+            .from('payouts')
+            .insert({
+              tailor_profile_id: verifiedTailorProfileId,
+              order_id: order.id,
+              source_payment_id: advance.payment_id ?? null,
+              material_advance_id: advance.id,
+              amount: advance.amount,
+              currency,
+              provider,
+              status: 'PROCESSING',
+              provider_transfer_status: 'PROCESSING',
+              bank_settlement_status: 'PENDING',
+              provider_destination_id: provider === 'STRIPE' ? stripeAccount : paystackRecipient,
+              provider_response: { function: FN, release_type: 'MATERIAL_ADVANCE' },
+            })
+            .select('id')
+            .single()
+          if (insertPayoutError) throw insertPayoutError
+          payoutId = insertedPayout.id
+        }
         if (provider === 'PAYSTACK') {
           const transfer = await createPaystackTransfer({
             amount: advance.amount,
@@ -1202,12 +1737,28 @@ Deno.serve(async (req) => {
             metadata: {
               order_id: order.id,
               material_advance_id: advance.id,
+              payout_id: payoutId!,
               source: FN,
             },
           })
           providerReleaseId = transfer.id
           providerReleaseResponse = transfer as unknown as Record<string, unknown>
         }
+
+        const providerReleasedAt = new Date().toISOString()
+        const { error: payoutUpdateError } = await supabase
+          .from('payouts')
+          .update({
+            provider_payout_id: providerReleaseId,
+            provider_response: providerReleaseResponse,
+            provider_destination_id: provider === 'STRIPE' ? stripeAccount : paystackRecipient,
+            provider_transfer_status: provider === 'STRIPE' ? 'AVAILABLE_IN_PROVIDER_BALANCE' : 'PAID_TO_BANK',
+            bank_settlement_status: provider === 'STRIPE' ? 'PENDING' : 'PAID',
+            status: provider === 'STRIPE' ? 'PROCESSING' : 'PAID',
+            completed_at: provider === 'PAYSTACK' ? providerReleasedAt : null,
+          })
+          .eq('id', payoutId)
+        if (payoutUpdateError) throw payoutUpdateError
 
         const { data: updated, error } = await supabase
           .from('order_material_advances')
@@ -1223,6 +1774,15 @@ Deno.serve(async (req) => {
           .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, payment_provider, provider_payment_id, provider_checkout_url, payment_id, paid_at, released_at')
           .maybeSingle()
         if (error) throw error
+
+        const releaseCorrelationId = crypto.randomUUID()
+        const { error: ledgerError } = await supabase.rpc('record_material_advance_release_ledger', {
+          p_advance_id: advance.id,
+          p_provider_reference: providerReleaseId ?? releaseReference(advance.id),
+          p_actor_id: null,
+          p_correlation_id: releaseCorrelationId,
+        })
+        if (ledgerError) throw new Error(`Provider release succeeded but ledger recording failed: ${ledgerError.message}`)
 
         await supabase.from('order_stage_updates').insert({
           order_id: order.id,
@@ -1245,17 +1805,16 @@ Deno.serve(async (req) => {
           },
         })
 
-        await notifyTailor(
-          supabase,
-          order,
-          'Material advance released',
-          'Drapeon released the approved material funds. Upload the receipt as soon as the purchase is made.',
-          `material-advance-released:${advance.id}`,
-        )
+        await Promise.all([
+          notifyTailor(supabase, order, provider === 'STRIPE' ? 'Material funds released to Stripe' : 'Material funds paid', provider === 'STRIPE' ? 'The approved material amount is now in your Stripe balance. Stripe will confirm bank movement separately. Upload the receipt as soon as the purchase is made.' : 'Drapeon released the approved material funds to your verified bank destination. Upload the receipt as soon as the purchase is made.', `material-advance-released:tailor:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_CONFIRMED' }),
+          notifyCustomer(supabase, order, 'Material advance released', provider === 'STRIPE' ? 'Drapeon released only the material amount you approved to the tailor’s verified Stripe account. Bank arrival is tracked separately; your main order funds remain protected.' : 'Drapeon released only the material amount you approved to the tailor’s verified bank destination. Your main order funds remain protected.', `material-advance-released:customer:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_CONFIRMED' }),
+        ])
+        await resolveOpsIssueByDedupeKey(supabase, `material-advance:paid_release_review:${advance.id}`, { providerReleaseId })
 
         return jsonResponse({ ok: true, advance: updated as MaterialAdvanceRow }, 200, cors)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        await Sentry.captureMessage('Material advance release failed', { tags: { function: FN, action: 'release-advance' }, extra: { advanceId: advance.id, orderId: order.id, error: message } })
         await supabase
           .from('order_material_advances')
           .update({
@@ -1274,6 +1833,10 @@ Deno.serve(async (req) => {
           recommendedAction: 'Review provider transfer status and tailor payout destination before retrying. Do not retry automatically.',
           reason: 'release_failed',
         })
+        await Promise.all([
+          notifyTailor(supabase, order, 'Material release failed', 'The provider did not confirm this material release. Drapeon Ops is checking it; do not make the purchase yet.', `material-release-failed:tailor:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+          notifyCustomer(supabase, order, 'Material release under review', 'The provider did not confirm the approved material release. Your main order funds remain protected while Ops checks it.', `material-release-failed:customer:${advance.id}`, { advanceId: advance.id, action: 'RELEASE_FAILED' }),
+        ])
         return jsonError(cors, 502, 'MATERIAL_ADVANCE_RELEASE_FAILED', 'Drapeon could not release this material advance. Ops needs to review it.', {
           detail: message,
         })
@@ -1284,6 +1847,32 @@ Deno.serve(async (req) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     log('error', FN, 'request.failed', { error: message })
+    let adjustmentId: string | null = null
+    if (activeSupabase && activeAdvanceId) {
+      const { data: adjustmentLink } = await activeSupabase.from('fabric_release_adjustment_links')
+        .select('adjustment_id').eq('material_advance_id', activeAdvanceId).maybeSingle()
+      adjustmentId = adjustmentLink?.adjustment_id ?? null
+    }
+    await Sentry.captureMessage('Material advance action failed', {
+      level: 'error',
+      tags: { function: FN, action: activeAction, actor_role: activeActorRole, provider: activeAdvance?.payment_provider ?? 'none', policy_version: activeOrder?.fabric_funding_policy_version ?? 'legacy' },
+      extra: { error: message, orderId: activeOrderId, advanceId: activeAdvanceId, adjustmentId, correlationId: activeCorrelationId },
+    })
+    if (activeAction === 'release-advance' && activeSupabase && activeOrder && activeAdvance) {
+      await createMaterialAdvanceOpsIssue(activeSupabase, {
+        order: activeOrder,
+        advance: activeAdvance,
+        severity: 'CRITICAL',
+        title: 'Funded fabric release outcome needs verification',
+        description: 'The reviewed provider release did not reach a clean terminal application outcome.',
+        recommendedAction: 'Verify the provider transfer and Money Desk attempt before any retry. Record the terminal provider outcome and do not send a duplicate transfer.',
+        reason: 'release_failed',
+      })
+      await Promise.all([
+        notifyTailor(activeSupabase, activeOrder, 'Fabric release under review', 'The provider release needs Drapeon verification. Do not purchase the fabric until the order shows a confirmed release.', `funded-release-error:tailor:${activeAdvance.id}`, { advanceId: activeAdvance.id, action: 'RELEASE_FAILED' }),
+        notifyCustomer(activeSupabase, activeOrder, 'Fabric release under review', 'Drapeon is verifying the provider outcome. Your protected order balance will not be moved twice.', `funded-release-error:customer:${activeAdvance.id}`, { advanceId: activeAdvance.id, action: 'RELEASE_FAILED' }),
+      ])
+    }
     return jsonError(getCorsHeaders(req), 500, 'MATERIAL_ADVANCE_FAILED', 'We could not update the material advance right now.', { detail: message })
   }
 })

@@ -98,6 +98,8 @@ The app maintenance cron jobs are expected to call:
 - `finalize-account-deletions` daily at 03:30
 - `process-notification-jobs` every minute for push/SMS/email delivery
 - `process-ops-jobs` every 5 minutes for internal issue creation
+- `monitor-tax-controls` hourly at `:17` for reviewed tax-control expiry and
+  affected-reservation escalation
 
 These are not health checks. They are operational jobs that reconcile payment, quote, consultation, production, and payout state.
 

@@ -10,6 +10,7 @@
     "./auth-security": "./src/auth-security.ts",
     "./phone": "./src/phone.ts",
     "./phone-countries": "./src/phone-countries.ts",
+    "./address": "./src/address.ts",
     "./cancellation-policy": "./src/cancellation-policy.ts",
     "./sms-copy": "./src/sms-copy.ts",
     "./order-terminal": "./src/order-terminal.ts",
@@ -39,7 +40,19 @@
     "./form-foundation": "./src/form-foundation.ts",
     "./conversation-event-presentation": "./src/conversation-event-presentation.ts",
     "./date-time": "./src/date-time.ts",
-    "./message-translation": "./src/message-translation.ts"
+    "./message-translation": "./src/message-translation.ts",
+    "./commercial-contracts": "./src/commercial-contracts.ts",
+    "./commercial-pricing": "./src/commercial-pricing.ts",
+    "./financial-cases": "./src/financial-cases.ts",
+    "./money-desk": "./src/money-desk.ts",
+    "./consultations": "./src/consultations.ts",
+    "./order-detail-contract": "./src/order-detail-contract.ts",
+    "./fabric-funding": "./src/fabric-funding.ts",
+    "./money-input": "./src/money-input.ts",
+    "./quote-draft": "./src/quote-draft.ts",
+    "./fulfillment-eligibility": "./src/fulfillment-eligibility.ts",
+    "./tax-decision": "./src/tax-decision.ts",
+    "./drapeon-dispatch": "./src/drapeon-dispatch.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

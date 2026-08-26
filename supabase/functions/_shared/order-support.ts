@@ -106,6 +106,10 @@ export type QuoteBreakdownMeta = {
   included?: string[] | null
   excluded?: string[] | null
   summary?: string | null
+  tailoringAmount?: number | null
+  fabricAllowanceAmount?: number | null
+  fabricAllowanceCoverage?: string[] | null
+  fabricSourcingAssumptions?: string | null
 }
 
 export type ConsultationMeta = {
@@ -127,6 +131,7 @@ export type ConsultationMeta = {
   reminderEnabled?: boolean | null
   requestNote?: string | null
   requestedAt?: string | null
+  requestExpiresAt?: string | null
   proposedStartAt?: string | null
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
@@ -142,6 +147,10 @@ export type ConsultationMeta = {
   reminderStartSentAt?: string | null
   followUpSentAt?: string | null
   expiredAt?: string | null
+  policyVersion?: string | null
+  durationMinutes?: 15 | 30 | 45 | 60 | null
+  callType?: 'AUDIO' | 'VIDEO' | null
+  requirement?: 'OPTIONAL' | 'REQUIRED' | null
 }
 
 export type OrderCallReason =
@@ -315,6 +324,19 @@ export type DeliveryReviewReason =
   | 'MARKED_DELIVERED_NOT_RECEIVED'
   | 'WRONG_ITEM_RECEIVED'
   | 'RECIPIENT_UNREACHABLE'
+  | 'TRACKING_STALLED'
+  | 'SIGNIFICANT_DELAY'
+  | 'NOT_RECEIVED'
+  | 'WRONG_ADDRESS_OR_RECIPIENT'
+  | 'DAMAGED_IN_TRANSIT'
+  | 'MISSING_CONTENTS'
+  | 'RETURNED_TO_DRAPEON'
+  | 'CUSTOMS_OR_CARRIER_CHARGE'
+  | 'RECIPIENT_CONTACT_PROBLEM'
+  | 'DRAPEON_COLLECTION_MISSED'
+  | 'CUSTODY_SCAN_MISMATCH'
+  | 'PARCEL_RETURNED_TO_TAILOR'
+  | 'HANDOFF_DAMAGE'
   | 'OTHER'
 
 export type ScopeChangeType =
@@ -376,6 +398,7 @@ export type DeliveryReviewMeta = {
   note?: string | null
   requestedAt?: string | null
   requestedFromStage?: string | null
+  riskAction?: 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' | 'OPS_FOLLOW_UP' | null
   resolvedAt?: string | null
 }
 
@@ -430,6 +453,16 @@ export type OrderSupportMeta = {
     acknowledgedAt?: string | null
     acknowledgedBy?: string | null
     policyName?: string | null
+  } | null
+  readyMadeFitReview?: {
+    version?: number | null
+    acknowledgedAt?: string | null
+    acknowledgedBy?: string | null
+    selectedSize?: string | null
+    sellerItemId?: string | null
+    sellerItemUpdatedAt?: string | null
+    sizeGuideVersion?: number | null
+    sizeGuideSnapshot?: Record<string, unknown> | null
   } | null
   consultation?: ConsultationMeta | null
   orderCall?: OrderCallMeta | null
@@ -542,6 +575,19 @@ export const DELIVERY_REVIEW_REASON_LABELS: Record<DeliveryReviewReason, string>
   MARKED_DELIVERED_NOT_RECEIVED: 'Marked delivered, but not received',
   WRONG_ITEM_RECEIVED: 'Wrong item arrived',
   RECIPIENT_UNREACHABLE: 'Recipient could not be reached',
+  TRACKING_STALLED: 'Tracking has stopped updating',
+  SIGNIFICANT_DELAY: 'Delivery is significantly delayed',
+  NOT_RECEIVED: 'Order was not received',
+  WRONG_ADDRESS_OR_RECIPIENT: 'Delivered to the wrong address or person',
+  DAMAGED_IN_TRANSIT: 'Parcel was damaged in transit',
+  MISSING_CONTENTS: 'Something is missing from the parcel',
+  RETURNED_TO_DRAPEON: 'Parcel was returned to Drapeon',
+  CUSTOMS_OR_CARRIER_CHARGE: 'Unexpected customs or carrier charge',
+  RECIPIENT_CONTACT_PROBLEM: 'Courier could not reach the recipient',
+  DRAPEON_COLLECTION_MISSED: 'Drapeon collection was missed',
+  CUSTODY_SCAN_MISMATCH: 'Drapeon custody acknowledgement is missing or wrong',
+  PARCEL_RETURNED_TO_TAILOR: 'Parcel was returned to the tailor',
+  HANDOFF_DAMAGE: 'Damage was found during Drapeon handoff',
   OTHER: 'Other',
 }
 

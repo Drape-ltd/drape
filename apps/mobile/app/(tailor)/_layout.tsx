@@ -86,7 +86,6 @@ export default function TailorTabLayout() {
         options={{
           title: 'Dashboard',
           tabBarButtonTestID: 'tab-dashboard',
-          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="home" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable

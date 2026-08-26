@@ -66,6 +66,7 @@ export type SuccessfulOrderPayment = {
   amount: number
   status: 'SUCCEEDED' | 'PARTIAL_REFUND' | 'REFUNDED'
   provider_payment_id?: string | null
+  provider_response?: Record<string, unknown> | null
   refunded_amount?: number | null
 }
 

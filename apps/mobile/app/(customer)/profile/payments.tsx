@@ -25,14 +25,16 @@ import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus } from '@/lib/queries'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { DrapeStatusChip } from '@/components/ui'
+import { formatTaxRate, taxLinesForReceiptSnapshot } from '@drape/shared'
 
 type StatusFilter = 'ALL' | CustomerPaymentStatus
 type RangeFilter = 'ALL' | '30D' | '90D' | '365D'
 
 const STATUS_FILTERS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'ALL', label: 'All' },
-  { key: 'IN_ESCROW', label: 'Protected' },
-  { key: 'RELEASED', label: 'Closed out' },
+  { key: 'PROTECTED', label: 'Payment protected' },
+  { key: 'PAID', label: 'Paid' },
+  { key: 'RELEASED', label: 'Order earning released' },
   { key: 'PARTIALLY_REFUNDED', label: 'Partial refund' },
   { key: 'REFUNDED', label: 'Refunded' },
 ]
@@ -228,7 +230,7 @@ export default function CustomerPaymentHistoryScreen() {
         <View style={styles.statsGrid}>
           <StatCard
             label="Protected orders"
-            value={String(data?.activeEscrowOrders ?? 0)}
+            value={String(data?.activeProtectedOrders ?? 0)}
             hint="Paid orders still in progress"
           />
           <StatCard
@@ -293,6 +295,10 @@ export default function CustomerPaymentHistoryScreen() {
             </View>
           ) : (
             filteredTransactions.map((row) => {
+              const taxLines = taxLinesForReceiptSnapshot({
+                taxJurisdiction: row.taxJurisdiction,
+                taxAmount: row.taxAmount,
+              })
               return (
                 <TouchableOpacity
                   key={row.paymentId}
@@ -311,6 +317,7 @@ export default function CustomerPaymentHistoryScreen() {
                   <View style={styles.rowTop}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowTitle}>{row.title}</Text>
+                      <Text style={styles.paymentKind}>{row.phaseLabel}</Text>
                       <Text style={styles.rowMeta}>
                         #{row.reference} · {row.tailorName} ·{' '}
                         {new Date(row.date).toLocaleDateString('en-GB', {
@@ -319,25 +326,43 @@ export default function CustomerPaymentHistoryScreen() {
                           year: 'numeric',
                         })}
                       </Text>
+                      {row.receiptNumber ? <Text style={styles.rowMeta}>Receipt {row.receiptNumber}</Text> : null}
                     </View>
-                    <DrapeStatusChip value={row.status} domain="payment" />
+                    <DrapeStatusChip
+                      value={row.status}
+                      label={
+                        row.status === 'PROTECTED'
+                          ? 'Payment protected'
+                          : row.status === 'PAID'
+                            ? 'Paid'
+                            : row.status === 'RELEASED'
+                              ? 'Order earning released'
+                              : undefined
+                      }
+                      domain="payment"
+                    />
                   </View>
 
                   <View style={styles.moneyBreakdown}>
+                    {row.phase === 'INITIAL_ORDER' && row.receiptNumber ? (
+                      <>
+                        <MoneyLine label="Tailor work and included materials" value={money(row.subtotalAmount + row.consultationCreditAmount + row.promotionAmount, row.currency)} />
+                        {row.consultationCreditAmount > 0 ? <MoneyLine label="Consultation fee credit" value={`−${money(row.consultationCreditAmount, row.currency)}`} /> : null}
+                        {row.promotionAmount > 0 ? <MoneyLine label="Drapeon-funded benefit" value={`−${money(row.promotionAmount, row.currency)}`} /> : null}
+                        {row.platformFeeAmount > 0 ? <MoneyLine label="Drapeon service fee" value={money(row.platformFeeAmount, row.currency)} /> : null}
+                        <MoneyLine label="Fulfillment" value={row.shippingAmount > 0 ? money(row.shippingAmount, row.currency) : 'Free'} />
+                        {taxLines.map((line) => (
+                          <MoneyLine key={line.key} label={line.rateBps > 0 ? `${line.label} (${formatTaxRate(line.rateBps)})` : line.label} value={money(line.amount, row.currency)} />
+                        ))}
+                        <MoneyLine label="Total paid" value={money(row.amount, row.currency)} strong />
+                      </>
+                    ) : (
                     <MoneyLine
-                      label={
-                        row.phase === 'CONSULTATION'
-                          ? 'Consultation payment'
-                          : row.phase === 'FULFILLMENT'
-                            ? 'Fulfillment payment'
-                            : row.phase === 'MATERIAL_ADVANCE'
-                              ? 'Material advance'
-                            : 'Amount paid'
-                      }
+                      label={row.phaseLabel}
                       value={money(row.amount, row.currency)}
                       strong
                     />
-                    <MoneyLine label="Tax" value={money(row.taxAmount, row.currency)} />
+                    )}
                     {row.refundedAmount > 0 ? (
                       <MoneyLine
                         label="Refunded so far"
@@ -351,6 +376,7 @@ export default function CustomerPaymentHistoryScreen() {
                       Locked in {row.currency} when placed. Current account currency is {currency}.
                     </Text>
                   ) : null}
+                  {row.providerReference ? <Text style={styles.reasonText}>{row.provider} reference · {row.providerReference}</Text> : null}
                 </TouchableOpacity>
               )
             })
@@ -659,6 +685,13 @@ const styles = StyleSheet.create({
   },
   rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   rowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  paymentKind: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
   rowMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
   moneyBreakdown: {
     borderTopWidth: 1,

@@ -1,5 +1,7 @@
 # Research To V1 Completion Map
 
+> Historical V1 sequencing record. Commercial rules that conflict with `drapeon-commercial-money-tax-and-resolution-architecture.md` are superseded for newly activated policy versions; existing orders retain their accepted policy.
+
 Date: April 2, 2026
 
 ## Why This Exists

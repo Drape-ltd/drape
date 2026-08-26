@@ -6,6 +6,7 @@ on:
     - cron: "*/5 * * * *"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -20,22 +21,55 @@ jobs:
       HEALTH_URL: https://pqptfuqogvrajozfsqzi.supabase.co/functions/v1/service-health
       HEALTH_SECRET: ${{ secrets.DRAPE_HEALTHCHECK_SECRET }}
     steps:
-      - name: Check public Edge liveness
+      - name: Find previous health state
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          curl \
-            --fail-with-body \
+          previous_run_id="$(
+            gh api \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/beta-service-health.yml/runs?status=completed&per_page=1" \
+              --jq '.workflow_runs[0].id // empty'
+          )"
+          echo "run_id=$previous_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Restore previous health state
+        if: ${{ steps.previous.outputs.run_id != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: beta-service-health-state
+          path: /tmp/previous-health
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Check public Edge liveness
+        id: liveness
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl \
             --silent \
             --show-error \
             --retry 2 \
             --retry-all-errors \
             --max-time 20 \
-            "$HEALTH_URL?check=live" |
-            tee /tmp/drape-live.json
-          jq -e '.ok == true and .status == "ok"' /tmp/drape-live.json
+            --output /tmp/drape-live.json \
+            --write-out "%{http_code}" \
+            "$HEALTH_URL?check=live" || true)"
+          if [[ "$status" == "200" ]] && jq -e '.ok == true and .status == "ok"' /tmp/drape-live.json >/dev/null 2>&1; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=Edge liveness passed." >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "summary=Edge liveness failed with HTTP ${status:-000}." >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Check protected beta readiness
+        id: readiness
         if: ${{ env.HEALTH_SECRET != '' }}
         shell: bash
         run: |
@@ -51,12 +85,86 @@ jobs:
               --write-out "%{http_code}" \
               --header "Authorization: Bearer $HEALTH_SECRET" \
               "$HEALTH_URL?check=ready&tier=beta"
-          )"
-          jq . /tmp/drape-ready.json
-          test "$status" = "200"
-          jq -e '.ok == true' /tmp/drape-ready.json
+          )" || true
+          if jq -e . /tmp/drape-ready.json >/dev/null 2>&1; then
+            jq . /tmp/drape-ready.json
+            jq -r '.checks | to_entries[] | select(.value.status == "warn") | "::warning title=Readiness warning: \(.key)::\(.value.message)"' /tmp/drape-ready.json
+          fi
+          if [[ "$status" == "200" ]] && jq -e '.ok == true' /tmp/drape-ready.json >/dev/null 2>&1; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+            echo "summary=Protected beta readiness passed." >> "$GITHUB_OUTPUT"
+          else
+            summary="$(jq -r '[.checks | to_entries[] | select(.value.status == "fail") | "\(.key): \(.value.message)"] | if length == 0 then "Protected beta readiness failed." else join("; ") end' /tmp/drape-ready.json 2>/dev/null || echo 'Protected beta readiness failed.')"
+            summary="${summary//$'\n'/ }"
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Report missing readiness secret
         if: ${{ env.HEALTH_SECRET == '' }}
         run: |
           echo "::warning::Add the repository secret DRAPE_HEALTHCHECK_SECRET to enable protected readiness checks."
+
+      - name: Record current health state
+        id: state
+        if: ${{ always() }}
+        env:
+          LIVE_HEALTHY: ${{ steps.liveness.outputs.healthy }}
+          LIVE_SUMMARY: ${{ steps.liveness.outputs.summary }}
+          READY_HEALTHY: ${{ steps.readiness.outputs.healthy }}
+          READY_SUMMARY: ${{ steps.readiness.outputs.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="ok"
+          if [[ "$LIVE_HEALTHY" != "true" ]]; then
+            current="fail"
+          elif [[ -n "$HEALTH_SECRET" && "$READY_HEALTHY" != "true" ]]; then
+            current="fail"
+          fi
+          mkdir -p /tmp/current-health
+          printf '%s\n' "$current" > /tmp/current-health/state
+          printf '%s %s\n' "$LIVE_SUMMARY" "$READY_SUMMARY" > /tmp/current-health/summary
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "summary=$LIVE_SUMMARY $READY_SUMMARY" >> "$GITHUB_OUTPUT"
+
+      - name: Persist health state
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-service-health-state
+          path: /tmp/current-health
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Notify only when the incident changes
+        if: ${{ always() }}
+        env:
+          CURRENT: ${{ steps.state.outputs.current }}
+          SUMMARY: ${{ steps.state.outputs.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="unknown"
+          if [[ -f /tmp/previous-health/state ]]; then
+            previous="$(tr -d '\r\n' < /tmp/previous-health/state)"
+          fi
+
+          if [[ "$CURRENT" == "fail" && "$previous" == "fail" ]]; then
+            echo "::warning title=Ongoing beta service incident::$SUMMARY"
+            echo "The same incident is still open; a duplicate failure email was suppressed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$CURRENT" == "fail" ]]; then
+            echo "::error title=New beta service incident::$SUMMARY"
+            echo "A new beta service incident started: $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [[ "$previous" == "fail" ]]; then
+            echo "::notice title=Beta service recovered::$SUMMARY"
+            echo "The prior beta service incident recovered." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Beta service health remains clear." >> "$GITHUB_STEP_SUMMARY"
+          fi

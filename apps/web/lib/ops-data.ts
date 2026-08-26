@@ -127,12 +127,79 @@ type PayoutRow = {
   provider: string
   status: string
   provider_payout_id: string | null
+  provider_transfer_status: string | null
+  bank_settlement_status: string | null
+  provider_bank_payout_id: string | null
+  bank_settlement_expected_at: string | null
+  bank_settlement_completed_at: string | null
+  bank_settlement_failed_at: string | null
+  bank_settlement_failure_code: string | null
   blocked_reason: string | null
   order_id: string | null
   initiated_at: string | null
   completed_at: string | null
   failed_at: string | null
   processed_at: string
+}
+
+type MoneyDeskRequestRow = {
+  id: string
+  reference: string
+  action_type: string
+  status: string
+  target_type: string
+  target_id: string
+  order_id: string | null
+  case_id: string | null
+  amount: number | null
+  currency: string | null
+  amount_usd_equivalent: number | null
+  usd_equivalent_source: string | null
+  reason: string
+  action_payload: Record<string, unknown> | null
+  requester_email: string
+  requester_role: string
+  risk_level: string
+  risk_reasons: string[] | null
+  required_approval_count: number
+  approval_count: number
+  correlation_id: string
+  execution_outcome: string | null
+  provider_reference: string | null
+  approved_at: string | null
+  terminal_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+type MoneyDeskDecisionRow = {
+  request_id: string
+  decision: 'APPROVE' | 'REJECT'
+  approver_email: string
+  approver_role: string
+  created_at: string
+}
+
+type FinancialCaseReviewRow = {
+  id: string
+  reference: string
+  reason_code: string
+  summary: string
+  claim_details: Record<string, unknown> | null
+}
+
+type FinancialCaseEvidenceReviewRow = {
+  id: string
+  case_id: string
+  evidence_type: string
+  source: string
+  verification_status: string
+  visibility: string
+  storage_bucket: string | null
+  storage_object_path: string | null
+  external_reference: string | null
+  mime_type: string | null
+  captured_at: string
 }
 
 type OrderPaymentContextRow = {
@@ -229,6 +296,16 @@ type OpsIssueLedgerRow = {
   updated_at: string
 }
 
+type PayoutChangeReviewRow = {
+  id: string
+  status: string
+  current_destination: Record<string, unknown> | null
+  requested_destination: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+  submitted_at: string | null
+  updated_at: string
+}
+
 type OpsAuditLogRow = {
   id: string
   issue_id: string
@@ -290,6 +367,60 @@ type OrderRow = {
   tailor_id: string
 }
 
+type FulfillmentRunRow = {
+  id: string
+  order_id: string
+  status: string
+  funding_status: string
+  currency: string
+  captured_allowance_amount: number
+  customer_funded_allowance_amount: number
+  drapeon_subsidy_amount: number
+  actual_provider_cost_amount: number | null
+  shortfall_subtotal_amount: number
+  shortfall_tax_amount: number
+  shortfall_fee_amount: number
+  shortfall_total_amount: number
+  unused_allowance_amount: number
+  customer_refund_amount: number
+  customer_refund_tax_amount: number
+  customer_refund_status: string
+  subsidy_restored_amount: number
+  provider_name: string | null
+  provider_quote_reference: string | null
+  provider_quote_evidence: unknown[] | null
+  customer_decision: string | null
+  custody_accepted_at: string | null
+}
+
+type FulfillmentParcelRow = {
+  id: string
+  order_id: string
+  parcel_number: number
+  status: string
+  provider_name: string | null
+  service_level: string | null
+  provider_reference: string | null
+  tracking_number: string | null
+  tracking_url: string | null
+  eta_at: string | null
+  eta_timezone: string | null
+  last_location: Record<string, unknown> | null
+  last_status_at: string | null
+}
+
+type FulfillmentEventRow = {
+  id: string
+  order_id: string
+  event_type: string
+  source: string
+  customer_note: string | null
+  occurred_at: string
+  evidence_media: unknown[] | null
+  eta_at: string | null
+  eta_timezone: string | null
+}
+
 type UserRow = {
   id: string
   email: string | null
@@ -311,6 +442,11 @@ export type OpsDispute = {
   orderStage: string | null
   amount: number | null
   currency: string | null
+  capturedAmount: number
+  alreadyRefundedAmount: number
+  refundableAmount: number
+  unreleasedMaterialAmount: number
+  refundablePaymentCount: number
   deliveryMethod: string | null
   fulfillmentOption: string | null
   customerName: string
@@ -425,6 +561,13 @@ export type OpsPayout = {
   provider: string
   status: string
   providerPayoutId: string | null
+  providerTransferStatus: string | null
+  bankSettlementStatus: string | null
+  providerBankPayoutId: string | null
+  bankSettlementExpectedAt: string | null
+  bankSettlementCompletedAt: string | null
+  bankSettlementFailedAt: string | null
+  bankSettlementFailureCode: string | null
   blockedReason: string | null
   blockedReasonMessage: string | null
   orderId: string | null
@@ -453,6 +596,20 @@ export type OpsPayout = {
   completedAt: string | null
   failedAt: string | null
   processedAt: string
+}
+
+export type OpsSettlementTranche = {
+  id: string
+  orderId: string
+  code: string
+  sequence: number
+  amount: number
+  currency: string
+  status: string
+  eligibleAt: string | null
+  waitingHours: number
+  planStatus: string
+  frozenReason: string | null
 }
 
 export type OpsShopItem = {
@@ -540,13 +697,33 @@ export type OpsWorkflowIssue = {
   orderStage: string | null
   relatedEntityType: string | null
   relatedEntityId: string | null
+  financialCaseId: string | null
+  refundResolutionId: string | null
+  refundResolution: {
+    id: string
+    status: string
+    amount: number
+    currency: string
+    providerReference: string | null
+    orderOutcome: string
+    outcomeAppliedAt: string | null
+    reviewedOrderOutcome: string | null
+    reviewedOutcomeReason: string | null
+    reviewedOutcomeAppliedAt: string | null
+  } | null
   materialAdvanceId: string | null
   materialAdvanceAmount: number | null
   materialAdvanceCurrency: string | null
+  materialReconciliationOutcome: string | null
+  materialReconciliationDelta: number | null
+  materialCustomerRefundAmount: number
+  materialUnapprovedOverageAmount: number
   summary: string
   reason: string | null
   blockedReasonCode: string | null
   provider: string | null
+  payoutId: string | null
+  payoutError: string | null
   payoutCurrency: string | null
   lockedPayoutCurrency: string | null
   orderTotalAmount: number | null
@@ -555,6 +732,68 @@ export type OpsWorkflowIssue = {
   maxRefundableAmount: number
   trackingNumber: string | null
   paymentStatus: string | null
+  consultationAttendance: {
+    reviewId: string
+    bookingId: string
+    reviewStatus: string
+    reportedByRole: string
+    reportedReason: string
+    counterpartyResponseCode: string | null
+    counterpartyResponse: string | null
+    evidenceOutcome: string
+    providerEvidenceComplete: boolean
+    customerVerifiedSeconds: number
+    tailorVerifiedSeconds: number
+    verifiedOverlapSeconds: number
+    feeAmount: number | null
+    feeCurrency: string | null
+    paymentStatus: string
+    settlementStatus: string
+  } | null
+  payoutChangeReview: {
+    requestId: string
+    status: string
+    submittedAt: string | null
+    currentDestination: {
+      provider: string | null
+      currency: string | null
+      bankName: string | null
+      accountName: string | null
+      accountMasked: string | null
+      countryCode: string | null
+      accountVerified: boolean
+    } | null
+    requestedDestination: {
+      provider: string | null
+      currency: string | null
+      bankName: string | null
+      accountName: string | null
+      accountMasked: string | null
+      countryCode: string | null
+      accountVerified: boolean
+    } | null
+    accountHolderMatch: boolean | null
+    riskSignals: string[]
+    lifecycleState: string | null
+    confirmationStatus: string | null
+    confirmedAt: string | null
+  } | null
+  fabricReview: {
+    candidateId: string
+    componentCode: string
+    status: string
+    supplierCostAmount: number
+    currency: string
+    providerStatus: string | null
+    providerReference: string | null
+    reconciliationStatus: string | null
+    correlationId: string
+    estimateUrl: string | null
+    receiptUrl: string | null
+    customerMediaUrls: string[]
+    acquiredMediaUrls: string[]
+    ledgerEntries: Array<{ accountCode: string; direction: string; amount: number; currency: string }>
+  } | null
   recommendedAction: string
   createdAt: string
   history: OpsIssueHistoryEntry[]
@@ -569,6 +808,7 @@ export type OpsDispatchItem = {
   stage: string
   stageUpdatedAt: string | null
   amount: number | null
+  checkoutFulfillmentAmount: number
   currency: string | null
   deliveryMethod: string | null
   customerName: string
@@ -585,6 +825,56 @@ export type OpsDispatchItem = {
   contactPhone: string | null
   trackingNumber: string | null
   carrier: string | null
+  fulfillmentRun: {
+    id: string
+    status: string
+    fundingStatus: string
+    currency: string
+    capturedAllowanceAmount: number
+    customerFundedAllowanceAmount: number
+    drapeonSubsidyAmount: number
+    actualProviderCostAmount: number | null
+    shortfallSubtotalAmount: number
+    shortfallTaxAmount: number
+    shortfallFeeAmount: number
+    shortfallTotalAmount: number
+    unusedAllowanceAmount: number
+    customerRefundAmount: number
+    customerRefundTaxAmount: number
+    customerRefundStatus: string
+    subsidyRestoredAmount: number
+    providerName: string | null
+    providerQuoteReference: string | null
+    providerQuoteEvidenceCount: number
+    providerQuoteEvidence: Array<{ url: string; mimeType: string | null }>
+    customerDecision: string | null
+    custodyAcceptedAt: string | null
+  } | null
+  parcels: Array<{
+    id: string
+    parcelNumber: number
+    status: string
+    providerName: string | null
+    serviceLevel: string | null
+    providerReference: string | null
+    trackingNumber: string | null
+    trackingUrl: string | null
+    etaAt: string | null
+    etaTimezone: string | null
+    lastLocation: Record<string, unknown> | null
+    lastStatusAt: string | null
+  }>
+  fulfillmentEvents: Array<{
+    id: string
+    eventType: string
+    source: string
+    customerNote: string | null
+    occurredAt: string
+    evidenceCount: number
+    evidence: Array<{ url: string; mimeType: string | null }>
+    etaAt: string | null
+    etaTimezone: string | null
+  }>
 }
 
 export type OpsOrderReviewItem = {
@@ -604,6 +894,98 @@ export type OpsOrderReviewItem = {
   note: string | null
   requestedAt: string | null
   requestedFromStage: string | null
+  riskAction: 'OPS_FOLLOW_UP' | 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' | null
+}
+
+export type OpsMoneyDeskRequest = {
+  id: string
+  reference: string
+  actionType: string
+  status: string
+  targetType: string
+  targetId: string
+  orderId: string | null
+  caseId: string | null
+  amount: number | null
+  currency: string | null
+  amountUsdEquivalent: number | null
+  usdEquivalentSource: string | null
+  reason: string
+  requesterEmail: string
+  requesterRole: string
+  riskLevel: string
+  riskReasons: string[]
+  requiredApprovalCount: number
+  approvalCount: number
+  correlationId: string
+  executionOutcome: string | null
+  providerReference: string | null
+  approvedAt: string | null
+  terminalAt: string | null
+  createdAt: string
+  updatedAt: string
+  originIssue: {
+    id: string
+    displayId: string
+    title: string
+    summary: string
+    recommendedAction: string
+    severity: string
+    status: string
+  } | null
+  payoutChangeReview: OpsWorkflowIssue['payoutChangeReview']
+  decisions: Array<{
+    decision: 'APPROVE' | 'REJECT'
+    approverEmail: string
+    approverRole: string
+    createdAt: string
+  }>
+  evidenceCase: {
+    reference: string
+    reasonCode: string
+    summary: string
+    decisionBasis: string | null
+    orderOutcome: string | null
+    resumeStage: string | null
+    evidence: Array<{
+      id: string
+      evidenceType: string
+      source: string
+      verificationStatus: string
+      visibility: string
+      externalReference: string | null
+      mimeType: string | null
+      capturedAt: string
+      signedUrl: string | null
+    }>
+  } | null
+}
+
+export type OpsReturnResolution = {
+  id: string
+  reference: string
+  orderId: string
+  financialCaseId: string
+  reasonCode: string
+  requestedRemedy: string
+  summary: string
+  eligibilityStatus: string
+  eligibilityReason: string
+  returnRequired: boolean
+  status: string
+  responseDueAt: string
+  correlationId: string
+  proposalId: string | null
+  proposalRemedy: string | null
+  proposalAmount: number | null
+  proposalCurrency: string | null
+  proposalStatus: string | null
+  refundResolutionId: string | null
+  refundAmount: number | null
+  refundCurrency: string | null
+  refundStatus: string | null
+  recoveryAmount: number
+  createdAt: string
 }
 
 export type OpsDashboardData = {
@@ -628,6 +1010,7 @@ export type OpsDashboardData = {
     providersDegraded: number
     shopInventoryAlerts: number
     activeSupportThreads: number
+    pendingMoneyDeskApprovals: number
   }
   systemHealth: {
     jobQueue: {
@@ -655,6 +1038,28 @@ export type OpsDashboardData = {
   deletionRequests: OpsAccountDeletionRequest[]
   reviewQueue: OpsReviewQueueItem[]
   payouts: OpsPayout[]
+  settlementTranches: OpsSettlementTranche[]
+  moneyDeskRequests: OpsMoneyDeskRequest[]
+  returnResolutions: OpsReturnResolution[]
+  benefitCampaigns: Array<{campaignId:string;benefitId:string|null;name:string;status:string;fundingSource:string;currency:string|null;budgetAmount:number|null;reservedAmount:number;consumedAmount:number;redemptionCount:number;redeemedAmount:number;reversalCount:number}>
+  tips: Array<{id:string;orderId:string;amount:number;currency:string;status:string;provider:string|null;providerReference:string|null;correlationId:string;createdAt:string}>
+  commercialDeliveryOutcomes: Array<{source:string;jobType:string;status:string;outcomeCount:number;oldestCreatedAt:string|null;latestUpdatedAt:string|null}>
+  taxControls: Array<{
+    activationId:string; environment:string; policyVersion:string; status:string;
+    jurisdictionCountryCode:string; originCountryCode:string|null; destinationCountryCode:string|null;
+    transactionType:string; fulfillmentClassification:string; reviewedAt:string; reviewDueAt:string;
+    healthStatus:string; affectedOpenReservations:number; snapshotCount:number; correlationId:string; sourceUrls:string[];
+  }>
+  taxDecisions: Array<{
+    snapshotId:string; orderId:string|null; policyVersion:string; transactionType:string;
+    fulfillmentClassification:string; jurisdictionCountryCode:string; corridorKey:string|null;
+    supplyCharacterization:string; responsibleParty:string; registrationDecision:string;
+    lineClassifications:unknown[]; collectionMode:string; currency:string; subtotalAmount:number;
+    shippingAmount:number; taxAmount:number; importTaxAmount:number; dutyAmount:number;
+    calculationProvider:string; filingLiabilityAccount:string; importTaxLiabilityAccount:string|null;
+    dutyLiabilityAccount:string|null; requiredExportEvidence:string[]; requiredCustomsFields:string[]; sourceUrls:string[];
+    reviewDueAt:string; correlationId:string; createdAt:string;
+  }>
   shopItems: OpsShopItem[]
   supportThreads: OpsSupportThread[]
   orderReviews: OpsOrderReviewItem[]
@@ -694,6 +1099,7 @@ function emptySummary() {
     providersDegraded: 0,
     shopInventoryAlerts: 0,
     activeSupportThreads: 0,
+    pendingMoneyDeskApprovals: 0,
   }
 }
 
@@ -773,6 +1179,52 @@ function payloadStringValue(payload: Record<string, unknown> | null, key: string
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+function payoutDestinationReviewValue(destination: Record<string, unknown> | null) {
+  if (!destination) return null
+  return {
+    provider: payloadStringValue(destination, 'payout_provider'),
+    currency: payloadStringValue(destination, 'payout_currency'),
+    bankName: payloadStringValue(destination, 'payout_bank_name'),
+    accountName: payloadStringValue(destination, 'payout_account_name'),
+    accountMasked: payloadStringValue(destination, 'payout_account_masked'),
+    countryCode: payloadStringValue(destination, 'payout_country_code'),
+    accountVerified: destination.payout_account_verified === true,
+  }
+}
+
+function normalizedPayoutName(value: string | null) {
+  return value?.trim().replace(/\s+/gu, ' ').toUpperCase() ?? ''
+}
+
+function buildPayoutChangeReview(row: PayoutChangeReviewRow): NonNullable<OpsWorkflowIssue['payoutChangeReview']> {
+  const currentDestination = payoutDestinationReviewValue(row.current_destination)
+  const requestedDestination = payoutDestinationReviewValue(row.requested_destination)
+  const currentName = normalizedPayoutName(currentDestination?.accountName ?? null)
+  const requestedName = normalizedPayoutName(requestedDestination?.accountName ?? null)
+  const accountHolderMatch = currentName && requestedName ? currentName === requestedName : null
+  const riskSignals: string[] = []
+  if (currentDestination?.provider !== requestedDestination?.provider) riskSignals.push('Provider changed')
+  if (currentDestination?.currency !== requestedDestination?.currency) riskSignals.push('Currency changed')
+  if (currentDestination?.bankName !== requestedDestination?.bankName) riskSignals.push('Bank changed')
+  if (currentDestination?.accountMasked !== requestedDestination?.accountMasked) riskSignals.push('Account changed')
+  if (accountHolderMatch === false) riskSignals.push('Account holder name changed')
+  if (requestedDestination?.accountVerified !== true) riskSignals.push('Provider verification incomplete')
+  const metadata = row.metadata ?? {}
+
+  return {
+    requestId: row.id,
+    status: row.status,
+    submittedAt: row.submitted_at ?? row.updated_at,
+    currentDestination,
+    requestedDestination,
+    accountHolderMatch,
+    riskSignals,
+    lifecycleState: payloadStringValue(metadata, 'lifecycle_state'),
+    confirmationStatus: payloadStringValue(metadata, 'confirmation_status'),
+    confirmedAt: payloadStringValue(metadata, 'confirmed_at'),
+  }
+}
+
 type OpenOrderReviewMeta = {
   type: 'CANCELLATION' | 'DELIVERY'
   requestedBy: 'CUSTOMER' | 'TAILOR' | null
@@ -780,6 +1232,7 @@ type OpenOrderReviewMeta = {
   note: string | null
   requestedAt: string | null
   requestedFromStage: string | null
+  riskAction: 'OPS_FOLLOW_UP' | 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' | null
 }
 
 function parseOpenOrderReviews(raw: string | null | undefined): OpenOrderReviewMeta[] {
@@ -813,6 +1266,7 @@ function parseOpenOrderReviews(raw: string | null | undefined): OpenOrderReviewM
           typeof cancellationReview.requestedFromStage === 'string' && cancellationReview.requestedFromStage.trim().length > 0
             ? cancellationReview.requestedFromStage
             : null,
+        riskAction: 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED',
       })
     }
 
@@ -840,6 +1294,12 @@ function parseOpenOrderReviews(raw: string | null | undefined): OpenOrderReviewM
           typeof deliveryReview.requestedFromStage === 'string' && deliveryReview.requestedFromStage.trim().length > 0
             ? deliveryReview.requestedFromStage
             : null,
+        riskAction:
+          deliveryReview.riskAction === 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED'
+            ? deliveryReview.riskAction
+            : deliveryReview.riskAction === 'OPS_FOLLOW_UP'
+              ? deliveryReview.riskAction
+              : null,
       })
     }
 
@@ -1224,6 +1684,12 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     reviewQueueResult,
     sellerItemsResult,
     payoutsResult,
+    settlementTranchesResult,
+    moneyDeskRequestsResult,
+    returnResolutionsResult,
+    benefitCampaignsResult,
+    tipsResult,
+    commercialDeliveryOutcomesResult,
     opsIssuesResult,
     legacyWorkflowIssuesResult,
     escrowOrdersResult,
@@ -1272,8 +1738,8 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
     client
       .from('orders')
-      .select('id, reference, order_kind, garment_type, item_title, stage, stage_updated_at, quoted_amount, currency, quoted_currency, delivery_method, fulfillment_option, delivery_address, recipient_name, recipient_phone, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, customer_id, tailor_id')
-      .eq('stage', 'READY_FOR_DRAPE_DISPATCH')
+      .select('id, reference, order_kind, garment_type, item_title, stage, stage_updated_at, quoted_amount, shipping_amount, currency, quoted_currency, delivery_method, fulfillment_option, delivery_address, recipient_name, recipient_phone, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, customer_id, tailor_id')
+      .in('stage', ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'])
       .in('delivery_method', ['LOCAL_DELIVERY', 'SHIPPING'])
       .order('stage_updated_at', { ascending: true })
       .limit(40),
@@ -1306,9 +1772,29 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .limit(48),
     client
       .from('payouts')
-      .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
+      .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, provider_transfer_status, bank_settlement_status, provider_bank_payout_id, bank_settlement_expected_at, bank_settlement_completed_at, bank_settlement_failed_at, bank_settlement_failure_code, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
       .order('processed_at', { ascending: false })
       .limit(24),
+    client
+      .from('order_settlement_tranches')
+      .select('id, order_id, code, sequence, amount, currency, status, eligible_at, order_settlement_plans!inner(status, frozen_reason)')
+      .in('status', ['ELIGIBLE', 'RELEASE_REQUESTED', 'BLOCKED'])
+      .order('eligible_at', { ascending: true, nullsFirst: false })
+      .limit(100),
+    client
+      .from('money_desk_requests')
+      .select('id, reference, action_type, status, target_type, target_id, order_id, case_id, amount, currency, amount_usd_equivalent, usd_equivalent_source, reason, action_payload, requester_email, requester_role, risk_level, risk_reasons, required_approval_count, approval_count, correlation_id, execution_outcome, provider_reference, approved_at, terminal_at, created_at, updated_at')
+      .order('created_at', { ascending: false })
+      .limit(100),
+    client
+      .from('order_return_requests')
+      .select('id, reference, order_id, financial_case_id, reason_code, requested_remedy, summary, eligibility_status, eligibility_reason, return_required, status, response_due_at, correlation_id, created_at, order_resolution_proposals(id, version, remedy, amount, currency, status), order_refund_resolutions(id, amount, currency, status, released_tailor_recovery_amount)')
+      .not('status', 'in', '(RESOLVED,CANCELLED)')
+      .order('created_at', { ascending: true })
+      .limit(100),
+    client.from('commercial_benefit_reporting').select('campaign_id, benefit_id, name, status, funding_source, currency, budget_amount, reserved_amount, consumed_amount, redemption_count, redeemed_amount, reversal_count').order('name').limit(100),
+    client.from('order_tips').select('id, order_id, amount, currency, status, provider, provider_reference, correlation_id, created_at').order('created_at', { ascending: false }).limit(100),
+    client.from('commercial_delivery_outcome_reporting').select('source, job_type, status, outcome_count, oldest_created_at, latest_updated_at').limit(100),
     client
       .from('ops_issues')
       .select('id, issue_number, issue_type, severity, status, source, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action, metadata, created_at, updated_at')
@@ -1382,6 +1868,71 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     dispatchQueueResult.status === 'fulfilled' && !dispatchQueueResult.value.error
       ? ((dispatchQueueResult.value.data ?? []) as OrderRow[])
       : []
+  const dispatchOrderIds = dispatchQueue.map((order) => order.id)
+  let fulfillmentRuns: FulfillmentRunRow[] = []
+  let fulfillmentParcels: FulfillmentParcelRow[] = []
+  let fulfillmentEvents: FulfillmentEventRow[] = []
+  if (dispatchOrderIds.length > 0) {
+    const [runsResult, parcelsResult, eventsResult] = await Promise.all([
+      client
+        .from('order_fulfillment_runs')
+        .select('id,order_id,status,funding_status,currency,captured_allowance_amount,customer_funded_allowance_amount,drapeon_subsidy_amount,actual_provider_cost_amount,shortfall_subtotal_amount,shortfall_tax_amount,shortfall_fee_amount,shortfall_total_amount,unused_allowance_amount,customer_refund_amount,customer_refund_tax_amount,customer_refund_status,subsidy_restored_amount,provider_name,provider_quote_reference,provider_quote_evidence,customer_decision,custody_accepted_at')
+        .in('order_id', dispatchOrderIds),
+      client
+        .from('order_fulfillment_parcels')
+        .select('id,order_id,parcel_number,status,provider_name,service_level,provider_reference,tracking_number,tracking_url,eta_at,eta_timezone,last_location,last_status_at')
+        .in('order_id', dispatchOrderIds)
+        .order('parcel_number', { ascending: true }),
+      client
+        .from('order_fulfillment_events')
+        .select('id,order_id,event_type,source,customer_note,occurred_at,evidence_media,eta_at,eta_timezone')
+        .in('order_id', dispatchOrderIds)
+        .order('occurred_at', { ascending: false })
+        .limit(240),
+    ])
+    if (runsResult.error) issues.push(formatIssue('Dispatch funding', runsResult.error))
+    else fulfillmentRuns = (runsResult.data ?? []) as FulfillmentRunRow[]
+    if (parcelsResult.error) issues.push(formatIssue('Dispatch parcels', parcelsResult.error))
+    else fulfillmentParcels = (parcelsResult.data ?? []) as FulfillmentParcelRow[]
+    if (eventsResult.error) issues.push(formatIssue('Dispatch events', eventsResult.error))
+    else fulfillmentEvents = (eventsResult.data ?? []) as FulfillmentEventRow[]
+  }
+  const fulfillmentRunByOrderId = new Map(fulfillmentRuns.map((run) => [run.order_id, run]))
+  const fulfillmentParcelsByOrderId = new Map<string, FulfillmentParcelRow[]>()
+  const fulfillmentEventsByOrderId = new Map<string, FulfillmentEventRow[]>()
+  for (const parcel of fulfillmentParcels) {
+    fulfillmentParcelsByOrderId.set(parcel.order_id, [...(fulfillmentParcelsByOrderId.get(parcel.order_id) ?? []), parcel])
+  }
+  for (const event of fulfillmentEvents) {
+    fulfillmentEventsByOrderId.set(event.order_id, [...(fulfillmentEventsByOrderId.get(event.order_id) ?? []), event])
+  }
+  const signDispatchEvidence = async (value: unknown) => {
+    if (!Array.isArray(value)) return []
+    return (await Promise.all(value.map(async (artifact) => {
+      const item = artifact && typeof artifact === 'object' ? artifact as Record<string, unknown> : {}
+      const bucket = typeof item.storageBucket === 'string'
+        ? item.storageBucket
+        : typeof item.storage_bucket === 'string'
+          ? item.storage_bucket
+          : null
+      const path = typeof item.storageObjectPath === 'string'
+        ? item.storageObjectPath
+        : typeof item.storage_object_path === 'string'
+          ? item.storage_object_path
+          : null
+      if (!bucket || !path) return null
+      const signed = await client.storage.from(bucket).createSignedUrl(path, 10 * 60)
+      if (signed.error || !signed.data?.signedUrl) return null
+      const mimeType = typeof item.mimeType === 'string'
+        ? item.mimeType
+        : typeof item.mime_type === 'string'
+          ? item.mime_type
+          : null
+      return { url: signed.data.signedUrl, mimeType }
+    }))).filter((item): item is { url: string; mimeType: string | null } => item !== null)
+  }
+  const dispatchRunEvidenceById = new Map(await Promise.all(fulfillmentRuns.map(async (run) => [run.id, await signDispatchEvidence(run.provider_quote_evidence)] as const)))
+  const dispatchEventEvidenceById = new Map(await Promise.all(fulfillmentEvents.map(async (event) => [event.id, await signDispatchEvidence(event.evidence_media)] as const)))
   const applications =
     applicationsResult.status === 'fulfilled' && !applicationsResult.value.error
       ? ((applicationsResult.value.data ?? []) as TailorApplicationRow[])
@@ -1406,10 +1957,214 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     payoutsResult.status === 'fulfilled' && !payoutsResult.value.error
       ? ((payoutsResult.value.data ?? []) as PayoutRow[])
       : []
+  const settlementTranches =
+    settlementTranchesResult.status === 'fulfilled' && !settlementTranchesResult.value.error
+      ? ((settlementTranchesResult.value.data ?? []) as Array<{ id: string; order_id: string; code: string; sequence: number; amount: number; currency: string; status: string; eligible_at: string | null; order_settlement_plans: { status: string; frozen_reason: string | null } | Array<{ status: string; frozen_reason: string | null }> }>)
+      : []
+  const moneyDeskRequests =
+    moneyDeskRequestsResult.status === 'fulfilled' && !moneyDeskRequestsResult.value.error
+      ? ((moneyDeskRequestsResult.value.data ?? []) as MoneyDeskRequestRow[])
+      : []
+  let moneyDeskDecisions: MoneyDeskDecisionRow[] = []
+  let moneyDeskFinancialCases: FinancialCaseReviewRow[] = []
+  let moneyDeskCaseEvidence: Array<FinancialCaseEvidenceReviewRow & { signed_url: string | null }> = []
+  if (moneyDeskRequests.length > 0) {
+    const { data, error } = await client
+      .from('money_desk_decisions')
+      .select('request_id, decision, approver_email, approver_role, created_at')
+      .in('request_id', moneyDeskRequests.map((request) => request.id))
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      issues.push(formatIssue('Money Desk decisions', error))
+    } else {
+      moneyDeskDecisions = (data ?? []) as MoneyDeskDecisionRow[]
+    }
+
+    const caseIds = [...new Set(moneyDeskRequests.map((request) => request.case_id).filter((caseId): caseId is string => !!caseId))]
+    if (caseIds.length > 0) {
+      const [{ data: caseData, error: caseError }, { data: evidenceData, error: evidenceError }] = await Promise.all([
+        client
+          .from('financial_cases')
+          .select('id, reference, reason_code, summary, claim_details')
+          .in('id', caseIds),
+        client
+          .from('financial_case_evidence')
+          .select('id, case_id, evidence_type, source, verification_status, visibility, storage_bucket, storage_object_path, external_reference, mime_type, captured_at')
+          .in('case_id', caseIds)
+          .order('captured_at', { ascending: true }),
+      ])
+
+      if (caseError) issues.push(formatIssue('Money Desk financial cases', caseError))
+      else moneyDeskFinancialCases = (caseData ?? []) as FinancialCaseReviewRow[]
+
+      if (evidenceError) {
+        issues.push(formatIssue('Money Desk case evidence', evidenceError))
+      } else {
+        moneyDeskCaseEvidence = await Promise.all(((evidenceData ?? []) as FinancialCaseEvidenceReviewRow[]).map(async (evidence) => {
+          if (!evidence.storage_bucket || !evidence.storage_object_path) return { ...evidence, signed_url: null }
+          const { data: signedData, error: signedError } = await client.storage
+            .from(evidence.storage_bucket)
+            .createSignedUrl(evidence.storage_object_path, 10 * 60)
+          if (signedError) issues.push(formatIssue(`Evidence ${evidence.id}`, signedError))
+          return { ...evidence, signed_url: signedData?.signedUrl ?? null }
+        }))
+      }
+    }
+  }
+  const returnResolutions =
+    returnResolutionsResult.status === 'fulfilled' && !returnResolutionsResult.value.error
+      ? ((returnResolutionsResult.value.data ?? []) as Array<Record<string, unknown>>)
+      : []
+  const benefitCampaigns = benefitCampaignsResult.status === 'fulfilled' && !benefitCampaignsResult.value.error ? ((benefitCampaignsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const tips = tipsResult.status === 'fulfilled' && !tipsResult.value.error ? ((tipsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const commercialDeliveryOutcomes = commercialDeliveryOutcomesResult.status === 'fulfilled' && !commercialDeliveryOutcomesResult.value.error ? ((commercialDeliveryOutcomesResult.value.data ?? []) as Array<Record<string, unknown>>) : []
   const opsIssues =
     opsIssuesResult.status === 'fulfilled' && !opsIssuesResult.value.error
       ? ((opsIssuesResult.value.data ?? []) as OpsIssueLedgerRow[])
       : []
+  const refundResolutionIds = [...new Set(opsIssues
+    .map((issue) => payloadStringValue(issue.metadata, 'refund_resolution_id'))
+    .filter((id): id is string => !!id))]
+  const refundResolutionById = new Map<string, NonNullable<OpsWorkflowIssue['refundResolution']>>()
+  if (refundResolutionIds.length > 0) {
+    const { data: rows, error: refundResolutionError } = await client
+      .from('order_refund_resolutions')
+      .select('id,status,amount,currency,provider_reference,order_outcome,outcome_applied_at,reviewed_order_outcome,reviewed_outcome_reason,reviewed_outcome_applied_at')
+      .in('id', refundResolutionIds)
+    if (refundResolutionError) issues.push(formatIssue('Refund order outcomes', refundResolutionError))
+    else for (const row of (rows ?? []) as Array<Record<string, unknown>>) {
+      refundResolutionById.set(String(row.id), {
+        id: String(row.id),
+        status: String(row.status),
+        amount: Number(row.amount),
+        currency: String(row.currency),
+        providerReference: typeof row.provider_reference === 'string' ? row.provider_reference : null,
+        orderOutcome: String(row.order_outcome),
+        outcomeAppliedAt: typeof row.outcome_applied_at === 'string' ? row.outcome_applied_at : null,
+        reviewedOrderOutcome: typeof row.reviewed_order_outcome === 'string' ? row.reviewed_order_outcome : null,
+        reviewedOutcomeReason: typeof row.reviewed_outcome_reason === 'string' ? row.reviewed_outcome_reason : null,
+        reviewedOutcomeAppliedAt: typeof row.reviewed_outcome_applied_at === 'string' ? row.reviewed_outcome_applied_at : null,
+      })
+    }
+  }
+  const fabricCandidateIds = [...new Set(opsIssues
+    .filter((issue) => issue.related_entity_type?.toUpperCase() === 'FABRIC_CANDIDATE' && !!issue.related_entity_id)
+    .map((issue) => issue.related_entity_id!))]
+  const fabricReviewById = new Map<string, NonNullable<OpsWorkflowIssue['fabricReview']>>()
+  if (fabricCandidateIds.length > 0) {
+    const { data: rows, error: fabricError } = await client
+      .from('order_fabric_candidates')
+      .select('id,component_code,status,supplier_cost_amount,currency,provider_status,provider_reference,reconciliation_status,correlation_id,estimate_storage_bucket,estimate_storage_path,receipt_storage_bucket,receipt_storage_path,customer_media,acquired_media')
+      .in('id', fabricCandidateIds)
+    if (fabricError) issues.push(formatIssue('Fabric exception candidates', fabricError))
+    else {
+      for (const row of (rows ?? []) as Array<Record<string, unknown>>) {
+        const sign = async (bucket: unknown, path: unknown) => {
+          if (typeof bucket !== 'string' || typeof path !== 'string' || path.length < 3) return null
+          const result = await client.storage.from(bucket).createSignedUrl(path, 10 * 60)
+          return result.error ? null : result.data?.signedUrl ?? null
+        }
+        const signArtifacts = async (value: unknown) => {
+          if (!Array.isArray(value)) return []
+          const urls = await Promise.all(value.map((artifact) => {
+            const item = artifact && typeof artifact === 'object' ? artifact as Record<string, unknown> : {}
+            const path = item.mediaType === 'VIDEO'
+              ? item.posterStoragePath ?? item.originalStoragePath
+              : item.displayStoragePath ?? item.originalStoragePath
+            return sign('commercial-evidence', path)
+          }))
+          return urls.filter((url): url is string => !!url)
+        }
+        const id = String(row.id)
+        const { data: transactionRows } = await client.from('commercial_ledger_transactions').select('id').contains('metadata', { candidateId: id }).limit(5)
+        const transactionIds = (transactionRows ?? []).map((transaction) => String(transaction.id))
+        const ledgerEntries = transactionIds.length > 0
+          ? ((await client.from('commercial_ledger_entries').select('account_code,direction,amount,currency').in('transaction_id', transactionIds)).data ?? [])
+          : []
+        fabricReviewById.set(id, {
+          candidateId: id,
+          componentCode: String(row.component_code),
+          status: String(row.status),
+          supplierCostAmount: Number(row.supplier_cost_amount),
+          currency: String(row.currency),
+          providerStatus: typeof row.provider_status === 'string' ? row.provider_status : null,
+          providerReference: typeof row.provider_reference === 'string' ? row.provider_reference : null,
+          reconciliationStatus: typeof row.reconciliation_status === 'string' ? row.reconciliation_status : null,
+          correlationId: String(row.correlation_id),
+          estimateUrl: await sign(row.estimate_storage_bucket, row.estimate_storage_path),
+          receiptUrl: await sign(row.receipt_storage_bucket, row.receipt_storage_path),
+          customerMediaUrls: await signArtifacts(row.customer_media),
+          acquiredMediaUrls: await signArtifacts(row.acquired_media),
+          ledgerEntries: (ledgerEntries as Array<Record<string, unknown>>).map((entry) => ({
+            accountCode: String(entry.account_code), direction: String(entry.direction),
+            amount: Number(entry.amount), currency: String(entry.currency),
+          })),
+        })
+      }
+    }
+  }
+  const payoutChangeRequestIds = [...new Set(opsIssues
+    .filter((issue) => issue.related_entity_type === 'payout_change_request' && !!issue.related_entity_id)
+    .map((issue) => issue.related_entity_id!))]
+  const payoutChangeReviewById = new Map<string, NonNullable<OpsWorkflowIssue['payoutChangeReview']>>()
+  if (payoutChangeRequestIds.length > 0) {
+    const { data: payoutChangeRows, error: payoutChangeError } = await client
+      .from('payout_change_requests')
+      .select('id,status,current_destination,requested_destination,metadata,submitted_at,updated_at')
+      .in('id', payoutChangeRequestIds)
+    if (payoutChangeError) {
+      issues.push(formatIssue('Payout destination reviews', payoutChangeError))
+    } else {
+      for (const row of (payoutChangeRows ?? []) as PayoutChangeReviewRow[]) {
+        payoutChangeReviewById.set(row.id, buildPayoutChangeReview(row))
+      }
+    }
+  }
+  const consultationBookingIds = [...new Set(opsIssues
+    .filter((issue) => issue.related_entity_type === 'CONSULTATION_BOOKING' && !!issue.related_entity_id)
+    .map((issue) => issue.related_entity_id!))]
+  const consultationAttendanceByBookingId = new Map<string, OpsWorkflowIssue['consultationAttendance']>()
+  if (consultationBookingIds.length > 0) {
+    const [reviewResult, evidenceResult, bookingResult] = await Promise.all([
+      client.from('consultation_attendance_reviews')
+        .select('id,booking_id,status,reported_by_role,reported_reason,counterparty_response_code,counterparty_response,evidence_outcome_at_report')
+        .in('booking_id', consultationBookingIds),
+      client.from('consultation_attendance_evidence')
+        .select('booking_id,provider_evidence_complete,customer_verified_seconds,tailor_verified_seconds,verified_overlap_seconds')
+        .in('booking_id', consultationBookingIds),
+      client.from('consultation_bookings')
+        .select('id,fee_amount,fee_currency,payment_status,settlement_status')
+        .in('id', consultationBookingIds),
+    ])
+    if (reviewResult.error) issues.push(formatIssue('Consultation attendance reviews', reviewResult.error))
+    if (evidenceResult.error) issues.push(formatIssue('Consultation attendance evidence', evidenceResult.error))
+    if (bookingResult.error) issues.push(formatIssue('Consultation booking settlement', bookingResult.error))
+    const evidenceByBookingId = new Map((evidenceResult.data ?? []).map((row) => [row.booking_id, row]))
+    const bookingById = new Map((bookingResult.data ?? []).map((row) => [row.id, row]))
+    for (const row of reviewResult.data ?? []) {
+      const evidence = evidenceByBookingId.get(row.booking_id)
+      const booking = bookingById.get(row.booking_id)
+      consultationAttendanceByBookingId.set(row.booking_id, {
+        reviewId: row.id,
+        bookingId: row.booking_id,
+        reviewStatus: row.status,
+        reportedByRole: row.reported_by_role,
+        reportedReason: row.reported_reason,
+        counterpartyResponseCode: row.counterparty_response_code ?? null,
+        counterpartyResponse: row.counterparty_response ?? null,
+        evidenceOutcome: row.evidence_outcome_at_report,
+        providerEvidenceComplete: evidence?.provider_evidence_complete === true,
+        customerVerifiedSeconds: evidence?.customer_verified_seconds ?? 0,
+        tailorVerifiedSeconds: evidence?.tailor_verified_seconds ?? 0,
+        verifiedOverlapSeconds: evidence?.verified_overlap_seconds ?? 0,
+        feeAmount: booking?.fee_amount ?? null,
+        feeCurrency: booking?.fee_currency ?? null,
+        paymentStatus: booking?.payment_status ?? 'UNKNOWN',
+        settlementStatus: booking?.settlement_status ?? 'UNKNOWN',
+      })
+    }
+  }
   const legacyWorkflowIssues =
     legacyWorkflowIssuesResult.status === 'fulfilled' && !legacyWorkflowIssuesResult.value.error
       ? ((legacyWorkflowIssuesResult.value.data ?? []) as AuditLogRow[])
@@ -1540,6 +2295,12 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   if (payoutsResult.status === 'fulfilled' && payoutsResult.value.error) {
     issues.push(formatIssue('Payouts', payoutsResult.value.error))
   }
+  if (moneyDeskRequestsResult.status === 'rejected') issues.push(formatIssue('Money Desk', moneyDeskRequestsResult.reason))
+  if (moneyDeskRequestsResult.status === 'fulfilled' && moneyDeskRequestsResult.value.error) {
+    issues.push(formatIssue('Money Desk', moneyDeskRequestsResult.value.error))
+  }
+  if (returnResolutionsResult.status === 'rejected') issues.push(formatIssue('Return resolutions', returnResolutionsResult.reason))
+  if (returnResolutionsResult.status === 'fulfilled' && returnResolutionsResult.value.error) issues.push(formatIssue('Return resolutions', returnResolutionsResult.value.error))
   if (opsIssuesResult.status === 'rejected') issues.push(formatIssue('Ops issues', opsIssuesResult.reason))
   if (opsIssuesResult.status === 'fulfilled' && opsIssuesResult.value.error) {
     issues.push(formatIssue('Ops issues', opsIssuesResult.value.error))
@@ -1630,6 +2391,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   )
   const openPayouts = payouts.filter((payout) => OPEN_PAYOUT_STATUSES.includes(payout.status as (typeof OPEN_PAYOUT_STATUSES)[number]))
   summary.pendingPayoutCount = openPayouts.length
+  summary.pendingMoneyDeskApprovals = moneyDeskRequests.filter((request) => request.status === 'PENDING_APPROVAL').length
   summary.pendingPayoutValueLabel = formatGroupedCurrencyTotals(
     openPayouts.map((payout) => ({
       amount: payout.amount,
@@ -1662,6 +2424,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       note: review.note,
       requestedAt: review.requestedAt,
       requestedFromStage: review.requestedFromStage,
+      riskAction: review.riskAction,
     }))
   )
   summary.pendingOrderReviews = openOrderReviews.length
@@ -1707,6 +2470,8 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     capturedAmount: number
     alreadyRefundedAmount: number
     maxRefundableAmount: number
+    unreleasedMaterialAmount: number
+    refundablePaymentCount: number
     paymentStatus: string | null
     paymentProvider: string | null
   }>()
@@ -1735,6 +2500,22 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       issues.push(formatIssue('Order payment context', orderPaymentsError))
     } else {
       const paymentRows = (orderPaymentsData ?? []) as OrderPaymentContextRow[]
+      const { data: materialAdvanceRows, error: materialAdvanceError } = await client
+        .from('order_material_advances')
+        .select('order_id,payment_id,release_status,provider_release_status,released_at,paid_at')
+        .in('order_id', orderIds)
+      if (materialAdvanceError) issues.push(formatIssue('Material cancellation exposure', materialAdvanceError))
+      const safelyUnreleasedPaymentIds = new Set(
+        (materialAdvanceRows ?? [])
+          .filter((advance) =>
+            advance.payment_id
+            && advance.paid_at
+            && !advance.released_at
+            && advance.release_status !== 'RELEASED'
+            && ['NOT_REQUESTED', 'BLOCKED'].includes(advance.provider_release_status ?? 'NOT_REQUESTED')
+          )
+          .map((advance) => advance.payment_id as string),
+      )
       for (const orderId of orderIds) {
         const payments = paymentRows
           .filter((row) => row.order_id === orderId)
@@ -1744,10 +2525,24 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
           .filter((row) => ['SUCCEEDED', 'PARTIAL_REFUND', 'REFUNDED'].includes(row.status))
           .reduce((sum, row) => sum + Math.max(row.amount, 0), 0)
         const alreadyRefundedAmount = payments.reduce((sum, row) => sum + orderPaymentRefundedAmount(row), 0)
+        const refundablePayments = payments.filter((row) =>
+          ['INITIAL_ORDER', 'CONSULTATION', 'FULFILLMENT', 'MATERIAL_ADVANCE'].includes(row.phase)
+          && ['SUCCEEDED', 'PARTIAL_REFUND'].includes(row.status)
+          && Math.max(row.amount - orderPaymentRefundedAmount(row), 0) > 0
+          && (row.phase !== 'MATERIAL_ADVANCE' || safelyUnreleasedPaymentIds.has(row.id))
+        )
+        const unreleasedMaterialAmount = refundablePayments
+          .filter((row) => row.phase === 'MATERIAL_ADVANCE' && safelyUnreleasedPaymentIds.has(row.id))
+          .reduce((sum, row) => sum + Math.max(row.amount - orderPaymentRefundedAmount(row), 0), 0)
         orderPaymentContextByOrderId.set(orderId, {
           capturedAmount,
           alreadyRefundedAmount,
-          maxRefundableAmount: Math.max(capturedAmount - alreadyRefundedAmount, 0),
+          maxRefundableAmount: refundablePayments.reduce(
+            (sum, row) => sum + Math.max(row.amount - orderPaymentRefundedAmount(row), 0),
+            0,
+          ),
+          unreleasedMaterialAmount,
+          refundablePaymentCount: refundablePayments.length,
           paymentStatus: latestPayment?.status ?? null,
           paymentProvider: latestPayment?.provider ?? null,
         })
@@ -1910,13 +2705,75 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     verificationProofItemsByProfileId.set(item.tailor_profile_id, current)
   }
 
+  const { data: taxControlRows, error: taxControlError } = await client
+    .from('tax_control_health')
+    .select('activation_id,environment,policy_version,status,jurisdiction_country_code,origin_country_code,destination_country_code,tax_transaction_type,fulfillment_classification,reviewed_at,review_due_at,health_status,affected_open_reservations,snapshot_count,correlation_id,source_urls')
+    .order('review_due_at', { ascending: true })
+  if (taxControlError) issues.push(formatIssue('Activated tax controls', taxControlError))
+
+  const { data: taxDecisionRows, error: taxDecisionError } = await client
+    .from('tax_decision_ops')
+    .select('snapshot_id,order_id,policy_version,tax_transaction_type,fulfillment_classification,jurisdiction_country_code,corridor_key,tax_supply_characterization,responsible_party,registration_decision,line_classifications,collection_mode,currency,subtotal_amount,shipping_amount,tax_amount,import_tax_amount,duty_amount,calculation_provider,filing_liability_account,import_tax_liability_account,duty_liability_account,required_export_evidence,required_customs_fields,source_urls,review_due_at,correlation_id,created_at')
+    .order('created_at', { ascending: false })
+    .limit(25)
+  if (taxDecisionError) issues.push(formatIssue('Tax decision evidence', taxDecisionError))
+
   return {
     summary,
     systemHealth,
+    taxControls: (taxControlRows ?? []).map((row) => ({
+      activationId: row.activation_id,
+      environment: row.environment,
+      policyVersion: row.policy_version,
+      status: row.status,
+      jurisdictionCountryCode: row.jurisdiction_country_code,
+      originCountryCode: row.origin_country_code,
+      destinationCountryCode: row.destination_country_code,
+      transactionType: row.tax_transaction_type,
+      fulfillmentClassification: row.fulfillment_classification,
+      reviewedAt: row.reviewed_at,
+      reviewDueAt: row.review_due_at,
+      healthStatus: row.health_status,
+      affectedOpenReservations: Number(row.affected_open_reservations ?? 0),
+      snapshotCount: Number(row.snapshot_count ?? 0),
+      correlationId: row.correlation_id,
+      sourceUrls: Array.isArray(row.source_urls) ? row.source_urls : [],
+    })),
+    taxDecisions: (taxDecisionRows ?? []).map((row) => ({
+      snapshotId: row.snapshot_id,
+      orderId: row.order_id,
+      policyVersion: row.policy_version,
+      transactionType: row.tax_transaction_type,
+      fulfillmentClassification: row.fulfillment_classification,
+      jurisdictionCountryCode: row.jurisdiction_country_code,
+      corridorKey: row.corridor_key,
+      supplyCharacterization: row.tax_supply_characterization,
+      responsibleParty: row.responsible_party,
+      registrationDecision: row.registration_decision,
+      lineClassifications: Array.isArray(row.line_classifications) ? row.line_classifications : [],
+      collectionMode: row.collection_mode,
+      currency: row.currency,
+      subtotalAmount: Number(row.subtotal_amount ?? 0),
+      shippingAmount: Number(row.shipping_amount ?? 0),
+      taxAmount: Number(row.tax_amount ?? 0),
+      importTaxAmount: Number(row.import_tax_amount ?? 0),
+      dutyAmount: Number(row.duty_amount ?? 0),
+      calculationProvider: row.calculation_provider,
+      filingLiabilityAccount: row.filing_liability_account,
+      importTaxLiabilityAccount: row.import_tax_liability_account,
+      dutyLiabilityAccount: row.duty_liability_account,
+      requiredExportEvidence: Array.isArray(row.required_export_evidence) ? row.required_export_evidence : [],
+      requiredCustomsFields: Array.isArray(row.required_customs_fields) ? row.required_customs_fields : [],
+      sourceUrls: Array.isArray(row.source_urls) ? row.source_urls : [],
+      reviewDueAt: row.review_due_at,
+      correlationId: row.correlation_id,
+      createdAt: row.created_at,
+    })),
     disputes: disputes.map((dispute) => {
       const order = ordersById.get(dispute.order_id)
       const customer = order ? usersById.get(order.customer_id) : null
       const tailor = order ? usersById.get(order.tailor_id) : null
+      const paymentContext = orderPaymentContextByOrderId.get(dispute.order_id)
 
       return {
         id: dispute.id,
@@ -1925,6 +2782,11 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         orderStage: order?.stage ?? null,
         amount: order?.quoted_amount ?? null,
         currency: order?.currency ?? order?.quoted_currency ?? null,
+        capturedAmount: paymentContext?.capturedAmount ?? 0,
+        alreadyRefundedAmount: paymentContext?.alreadyRefundedAmount ?? 0,
+        refundableAmount: paymentContext?.maxRefundableAmount ?? 0,
+        unreleasedMaterialAmount: paymentContext?.unreleasedMaterialAmount ?? 0,
+        refundablePaymentCount: paymentContext?.refundablePaymentCount ?? 0,
         deliveryMethod: order?.delivery_method ?? null,
         fulfillmentOption: order?.fulfillment_option ?? null,
         customerName: customer?.display_name ?? 'Customer',
@@ -2090,6 +2952,13 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         provider: payout.provider,
         status: payout.status,
         providerPayoutId: payout.provider_payout_id,
+        providerTransferStatus: payout.provider_transfer_status,
+        bankSettlementStatus: payout.bank_settlement_status,
+        providerBankPayoutId: payout.provider_bank_payout_id,
+        bankSettlementExpectedAt: payout.bank_settlement_expected_at,
+        bankSettlementCompletedAt: payout.bank_settlement_completed_at,
+        bankSettlementFailedAt: payout.bank_settlement_failed_at,
+        bankSettlementFailureCode: payout.bank_settlement_failure_code,
         blockedReason: payout.blocked_reason,
         blockedReasonMessage: payoutBlockedReasonCopy(payout.blocked_reason),
         orderId: payout.order_id,
@@ -2120,6 +2989,128 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         processedAt: payout.processed_at,
       }
     }),
+    settlementTranches: settlementTranches.map((tranche) => {
+      const plan = Array.isArray(tranche.order_settlement_plans) ? tranche.order_settlement_plans[0] : tranche.order_settlement_plans
+      return {
+        id: tranche.id,
+        orderId: tranche.order_id,
+        code: tranche.code,
+        sequence: tranche.sequence,
+        amount: tranche.amount,
+        currency: tranche.currency,
+        status: tranche.status,
+        eligibleAt: tranche.eligible_at,
+        waitingHours: tranche.eligible_at ? Math.max(0, Math.floor((Date.now() - Date.parse(tranche.eligible_at)) / 3_600_000)) : 0,
+        planStatus: plan?.status ?? 'UNKNOWN',
+        frozenReason: plan?.frozen_reason ?? null,
+      }
+    }),
+    moneyDeskRequests: moneyDeskRequests.map((request) => {
+      const originIssue = opsIssues.find((issue) =>
+        issue.related_entity_id === request.target_id
+        && (
+          issue.related_entity_type?.toUpperCase() === request.target_type.toUpperCase()
+          || (request.target_type === 'PAYOUT_CHANGE_REQUEST' && issue.related_entity_type === 'payout_change_request')
+        )) ?? null
+      return {
+      id: request.id,
+      reference: request.reference,
+      actionType: request.action_type,
+      status: request.status,
+      targetType: request.target_type,
+      targetId: request.target_id,
+      orderId: request.order_id,
+      caseId: request.case_id,
+      amount: request.amount,
+      currency: request.currency,
+      amountUsdEquivalent: request.amount_usd_equivalent,
+      usdEquivalentSource: request.usd_equivalent_source,
+      reason: request.reason,
+      requesterEmail: request.requester_email,
+      requesterRole: request.requester_role,
+      riskLevel: request.risk_level,
+      riskReasons: request.risk_reasons ?? [],
+      requiredApprovalCount: request.required_approval_count,
+      approvalCount: request.approval_count,
+      correlationId: request.correlation_id,
+      executionOutcome: request.execution_outcome,
+      providerReference: request.provider_reference,
+      approvedAt: request.approved_at,
+      terminalAt: request.terminal_at,
+      createdAt: request.created_at,
+      updatedAt: request.updated_at,
+      originIssue: originIssue ? {
+        id: originIssue.id,
+        displayId: formatOpsIssueNumber(originIssue.issue_number),
+        title: originIssue.title,
+        summary: originIssue.description,
+        recommendedAction: originIssue.recommended_action,
+        severity: originIssue.severity,
+        status: originIssue.status,
+      } : null,
+      payoutChangeReview: request.target_type === 'PAYOUT_CHANGE_REQUEST'
+        ? payoutChangeReviewById.get(request.target_id) ?? null
+        : null,
+      decisions: moneyDeskDecisions
+        .filter((decision) => decision.request_id === request.id)
+        .map((decision) => ({
+          decision: decision.decision,
+          approverEmail: decision.approver_email,
+          approverRole: decision.approver_role,
+          createdAt: decision.created_at,
+        })),
+      evidenceCase: (() => {
+        if (!request.case_id) return null
+        const financialCase = moneyDeskFinancialCases.find((candidate) => candidate.id === request.case_id)
+        if (!financialCase) return null
+        const claimDetails = financialCase.claim_details && typeof financialCase.claim_details === 'object'
+          ? financialCase.claim_details
+          : {}
+        return {
+          reference: financialCase.reference,
+          reasonCode: financialCase.reason_code,
+          summary: financialCase.summary,
+          decisionBasis: typeof claimDetails.decisionBasis === 'string' ? claimDetails.decisionBasis : null,
+          orderOutcome: typeof request.action_payload?.orderOutcome === 'string' ? request.action_payload.orderOutcome : null,
+          resumeStage: typeof request.action_payload?.resumeStage === 'string' ? request.action_payload.resumeStage : null,
+          evidence: moneyDeskCaseEvidence
+            .filter((evidence) => evidence.case_id === request.case_id)
+            .map((evidence) => ({
+              id: evidence.id,
+              evidenceType: evidence.evidence_type,
+              source: evidence.source,
+              verificationStatus: evidence.verification_status,
+              visibility: evidence.visibility,
+              externalReference: evidence.external_reference,
+              mimeType: evidence.mime_type,
+              capturedAt: evidence.captured_at,
+              signedUrl: evidence.signed_url,
+            })),
+        }
+      })(),
+    }}),
+    returnResolutions: returnResolutions.map((row) => {
+      const proposals = Array.isArray(row.order_resolution_proposals) ? row.order_resolution_proposals as Array<Record<string, unknown>> : []
+      const proposal = [...proposals].sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0))[0]
+      const refundRows = Array.isArray(row.order_refund_resolutions) ? row.order_refund_resolutions as Array<Record<string, unknown>> : []
+      const refund = refundRows[0]
+      return {
+        id: String(row.id), reference: String(row.reference), orderId: String(row.order_id), financialCaseId: String(row.financial_case_id),
+        reasonCode: String(row.reason_code), requestedRemedy: String(row.requested_remedy), summary: String(row.summary),
+        eligibilityStatus: String(row.eligibility_status), eligibilityReason: String(row.eligibility_reason), returnRequired: row.return_required === true,
+        status: String(row.status), responseDueAt: String(row.response_due_at), correlationId: String(row.correlation_id),
+        proposalId: proposal?.id ? String(proposal.id) : null, proposalRemedy: proposal?.remedy ? String(proposal.remedy) : null,
+        proposalAmount: typeof proposal?.amount === 'number' ? proposal.amount : null, proposalCurrency: proposal?.currency ? String(proposal.currency) : null,
+        proposalStatus: proposal?.status ? String(proposal.status) : null,
+        refundResolutionId: refund?.id ? String(refund.id) : null, refundAmount: typeof refund?.amount === 'number' ? refund.amount : null,
+        refundCurrency: refund?.currency ? String(refund.currency) : null, refundStatus: refund?.status ? String(refund.status) : null,
+        recoveryAmount: typeof refund?.released_tailor_recovery_amount === 'number' ? refund.released_tailor_recovery_amount : 0,
+        createdAt: String(row.created_at),
+      }
+    }),
+    benefitCampaigns: benefitCampaigns.map(row=>({campaignId:String(row.campaign_id),benefitId:typeof row.benefit_id==='string'?row.benefit_id:null,name:String(row.name),status:String(row.status),fundingSource:String(row.funding_source),currency:typeof row.currency==='string'?row.currency:null,budgetAmount:typeof row.budget_amount==='number'?row.budget_amount:null,reservedAmount:Number(row.reserved_amount??0),consumedAmount:Number(row.consumed_amount??0),redemptionCount:Number(row.redemption_count??0),redeemedAmount:Number(row.redeemed_amount??0),reversalCount:Number(row.reversal_count??0)})),
+    tips: tips.map(row=>({id:String(row.id),orderId:String(row.order_id),amount:Number(row.amount),currency:String(row.currency),status:String(row.status),provider:typeof row.provider==='string'?row.provider:null,providerReference:typeof row.provider_reference==='string'?row.provider_reference:null,correlationId:String(row.correlation_id),createdAt:String(row.created_at)})),
+    commercialDeliveryOutcomes: commercialDeliveryOutcomes.map(row=>({source:String(row.source),jobType:String(row.job_type),status:String(row.status),outcomeCount:Number(row.outcome_count??0),oldestCreatedAt:typeof row.oldest_created_at==='string'?row.oldest_created_at:null,latestUpdatedAt:typeof row.latest_updated_at==='string'?row.latest_updated_at:null})),
     shopItems: sellerItems.map((item) => {
       const tailorProfile = tailorProfilesById.get(item.tailor_profile_id)
       const tailorUser = tailorProfile ? usersById.get(tailorProfile.user_id) : null
@@ -2213,6 +3204,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         note: review.note,
         requestedAt: review.requestedAt,
         requestedFromStage: review.requestedFromStage,
+        riskAction: review.riskAction,
       }
     }),
     workflowIssues: [
@@ -2237,6 +3229,9 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
           orderStage: order?.stage ?? workflowIssue.stage ?? null,
           relatedEntityType: workflowIssue.related_entity_type,
           relatedEntityId: workflowIssue.related_entity_id,
+          financialCaseId: payloadStringValue(workflowIssue.metadata, 'financial_case_id'),
+          refundResolutionId: payloadStringValue(workflowIssue.metadata, 'refund_resolution_id'),
+          refundResolution: refundResolutionById.get(payloadStringValue(workflowIssue.metadata, 'refund_resolution_id') ?? '') ?? null,
           materialAdvanceId:
             workflowIssue.related_entity_type === 'order_material_advance'
               ? workflowIssue.related_entity_id
@@ -2244,12 +3239,18 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
                 ?? payloadStringValue(workflowIssue.metadata, 'material_advance_id'),
           materialAdvanceAmount: numberPayloadValue(workflowIssue.metadata ?? {}, 'amount'),
           materialAdvanceCurrency: payloadStringValue(workflowIssue.metadata, 'currency'),
+          materialReconciliationOutcome: payloadStringValue(workflowIssue.metadata, 'reconciliation_outcome'),
+          materialReconciliationDelta: numberPayloadValue(workflowIssue.metadata ?? {}, 'reconciliation_delta'),
+          materialCustomerRefundAmount: numberPayloadValue(workflowIssue.metadata ?? {}, 'customer_refund_amount') ?? 0,
+          materialUnapprovedOverageAmount: numberPayloadValue(workflowIssue.metadata ?? {}, 'unapproved_overage_amount') ?? 0,
           summary: workflowIssue.description,
           reason:
             payloadStringValue(workflowIssue.metadata, 'reason')
             ?? payloadStringValue(workflowIssue.metadata, 'blocked_reason'),
           blockedReasonCode: payloadStringValue(workflowIssue.metadata, 'blocked_reason'),
           provider: workflowIssue.provider ?? payloadStringValue(workflowIssue.metadata, 'provider'),
+          payoutId: payloadStringValue(workflowIssue.metadata, 'payout_id'),
+          payoutError: payloadStringValue(workflowIssue.metadata, 'error'),
           payoutCurrency: payloadStringValue(workflowIssue.metadata, 'payout_currency'),
           lockedPayoutCurrency:
             payloadStringValue(workflowIssue.metadata, 'locked_payout_currency')
@@ -2264,8 +3265,19 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
             : 0,
           trackingNumber: payloadStringValue(workflowIssue.metadata, 'tracking_number'),
           paymentStatus: payloadStringValue(workflowIssue.metadata, 'payment_status'),
+          consultationAttendance: workflowIssue.related_entity_type === 'CONSULTATION_BOOKING' && workflowIssue.related_entity_id
+            ? consultationAttendanceByBookingId.get(workflowIssue.related_entity_id) ?? null
+            : null,
+          payoutChangeReview: workflowIssue.related_entity_type === 'payout_change_request' && workflowIssue.related_entity_id
+            ? payoutChangeReviewById.get(workflowIssue.related_entity_id) ?? null
+            : null,
+          fabricReview: workflowIssue.related_entity_type?.toUpperCase() === 'FABRIC_CANDIDATE' && workflowIssue.related_entity_id
+            ? fabricReviewById.get(workflowIssue.related_entity_id) ?? null
+            : null,
           recommendedAction: workflowIssue.recommended_action,
-          createdAt: workflowIssue.created_at,
+          createdAt: workflowIssue.related_entity_type === 'payout_change_request' && workflowIssue.related_entity_id
+            ? payoutChangeReviewById.get(workflowIssue.related_entity_id)?.submittedAt ?? workflowIssue.created_at
+            : workflowIssue.created_at,
           history: issueHistoryByIssueId.get(workflowIssue.id) ?? [],
         }
       }),
@@ -2289,15 +3301,24 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
           orderStage: order?.stage ?? null,
           relatedEntityType: null,
           relatedEntityId: null,
+          financialCaseId: payloadStringValue(workflowIssue.payload, 'financial_case_id'),
+          refundResolutionId: payloadStringValue(workflowIssue.payload, 'refund_resolution_id'),
+          refundResolution: refundResolutionById.get(payloadStringValue(workflowIssue.payload, 'refund_resolution_id') ?? '') ?? null,
           materialAdvanceId:
             payloadStringValue(workflowIssue.payload, 'advance_id')
             ?? payloadStringValue(workflowIssue.payload, 'material_advance_id'),
           materialAdvanceAmount: numberPayloadValue(workflowIssue.payload ?? {}, 'amount'),
           materialAdvanceCurrency: payloadStringValue(workflowIssue.payload, 'currency'),
+          materialReconciliationOutcome: payloadStringValue(workflowIssue.payload, 'reconciliation_outcome'),
+          materialReconciliationDelta: numberPayloadValue(workflowIssue.payload ?? {}, 'reconciliation_delta'),
+          materialCustomerRefundAmount: numberPayloadValue(workflowIssue.payload ?? {}, 'customer_refund_amount') ?? 0,
+          materialUnapprovedOverageAmount: numberPayloadValue(workflowIssue.payload ?? {}, 'unapproved_overage_amount') ?? 0,
           summary: formatWorkflowSummary(workflowIssue.event, workflowIssue.payload),
           reason: payloadStringValue(workflowIssue.payload, 'reason'),
           blockedReasonCode: payloadStringValue(workflowIssue.payload, 'blocked_reason'),
           provider: payloadStringValue(workflowIssue.payload, 'provider'),
+          payoutId: payloadStringValue(workflowIssue.payload, 'payout_id'),
+          payoutError: payloadStringValue(workflowIssue.payload, 'error'),
           payoutCurrency: payloadStringValue(workflowIssue.payload, 'payout_currency'),
           lockedPayoutCurrency:
             payloadStringValue(workflowIssue.payload, 'locked_payout_currency')
@@ -2312,6 +3333,9 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
             : 0,
           trackingNumber: payloadStringValue(workflowIssue.payload, 'tracking_number'),
           paymentStatus: payloadStringValue(workflowIssue.payload, 'payment_status'),
+          consultationAttendance: null,
+          payoutChangeReview: null,
+          fabricReview: null,
           recommendedAction: workflowRecommendedAction(workflowIssue.event, workflowIssue.payload),
           createdAt: workflowIssue.created_at,
           history: [],
@@ -2326,6 +3350,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       const customer = usersById.get(order.customer_id)
       const tailor = usersById.get(order.tailor_id)
       const tailorProfile = tailorProfilesByUserId.get(order.tailor_id)
+      const fulfillmentRun = fulfillmentRunByOrderId.get(order.id) ?? null
 
       return {
         orderId: order.id,
@@ -2336,6 +3361,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         stage: order.stage,
         stageUpdatedAt: order.stage_updated_at ?? null,
         amount: order.quoted_amount ?? null,
+        checkoutFulfillmentAmount: order.shipping_amount ?? 0,
         currency: order.currency ?? order.quoted_currency ?? null,
         deliveryMethod: order.delivery_method ?? null,
         customerName: customer?.display_name ?? 'Customer',
@@ -2352,6 +3378,60 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         contactPhone: order.fulfillment_contact_phone ?? null,
         trackingNumber: order.tracking_number ?? null,
         carrier: order.carrier ?? null,
+        fulfillmentRun: fulfillmentRun
+          ? {
+              id: fulfillmentRun.id,
+              status: fulfillmentRun.status,
+              fundingStatus: fulfillmentRun.funding_status,
+              currency: fulfillmentRun.currency,
+              capturedAllowanceAmount: fulfillmentRun.captured_allowance_amount,
+              customerFundedAllowanceAmount: fulfillmentRun.customer_funded_allowance_amount,
+              drapeonSubsidyAmount: fulfillmentRun.drapeon_subsidy_amount,
+              actualProviderCostAmount: fulfillmentRun.actual_provider_cost_amount,
+              shortfallSubtotalAmount: fulfillmentRun.shortfall_subtotal_amount,
+              shortfallTaxAmount: fulfillmentRun.shortfall_tax_amount,
+              shortfallFeeAmount: fulfillmentRun.shortfall_fee_amount,
+              shortfallTotalAmount: fulfillmentRun.shortfall_total_amount,
+              unusedAllowanceAmount: fulfillmentRun.unused_allowance_amount,
+              customerRefundAmount: fulfillmentRun.customer_refund_amount,
+              customerRefundTaxAmount: fulfillmentRun.customer_refund_tax_amount,
+              customerRefundStatus: fulfillmentRun.customer_refund_status,
+              subsidyRestoredAmount: fulfillmentRun.subsidy_restored_amount,
+              providerName: fulfillmentRun.provider_name,
+              providerQuoteReference: fulfillmentRun.provider_quote_reference,
+              providerQuoteEvidenceCount: Array.isArray(fulfillmentRun.provider_quote_evidence)
+                ? fulfillmentRun.provider_quote_evidence.length
+                : 0,
+              providerQuoteEvidence: dispatchRunEvidenceById.get(fulfillmentRun.id) ?? [],
+              customerDecision: fulfillmentRun.customer_decision,
+              custodyAcceptedAt: fulfillmentRun.custody_accepted_at,
+            }
+          : null,
+        parcels: (fulfillmentParcelsByOrderId.get(order.id) ?? []).map((parcel) => ({
+          id: parcel.id,
+          parcelNumber: parcel.parcel_number,
+          status: parcel.status,
+          providerName: parcel.provider_name,
+          serviceLevel: parcel.service_level,
+          providerReference: parcel.provider_reference,
+          trackingNumber: parcel.tracking_number,
+          trackingUrl: parcel.tracking_url,
+          etaAt: parcel.eta_at,
+          etaTimezone: parcel.eta_timezone,
+          lastLocation: parcel.last_location,
+          lastStatusAt: parcel.last_status_at,
+        })),
+        fulfillmentEvents: (fulfillmentEventsByOrderId.get(order.id) ?? []).map((event) => ({
+          id: event.id,
+          eventType: event.event_type,
+          source: event.source,
+          customerNote: event.customer_note,
+          occurredAt: event.occurred_at,
+          evidenceCount: Array.isArray(event.evidence_media) ? event.evidence_media.length : 0,
+          evidence: dispatchEventEvidenceById.get(event.id) ?? [],
+          etaAt: event.eta_at,
+          etaTimezone: event.eta_timezone,
+        })),
       }
     }),
     issues,

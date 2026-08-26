@@ -13,6 +13,7 @@ import {
   isStripePaymentSheetCanceled,
   useOptionalStripe,
 } from '@/lib/stripe-runtime'
+import { usePaystackCheckout } from '@/lib/paystack-checkout'
 
 WebBrowser.maybeCompleteAuthSession()
 
@@ -33,7 +34,7 @@ export function paymentRouteLabelForCurrency(currency: string | null | undefined
 export function paymentRouteCopyForCurrency(currency: string | null | undefined) {
   const orderCurrency = normalizeAccountCurrency(currency)
   if (!orderCurrency) return null
-  return `Payment route is locked to this ${orderCurrency} order. Drapeon opens ${paymentRouteLabelForCurrency(orderCurrency)} for this payment; changing account currency later will not move the order, refund, or payout route.`
+  return `This ${orderCurrency} order uses ${paymentRouteLabelForCurrency(orderCurrency)}. Any refund returns through the same payment route, even if you change your account currency later.`
 }
 
 type BasePreparePaymentResponse = {
@@ -60,7 +61,14 @@ type PaystackPreparePaymentResponse = BasePreparePaymentResponse & {
   clientSecret?: null
 }
 
-type PreparePaymentResponse = StripePreparePaymentResponse | PaystackPreparePaymentResponse
+type CoveragePreparePaymentResponse = BasePreparePaymentResponse & {
+  provider: 'COVERAGE'
+  confirmed: true
+  clientSecret?: null
+  authorizationUrl?: null
+}
+
+type PreparePaymentResponse = StripePreparePaymentResponse | PaystackPreparePaymentResponse | CoveragePreparePaymentResponse
 
 type ConfirmPaymentResponse = {
   ok: boolean
@@ -94,6 +102,17 @@ type MaterialAdvanceConfirmPaymentResponse = {
     status: string
     release_status?: string | null
   }
+}
+
+type CommercialAdjustmentPreparePaymentResponse = {
+  ok: boolean
+  provider: 'STRIPE' | 'PAYSTACK'
+  adjustmentId: string
+  paymentIntentId: string
+  authorizationUrl: string | null
+  clientSecret: string | null
+  amount: number
+  currency: string
 }
 
 export type OrderPaymentFlowResult =
@@ -270,6 +289,7 @@ export async function confirmOrderPayment(
 }
 
 function preparedPaymentRoutingFailure(prepared: PreparePaymentResponse): OrderPaymentFlowResult | null {
+  if (prepared.provider === 'COVERAGE') return prepared.confirmed ? null : { ok: false, reason: 'failed', message: 'Complimentary coverage has not been confirmed yet.' }
   const orderCurrency = normalizeAccountCurrency(prepared.currency)
   if (!orderCurrency) {
     return {
@@ -295,6 +315,7 @@ function preparedPaymentRoutingFailure(prepared: PreparePaymentResponse): OrderP
 
 export function useOrderPaymentFlow() {
   const { available: stripeRuntimeAvailable, initPaymentSheet, presentPaymentSheet } = useOptionalStripe()
+  const paystackCheckout = usePaystackCheckout()
 
   async function failureStage(error: Error | null) {
     return failureStageFromError(error)
@@ -353,7 +374,7 @@ export function useOrderPaymentFlow() {
         }
       }
 
-      const browserResult = await WebBrowser.openAuthSessionAsync(
+      const browserResult = await paystackCheckout.present(
         prepared.authorizationUrl,
         PAYSTACK_RETURN_URL,
       )
@@ -378,6 +399,10 @@ export function useOrderPaymentFlow() {
 
       if (browserResult.type === 'success') {
         return confirmed
+      }
+
+      if (browserResult.type === 'error') {
+        return { ok: false, reason: 'failed', message: browserResult.message, stage: prepared.stage }
       }
 
       return {
@@ -534,7 +559,7 @@ export function useOrderPaymentFlow() {
         }
       }
 
-      const browserResult = await WebBrowser.openAuthSessionAsync(
+      const browserResult = await paystackCheckout.present(
         prepared.authorizationUrl,
         PAYSTACK_RETURN_URL,
       )
@@ -554,6 +579,9 @@ export function useOrderPaymentFlow() {
 
       const confirmed = await confirmMaterialAdvance(reference)
       if (confirmed.ok || browserResult.type === 'success') return confirmed
+      if (browserResult.type === 'error') {
+        return { ok: false, reason: 'failed', message: browserResult.message }
+      }
 
       return {
         ok: false,
@@ -631,9 +659,100 @@ export function useOrderPaymentFlow() {
     return confirmMaterialAdvance(prepared.paymentIntentId)
   }
 
+  async function startCommercialAdjustmentPayment(options: {
+    orderId: string
+    adjustmentId: string
+    customerEmail?: string | null
+    customerName?: string | null
+  }): Promise<OrderPaymentFlowResult> {
+    const { data: prepared, error: prepareError } = await invokeFunction<CommercialAdjustmentPreparePaymentResponse>(
+      'commercial-adjustment-action',
+      { body: { action: 'prepare-payment', adjustmentId: options.adjustmentId } },
+    )
+    if (prepareError || !prepared) {
+      return { ok: false, reason: 'failed', message: await resolvePaymentErrorMessage(prepareError, 'Could not start this approved order-change payment.') }
+    }
+    const orderCurrency = normalizeAccountCurrency(prepared.currency)
+    if (!orderCurrency || prepared.provider !== resolvePaymentProviderForCurrency(orderCurrency)) {
+      return { ok: false, reason: 'failed', message: 'Payment routing did not match this approved order change. Refresh and try again.' }
+    }
+
+    const confirm = async (paymentIntentId: string): Promise<OrderPaymentFlowResult> => {
+      const { data, error } = await invokeFunction<{ ok: boolean; confirmed: boolean }>('commercial-adjustment-action', {
+        body: { action: 'confirm-payment', adjustmentId: options.adjustmentId, paymentIntentId },
+      })
+      if (error || !data?.confirmed) {
+        return { ok: false, reason: 'failed', message: await resolvePaymentErrorMessage(error, 'Payment went through, but Drapeon could not confirm the order change yet. Pull to refresh shortly.') }
+      }
+      return successResult({ orderId: options.orderId, stage: 'PAID', paymentIntentId })
+    }
+
+    if (prepared.provider === 'PAYSTACK') {
+      if (!prepared.authorizationUrl) return { ok: false, reason: 'failed', message: 'Secure checkout could not open. Try again in a moment.' }
+      const checkout = await paystackCheckout.present(prepared.authorizationUrl, PAYSTACK_RETURN_URL)
+      let reference = prepared.paymentIntentId
+      if (checkout.type === 'success') {
+        try {
+          const callback = new URL(checkout.url)
+          reference = callback.searchParams.get('reference') ?? callback.searchParams.get('trxref') ?? reference
+        } catch { /* server verification still uses the prepared reference */ }
+      }
+      const confirmed = await confirm(reference)
+      if (confirmed.ok || checkout.type === 'success') return confirmed
+      if (checkout.type === 'error') return { ok: false, reason: 'failed', message: checkout.message }
+      return { ok: false, reason: 'cancelled', message: 'Payment was not completed.' }
+    }
+
+    if (!hasStripePublishableKey()) return { ok: false, reason: 'not_configured', message: 'Card payments are not available in this build yet.' }
+    if (!stripeRuntimeAvailable || !isNativeStripeRuntimeAvailable()) return { ok: false, reason: 'not_configured', message: getStripeUnavailableMessage() }
+    if (!prepared.clientSecret) return { ok: false, reason: 'failed', message: 'Card checkout could not open cleanly.' }
+    const { error: initError } = await initPaymentSheet({
+      merchantDisplayName: STRIPE_MERCHANT_DISPLAY_NAME,
+      paymentIntentClientSecret: prepared.clientSecret,
+      returnURL: STRIPE_RETURN_URL,
+      allowsDelayedPaymentMethods: false,
+      defaultBillingDetails: { email: options.customerEmail?.trim() || undefined, name: options.customerName?.trim() || undefined },
+    })
+    if (initError) return { ok: false, reason: 'failed', message: nativePaymentSheetErrorMessage(initError, 'Card checkout could not open cleanly.') }
+    const { error: presentError } = await presentPaymentSheet()
+    if (presentError) {
+      if (isStripePaymentSheetCanceled(presentError.code)) return { ok: false, reason: 'cancelled', message: 'Payment was not completed.' }
+      return { ok: false, reason: 'failed', message: nativePaymentSheetErrorMessage(presentError, 'Payment could not be completed.') }
+    }
+    return confirm(prepared.paymentIntentId)
+  }
+
+  async function startOrderTip(options: { orderId: string; amount: number; currency: string; customerEmail?: string | null; customerName?: string | null }): Promise<OrderPaymentFlowResult> {
+    const { data: prepared, error: prepareError } = await invokeFunction<{ ok: boolean; confirmed?: boolean; tipId: string; provider: 'STRIPE'|'PAYSTACK'; providerReference: string; authorizationUrl: string|null; clientSecret: string|null; amount: number; currency: string }>('order-tip-action', { body: { action: 'prepare', orderId: options.orderId, amount: options.amount, currency: options.currency, idempotencyKey: `tip:${options.orderId}:${options.amount}` } })
+    if (prepareError || !prepared) return { ok: false, reason: 'failed', message: await resolvePaymentErrorMessage(prepareError, 'Could not start this tip payment.') }
+    if (prepared.confirmed) return successResult({ orderId: options.orderId, stage: 'PAYOUT_PENDING', paymentIntentId: prepared.providerReference })
+    const confirm = async () => {
+      const { data, error } = await invokeFunction<{ confirmed: boolean }>('order-tip-action', { body: { action: 'confirm', tipId: prepared.tipId, providerReference: prepared.providerReference } })
+      if (error || !data?.confirmed) return { ok: false, reason: 'failed', message: await resolvePaymentErrorMessage(error, 'The tip went through, but confirmation is still pending.') } as OrderPaymentFlowResult
+      return successResult({ orderId: options.orderId, stage: 'PAYOUT_PENDING', paymentIntentId: prepared.providerReference })
+    }
+    if (prepared.provider === 'PAYSTACK') {
+      if (!prepared.authorizationUrl) return { ok: false, reason: 'failed', message: 'Secure tip checkout could not open.' }
+      const checkout = await paystackCheckout.present(prepared.authorizationUrl, PAYSTACK_RETURN_URL)
+      const result = await confirm()
+      if (result.ok || checkout.type === 'success') return result
+      if (checkout.type === 'error') return { ok: false, reason: 'failed', message: checkout.message }
+      return { ok: false, reason: 'cancelled', message: 'Tip was not completed.' }
+    }
+    if (!hasStripePublishableKey() || !stripeRuntimeAvailable || !isNativeStripeRuntimeAvailable()) return { ok: false, reason: 'not_configured', message: getStripeUnavailableMessage() }
+    if (!prepared.clientSecret) return { ok: false, reason: 'failed', message: 'Card tip checkout could not open.' }
+    const { error: initError } = await initPaymentSheet({ merchantDisplayName: STRIPE_MERCHANT_DISPLAY_NAME, paymentIntentClientSecret: prepared.clientSecret, returnURL: STRIPE_RETURN_URL, allowsDelayedPaymentMethods: false, defaultBillingDetails: { email: options.customerEmail?.trim() || undefined, name: options.customerName?.trim() || undefined } })
+    if (initError) return { ok: false, reason: 'failed', message: nativePaymentSheetErrorMessage(initError, 'Card tip checkout could not open.') }
+    const { error: presentError } = await presentPaymentSheet()
+    if (presentError) return isStripePaymentSheetCanceled(presentError.code) ? { ok: false, reason: 'cancelled', message: 'Tip was not completed.' } : { ok: false, reason: 'failed', message: nativePaymentSheetErrorMessage(presentError, 'Tip could not be completed.') }
+    return confirm()
+  }
+
   return {
     startOrderPayment,
     startMaterialAdvancePayment,
+    startCommercialAdjustmentPayment,
+    startOrderTip,
     isStripeConfigured: hasStripePublishableKey(),
   }
 }

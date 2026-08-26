@@ -55,6 +55,22 @@ function makeSupabase(attempts: RefundablePaymentAttemptRow[]): FakeSupabase {
         }
       }
 
+      if (table === 'ops_issues') {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  maybeSingle() {
+                    return Promise.resolve({ data: null, error: { message: 'ops issue persistence disabled in unit test' } })
+                  },
+                }
+              },
+            }
+          },
+        }
+      }
+
       throw new Error(`Unexpected table ${table}`)
     },
   }
@@ -81,7 +97,7 @@ Deno.test('refundSettledOrderPayments refunds consultation attempts and marks th
   const markCalls: Array<Record<string, unknown>> = []
 
   const result = await refundSettledOrderPayments(
-    supabase,
+    supabase as never,
     {
       orderId: 'order_1',
       reason: 'Customer cancelled order from CONSULTATION',
@@ -100,6 +116,7 @@ Deno.test('refundSettledOrderPayments refunds consultation attempts and marks th
         markCalls.push(input as unknown as Record<string, unknown>)
         return null
       },
+      recordCommercialPaymentRefund: async () => ({ transactionId: 'ledger_1', entries: [] }),
     },
   )
 
@@ -129,7 +146,7 @@ Deno.test('refundSettledOrderPayments skips attempts already marked refunded', a
   const supabase = makeSupabase(attempts)
 
   const result = await refundSettledOrderPayments(
-    supabase,
+    supabase as never,
     {
       orderId: 'order_2',
       actorRole: 'OPS',
@@ -144,6 +161,7 @@ Deno.test('refundSettledOrderPayments skips attempts already marked refunded', a
       markPaymentAttemptStatus: async () => {
         throw new Error('No status update should occur')
       },
+      recordCommercialPaymentRefund: async () => ({ transactionId: 'ledger_2', entries: [] }),
     },
   )
 
@@ -171,7 +189,7 @@ Deno.test('partiallyRefundOrderPayments applies a partial refund and keeps the a
   const supabase = makeSupabase(attempts)
 
   const result = await partiallyRefundOrderPayments(
-    supabase,
+    supabase as never,
     {
       orderId: 'order_3',
       amount: 5000,
@@ -189,6 +207,7 @@ Deno.test('partiallyRefundOrderPayments applies a partial refund and keeps the a
       markPaymentAttemptStatus: async () => {
         throw new Error('markPaymentAttemptStatus should not be called for partial refunds')
       },
+      recordCommercialPaymentRefund: async () => ({ transactionId: 'ledger_3', entries: [] }),
     },
   )
 
@@ -199,4 +218,99 @@ Deno.test('partiallyRefundOrderPayments applies a partial refund and keeps the a
   assertEquals(attempts[0].status, 'PARTIAL_REFUND')
   assertEquals(attempts[0].refunded_amount, 5000)
   assertEquals(attempts[0].partial_refund_count, 1)
+})
+
+Deno.test('reviewed partial refund carries the exact restoration into the ledger adapter', async () => {
+  const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_exact',order_id:'order_exact',phase:'INITIAL_ORDER',provider:'STRIPE',currency:'USD',amount:10000,status:'SUCCEEDED',provider_payment_id:'pi_exact',refunded_amount:0,partial_refund_count:0 }]
+  const supabase = makeSupabase(attempts)
+  const ledgerCalls: Array<Record<string, unknown>> = []
+  const exactRestoration = { refundResolutionId:'resolution_1',tailorWorkAmount:7000,platformFeeAmount:500,taxAmount:500,fulfillmentAmount:1000,consultationAmount:0,promotionAmount:200,drapeonFundedAmount:0 }
+  await partiallyRefundOrderPayments(supabase as never,{ orderId:'order_exact',amount:9000,actorRole:'OPS',allowedPhases:['INITIAL_ORDER'],exactRestoration },{
+    refundStripePaymentIntent:async(options)=>({id:'re_exact',status:'succeeded',amount:options.amount,payment_intent:options.paymentIntentId}),
+    refundPaystackTransaction:async()=>{throw new Error('Paystack should not be called')},
+    markPaymentAttemptStatus:async()=>null,
+    recordCommercialPaymentRefund:async(_client,input)=>{ledgerCalls.push(input as unknown as Record<string,unknown>);return {transactionId:'ledger_exact',entries:[]}},
+  })
+  assertEquals(ledgerCalls.length,1)
+  assertEquals(ledgerCalls[0].exactRestoration,exactRestoration)
+})
+
+Deno.test('partial refund validates the commercial journal before contacting the provider', async () => {
+  const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_preflight',order_id:'order_preflight',phase:'INITIAL_ORDER',provider:'PAYSTACK',currency:'NGN',amount:100000,status:'SUCCEEDED',provider_payment_id:'paystack_preflight',refunded_amount:0,partial_refund_count:0 }]
+  const supabase = makeSupabase(attempts)
+  let providerCalls = 0
+  let message = ''
+  try {
+    await partiallyRefundOrderPayments(supabase as never,{ orderId:'order_preflight',amount:50000,actorRole:'OPS' },{
+      refundStripePaymentIntent:async()=>{throw new Error('Stripe should not be called')},
+      refundPaystackTransaction:async()=>{providerCalls += 1;return {id:1,status:'processed',transaction:'paystack_preflight'}},
+      markPaymentAttemptStatus:async()=>null,
+      recordCommercialPaymentRefund:async()=>({transactionId:'never',entries:[]}),
+      assertCommercialPaymentRefundReady:async()=>{throw new Error('The payment capture ledger transaction is missing.')},
+    })
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error)
+  }
+  assertEquals(providerCalls,0)
+  assertEquals(message,'The payment capture ledger transaction is missing.')
+  assertEquals(attempts[0].status,'SUCCEEDED')
+})
+
+Deno.test('pending Paystack refund remains financially unposted until the processed webhook', async () => {
+  const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_pending',order_id:'order_pending',phase:'INITIAL_ORDER',provider:'PAYSTACK',currency:'NGN',amount:100000,status:'SUCCEEDED',provider_payment_id:'paystack_pending',refunded_amount:0,partial_refund_count:0,provider_response:{} }]
+  const supabase = makeSupabase(attempts)
+  let ledgerCalls = 0
+  let providerCalls = 0
+  const result = await partiallyRefundOrderPayments(supabase as never,{ orderId:'order_pending',amount:50000,actorRole:'OPS' },{
+    refundStripePaymentIntent:async()=>{throw new Error('Stripe should not be called')},
+    refundPaystackTransaction:async()=>{providerCalls += 1;return {id:17949565,status:'pending',transaction:'paystack_pending'}},
+    markPaymentAttemptStatus:async()=>null,
+    recordCommercialPaymentRefund:async()=>{ledgerCalls += 1;return {transactionId:'never',entries:[]}},
+    assertCommercialPaymentRefundReady:async()=>({transactionId:null,entries:[],validated:true as const}),
+  })
+  assertEquals(result.refundedAttempts,[])
+  assertEquals(result.pendingAttempts,[{
+    id:'pay_pending',
+    provider:'PAYSTACK',
+    providerPaymentId:'paystack_pending',
+    providerRefundId:'17949565',
+    phase:'INITIAL_ORDER',
+    amount:50000,
+    currency:'NGN',
+    status:'PENDING',
+  }])
+  assertEquals(ledgerCalls,0)
+  assertEquals(providerCalls,1)
+  assertEquals(attempts[0].status,'SUCCEEDED')
+  assertEquals(attempts[0].refunded_amount,0)
+  const duplicateResult = await partiallyRefundOrderPayments(supabase as never,{ orderId:'order_pending',amount:50000,actorRole:'OPS' },{
+    refundStripePaymentIntent:async()=>{throw new Error('Stripe should not be called')},
+    refundPaystackTransaction:async()=>{providerCalls += 1;throw new Error('A pending refund must not be submitted twice')},
+    markPaymentAttemptStatus:async()=>null,
+    recordCommercialPaymentRefund:async()=>{ledgerCalls += 1;return {transactionId:'never',entries:[]}},
+    assertCommercialPaymentRefundReady:async()=>({transactionId:null,entries:[],validated:true as const}),
+  })
+  assertEquals(duplicateResult.pendingAttempts[0]?.providerRefundId,'17949565')
+  assertEquals(providerCalls,1)
+  assertEquals(ledgerCalls,0)
+})
+
+Deno.test('provider success with ledger failure is not reported as a successful refund', async () => {
+  const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_reconcile',order_id:'order_reconcile',phase:'INITIAL_ORDER',provider:'PAYSTACK',currency:'NGN',amount:100000,status:'SUCCEEDED',provider_payment_id:'paystack_reconcile',refunded_amount:0,partial_refund_count:0,provider_response:{} }]
+  const supabase = makeSupabase(attempts)
+  let message = ''
+  try {
+    await partiallyRefundOrderPayments(supabase as never,{ orderId:'order_reconcile',amount:50000,actorRole:'OPS' },{
+      refundStripePaymentIntent:async()=>{throw new Error('Stripe should not be called')},
+      refundPaystackTransaction:async()=>({id:2,status:'processed',transaction:'paystack_reconcile'}),
+      markPaymentAttemptStatus:async()=>null,
+      recordCommercialPaymentRefund:async()=>{throw new Error('ledger unavailable')},
+      assertCommercialPaymentRefundReady:async()=>({transactionId:null,entries:[],validated:true}),
+    })
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error)
+  }
+  assertEquals(message,'The provider refund completed, but ledger reconciliation is still pending. Do not retry the provider refund.')
+  assertEquals(attempts[0].status,'PARTIAL_REFUND')
+  assertEquals(attempts[0].refunded_amount,50000)
 })

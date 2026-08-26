@@ -14,7 +14,7 @@ import type { OpsRole } from './ops-console'
 export const OPS_SESSION_COOKIE = 'drape_ops_session'
 export const OPS_DASHBOARD_TOKEN_MIN_LENGTH = 32
 
-type OpsAccessMode = 'bootstrap-token' | 'cloudflare-access'
+type OpsAccessMode = 'bootstrap-token' | 'cloudflare-access' | 'local-workforce'
 type OpsDashboardTokenStatus = 'missing' | 'weak' | 'ready'
 
 export type OpsSession = {
@@ -22,6 +22,24 @@ export type OpsSession = {
   mode: OpsAccessMode
   role: OpsRole
   email: string | null
+  subject: string
+  authenticationMethods: string[]
+  authenticatedAt: number | null
+  expiresAt: number | null
+  mfaVerified: boolean
+}
+
+export function hasFreshOpsMfa(session: OpsSession, maxAgeSeconds = 15 * 60) {
+  if (!session.mfaVerified || session.authenticatedAt == null) return false
+  return Math.floor(Date.now() / 1000) - session.authenticatedAt <= maxAgeSeconds
+}
+
+export function isNamedOpsWorkforceSession(session: OpsSession) {
+  return session.mode === 'cloudflare-access' || session.mode === 'local-workforce'
+}
+
+export function getOpsIdentityAssuranceSource(session: OpsSession) {
+  return session.mode === 'local-workforce' ? 'MIGRATION_DRY_RUN' : 'CLOUDFLARE_ACCESS'
 }
 
 type AccessJwtHeader = {
@@ -35,6 +53,8 @@ type AccessJwtPayload = {
   email?: string
   exp?: number
   groups?: string[] | string
+  amr?: string[] | string
+  iat?: number
   iss?: string
   nbf?: number
   sub?: string
@@ -136,6 +156,16 @@ export function getOpsBootstrapRole(): OpsRole {
   return normalizeOpsRole(process.env.OPS_DASHBOARD_BOOTSTRAP_ROLE)
 }
 
+function getLocalWorkforceDryRunIdentity() {
+  if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return null
+  const email = process.env.OPS_LOCAL_WORKFORCE_EMAIL?.trim().toLowerCase() ?? ''
+  if (!email.endsWith('@drapeon.co')) return null
+  return {
+    email,
+    role: normalizeOpsRole(process.env.OPS_LOCAL_WORKFORCE_ROLE),
+  }
+}
+
 export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
   const teamDomain = normalizeHost(process.env.CF_ACCESS_TEAM_DOMAIN)
   const audiences = parseCsv(process.env.CF_ACCESS_AUD)
@@ -144,6 +174,7 @@ export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
     process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION === '1'
 
   if (teamDomain && audiences.size > 0) return 'cloudflare-access'
+  if (getLocalWorkforceDryRunIdentity() && hasOpsDashboardToken()) return 'local-workforce'
   if (bootstrapAllowed && hasOpsDashboardToken()) return 'bootstrap-token'
   return 'unconfigured'
 }
@@ -282,6 +313,13 @@ function normalizeGroups(groups: AccessJwtPayload['groups']) {
   return []
 }
 
+function normalizeAuthenticationMethods(value: AccessJwtPayload['amr']) {
+  const methods = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : []
+  return methods.map((method) => method.trim().toLowerCase()).filter(Boolean)
+}
+
+const MFA_AUTHENTICATION_METHODS = new Set(['mfa', 'hwk', 'swk', 'otp', 'face', 'fpt', 'iris', 'retina', 'vbm'])
+
 function determineWorkforceRole(email: string, groups: string[]): OpsRole | null {
   const normalizedEmail = email.trim().toLowerCase()
   const emailSets = {
@@ -383,6 +421,11 @@ async function getWorkforceSession(): Promise<OpsSession | null> {
     mode: 'cloudflare-access',
     role,
     email,
+    subject: parsed.payload.sub?.trim() || email,
+    authenticationMethods: normalizeAuthenticationMethods(parsed.payload.amr),
+    authenticatedAt: typeof parsed.payload.iat === 'number' ? parsed.payload.iat : null,
+    expiresAt: typeof parsed.payload.exp === 'number' ? parsed.payload.exp : null,
+    mfaVerified: normalizeAuthenticationMethods(parsed.payload.amr).some((method) => MFA_AUTHENTICATION_METHODS.has(method)),
   }
 }
 
@@ -394,11 +437,32 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
   const session = cookieStore.get(OPS_SESSION_COOKIE)?.value ?? null
   if (!safeCompare(session, hashOpsToken(token))) return null
 
+  const localIdentity = getLocalWorkforceDryRunIdentity()
+  if (localIdentity) {
+    const authenticatedAt = Math.floor(Date.now() / 1000)
+    return {
+      allowed: true,
+      mode: 'local-workforce',
+      role: localIdentity.role,
+      email: localIdentity.email,
+      subject: `local-dry-run:${localIdentity.email}`,
+      authenticationMethods: ['mfa', 'local-dry-run'],
+      authenticatedAt,
+      expiresAt: authenticatedAt + 15 * 60,
+      mfaVerified: true,
+    }
+  }
+
   return {
     allowed: true,
     mode: 'bootstrap-token',
     role: getOpsBootstrapRole(),
     email: null,
+    subject: `bootstrap:${getOpsBootstrapRole()}`,
+    authenticationMethods: [],
+    authenticatedAt: null,
+    expiresAt: null,
+    mfaVerified: false,
   }
 }
 
@@ -409,7 +473,7 @@ export async function getOpsSession(): Promise<OpsSession | null> {
     return getWorkforceSession()
   }
 
-  if (mode === 'bootstrap-token') {
+  if (mode === 'bootstrap-token' || mode === 'local-workforce') {
     return getBootstrapSession()
   }
 

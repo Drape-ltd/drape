@@ -30,4 +30,21 @@ describe('buildRefundOrderPaymentsRequest', () => {
       orderId: 'fc461279-d6b5-4b10-b77c-d4317ec2680e',
     })
   })
+
+  it('opts into unreleased material advances only for an explicit cancellation request', () => {
+    expect(buildRefundOrderPaymentsRequest({
+      orderId: 'fc461279-d6b5-4b10-b77c-d4317ec2680e',
+      includeUnreleasedMaterialAdvances: true,
+    })).toEqual({
+      orderId: 'fc461279-d6b5-4b10-b77c-d4317ec2680e',
+      includeUnreleasedMaterialAdvances: true,
+    })
+
+    expect(buildRefundOrderPaymentsRequest({
+      orderId: 'fc461279-d6b5-4b10-b77c-d4317ec2680e',
+      includeUnreleasedMaterialAdvances: false,
+    })).toEqual({
+      orderId: 'fc461279-d6b5-4b10-b77c-d4317ec2680e',
+    })
+  })
 })

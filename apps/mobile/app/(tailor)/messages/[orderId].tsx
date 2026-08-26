@@ -19,6 +19,7 @@ import {
   type ConversationAccessState,
 } from '@/lib/conversation-access'
 import { supabase, invokeFunction } from '@/lib/supabase'
+import { getConsultationCallAccess } from '@/lib/consultation-call-access'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
@@ -41,8 +42,6 @@ import type { OrderConversationAction } from '@drape/shared/order-negotiation'
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
 const ORDER_CALL_STAGES: OrderStage[] = [
-  'PENDING_QUOTE',
-  'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
   'PAYMENT_FAILED',
@@ -133,6 +132,8 @@ export default function TailorMessagesScreen() {
   const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
   const [showConversationDetails, setShowConversationDetails] = useState(false)
   const [counterpartyOnline, setCounterpartyOnline] = useState(false)
+  const [consultationRescheduleRequired, setConsultationRescheduleRequired] = useState(false)
+  const [consultationBookingId, setConsultationBookingId] = useState<string | null>(null)
   const translation = useConversationTranslation(orderId)
   const consultationMeta = orderInfo?.supportMeta.consultation ?? null
   const consultationPaymentBlocked =
@@ -144,6 +145,21 @@ export default function TailorMessagesScreen() {
     getEmptyConversationAccessState()
   )
   const [, setLoadingConversationAccess] = useState(false)
+
+  const refreshConsultationCallAccess = useCallback(async () => {
+    if (!orderId || orderInfo?.stage !== 'CONSULTATION') {
+      setConsultationRescheduleRequired(false)
+      setConsultationBookingId(null)
+      return
+    }
+    try {
+      const access = await getConsultationCallAccess(orderId)
+      setConsultationRescheduleRequired(access.rescheduleRequired)
+      setConsultationBookingId(access.bookingId)
+    } catch {
+      // The consultation room remains server-gated if this secondary UI check cannot refresh.
+    }
+  }, [orderId, orderInfo?.stage])
 
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(tailor)/orders')
@@ -337,6 +353,26 @@ export default function TailorMessagesScreen() {
     }, 0)
     return () => clearTimeout(timer)
   }, [refreshConversationAccess])
+  useEffect(() => {
+    void refreshConsultationCallAccess()
+  }, [refreshConsultationCallAccess])
+  useEffect(() => {
+    if (!consultationBookingId) return
+    const channel = supabase
+      .channel(`tailor-message-consultation-access:${consultationBookingId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'consultation_attendance_reviews',
+          filter: `booking_id=eq.${consultationBookingId}`,
+        },
+        () => { void refreshConsultationCallAccess() },
+      )
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [consultationBookingId, refreshConsultationCallAccess])
 
   useFocusEffect(
     useCallback(() => {
@@ -344,7 +380,8 @@ export default function TailorMessagesScreen() {
       setShowOrderCallScheduler(false)
       void fetchOrder()
       void refreshConversationAccess()
-    }, [fetchOrder, refreshConversationAccess])
+      void refreshConsultationCallAccess()
+    }, [fetchOrder, refreshConsultationCallAccess, refreshConversationAccess])
   )
 
   const startCall = useCallback(async (callType: 'audio' | 'video') => {
@@ -427,6 +464,17 @@ export default function TailorMessagesScreen() {
 
   const showCallOptions = useCallback(() => {
     if (startingCall) return
+    if (orderInfo?.stage === 'CONSULTATION' && consultationRescheduleRequired) {
+      Alert.alert(
+        'Choose a new consultation time',
+        'The previous consultation window is closed. Open the order to send new protected time options.',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'View order', onPress: openConsultationOrderDetails },
+        ],
+      )
+      return
+    }
     const consultation =
       orderInfo?.stage === 'CONSULTATION' &&
       consultationMeta?.status === 'SCHEDULED' &&
@@ -446,26 +494,21 @@ export default function TailorMessagesScreen() {
       )
       return
     }
+    const scheduledCallType = consultationMeta?.callType === 'AUDIO' ? 'audio' : 'video'
     Alert.alert(
       'Consultation call',
-      'Start or join the scheduled consultation. Any fee must be the consultation fee already shown on the order; do not charge outside Drapeon.',
+      `Start or join the scheduled ${scheduledCallType} call. Any fee must be the consultation fee already shown on the order.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Video call',
+          text: scheduledCallType === 'audio' ? 'Open audio call' : 'Open video call',
           onPress: () => {
-            void startCall('video')
-          },
-        },
-        {
-          text: 'Audio call',
-          onPress: () => {
-            void startCall('audio')
+            void startCall(scheduledCallType)
           },
         },
       ]
     )
-  }, [consultationMeta, consultationPaymentBlocked, openConsultationOrderDetails, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
+  }, [consultationMeta, consultationPaymentBlocked, consultationRescheduleRequired, openConsultationOrderDetails, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
 
   const callAvailable = isOrderCallStage(orderInfo?.stage)
 
@@ -551,6 +594,7 @@ export default function TailorMessagesScreen() {
     consultationMeta?.status === 'SCHEDULED' &&
     consultationMeta.scheduledStartAt
   const consultationCallAvailable = Boolean(scheduledConsultation)
+    && !consultationRescheduleRequired
   const scheduledOrderCall = orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
     orderInfo.supportMeta.orderCall.scheduledStartAt
   const callLifecycleEvent = scheduledConsultation

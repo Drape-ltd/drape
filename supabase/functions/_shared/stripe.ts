@@ -11,6 +11,7 @@ export type StripePaymentIntent = {
   amount: number
   currency: string
   metadata?: Record<string, string>
+  latest_charge?: string | { id?: string | null } | null
   last_payment_error?: {
     message?: string | null
   } | null
@@ -21,6 +22,8 @@ export type StripeRefund = {
   status?: string | null
   amount?: number | null
   payment_intent?: string | null
+  failure_reason?: string | null
+  destination_details?: Record<string, unknown> | null
   metadata?: Record<string, string> | null
 }
 
@@ -45,6 +48,38 @@ export type StripeTransfer = {
   amount: number
   currency: string
   destination?: string | null
+  metadata?: Record<string, string> | null
+}
+
+export type StripeTransferReversal = {
+  id: string
+  amount: number
+  currency: string
+  transfer: string
+  metadata?: Record<string, string> | null
+}
+
+export type StripePayout = {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  arrival_date?: number | null
+  failure_code?: string | null
+  failure_message?: string | null
+  metadata?: Record<string, string> | null
+}
+
+export type StripeEventRecord = {
+  id: string
+  type: string
+  account?: string | null
+  data?: { object?: Record<string, unknown> | null }
+}
+
+export type StripeCharge = {
+  id: string
+  payment_intent?: string | null
   metadata?: Record<string, string> | null
 }
 
@@ -111,6 +146,21 @@ export async function retrieveStripePaymentIntent(
   return response.json()
 }
 
+export async function retrieveStripeEvent(options: {
+  eventId: string
+  accountId?: string | null
+}): Promise<StripeEventRecord> {
+  const response = await fetch(`${STRIPE_API_BASE}/events/${encodeURIComponent(options.eventId)}`, {
+    headers: {
+      ...authHeaders(),
+      ...(options.accountId?.trim() ? { 'Stripe-Account': options.accountId.trim() } : {}),
+    },
+  })
+
+  if (!response.ok) await parseStripeError(response)
+  return response.json()
+}
+
 export async function cancelStripePaymentIntent(
   paymentIntentId: string,
 ): Promise<StripePaymentIntent> {
@@ -131,6 +181,7 @@ export async function refundStripePaymentIntent(options: {
   amount?: number
   idempotencyKey?: string
   reasonNote?: string | null
+  metadata?: Record<string, string | null | undefined>
 }): Promise<StripeRefund> {
   const body = new URLSearchParams()
   body.set('payment_intent', options.paymentIntentId)
@@ -140,6 +191,9 @@ export async function refundStripePaymentIntent(options: {
   body.set('reason', 'requested_by_customer')
   if (options.reasonNote?.trim()) {
     body.set('metadata[drape_reason]', options.reasonNote.trim())
+  }
+  for (const [key, value] of Object.entries(options.metadata ?? {})) {
+    if (typeof value === 'string' && value.trim()) body.set(`metadata[${key}]`, value.trim())
   }
 
   const response = await fetch(`${STRIPE_API_BASE}/refunds`, {
@@ -235,6 +289,7 @@ export async function createStripeTransfer(options: {
   destinationAccountId: string
   idempotencyKey?: string
   transferGroup?: string | null
+  sourceTransaction?: string | null
   metadata?: Record<string, string>
 }): Promise<StripeTransfer> {
   const body = new URLSearchParams()
@@ -243,6 +298,9 @@ export async function createStripeTransfer(options: {
   body.set('destination', options.destinationAccountId.trim())
   if (options.transferGroup?.trim()) {
     body.set('transfer_group', options.transferGroup.trim())
+  }
+  if (options.sourceTransaction?.trim()) {
+    body.set('source_transaction', options.sourceTransaction.trim())
   }
 
   for (const [key, value] of Object.entries(options.metadata ?? {})) {
@@ -263,6 +321,59 @@ export async function createStripeTransfer(options: {
     await parseStripeError(response)
   }
 
+  return response.json()
+}
+
+export async function retrieveStripePayout(options: {
+  accountId: string
+  payoutId: string
+}): Promise<StripePayout> {
+  const response = await fetch(`${STRIPE_API_BASE}/payouts/${encodeURIComponent(options.payoutId)}`, {
+    headers: {
+      ...authHeaders(),
+      'Stripe-Account': options.accountId.trim(),
+    },
+  })
+
+  if (!response.ok) await parseStripeError(response)
+  return response.json()
+}
+
+export async function retrieveStripeCharge(chargeId: string): Promise<StripeCharge> {
+  const response = await fetch(`${STRIPE_API_BASE}/charges/${encodeURIComponent(chargeId)}`, {
+    headers: authHeaders(),
+  })
+
+  if (!response.ok) await parseStripeError(response)
+  return response.json()
+}
+
+export async function createStripeTransferReversal(options: {
+  transferId: string
+  amount: number
+  idempotencyKey: string
+  metadata?: Record<string, string>
+}): Promise<StripeTransferReversal> {
+  const body = new URLSearchParams()
+  body.set('amount', String(options.amount))
+  for (const [key, value] of Object.entries(options.metadata ?? {})) {
+    body.set(`metadata[${key}]`, value)
+  }
+
+  const response = await fetch(
+    `${STRIPE_API_BASE}/transfers/${encodeURIComponent(options.transferId)}/reversals`,
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Idempotency-Key': options.idempotencyKey,
+      },
+      body,
+    },
+  )
+
+  if (!response.ok) await parseStripeError(response)
   return response.json()
 }
 

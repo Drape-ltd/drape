@@ -286,7 +286,7 @@ export const DRAPE_EXCEPTION_RUNBOOK_ENTRIES: DrapeExceptionRunbookEntry[] = [
     useWhen: 'A scheduled audio or video call fails, either party misses it, or time zones caused confusion.',
     firstMove: 'Keep the order thread as source of truth, offer reschedule, and capture consultation notes so the brief does not depend on memory.',
     customerCopy: 'If the call did not work, keep the key notes in this order and reschedule from Drapeon so the brief stays protected.',
-    tailorCopy: 'If you missed the call or Daily was unavailable, propose a new time and summarize anything already agreed in the thread.',
+    tailorCopy: 'If you missed the call or calling was unavailable, propose a new time and summarize anything already agreed in the thread.',
     opsActions: [
       'Check reminder delivery, call room status, no-show history, and local time zones.',
       'If Daily is down, keep messaging and SMS reminders active rather than shutting consultations down.',

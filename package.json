@@ -32,6 +32,7 @@
     "security:edge-auth": "node scripts/check-edge-auth.mjs",
     "launch:contracts": "node scripts/launch-contract-check.mjs",
     "launch:contracts:linked": "node scripts/launch-contract-check.mjs --with-supabase",
+    "commercial:contracts": "node scripts/check-commercial-contract-parity.mjs",
     "load:smoke": "node scripts/load-smoke.mjs",
     "beta:logs": "node scripts/beta-logs.mjs",
     "seed:store-demo": "node scripts/seed-store-demo.mjs",

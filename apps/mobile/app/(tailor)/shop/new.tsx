@@ -15,6 +15,7 @@ import {
   DrapeCapsuleButton,
   DrapeFloatingActionDock,
   DrapeIconButton,
+  MoneyInput,
   PortfolioVideoPreview,
   RemoteImage,
 } from '@/components/ui'
@@ -60,6 +61,11 @@ import {
   isVideoMediaUrl,
 } from '@drape/shared/media-policy'
 import { getOnboardingProofItemIssues } from '@drape/shared/onboarding-proof-item'
+import {
+  formatMoneyInputValue,
+  parseMoneyInputToMinorUnits,
+  type AccountCurrencyCode,
+} from '@drape/shared'
 
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
@@ -253,9 +259,7 @@ function formatMissingChecksForAlert(missingChecks: Array<{ blockingMessage: str
 }
 
 function parseItemPriceAmount(value: string) {
-  const parsed = Number(value)
-  if (!value.trim() || Number.isNaN(parsed) || parsed <= 0) return null
-  return Math.round(parsed * 100)
+  return parseMoneyInputToMinorUnits(value)
 }
 
 type ItemMediaSource = 'camera-photo' | 'camera-video' | 'library'
@@ -557,7 +561,7 @@ export default function NewShopItemScreen() {
       setDescription(itemData.description ?? '')
       const resolvedSizes = Array.isArray(itemData.sizes) ? itemData.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : []
       setSizes(resolvedSizes)
-      setPrice(itemData.price_amount ? String(itemData.price_amount / 100) : '')
+      setPrice(itemData.price_amount ? formatMoneyInputValue(String(itemData.price_amount / 100)) : '')
       if (itemData.currency && CURRENCIES.includes(itemData.currency as (typeof CURRENCIES)[number])) {
         setCurrency(itemData.currency as (typeof CURRENCIES)[number])
       }
@@ -1491,9 +1495,7 @@ export default function NewShopItemScreen() {
         ) : null}
 
         {!isOnboardingSetupItem ? (
-        <Field label="Price">
-          <TextInput style={styles.input} value={price} onChangeText={setPrice} placeholder="e.g. 85000" placeholderTextColor={Colors.midGrey} keyboardType="decimal-pad" />
-        </Field>
+        <MoneyInput label="Price" value={price} onChangeText={setPrice} currency={currency as AccountCurrencyCode} required />
         ) : null}
 
         <Field label="Units by size">

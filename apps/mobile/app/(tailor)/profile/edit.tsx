@@ -7,7 +7,7 @@ import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Modal, Platform, KeyboardAvoidingView,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
@@ -17,11 +17,18 @@ import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
-import { AddressAutocompleteInput, TagSelector } from '@/components/ui'
+import { appendToHistory, goBackOrReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
+import { Sentry } from '@/lib/sentry'
+import { AddressAutocompleteInput, MoneyInput, TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
+import {
+  formatMoneyInputValue,
+  parseMoneyInputToMinorUnits,
+  type AccountCurrencyCode,
+} from '@drape/shared'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
@@ -46,6 +53,8 @@ const BIO_PROMPTS = [
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
+type ConsultationMode = 'UNAVAILABLE' | 'FREE' | 'PAID'
+type ConsultationRequirement = 'OPTIONAL' | 'REQUIRED'
 
 type TailorEditProfileRow = {
   id: string
@@ -53,6 +62,7 @@ type TailorEditProfileRow = {
   location: string | null
   bio: string | null
   specialty_tags: unknown
+  languages: unknown
   availability: Availability | null
   currency: Currency | null
   id_verification_status: VerificationStatus | 'APPROVED' | null
@@ -64,10 +74,21 @@ type TailorEditProfileRow = {
   pickup_available: boolean | null
   delivery_available: boolean | null
   shipping_available: boolean | null
+  consultation_mode: ConsultationMode | null
+  consultation_requirement: ConsultationRequirement | null
+  consultation_fee_amount: number | null
+  consultation_duration_minutes: 15 | 30 | 45 | 60 | null
+  consultation_call_type: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO' | null
+  consultation_fee_creditable: boolean | null
 }
 
 type PickupDetailsRow = {
   pickup_address: string | null
+  pickup_address_line1: string | null
+  pickup_city: string | null
+  pickup_region: string | null
+  pickup_postal_code: string | null
+  pickup_country_code: string | null
   pickup_instructions: string | null
 }
 
@@ -127,19 +148,37 @@ const VERIFY_COLOR: Record<VerificationStatus, string> = {
 export default function EditProfileScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const params = useLocalSearchParams<{
+    focus?: string
+    returnTo?: string
+    historyChain?: string
+  }>()
   const { user } = useAuth()
   const userId = user?.id ?? null
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
+  const isFulfillmentFocus = params.focus === 'fulfillment'
+  const scrollRef = useRef<ScrollView>(null)
+  const hasFocusedFulfillment = useRef(false)
 
   function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)/profile')
+    goBackOrReturnTo(
+      router,
+      navigation,
+      params.historyChain ?? params.returnTo,
+      '/(tailor)/profile',
+    )
   }
+
+  useContextualBackHandler(goBack)
 
   // ── Form state ──────────────────────────────────────────────────────────────
   const [displayName, setDisplayName]     = useState('')
   const [location, setLocation]           = useState('')
   const [bio, setBio]                     = useState('')
   const [specialties, setSpecialties]     = useState<string[]>([])
+  // Languages are edited elsewhere on mobile, but must round-trip here so a
+  // fulfillment-only save never stages an unrelated public-profile change.
+  const [profileLanguages, setProfileLanguages] = useState<string[]>([])
   const [availability, setAvailability]   = useState<Availability>('OPEN')
   const [sellerType, setSellerType]       = useState<SellerType>('TAILOR')
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
@@ -148,9 +187,19 @@ export default function EditProfileScreen() {
   const [shopPaused, setShopPaused] = useState(false)
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
+  const [pickupCity, setPickupCity] = useState('')
+  const [pickupRegion, setPickupRegion] = useState('')
+  const [pickupPostalCode, setPickupPostalCode] = useState('')
+  const [pickupCountryCode, setPickupCountryCode] = useState('')
   const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
+  const [consultationMode, setConsultationMode] = useState<ConsultationMode>('FREE')
+  const [consultationRequirement, setConsultationRequirement] = useState<ConsultationRequirement>('OPTIONAL')
+  const [consultationFee, setConsultationFee] = useState('')
+  const [consultationDurationMinutes, setConsultationDurationMinutes] = useState<15 | 30 | 45 | 60>(30)
+  const [consultationCallType, setConsultationCallType] = useState<'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'>('VIDEO')
+  const [consultationFeeCreditable, setConsultationFeeCreditable] = useState(false)
   const [verifyStatus, setVerifyStatus]   = useState<VerificationStatus>('NOT_SUBMITTED')
   const [portfolioCount, setPortfolioCount] = useState(0)
 
@@ -165,9 +214,19 @@ export default function EditProfileScreen() {
     shopPaused: boolean
     pickupAvailable: boolean
     pickupAddress: string
+    pickupCity: string
+    pickupRegion: string
+    pickupPostalCode: string
+    pickupCountryCode: string
     pickupInstructions: string
     deliveryAvailable: boolean
     shippingAvailable: boolean
+    consultationMode: ConsultationMode
+    consultationRequirement: ConsultationRequirement
+    consultationFee: string
+    consultationDurationMinutes: 15 | 30 | 45 | 60
+    consultationCallType: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'
+    consultationFeeCreditable: boolean
   } | null>(null)
 
   const [currency, setCurrency]           = useState<Currency>('GBP')
@@ -204,9 +263,19 @@ export default function EditProfileScreen() {
     shopPaused !== base.shopPaused ||
     pickupAvailable !== base.pickupAvailable ||
     pickupAddress !== base.pickupAddress ||
+    pickupCity !== base.pickupCity ||
+    pickupRegion !== base.pickupRegion ||
+    pickupPostalCode !== base.pickupPostalCode ||
+    pickupCountryCode !== base.pickupCountryCode ||
     pickupInstructions !== base.pickupInstructions ||
     deliveryAvailable !== base.deliveryAvailable ||
     shippingAvailable !== base.shippingAvailable ||
+    consultationMode !== base.consultationMode ||
+    consultationRequirement !== base.consultationRequirement ||
+    consultationFee !== base.consultationFee ||
+    consultationDurationMinutes !== base.consultationDurationMinutes ||
+    consultationCallType !== base.consultationCallType ||
+    consultationFeeCreditable !== base.consultationFeeCreditable ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
   const specialtySummary =
@@ -263,20 +332,21 @@ export default function EditProfileScreen() {
     }
     setFetchError(false)
     try {
-      const [{ data, error }, { data: pickupData }] = await Promise.all([
+      const [{ data, error }, { data: pickupData, error: pickupError }] = await Promise.all([
         supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, accepts_custom_orders_now, shop_paused, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
+          .select('id, display_name, location, bio, specialty_tags, languages, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, accepts_custom_orders_now, shop_paused, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable')
           .eq('user_id', userId)
           .maybeSingle(),
         supabase
           .from('tailor_pickup_details')
-          .select('pickup_address, pickup_instructions')
+          .select('pickup_address, pickup_address_line1, pickup_city, pickup_region, pickup_postal_code, pickup_country_code, pickup_instructions')
           .eq('user_id', userId)
           .maybeSingle(),
       ])
 
       if (error) throw error
+      if (pickupError) throw pickupError
 
       if (data) {
         const d = data as TailorEditProfileRow
@@ -295,15 +365,26 @@ export default function EditProfileScreen() {
           shopPaused: d.shop_paused ?? false,
           pickupAvailable: d.pickup_available ?? true,
           pickupAddress: pickup?.pickup_address ?? '',
+          pickupCity: pickup?.pickup_city ?? '',
+          pickupRegion: pickup?.pickup_region ?? '',
+          pickupPostalCode: pickup?.pickup_postal_code ?? '',
+          pickupCountryCode: pickup?.pickup_country_code ?? '',
           pickupInstructions: pickup?.pickup_instructions ?? '',
           deliveryAvailable: d.delivery_available ?? false,
           shippingAvailable: d.shipping_available ?? false,
+          consultationMode: d.consultation_mode ?? 'FREE',
+          consultationRequirement: d.consultation_requirement ?? 'OPTIONAL',
+          consultationFee: d.consultation_fee_amount ? formatMoneyInputValue(String(d.consultation_fee_amount / 100)) : '',
+          consultationDurationMinutes: d.consultation_duration_minutes ?? 30,
+          consultationCallType: d.consultation_call_type ?? 'VIDEO',
+          consultationFeeCreditable: d.consultation_fee_creditable ?? false,
         }
         setBase(snap)
         setDisplayName(snap.displayName)
         setLocation(snap.location)
         setBio(snap.bio)
         setSpecialties(snap.specialties)
+        setProfileLanguages(asStringList(d.languages))
         setAvailability(snap.availability)
         setCurrency(snap.currency)
         setSellerType(snap.sellerType)
@@ -313,9 +394,19 @@ export default function EditProfileScreen() {
         setShopPaused(snap.shopPaused)
         setPickupAvailable(snap.pickupAvailable)
         setPickupAddress(snap.pickupAddress)
+        setPickupCity(snap.pickupCity)
+        setPickupRegion(snap.pickupRegion)
+        setPickupPostalCode(snap.pickupPostalCode)
+        setPickupCountryCode(snap.pickupCountryCode)
         setPickupInstructions(snap.pickupInstructions)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
+        setConsultationMode(snap.consultationMode)
+        setConsultationRequirement(snap.consultationRequirement)
+        setConsultationFee(snap.consultationFee)
+        setConsultationDurationMinutes(snap.consultationDurationMinutes)
+        setConsultationCallType(snap.consultationCallType)
+        setConsultationFeeCreditable(snap.consultationFeeCreditable)
         setVerifyStatus(normalizeVerificationStatus(d.id_verification_status))
 
         const { count, error: countError } = await supabase
@@ -342,15 +433,26 @@ export default function EditProfileScreen() {
           shopPaused: false,
           pickupAvailable: true,
           pickupAddress: '',
+          pickupCity: '',
+          pickupRegion: '',
+          pickupPostalCode: '',
+          pickupCountryCode: '',
           pickupInstructions: '',
           deliveryAvailable: false,
           shippingAvailable: false,
+          consultationMode: 'FREE' as ConsultationMode,
+          consultationRequirement: 'OPTIONAL' as ConsultationRequirement,
+          consultationFee: '',
+          consultationDurationMinutes: 30 as const,
+          consultationCallType: 'VIDEO' as const,
+          consultationFeeCreditable: false,
         }
         setBase(snap)
         setDisplayName(snap.displayName)
         setLocation(snap.location)
         setBio(snap.bio)
         setSpecialties(snap.specialties)
+        setProfileLanguages([])
         setAvailability(snap.availability)
         setCurrency(snap.currency)
         setSellerType(snap.sellerType)
@@ -363,15 +465,39 @@ export default function EditProfileScreen() {
         setPickupInstructions(snap.pickupInstructions)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
+        setConsultationMode(snap.consultationMode)
+        setConsultationRequirement(snap.consultationRequirement)
+        setConsultationFee(snap.consultationFee)
+        setConsultationDurationMinutes(snap.consultationDurationMinutes)
+        setConsultationCallType(snap.consultationCallType)
+        setConsultationFeeCreditable(snap.consultationFeeCreditable)
         setVerifyStatus('NOT_SUBMITTED')
         setPortfolioCount(0)
       }
-    } catch {
+    } catch (error) {
+      if (__DEV__) {
+        const safeError = error && typeof error === 'object'
+          ? {
+              code: 'code' in error ? String(error.code) : 'UNKNOWN',
+              message: 'message' in error ? String(error.message) : 'Profile load failed',
+            }
+          : { code: 'UNKNOWN', message: 'Profile load failed' }
+        console.warn('[tailor-profile-edit-load]', safeError)
+      }
+      Sentry.captureException(error, {
+        tags: {
+          surface: 'tailor_profile_edit',
+          focus: isFulfillmentFocus ? 'fulfillment' : 'full_profile',
+        },
+        extra: {
+          context: 'load_tailor_profile_editor',
+        },
+      })
       setFetchError(true)
     } finally {
       setLoading(false)
     }
-  }, [userId])
+  }, [isFulfillmentFocus, userId])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -487,6 +613,15 @@ export default function EditProfileScreen() {
       Alert.alert('Pickup address needed', 'Add a fuller private pickup address before offering pickup.')
       return
     }
+    if (pickupAvailable && (!pickupCity.trim() || !/^[A-Za-z]{2}$/u.test(pickupCountryCode.trim()))) {
+      Alert.alert('Confirm pickup location', 'Add the pickup city and 2-letter country code so local collection can be checked correctly.')
+      return
+    }
+    const consultationFeeMinor = parseMoneyInputToMinorUnits(consultationFee)
+    if (consultationMode === 'PAID' && !consultationFeeMinor) {
+      Alert.alert('Consultation fee needed', 'Enter the amount customers see before starting a custom brief.')
+      return
+    }
 
     setSaving(true)
     const { data, error } = await invokeFunction<{ pendingReview?: boolean }>('tailor-profile-action', {
@@ -497,7 +632,7 @@ export default function EditProfileScreen() {
           location: location.trim(),
           bio: bio.trim() || null,
           specialties,
-          languages: [],
+          languages: profileLanguages,
           availability,
           currency,
           sellerType,
@@ -507,6 +642,14 @@ export default function EditProfileScreen() {
           shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
+          pickupAddressLine1: pickupAddress.trim() || null,
+          pickupCity: pickupCity.trim() || null,
+          pickupRegion: pickupRegion.trim() || null,
+          pickupPostalCode: pickupPostalCode.trim() || null,
+          pickupCountryCode: pickupCountryCode.trim().toUpperCase() || null,
+          pickupLocationVerificationSource: pickupAvailable ? 'TAILOR_CONFIRMED_STRUCTURED' : null,
+          pickupLocationVerificationReference: null,
+          pickupLocationVerifiedAt: pickupAvailable ? new Date().toISOString() : null,
           pickupInstructions: pickupInstructions.trim() || null,
           deliveryAvailable,
           shippingAvailable,
@@ -514,6 +657,12 @@ export default function EditProfileScreen() {
           shippingFee: 0,
           priceRangeMin: null,
           priceRangeMax: null,
+          consultationMode,
+          consultationRequirement,
+          consultationFeeAmount: consultationMode === 'PAID' ? consultationFeeMinor : null,
+          consultationDurationMinutes,
+          consultationCallType,
+          consultationFeeCreditable: consultationMode === 'PAID' && consultationFeeCreditable,
         },
       },
     })
@@ -524,9 +673,6 @@ export default function EditProfileScreen() {
         : await readFunctionErrorMessage(error, 'Could not save these profile changes right now. Please try again in a moment.')
       Alert.alert('Save failed', message)
       return
-    }
-    if (data?.pendingReview) {
-      Alert.alert('Submitted for review', 'Trust-sensitive profile changes are saved as a pending draft. Your approved public profile stays live while ops reviews them.')
     }
     setBase({
       displayName: displayName.trim(),
@@ -542,10 +688,34 @@ export default function EditProfileScreen() {
       shopPaused,
       pickupAvailable,
       pickupAddress: pickupAddress.trim(),
+      pickupCity: pickupCity.trim(),
+      pickupRegion: pickupRegion.trim(),
+      pickupPostalCode: pickupPostalCode.trim(),
+      pickupCountryCode: pickupCountryCode.trim().toUpperCase(),
       pickupInstructions: pickupInstructions.trim(),
       deliveryAvailable,
       shippingAvailable,
+      consultationMode,
+      consultationRequirement,
+      consultationFee: consultationMode === 'PAID' ? consultationFee : '',
+      consultationDurationMinutes,
+      consultationCallType,
+      consultationFeeCreditable: consultationMode === 'PAID' && consultationFeeCreditable,
     })
+    if (isFulfillmentFocus) {
+      Alert.alert(
+        'Fulfillment location saved',
+        data?.pendingReview
+          ? 'Your fulfillment location is ready. Separate public-profile edits were submitted for review.'
+          : 'Customers can now use the delivery, collection, or shipping options you enabled.',
+        [{ text: 'Back to dashboard', onPress: goBack }],
+      )
+      return
+    }
+    if (data?.pendingReview) {
+      Alert.alert('Submitted for review', 'Trust-sensitive profile changes are saved as a pending draft. Your approved public profile stays live while ops reviews them.')
+      return
+    }
     goBack()
   }
 
@@ -569,9 +739,13 @@ export default function EditProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
+            <Text style={styles.stateTitle}>
+              {isFulfillmentFocus ? "Couldn't load fulfillment settings." : "Couldn't load your profile."}
+            </Text>
             <Text style={styles.stateHint}>
-              This is where you manage how customers find and book you.
+              {isFulfillmentFocus
+                ? 'Your dashboard is unchanged. Try again to add the location orders start from.'
+                : 'This is where you manage how customers find and book you.'}
             </Text>
             <TouchableOpacity
               style={styles.errorRetry}
@@ -584,9 +758,11 @@ export default function EditProfileScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.errorSecondary}
-              onPress={() => router.replace('/(tailor)/profile')}
+              onPress={goBack}
             >
-              <Text style={styles.errorSecondaryText}>Open profile</Text>
+              <Text style={styles.errorSecondaryText}>
+                {isFulfillmentFocus ? 'Back to dashboard' : 'Open profile'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -601,7 +777,7 @@ export default function EditProfileScreen() {
         <TouchableOpacity onPress={goBack} hitSlop={8}>
           <Feather name="arrow-left" size={22} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit profile</Text>
+        <Text style={styles.headerTitle}>{isFulfillmentFocus ? 'Fulfillment location' : 'Edit profile'}</Text>
         <TouchableOpacity
           style={[styles.saveBtn, (!dirty || saving) && styles.saveBtnDisabled]}
           onPress={handleSave}
@@ -616,6 +792,7 @@ export default function EditProfileScreen() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -851,6 +1028,110 @@ export default function EditProfileScreen() {
           ) : null}
         </View>
 
+        {supportsCustomOrders ? (
+          <>
+            <Text style={styles.sectionMicro}>Before a custom brief</Text>
+            <View style={styles.listCard}>
+              <View style={styles.serviceRow}>
+                <View style={[styles.serviceIconWrap, styles.serviceIconWrapActive]}>
+                  <Feather name="video" size={15} color={Colors.needleGreen} />
+                </View>
+                <View style={styles.serviceBody}>
+                  <Text style={styles.serviceTitleActive}>Consultation policy</Text>
+                  <Text style={styles.serviceHint}>Customers see these terms before they start their brief.</Text>
+                </View>
+              </View>
+              <View style={styles.statusChipRow}>
+                {(['UNAVAILABLE', 'FREE', 'PAID'] as const).map((mode) => (
+                  <TouchableOpacity
+                    key={mode}
+                    style={[styles.statusChip, consultationMode === mode && styles.statusChipActive]}
+                    onPress={() => {
+                      setConsultationMode(mode)
+                      if (mode !== 'PAID') {
+                        setConsultationFee('')
+                        setConsultationFeeCreditable(false)
+                      }
+                    }}
+                  >
+                    <Text style={[styles.statusChipText, consultationMode === mode && styles.statusChipTextActive]}>
+                      {mode === 'UNAVAILABLE' ? 'Not offered' : mode === 'FREE' ? 'Free' : 'Paid'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {consultationMode !== 'UNAVAILABLE' ? (
+                <>
+                  <View style={styles.listDivider} />
+                  <View style={styles.statusChipRow}>
+                    {(['OPTIONAL', 'REQUIRED'] as const).map((requirement) => (
+                      <TouchableOpacity
+                        key={requirement}
+                        style={[styles.statusChip, consultationRequirement === requirement && styles.statusChipActive]}
+                        onPress={() => setConsultationRequirement(requirement)}
+                      >
+                        <Text style={[styles.statusChipText, consultationRequirement === requirement && styles.statusChipTextActive]}>
+                          {requirement === 'OPTIONAL' ? 'Optional' : 'Required'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={styles.statusChipRow}>
+                    {([15, 30, 45, 60] as const).map((duration) => (
+                      <TouchableOpacity
+                        key={duration}
+                        style={[styles.statusChip, consultationDurationMinutes === duration && styles.statusChipActive]}
+                        onPress={() => setConsultationDurationMinutes(duration)}
+                      >
+                        <Text style={[styles.statusChipText, consultationDurationMinutes === duration && styles.statusChipTextActive]}>{duration} min</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={styles.statusChipRow}>
+                    {(['AUDIO', 'VIDEO', 'AUDIO_OR_VIDEO'] as const).map((callType) => (
+                      <TouchableOpacity
+                        key={callType}
+                        style={[styles.statusChip, consultationCallType === callType && styles.statusChipActive]}
+                        onPress={() => setConsultationCallType(callType)}
+                      >
+                        <Text style={[styles.statusChipText, consultationCallType === callType && styles.statusChipTextActive]}>
+                          {callType === 'AUDIO' ? 'Audio' : callType === 'VIDEO' ? 'Video' : 'Either'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {consultationMode === 'PAID' ? (
+                    <View style={styles.pickupBlock}>
+                      <Text style={styles.pickupNote}>Fee in {currency}. Payment is collected before the call.</Text>
+                      <MoneyInput
+                        label="Consultation fee"
+                        value={consultationFee}
+                        onChangeText={setConsultationFee}
+                        currency={currency as AccountCurrencyCode}
+                        required
+                      />
+                      <TouchableOpacity
+                        style={styles.serviceRow}
+                        onPress={() => setConsultationFeeCreditable((value) => !value)}
+                        activeOpacity={0.75}
+                      >
+                        <View style={[styles.serviceCheck, consultationFeeCreditable && styles.serviceCheckActive]}>
+                          {consultationFeeCreditable ? <Feather name="check" size={12} color={Colors.needleGreen} /> : null}
+                        </View>
+                        <View style={styles.serviceBody}>
+                          <Text style={styles.serviceTitle}>Credit this fee toward an accepted order</Text>
+                          <Text style={styles.serviceHint}>Prevents the customer paying for the same value twice.</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                  <Text style={styles.deliveryFeeNote}>More than 24 hours: full refund. Inside 24 hours: 50%. Tailor cancellation or verified call failure: full refund or agreed reschedule.</Text>
+                </>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+
         {/* ── Availability ─────────────────────────────────────────────── */}
         <Text style={styles.sectionMicro}>Availability</Text>
         <View style={styles.listCard}>
@@ -874,6 +1155,29 @@ export default function EditProfileScreen() {
         </View>
 
         {/* ── Delivery options ─────────────────────────────────────────── */}
+        <View
+          onLayout={(event) => {
+            const sectionY = event.nativeEvent.layout.y
+            if (isFulfillmentFocus && !hasFocusedFulfillment.current && sectionY > 0) {
+              setTimeout(() => {
+                scrollRef.current?.scrollTo({
+                  y: Math.max(0, sectionY - Spacing.md),
+                  animated: true,
+                })
+                hasFocusedFulfillment.current = true
+              }, 120)
+            }
+          }}
+          style={isFulfillmentFocus ? styles.focusedSection : undefined}
+        >
+        {isFulfillmentFocus ? (
+          <View style={styles.focusedSectionIntro}>
+            <Text style={styles.focusedSectionTitle}>Where orders start</Text>
+            <Text style={styles.focusedSectionBody}>
+              Add the private address Drapeon uses to check collection, delivery, shipping, and tax eligibility. Customers only see it when the order requires it.
+            </Text>
+          </View>
+        ) : null}
         <Text style={styles.sectionMicro}>Delivery options</Text>
         <View style={styles.deliveryRow}>
           {([
@@ -900,9 +1204,45 @@ export default function EditProfileScreen() {
               label="Pickup address"
               value={pickupAddress}
               onChangeText={setPickupAddress}
+              onSelectAddress={(address) => {
+                setPickupAddress(address.line1 || address.displayValue)
+                setPickupCity(address.city)
+                setPickupRegion(address.stateRegion)
+                setPickupPostalCode(address.postcode)
+                if (address.countryCode) setPickupCountryCode(address.countryCode)
+              }}
               placeholder="e.g. 12 Marina Road, Victoria Island"
               hint="Search or type your full pickup address. Include street, city, and country."
               multiline
+            />
+            <TextInput
+              style={styles.input}
+              value={pickupCity}
+              onChangeText={setPickupCity}
+              placeholder="Pickup city"
+              placeholderTextColor={Colors.midGrey}
+            />
+            <TextInput
+              style={styles.input}
+              value={pickupRegion}
+              onChangeText={setPickupRegion}
+              placeholder="State / region"
+              placeholderTextColor={Colors.midGrey}
+            />
+            <TextInput
+              style={styles.input}
+              value={pickupPostalCode}
+              onChangeText={setPickupPostalCode}
+              placeholder="Postcode / ZIP (optional)"
+              placeholderTextColor={Colors.midGrey}
+            />
+            <TextInput
+              style={styles.input}
+              value={pickupCountryCode}
+              onChangeText={(value) => setPickupCountryCode(value.toUpperCase().slice(0, 2))}
+              autoCapitalize="characters"
+              placeholder="2-letter country code, e.g. GH"
+              placeholderTextColor={Colors.midGrey}
             />
             <TextInput
               style={styles.input}
@@ -923,6 +1263,7 @@ export default function EditProfileScreen() {
             Drapeon calculates and collects the delivery fee at checkout. Keep your location accurate and you're set.
           </Text>
         ) : null}
+        </View>
 
         {/* ── Portfolio + Verification nav card ────────────────────────── */}
         <View style={[styles.listCard, { marginTop: Spacing.xs }]}>
@@ -1293,6 +1634,31 @@ const styles = StyleSheet.create({
   pickupBlock: { gap: Spacing.sm },
   pickupNote: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   deliveryFeeNote: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, paddingHorizontal: Spacing.xs },
+  focusedSection: {
+    marginHorizontal: -Spacing.xs,
+    paddingHorizontal: Spacing.xs,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  focusedSectionIntro: {
+    paddingHorizontal: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  focusedSectionTitle: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.xl,
+    color: Colors.ink,
+  },
+  focusedSectionBody: {
+    marginTop: Spacing.xs,
+    fontSize: FontSize.sm,
+    lineHeight: 21,
+    color: Colors.inkLight,
+  },
   input: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg, paddingVertical: 10,

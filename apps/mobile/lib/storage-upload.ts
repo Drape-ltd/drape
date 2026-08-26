@@ -76,3 +76,18 @@ export async function uploadPublicStorageImage(options: PublicStorageUploadOptio
 
   return supabase.storage.from(options.bucket).getPublicUrl(options.path).data.publicUrl
 }
+
+export async function uploadPrivateStorageImage(options: PublicStorageUploadOptions) {
+  const payload = await createValidatedUploadPayload(options.uri, {
+    maxBytes: options.maxBytes,
+    contentType: options.contentType,
+    allowedContentTypes: options.allowedContentTypes,
+    purpose: options.purpose ?? 'UNKNOWN',
+  })
+  const { error } = await supabase.storage.from(options.bucket).upload(options.path, payload.data, {
+    contentType: options.contentType,
+    upsert: options.upsert ?? false,
+  })
+  if (error) throw error
+  return options.path
+}

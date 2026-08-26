@@ -22,6 +22,11 @@ import { Button, FeatureStateCard } from '@/components/ui'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import {
+  materialAdvanceCustomerDecisionFromNote,
+  sourcedFabricDecisionFromNote,
+  styleAlignmentDecisionFromNote,
+} from '@drape/shared'
 import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 
@@ -80,6 +85,15 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 
 function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name'] {
   if (item.kind === 'message') return 'message-circle'
+  const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
+  if (materialDecision === 'APPROVED') return 'check-circle'
+  if (materialDecision === 'DECLINED') return 'x-circle'
+  const fabricDecision = sourcedFabricDecisionFromNote(item.note)
+  if (fabricDecision === 'APPROVED') return 'check-circle'
+  if (fabricDecision === 'CHANGES_REQUESTED') return 'refresh-cw'
+  const styleDecision = styleAlignmentDecisionFromNote(item.note)
+  if (styleDecision === 'APPROVED') return 'check-circle'
+  if (styleDecision === 'CHANGES_REQUESTED') return 'edit-3'
   const stage = item.stage
   if (!stage) return 'bell'
   if (stage === 'PENDING_QUOTE') return 'inbox'
@@ -98,6 +112,15 @@ function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name']
 
 function itemColor(item: NotifItem): string {
   if (item.kind === 'message') return Colors.needleGreen
+  const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
+  if (materialDecision === 'APPROVED') return Colors.success
+  if (materialDecision === 'DECLINED') return Colors.kanteRust
+  const fabricDecision = sourcedFabricDecisionFromNote(item.note)
+  if (fabricDecision === 'APPROVED') return Colors.success
+  if (fabricDecision === 'CHANGES_REQUESTED') return Colors.kanteRust
+  const styleDecision = styleAlignmentDecisionFromNote(item.note)
+  if (styleDecision === 'APPROVED') return Colors.success
+  if (styleDecision === 'CHANGES_REQUESTED') return Colors.kanteRust
   const stage = item.stage
   if (!stage) return Colors.needleGreen
   if (stage === 'PENDING_QUOTE') return Colors.warning
@@ -111,6 +134,15 @@ function itemColor(item: NotifItem): string {
 
 function itemTitle(item: NotifItem): string {
   if (item.kind === 'message') return 'New message'
+  const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
+  if (materialDecision === 'APPROVED') return 'Material request approved'
+  if (materialDecision === 'DECLINED') return 'Material request declined'
+  const fabricDecision = sourcedFabricDecisionFromNote(item.note)
+  if (fabricDecision === 'APPROVED') return 'Fabric approved'
+  if (fabricDecision === 'CHANGES_REQUESTED') return 'Fabric changes requested'
+  const styleDecision = styleAlignmentDecisionFromNote(item.note)
+  if (styleDecision === 'APPROVED') return 'Style plan approved'
+  if (styleDecision === 'CHANGES_REQUESTED') return 'Style clarification requested'
   if (!item.stage) return 'Order update'
   return stageDescription({ stage: item.stage, orderKind: item.orderKind })
 }
@@ -315,7 +347,12 @@ export default function TailorNotificationsScreen() {
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           )) {
             // Deduplicate stage items by orderId+stage; messages already deduped per order
-            const key = item.kind === 'message' ? `msg-${item.orderId}` : `${item.orderId}-${item.stage}`
+            const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
+            const key = item.kind === 'message'
+              ? `msg-${item.orderId}`
+              : materialDecision
+                ? `material-${item.id}`
+                : `${item.orderId}-${item.stage}`
             if (!seen.has(key)) {
               seen.add(key)
               merged.push(item)

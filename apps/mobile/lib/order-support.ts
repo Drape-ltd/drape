@@ -152,6 +152,10 @@ export type QuoteBreakdownMeta = {
   included?: string[] | null
   excluded?: string[] | null
   summary?: string | null
+  tailoringAmount?: number | null
+  fabricAllowanceAmount?: number | null
+  fabricAllowanceCoverage?: string[] | null
+  fabricSourcingAssumptions?: string | null
 }
 
 export type ConsultationMeta = {
@@ -173,6 +177,7 @@ export type ConsultationMeta = {
   reminderEnabled?: boolean | null
   requestNote?: string | null
   requestedAt?: string | null
+  requestExpiresAt?: string | null
   proposedStartAt?: string | null
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
@@ -188,6 +193,10 @@ export type ConsultationMeta = {
   reminderStartSentAt?: string | null
   followUpSentAt?: string | null
   expiredAt?: string | null
+  policyVersion?: string | null
+  durationMinutes?: 15 | 30 | 45 | 60 | null
+  callType?: 'AUDIO' | 'VIDEO' | null
+  requirement?: 'OPTIONAL' | 'REQUIRED' | null
 }
 
 export type OrderCallReason =
@@ -361,6 +370,19 @@ export type DeliveryReviewReason =
   | 'MARKED_DELIVERED_NOT_RECEIVED'
   | 'WRONG_ITEM_RECEIVED'
   | 'RECIPIENT_UNREACHABLE'
+  | 'TRACKING_STALLED'
+  | 'SIGNIFICANT_DELAY'
+  | 'NOT_RECEIVED'
+  | 'WRONG_ADDRESS_OR_RECIPIENT'
+  | 'DAMAGED_IN_TRANSIT'
+  | 'MISSING_CONTENTS'
+  | 'RETURNED_TO_DRAPEON'
+  | 'CUSTOMS_OR_CARRIER_CHARGE'
+  | 'RECIPIENT_CONTACT_PROBLEM'
+  | 'DRAPEON_COLLECTION_MISSED'
+  | 'CUSTODY_SCAN_MISMATCH'
+  | 'PARCEL_RETURNED_TO_TAILOR'
+  | 'HANDOFF_DAMAGE'
   | 'OTHER'
 
 export type ScopeChangeType =
@@ -477,6 +499,7 @@ export type DeliveryReviewMeta = {
   note?: string | null
   requestedAt?: string | null
   requestedFromStage?: string | null
+  riskAction?: 'ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' | 'OPS_FOLLOW_UP' | null
   resolvedAt?: string | null
 }
 
@@ -980,6 +1003,19 @@ export const DELIVERY_REVIEW_REASON_LABELS: Record<DeliveryReviewReason, string>
   MARKED_DELIVERED_NOT_RECEIVED: 'Marked delivered, but not received',
   WRONG_ITEM_RECEIVED: 'Wrong item arrived',
   RECIPIENT_UNREACHABLE: 'Recipient could not be reached',
+  TRACKING_STALLED: 'Tracking has stopped updating',
+  SIGNIFICANT_DELAY: 'Delivery is significantly delayed',
+  NOT_RECEIVED: 'Order was not received',
+  WRONG_ADDRESS_OR_RECIPIENT: 'Delivered to the wrong address or person',
+  DAMAGED_IN_TRANSIT: 'Parcel was damaged in transit',
+  MISSING_CONTENTS: 'Something is missing from the parcel',
+  RETURNED_TO_DRAPEON: 'Parcel was returned to Drapeon',
+  CUSTOMS_OR_CARRIER_CHARGE: 'Unexpected customs or carrier charge',
+  RECIPIENT_CONTACT_PROBLEM: 'Courier could not reach the recipient',
+  DRAPEON_COLLECTION_MISSED: 'Drapeon collection was missed',
+  CUSTODY_SCAN_MISMATCH: 'Drapeon custody acknowledgement is missing or wrong',
+  PARCEL_RETURNED_TO_TAILOR: 'Parcel was returned to the tailor',
+  HANDOFF_DAMAGE: 'Damage was found during Drapeon handoff',
   OTHER: 'Other',
 }
 
@@ -1212,6 +1248,66 @@ export function parseOrderSupportMeta(value: string | null | undefined): OrderSu
     return parsed as OrderSupportMeta
   } catch {
     return {}
+  }
+}
+
+export type ConsultationBookingSnapshot = {
+  status?: string | null
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
+  fee_mode?: string | null
+  fee_amount?: number | null
+  fee_currency?: string | null
+  fee_creditable?: boolean | null
+  payment_status?: string | null
+  paid_at?: string | null
+  call_type?: string | null
+  policy_version?: string | null
+}
+
+/**
+ * Older consultation records can have a confirmed normalized booking without
+ * the legacy order metadata snapshot. The booking is authoritative for the
+ * appointment and payment state; hydrate the UI without rewriting history.
+ */
+export function withConsultationBookingFallback(
+  meta: OrderSupportMeta,
+  booking: ConsultationBookingSnapshot | null | undefined,
+): OrderSupportMeta {
+  if (meta.consultation || !booking || booking.status !== 'CONFIRMED' || !booking.scheduled_start_at) {
+    return meta
+  }
+
+  const startsAt = new Date(booking.scheduled_start_at).getTime()
+  const endsAt = booking.scheduled_end_at ? new Date(booking.scheduled_end_at).getTime() : Number.NaN
+  const rawDuration = Number.isFinite(startsAt) && Number.isFinite(endsAt)
+    ? Math.round((endsAt - startsAt) / 60_000)
+    : 30
+  const durationMinutes = ([15, 30, 45, 60] as const).includes(rawDuration as 15 | 30 | 45 | 60)
+    ? rawDuration as 15 | 30 | 45 | 60
+    : 30
+  const feeMode: ConsultationFeeMode = booking.fee_mode === 'PAID' ? 'PAID' : 'FREE'
+
+  return {
+    ...meta,
+    consultation: {
+      status: 'SCHEDULED',
+      requestedBy: 'TAILOR',
+      feeMode,
+      feeAmount: feeMode === 'PAID' ? booking.fee_amount ?? null : null,
+      feeCurrency: booking.fee_currency ?? null,
+      feeCreditable: booking.fee_creditable === true,
+      paymentTiming: feeMode === 'PAID' ? 'BEFORE_CALL_STARTS' : 'WAIVED_OR_FREE',
+      paidAt: booking.payment_status === 'PAID' ? booking.paid_at ?? null : null,
+      proposedStartAt: booking.scheduled_start_at,
+      scheduledStartAt: booking.scheduled_start_at,
+      scheduledEndAt: booking.scheduled_end_at ?? null,
+      durationMinutes,
+      callType: booking.call_type === 'AUDIO' ? 'AUDIO' : 'VIDEO',
+      reschedulePolicy: 'ONE_FREE_RESCHEDULE',
+      reminderEnabled: true,
+      policyVersion: booking.policy_version ?? null,
+    },
   }
 }
 

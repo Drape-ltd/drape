@@ -13,9 +13,6 @@ const FN = 'tax'
 const ZIPTAX_ENDPOINT = 'https://api.ziptax.com/request/v60'
 const ZIPTAX_TIMEOUT_MS = 5_000
 const TAX_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-const ZIPTAX_FALLBACK_REASON = 'ZIPTAX_UNAVAILABLE'
-const ONTARIO_FALLBACK_RATE_BPS = 1_300
-const ONTARIO_FALLBACK_REGION = 'Ontario HST'
 
 // Drapeon is a Wyoming LLC. Formal nexus analysis has not
 // yet been completed with a US accountant. Tax is being
@@ -157,12 +154,6 @@ function normalizePostalCode(value: string | null | undefined, countryCode: 'US'
 function extractPostalCodeFromAddress(address: string | null | undefined, countryCode: 'US' | 'CA'): string | null {
   if (typeof address !== 'string') return null
   return normalizePostalCode(address, countryCode)
-}
-
-function countryCodeForCurrency(currency: AccountCurrencyCode): 'US' | 'CA' | null {
-  if (currency === 'USD') return 'US'
-  if (currency === 'CAD') return 'CA'
-  return null
 }
 
 function boolFromTaxableFlag(value: string | null | undefined, defaultValue: boolean) {
@@ -393,57 +384,33 @@ function staticTaxFromContext(input: TaxLockInput): ResolvedOrderTax {
   }
 }
 
-function ziptaxFallback(input: TaxLockInput, countryCode: 'US' | 'CA'): ResolvedOrderTax {
-  if (countryCode === 'CA') {
-    return {
-      label: `Tax (${ONTARIO_FALLBACK_REGION})`,
-      taxRegion: ONTARIO_FALLBACK_REGION,
-      rateBps: ONTARIO_FALLBACK_RATE_BPS,
-      fallback: true,
-      fallbackReason: ZIPTAX_FALLBACK_REASON,
-      source: 'STATIC',
-      rawResponse: null,
-      shippingTaxable: false,
-      platformFeeTaxable: false,
-    }
-  }
-
-  const region = input.stateRegion?.trim()
-    || input.regionCode?.trim().toUpperCase()
-    || 'United States'
-
-  return {
-    label: `Tax (${region})`,
-    taxRegion: region,
-    rateBps: 0,
-    fallback: true,
-    fallbackReason: ZIPTAX_FALLBACK_REASON,
-    source: 'STATIC',
-    rawResponse: null,
-    shippingTaxable: false,
-    platformFeeTaxable: false,
-  }
-}
-
 export async function resolveOrderTax(input: TaxLockInput): Promise<ResolvedOrderTax> {
   const countryCode =
-    (normalizeTaxCountryCode(input.countryCode) as 'US' | 'CA' | null)
-    ?? countryCodeForCurrency(input.currency)
-    ?? (normalizeTaxCountryCode(input.regionCode) as 'US' | 'CA' | null)
+    normalizeTaxCountryCode(input.countryCode)
+    ?? normalizeTaxCountryCode(input.regionCode)
 
-  if (!countryCode || !['USD', 'CAD'].includes(input.currency)) {
-    return staticTaxFromContext(input)
+  if (!countryCode) {
+    throw new Error('A supported delivery tax jurisdiction is required before checkout.')
   }
 
+  if (!['US', 'CA'].includes(countryCode)) {
+    const staticTax = staticTaxFromContext(input)
+    if (staticTax.fallback) {
+      throw new Error(`Tax is not configured for ${countryCode}.`)
+    }
+    return staticTax
+  }
+
+  const providerCountryCode = countryCode as 'US' | 'CA'
   const postalCode =
-    normalizePostalCode(input.postalCode, countryCode)
-    ?? extractPostalCodeFromAddress(input.address, countryCode)
+    normalizePostalCode(input.postalCode, providerCountryCode)
+    ?? extractPostalCodeFromAddress(input.address, providerCountryCode)
 
   if (!postalCode) {
-    return ziptaxFallback(input, countryCode)
+    throw new Error(`A valid ${countryCode === 'US' ? 'US ZIP' : 'Canadian postal'} code is required before checkout.`)
   }
 
-  const cached = await readCachedTaxRate(input.supabase, countryCode, postalCode)
+  const cached = await readCachedTaxRate(input.supabase, providerCountryCode, postalCode)
   if (cached) {
     return {
       label: `Tax (${cached.tax_region})`,
@@ -461,7 +428,7 @@ export async function resolveOrderTax(input: TaxLockInput): Promise<ResolvedOrde
   try {
     const params = new URLSearchParams({
       format: 'json',
-      countryCode: countryCode === 'US' ? 'USA' : 'CAN',
+      countryCode: providerCountryCode === 'US' ? 'USA' : 'CAN',
       postalcode: postalCode,
       addressDetailExtended: 'true',
       shippingExtended: 'true',
@@ -496,7 +463,7 @@ export async function resolveOrderTax(input: TaxLockInput): Promise<ResolvedOrde
       throw new Error('ZipTax did not return a combined tax rate.')
     }
 
-    const taxRegion = countryCode === 'US'
+    const taxRegion = providerCountryCode === 'US'
       ? usStateLabel(payload.addressDetail, payload.base_rates)
       : provinceTaxLabel(payload.addressDetail, payload.tax_summaries)
     const shippingTaxable = boolFromTaxableFlag(payload.shipping?.taxable, false)
@@ -514,7 +481,7 @@ export async function resolveOrderTax(input: TaxLockInput): Promise<ResolvedOrde
       platformFeeTaxable,
     }
 
-    await writeCachedTaxRate(input.supabase, countryCode, postalCode, resolved)
+    await writeCachedTaxRate(input.supabase, providerCountryCode, postalCode, resolved)
 
     return resolved
   } catch (error) {
@@ -522,13 +489,12 @@ export async function resolveOrderTax(input: TaxLockInput): Promise<ResolvedOrde
       order_id: input.orderId ?? null,
       country_code: countryCode,
       postal_code: postalCode,
-      address: input.address ?? null,
       currency: input.currency,
       error: error instanceof Error ? error.message : String(error),
     }
     log('error', FN, 'ziptax.lookup_failed', context)
     await captureTaxFailureInSentry(context)
-    return ziptaxFallback(input, countryCode)
+    throw new Error('Tax could not be resolved from the configured provider.')
   }
 }
 

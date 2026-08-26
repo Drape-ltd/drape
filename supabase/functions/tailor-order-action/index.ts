@@ -95,6 +95,7 @@ import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import {
+  lockConsultationCommercialSnapshot,
   releaseConsultationSlot,
   reserveConsultationSlot,
 } from '../_shared/consultation-bookings.ts'
@@ -103,16 +104,47 @@ import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellat
 import { buildCustomerStageSms } from '../../../packages/shared/src/sms-copy.ts'
 import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
 import {
+  FABRIC_ALLOWANCE_COVERAGE_CODES,
+  FABRIC_FUNDING_POLICY_VERSION,
+  FABRIC_FUNDING_POLICY_V2_VERSION,
+  isFundedFabricPolicy,
+  validateFabricQuoteAllocation,
+} from '../../../packages/shared/src/fabric-funding.ts'
+import {
+  canSubmitTailorFabricApproval,
+  QUOTE_ORDER_REVIEW_VERSION,
+  validateQuoteOrderReviewAttestation,
+} from '../../../packages/shared/src/quote-review.ts'
+import {
   CUSTOM_PRODUCTION_STAGE_REQUIREMENTS,
   CUSTOM_PRODUCTION_STAGE_LABELS,
+  CUSTOM_PRODUCTION_EVIDENCE_PURPOSES,
   type CustomProductionStageKey,
 } from '../../../packages/shared/src/custom-order-flow.ts'
-import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
+import {
+  resolveOrderTaxJurisdiction,
+} from '../../../packages/shared/src/tax.ts'
 import { notificationDestinationData } from '../../../packages/shared/src/notification-policy.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
+import { resolveActivatedTaxDecision } from '../_shared/tax-decision.ts'
+import {
+  calculateReviewedInternationalCharges,
+  deriveTaxTransactionType,
+  formatTaxDecisionBlockedReason,
+} from '../../../packages/shared/src/tax-decision.ts'
+import { resolveConsultationCallType } from '../../../packages/shared/src/consultations.ts'
 
 const MAX_MONEY_MINOR_UNITS = 999_999_999
 const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
+
+const PrivateProductionMediaSchema = z.object({
+  mediaType: z.enum(['IMAGE', 'VIDEO']),
+  bucket: z.literal('commercial-evidence'),
+  originalPath: z.string().trim().min(10).max(500),
+  displayPath: z.string().trim().min(10).max(500),
+  posterPath: z.string().trim().min(10).max(500).nullable().optional(),
+  crop: z.record(z.string(), z.unknown()).nullable().optional(),
+})
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -123,13 +155,23 @@ const BodySchema = z.discriminatedUnion('action', [
     currency:       z.string().trim().min(2).max(5),
     completionDate: isoDate,
     breakdown: z.object({
-      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
-      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
-      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
+      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
+      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
       included: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       excluded: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       summary: z.string().trim().max(300).optional(),
     }).optional(),
+    fabricAllocation: z.object({
+      tailoringAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS),
+      fabricAllowanceAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS),
+      coverage: z.array(z.enum(FABRIC_ALLOWANCE_COVERAGE_CODES)).max(FABRIC_ALLOWANCE_COVERAGE_CODES.length),
+      sourcingAssumptions: z.string().trim().max(1200),
+    }).optional(),
+    orderReview: z.object({
+      acknowledged: z.literal(true),
+      version: z.literal(QUOTE_ORDER_REVIEW_VERSION),
+    }),
     note:           z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -137,20 +179,33 @@ const BodySchema = z.discriminatedUnion('action', [
     action:         z.literal('revise-quote'),
     quoteId:        uuid,
     expectedQuoteVersion: z.number().int().positive(),
-    revisionRequestId: uuid.optional(),
+    // Older mobile builds included this key with a null value for a
+    // tailor-initiated correction. Treat null and omission identically so a
+    // valid correction is not rejected before the authoritative quote RPC.
+    revisionRequestId: uuid.nullish(),
     changeKind: z.enum(['CUSTOMER_REVISION', 'TAILOR_CORRECTION', 'UNCHANGED_RENEWAL']),
     amount:         z.number().int().positive().max(MAX_MONEY_MINOR_UNITS),
     fulfillmentFee: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
     currency:       z.string().trim().min(2).max(5),
     completionDate: isoDate,
     breakdown: z.object({
-      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
-      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
-      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
+      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
+      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullish(),
       included: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       excluded: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       summary: z.string().trim().max(300).optional(),
     }).optional(),
+    fabricAllocation: z.object({
+      tailoringAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS),
+      fabricAllowanceAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS),
+      coverage: z.array(z.enum(FABRIC_ALLOWANCE_COVERAGE_CODES)).max(FABRIC_ALLOWANCE_COVERAGE_CODES.length),
+      sourcingAssumptions: z.string().trim().max(1200),
+    }).optional(),
+    orderReview: z.object({
+      acknowledged: z.literal(true),
+      version: z.literal(QUOTE_ORDER_REVIEW_VERSION),
+    }),
     note:           z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -185,6 +240,7 @@ const BodySchema = z.discriminatedUnion('action', [
     noShowPolicy: z.enum(['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']).optional(),
     expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
     reminderEnabled: z.boolean().optional(),
+    callType: z.enum(['AUDIO', 'VIDEO']).optional(),
     scheduledStartAt: isoDate.optional(),
     timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
     note:            z.string().trim().max(300).optional(),
@@ -200,6 +256,7 @@ const BodySchema = z.discriminatedUnion('action', [
     noShowPolicy: z.enum(['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']).optional(),
     expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
     reminderEnabled: z.boolean().optional(),
+    callType: z.enum(['AUDIO', 'VIDEO']).optional(),
     scheduledStartAt: isoDate,
     timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
     note:            z.string().trim().max(300).optional(),
@@ -222,6 +279,7 @@ const BodySchema = z.discriminatedUnion('action', [
     note:           z.string().trim().min(10).max(300),
     photoUrl:       z.string().url().optional(),
     photoUrls:      z.array(z.string().url()).max(6).optional(),
+    evidenceMedia:  z.array(PrivateProductionMediaSchema).max(6).optional(),
     mediaFingerprints: z.array(z.string().trim().min(4).max(240)).max(6).optional(),
     trackingNumber: z.string().trim().max(50).optional(),
     carrier:        z.string().trim().max(50).optional(),
@@ -229,6 +287,25 @@ const BodySchema = z.discriminatedUnion('action', [
     fulfillmentReference: z.string().trim().max(120).optional(),
     fulfillmentContactName: z.string().trim().max(120).optional(),
     fulfillmentContactPhone: z.string().trim().max(40).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('submit-sourced-fabric'),
+    note: z.string().trim().min(10).max(300),
+    photoUrl: z.string().url().optional(),
+    photoUrls: z.array(z.string().url()).min(1).max(6).optional(),
+    evidenceMedia: z.array(PrivateProductionMediaSchema).max(6).optional(),
+    mediaFingerprints: z.array(z.string().trim().min(4).max(240)).max(6).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('post-stage-progress'),
+    targetStage: z.enum(['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING']),
+    note: z.string().trim().min(10).max(300),
+    photoUrl: z.string().url().optional(),
+    photoUrls: z.array(z.string().url()).min(1).max(6).optional(),
+    evidenceMedia: z.array(PrivateProductionMediaSchema).max(6).optional(),
+    mediaFingerprints: z.array(z.string().trim().min(4).max(240)).max(6).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -335,10 +412,10 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId: uuid,
     action: z.literal('request-delivery-review'),
     reason: z.enum([
-      'DISPATCH_DELAY',
-      'DELIVERY_FAILED',
-      'RETURN_TO_SENDER',
-      'RECIPIENT_UNREACHABLE',
+      'DRAPEON_COLLECTION_MISSED',
+      'CUSTODY_SCAN_MISMATCH',
+      'PARCEL_RETURNED_TO_TAILOR',
+      'HANDOFF_DAMAGE',
       'OTHER',
     ]),
     note: z.string().trim().max(300).optional(),
@@ -378,7 +455,7 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
   })
 }
 
-function quoteNegotiationErrorResponse(cors: HeadersInit, error: unknown) {
+function quoteNegotiationErrorResponse(cors: HeadersInit, error: unknown, failureReference?: string) {
   const message = error && typeof error === 'object' && 'message' in error
     ? String((error as { message?: unknown }).message ?? '')
     : String(error)
@@ -395,7 +472,10 @@ function quoteNegotiationErrorResponse(cors: HeadersInit, error: unknown) {
     REVISION_REQUEST_NOT_ALLOWED_FOR_CHANGE_KIND: 'This quote change does not match the selected revision type.',
   }
   const code = known ?? 'QUOTE_NEGOTIATION_FAILED'
-  return jsonErrorResponse(cors, known ? 409 : 500, code, copy[code] ?? 'We could not update this quote right now.')
+  const fallback = failureReference
+    ? `We could not update this quote right now. Reference ${failureReference}.`
+    : 'We could not update this quote right now.'
+  return jsonErrorResponse(cors, known ? 409 : 500, code, copy[code] ?? fallback)
 }
 
 async function orderAlreadyScheduledForConsultation(
@@ -447,6 +527,7 @@ type OrderRow = {
   customer_id?: string | null
   deadline?: string | null
   fabric_source?: string | null
+  fabric_funding_policy_version?: string | null
   garment_type?: string | null
   item_title?: string | null
   item_size?: string | null
@@ -484,6 +565,12 @@ type OrderRow = {
   active_quote_version?: number | null
   negotiation_round_limit?: number | null
   negotiation_rounds_used?: number | null
+  fulfillment_policy_version?: string | null
+  fulfillment_classification?: string | null
+  fulfillment_origin_snapshot?: Record<string, unknown> | null
+  fulfillment_destination_snapshot?: Record<string, unknown> | null
+  fulfillment_corridor_control_id?: string | null
+  fulfillment_collection_mode?: string | null
 }
 
 declare const EdgeRuntime: {
@@ -527,6 +614,7 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'decline-consultation-request': { title: 'Consultation declined', body: 'Your tailor declined the consultation request but can still send a quote or message you.' },
   DESIGNING:               { title: 'Order update ✏️',          body: 'Your tailor is working through design details for your order.' },
   SOURCING:                { title: 'Order update 🧵',          body: 'Your tailor is sourcing materials for your order.' },
+  'submit-sourced-fabric': { title: 'Fabric approval needed',   body: 'Your tailor submitted the selected fabric. Review the exact fabric before cutting begins.' },
   CUTTING:                 { title: 'Order update ✂️',          body: 'Your tailor has started cutting the fabric.' },
   SEWING:                  { title: 'Order update 🧵',          body: 'Your tailor is now sewing your garment.' },
   FINISHING:               { title: 'Almost ready ✨',          body: 'Your tailor is putting the finishing touches on your order.' },
@@ -576,6 +664,8 @@ function queueCustomerOrderEmail(
   subject: string,
   body: string,
   evidenceImageUrl?: string | null,
+  eventKey?: string,
+  evidenceStorageBucket?: 'order-photos' | 'commercial-evidence' | null,
 ) {
   if (!order.customer_id) return
   EdgeRuntime.waitUntil(
@@ -586,8 +676,9 @@ function queueCustomerOrderEmail(
       subject,
       body,
       evidenceImageUrl,
+      evidenceStorageBucket,
       source: FN,
-      idempotencyKey: `${FN}:${order.id}:customer-email:${subject}`,
+      idempotencyKey: `${FN}:${order.id}:customer-email:${eventKey ?? subject}`,
     }),
   )
 }
@@ -696,6 +787,31 @@ function uniqueMediaFingerprints(values?: string[] | null) {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
 }
 
+type PrivateProductionMedia = z.infer<typeof PrivateProductionMediaSchema>
+
+type FabricV2CuttingBlocker = {
+  code: string
+  message: string
+  recoveryAction: string
+  componentCode?: string
+}
+
+function privateProductionMediaForOrder(orderId: string, value?: PrivateProductionMedia[] | null) {
+  const expectedPrefix = `${orderId}/production/`
+  const media = value ?? []
+  for (const asset of media) {
+    const paths = [asset.originalPath, asset.displayPath, asset.posterPath].filter(Boolean) as string[]
+    if (paths.some((path) => !path.startsWith(expectedPrefix) || path.includes('..'))) {
+      throw new Error('PRIVATE_PRODUCTION_EVIDENCE_PATH_INVALID')
+    }
+  }
+  return media
+}
+
+function privateProductionDisplayPaths(media: PrivateProductionMedia[]) {
+  return media.map((asset) => asset.displayPath).filter(Boolean)
+}
+
 async function findReusedProductionMedia(
   supabase: SupabaseClient,
   orderId: string,
@@ -765,7 +881,7 @@ async function readCustomFabricApprovalForCutting(supabase: SupabaseClient, orde
 }
 
 function customProductionStageForTarget(targetStage: string, deliveryMethod?: string | null): CustomProductionStageKey {
-  if (targetStage === 'SOURCING') return 'FABRIC'
+  if (targetStage === 'SOURCING') return 'PRE_CUTTING'
   if (targetStage === 'DESIGNING') return 'PRE_CUTTING'
   if (targetStage === 'CUTTING') return 'CUTTING'
   if (targetStage === 'SEWING') return 'SEWING'
@@ -799,12 +915,14 @@ async function insertCustomProductionEvidence(
     })
 
   if (!error) {
+    const publicUrls = input.photoUrls.filter((value) => /^https?:\/\//iu.test(value))
+    if (publicUrls.length === 0) return error
     await queueMediaSafetyReview(supabase, {
       fn: FN,
       actorId: input.actorId,
       actorRole: 'TAILOR',
       surface: 'production_stage.evidence',
-      publicUrls: input.photoUrls,
+      publicUrls,
       purpose: 'PRODUCTION_STAGE',
       orderId: input.orderId,
       relatedEntityType: 'order',
@@ -891,8 +1009,8 @@ Deno.serve(async (req) => {
 
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
-      ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
-      : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
+      ? 'id, stage, tailor_id, customer_id, delivery_method, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
+      : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, fabric_funding_policy_version, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used, fulfillment_policy_version, fulfillment_classification, fulfillment_origin_snapshot, fulfillment_destination_snapshot, fulfillment_corridor_control_id, fulfillment_collection_mode'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -1105,7 +1223,7 @@ Deno.serve(async (req) => {
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['request-style-alignment'],
             preferenceKey: 'orderUpdates',
-            data: { orderId, type: 'style_alignment' },
+            data: { orderId, type: 'style_alignment', event: `requested:${now}` },
           }),
         )
         queueCustomerOrderEmail(
@@ -1113,6 +1231,8 @@ Deno.serve(async (req) => {
           order,
           'Style approval needed',
           'Your tailor explained how they will interpret your references. Approve it or request changes before cutting starts.',
+          null,
+          `style-alignment-requested:${now}`,
         )
       }
 
@@ -1394,7 +1514,6 @@ Deno.serve(async (req) => {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
         return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
-
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: order.stage,
@@ -1423,7 +1542,6 @@ Deno.serve(async (req) => {
           })
         )
       }
-
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
@@ -1932,14 +2050,24 @@ Deno.serve(async (req) => {
         )
       }
 
-      if (!['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED'].includes(order.stage)) {
-        return new Response(
-          JSON.stringify({ error: `Cannot request delivery review from stage ${order.stage}` }),
-          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
-        )
+      const { data: paidOrder } = await supabase
+        .from('order_payments')
+        .select('id')
+        .eq('order_id', orderId)
+        .eq('phase', 'INITIAL_ORDER')
+        .in('status', ['SUCCEEDED', 'PARTIAL_REFUND', 'REFUNDED'])
+        .limit(1)
+        .maybeSingle()
+      if (!paidOrder) {
+        return jsonErrorResponse(cors, 409, 'INITIAL_PAYMENT_REQUIRED', 'Shipping and delivery help becomes available after the initial order payment is confirmed.')
       }
 
       const reasonLabel = DELIVERY_REVIEW_REASON_LABELS[body.reason]
+      const freezesOrder = new Set([
+        'CUSTODY_SCAN_MISMATCH',
+        'PARCEL_RETURNED_TO_TAILOR',
+        'HANDOFF_DAMAGE',
+      ]).has(body.reason)
       const nextMeta = {
         ...meta,
         deliveryReview: {
@@ -1950,14 +2078,16 @@ Deno.serve(async (req) => {
           note: body.note?.trim() || null,
           requestedAt: new Date().toISOString(),
           requestedFromStage: order.stage,
+          riskAction: freezesOrder
+            ? ('ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' as const)
+            : ('OPS_FOLLOW_UP' as const),
         },
       }
 
       const { error } = await supabase
         .from('orders')
         .update({
-          stage: 'IN_DISPUTE',
-          stage_updated_at: new Date().toISOString(),
+          ...(freezesOrder ? { stage: 'IN_DISPUTE', stage_updated_at: new Date().toISOString() } : {}),
           special_note: serializeOrderSupportMeta(nextMeta),
         })
         .eq('id', orderId)
@@ -1966,10 +2096,48 @@ Deno.serve(async (req) => {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
         return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
+      if (freezesOrder) {
+        // A delivery-help review is itself enough to pause money movement. It
+        // does not necessarily create a financial_case, so freeze the plan and
+        // unreleased tranches explicitly after ensuring the plan exists.
+        await supabase.rpc('refresh_order_settlement', { p_order_id: orderId })
+        const freezeAt = new Date().toISOString()
+        const { data: settlementPlan, error: settlementFreezeError } = await supabase
+          .from('order_settlement_plans')
+          .update({ status: 'FROZEN', frozen_reason: 'OPEN_REVIEW', updated_at: freezeAt })
+          .eq('order_id', orderId)
+          .in('status', ['ACTIVE', 'FROZEN'])
+          .select('id')
+          .maybeSingle()
+        if (settlementPlan?.id) {
+          const { error: trancheFreezeError } = await supabase
+            .from('order_settlement_tranches')
+            .update({ status: 'BLOCKED', blocked_reason: 'OPEN_REVIEW', updated_at: freezeAt })
+            .eq('plan_id', settlementPlan.id)
+            .in('status', ['LOCKED', 'ELIGIBLE', 'RELEASE_REQUESTED'])
+          if (trancheFreezeError) {
+            log('error', FN, 'settlement.tranches_freeze_failed', {
+              actor_id: caller.id,
+              order_id: orderId,
+              plan_id: settlementPlan.id,
+              reason: body.reason,
+              error: trancheFreezeError.message,
+            })
+          }
+        }
+        if (settlementFreezeError) {
+          log('error', FN, 'settlement.freeze_failed', {
+            actor_id: caller.id,
+            order_id: orderId,
+            reason: body.reason,
+            error: settlementFreezeError.message,
+          })
+        }
+      }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
-        stage: 'IN_DISPUTE',
+        stage: freezesOrder ? 'IN_DISPUTE' : order.stage,
         note: buildDeliveryReviewNote('TAILOR', reasonLabel, body.note ?? null),
       })
 
@@ -1978,13 +2146,13 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        severity: 'warn',
-        payload: { reason: body.reason, from_stage: order.stage },
+        severity: freezesOrder ? 'error' : 'warn',
+        payload: { reason: body.reason, from_stage: order.stage, freezes_order: freezesOrder },
       })
 
       await createOrRefreshOpsIssue(supabase, {
         issueType: 'DELIVERY_REVIEW',
-        severity: 'HIGH',
+        severity: freezesOrder ? 'HIGH' : 'MEDIUM',
         source: FN,
         actorId: caller.id,
         actorRole: 'TAILOR',
@@ -2000,6 +2168,7 @@ Deno.serve(async (req) => {
           requested_by: 'TAILOR',
           reason: body.reason,
           from_stage: order.stage,
+          freezes_order: freezesOrder,
         },
       })
 
@@ -2012,6 +2181,12 @@ Deno.serve(async (req) => {
           })
         )
       }
+      queueCustomerOrderEmail(
+        supabase,
+        order,
+        freezesOrder ? 'Urgent shipping or delivery issue reported' : 'Shipping or delivery help requested',
+        `${reasonLabel}. Open this exact order in Drapeon to review the fulfillment record and next step.`,
+      )
 
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
@@ -2025,6 +2200,7 @@ Deno.serve(async (req) => {
       }
       // Idempotent: if already QUOTE_SENT, the previous request succeeded — return ok
       if (action === 'send-quote' && order.stage === 'QUOTE_SENT') {
+        await supabase.from('tailor_quote_drafts').delete().eq('order_id', orderId).eq('tailor_id', caller.id)
         return new Response(JSON.stringify({ ok: true, idempotent: true }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
@@ -2041,6 +2217,16 @@ Deno.serve(async (req) => {
 
       // Zod already validated: amount, currency, completionDate — extract safely
       const quoteBody = body as Extract<typeof body, { action: 'send-quote' }> | Extract<typeof body, { action: 'revise-quote' }>
+      try {
+        validateQuoteOrderReviewAttestation(quoteBody.orderReview)
+      } catch (reviewError) {
+        return jsonErrorResponse(
+          cors,
+          400,
+          'ORDER_REVIEW_REQUIRED',
+          reviewError instanceof Error ? reviewError.message : 'Review the complete order details before sending this quote.',
+        )
+      }
       const { amount, currency, completionDate, breakdown } = quoteBody
       const quoteCurrency = normalizeAccountCurrency(currency)
       if (!quoteCurrency) {
@@ -2115,15 +2301,98 @@ Deno.serve(async (req) => {
             sellerLocation: sellerProfileLocation,
             destinationAddress: order.delivery_address ?? null,
           }).feeMinorUnits
+      let sellerPickupAddress: string | null = null
+      if (order.delivery_method === 'LOCAL_COLLECTION') {
+        const { data: pickupDetails, error: pickupDetailsError } = await supabase
+          .from('tailor_pickup_details')
+          .select('pickup_address')
+          .eq('user_id', caller.id)
+          .maybeSingle()
+
+        if (pickupDetailsError) {
+          log('error', FN, 'db.error', {
+            actor_id: caller.id,
+            order_id: orderId,
+            action,
+            error: pickupDetailsError.message,
+            surface: 'tailor_pickup_details.pickup_address',
+          })
+          return jsonErrorResponse(cors, 500, 'TAX_REGION_UNAVAILABLE', 'Could not resolve the pickup tax region.')
+        }
+        sellerPickupAddress = pickupDetails?.pickup_address?.trim() || null
+      }
+      const taxJurisdiction = resolveOrderTaxJurisdiction({
+        fulfillment: order.delivery_method,
+        deliveryCountryCode: order.delivery_country_code,
+        deliveryAddress: order.delivery_address,
+        sellerLocation: sellerProfileLocation,
+        sellerPickupAddress,
+        customerRegionCode,
+      })
+      const taxTransaction = deriveTaxTransactionType({
+        paymentPhase: 'INITIAL_ORDER',
+        orderKind: order.order_kind === 'READY_MADE' ? 'READY_MADE' : 'CUSTOM',
+      })
+      if (taxTransaction.status !== 'RESOLVED') {
+        return jsonErrorResponse(cors, 409, taxTransaction.reason, formatTaxDecisionBlockedReason(taxTransaction.reason))
+      }
+      if (!taxJurisdiction.countryCode) {
+        return jsonErrorResponse(
+          cors,
+          409,
+          'TAX_REGION_UNAVAILABLE',
+          'A verified tax country is required before this quote can be sent.',
+        )
+      }
+      const fulfillmentClassification = order.fulfillment_classification
+        ?? (order.delivery_method === 'LOCAL_COLLECTION'
+          ? 'LOCAL_COLLECTION'
+          : order.delivery_method === 'LOCAL_DELIVERY'
+            ? 'LOCAL_DELIVERY'
+            : 'INTERNATIONAL_SHIPPING')
+      const originCountryCode = typeof order.fulfillment_origin_snapshot?.countryCode === 'string'
+        ? order.fulfillment_origin_snapshot.countryCode
+        : null
+      const destinationCountryCode = typeof order.fulfillment_destination_snapshot?.countryCode === 'string'
+        ? order.fulfillment_destination_snapshot.countryCode
+        : order.delivery_country_code ?? null
+      const taxEnvironment = (Deno.env.get('SUPABASE_URL') ?? '').includes('pqptfuqogvrajozfsqzi')
+        ? 'DEVELOPMENT' as const
+        : 'PRODUCTION' as const
+      const requiredTaxLines = [
+        order.order_kind === 'READY_MADE' ? 'READY_MADE_ITEM' as const : 'TAILORING' as const,
+        ...(isFundedFabricPolicy(order.fabric_funding_policy_version) ? ['FABRIC_ALLOWANCE' as const] : []),
+        ...(fulfillmentFee > 0 ? ['FULFILLMENT' as const] : []),
+      ]
+      const activatedTax = await resolveActivatedTaxDecision({
+        supabase,
+        environment: taxEnvironment,
+        jurisdictionCountryCode: taxJurisdiction.countryCode,
+        jurisdictionRegionCode: order.delivery_region ?? null,
+        originCountryCode,
+        destinationCountryCode,
+        transactionType: taxTransaction.transactionType,
+        fulfillmentClassification,
+        tailorId: caller.id,
+        customerId: order.customer_id ?? '',
+        requiredLineKeys: requiredTaxLines,
+      })
+      if (activatedTax.status === 'BLOCKED') {
+        await audit(supabase, {
+          event: 'tax.decision_blocked', actor_id: caller.id, actor_role: 'TAILOR', order_id: orderId,
+          severity: 'warn', payload: { function: FN, action, reason: activatedTax.reason, tax_transaction_type: taxTransaction.transactionType },
+        })
+        return jsonErrorResponse(cors, 409, activatedTax.reason, formatTaxDecisionBlockedReason(activatedTax.reason))
+      }
       let resolvedTax
       try {
         resolvedTax = await resolveOrderTax({
           supabase,
           orderId,
           currency: quoteCurrency,
-          regionCode: customerRegionCode,
-          countryCode: normalizeTaxCountryCode(order.delivery_country_code) ?? customerRegionCode,
-          address: order.delivery_address ?? null,
+          regionCode: taxJurisdiction.countryCode,
+          countryCode: taxJurisdiction.countryCode,
+          address: taxJurisdiction.address,
           postalCode: order.delivery_postal_code ?? null,
           stateRegion: order.delivery_region ?? null,
           city: order.delivery_city ?? null,
@@ -2140,14 +2409,87 @@ Deno.serve(async (req) => {
           { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
-      const lockedAmounts = calculateLockedOrderAmountsWithTaxBase({
-        subtotalAmount: amount,
+      const consultationCreditAmount =
+        supportMeta.consultation?.feeCreditable
+        && typeof order.consultation_fee === 'number'
+        && order.consultation_fee > 0
+          ? Math.min(order.consultation_fee, amount)
+          : 0
+      const fundedFabricPolicy = isFundedFabricPolicy(order.fabric_funding_policy_version)
+        ? order.fabric_funding_policy_version
+        : null
+      const usesFundedFabric = fundedFabricPolicy !== null
+      let fundedAllocation: ReturnType<typeof validateFabricQuoteAllocation> | null = null
+      if (usesFundedFabric) {
+        if (!quoteBody.fabricAllocation) {
+          return new Response(
+            JSON.stringify({ error: 'Separate tailoring and fabric allowance amounts before sending this quote.' }),
+            { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+        try {
+          fundedAllocation = validateFabricQuoteAllocation({
+            policyVersion: fundedFabricPolicy!,
+            fabricSource: order.fabric_source as 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES',
+            currency: quoteCurrency,
+            subtotalAmount: amount,
+            tailoringAmount: quoteBody.fabricAllocation.tailoringAmount,
+            fabricAllowanceAmount: quoteBody.fabricAllocation.fabricAllowanceAmount,
+            coverage: quoteBody.fabricAllocation.coverage,
+            sourcingAssumptions: quoteBody.fabricAllocation.sourcingAssumptions,
+          })
+          if (consultationCreditAmount > fundedAllocation.tailoringAmount) {
+            throw new Error('The consultation credit cannot reduce the protected fabric allowance.')
+          }
+        } catch (allocationError) {
+          return new Response(
+            JSON.stringify({ error: allocationError instanceof Error ? allocationError.message : 'The fabric allocation is invalid.' }),
+            { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
+      const domesticLockedAmounts = calculateLockedOrderAmountsWithTaxBase({
+        subtotalAmount: Math.max(amount - consultationCreditAmount, 0),
         platformFeeAmount: 0,
         shippingAmount: fulfillmentFee,
-        taxRateBps: resolvedTax.rateBps,
-        shippingTaxable: resolvedTax.shippingTaxable,
+        taxRateBps: activatedTax.status === 'RESOLVED' && activatedTax.decision.collectionMode !== 'COLLECTED_AT_CHECKOUT'
+          ? 0
+          : resolvedTax.rateBps,
+        shippingTaxable: activatedTax.status === 'RESOLVED'
+          ? activatedTax.decision.shippingTaxable
+          : resolvedTax.shippingTaxable,
         platformFeeTaxable: resolvedTax.platformFeeTaxable,
       })
+      let internationalCharges = { importTaxAmount: 0, dutyAmount: 0 }
+      if (activatedTax.status === 'RESOLVED' && fulfillmentClassification === 'INTERNATIONAL_SHIPPING') {
+        const corridor = activatedTax.corridor as Record<string, unknown> | null
+        try {
+          internationalCharges = calculateReviewedInternationalCharges({
+            subtotalAmount: domesticLockedAmounts.subtotalAmount,
+            shippingAmount: domesticLockedAmounts.shippingAmount,
+            rule: {
+              collectionMode: activatedTax.decision.collectionMode,
+              importTaxRateBps: typeof corridor?.import_tax_rate_bps === 'number' ? corridor.import_tax_rate_bps : null,
+              dutyRateBps: typeof corridor?.duty_rate_bps === 'number' ? corridor.duty_rate_bps : null,
+              importTaxBase: typeof corridor?.import_tax_base === 'string' ? corridor.import_tax_base as never : null,
+              dutyBase: typeof corridor?.duty_base === 'string' ? corridor.duty_base as never : null,
+            },
+          })
+        } catch (chargeError) {
+          log('error', FN, 'tax.international_calculation_blocked', {
+            actor_id: caller.id,
+            order_id: orderId,
+            action,
+            error: chargeError instanceof Error ? chargeError.message : 'invalid reviewed corridor calculation',
+          })
+          return jsonErrorResponse(cors, 409, 'MISSING_CORRIDOR_CONTROL', 'Import tax and duty could not be verified. No quote or payment was started.')
+        }
+      }
+      const lockedAmounts = {
+        ...domesticLockedAmounts,
+        taxAmount: domesticLockedAmounts.taxAmount + internationalCharges.importTaxAmount + internationalCharges.dutyAmount,
+        totalAmount: domesticLockedAmounts.totalAmount + internationalCharges.importTaxAmount + internationalCharges.dutyAmount,
+      }
 
       if (customerDeadline && parsedDate.getTime() > customerDeadline.getTime()) {
         return new Response(
@@ -2156,18 +2498,122 @@ Deno.serve(async (req) => {
         )
       }
 
-      const cleanBreakdown = breakdown
+      let taxDecisionSnapshotId: string | null = null
+      if (activatedTax.status === 'RESOLVED') {
+        const decisionPayload = {
+          environment: taxEnvironment,
+          orderId,
+          policyVersion: activatedTax.decision.activation.policyVersion,
+          activationId: activatedTax.decision.activation.activationId,
+          responsibilityControlId: activatedTax.decision.control.controlId,
+          registrationFactId: activatedTax.decision.registrationFactId,
+          transactionType: taxTransaction.transactionType,
+          fulfillmentClassification,
+          origin: order.fulfillment_origin_snapshot ?? null,
+          destination: order.fulfillment_destination_snapshot ?? null,
+          lines: activatedTax.decision.lines,
+          collectionMode: activatedTax.decision.collectionMode,
+          amounts: { ...lockedAmounts, ...internationalCharges },
+          currency: quoteCurrency,
+        }
+        const fingerprintBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(decisionPayload)))
+        const decisionFingerprint = [...new Uint8Array(fingerprintBytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+        const corridor = activatedTax.corridor as Record<string, unknown> | null
+        const { data: snapshot, error: snapshotError } = await supabase
+          .from('tax_decision_snapshots')
+          .insert({
+            environment: taxEnvironment,
+            order_id: orderId,
+            activation_id: activatedTax.decision.activation.activationId,
+            policy_version: activatedTax.decision.activation.policyVersion,
+            responsibility_control_id: activatedTax.decision.control.controlId,
+            registration_control_id: activatedTax.decision.control.registrationRuleId,
+            registration_fact_id: activatedTax.decision.registrationFactId,
+            corridor_control_id: typeof corridor?.id === 'string' ? corridor.id : null,
+            tax_transaction_type: taxTransaction.transactionType,
+            fulfillment_classification: fulfillmentClassification,
+            origin_snapshot: order.fulfillment_origin_snapshot ?? null,
+            destination_snapshot: order.fulfillment_destination_snapshot ?? null,
+            jurisdiction_country_code: activatedTax.decision.control.jurisdictionCountryCode,
+            jurisdiction_region_code: activatedTax.decision.control.jurisdictionRegionCode,
+            corridor_key: typeof corridor?.control_key === 'string' ? corridor.control_key : null,
+            tax_supply_characterization: activatedTax.decision.control.supplyCharacterization,
+            liability_granularity: activatedTax.decision.control.liabilityGranularity,
+            responsible_party: activatedTax.decision.control.responsibleParty,
+            registration_subject: activatedTax.decision.control.registrationSubject,
+            registration_decision: activatedTax.decision.registrationDecision,
+            line_classifications: activatedTax.decision.lines,
+            collection_mode: activatedTax.decision.collectionMode,
+            export_treatment: typeof corridor?.export_treatment === 'string' ? corridor.export_treatment : null,
+            import_treatment: typeof corridor?.import_treatment === 'string' ? corridor.import_treatment : null,
+            shipping_taxable: activatedTax.decision.shippingTaxable,
+            carrier_constraints: corridor?.carrier_constraints ?? [],
+            subtotal_amount: lockedAmounts.subtotalAmount,
+            shipping_amount: lockedAmounts.shippingAmount,
+            tax_amount: domesticLockedAmounts.taxAmount,
+            import_tax_amount: internationalCharges.importTaxAmount,
+            duty_amount: internationalCharges.dutyAmount,
+            import_tax_liability_account: typeof corridor?.import_tax_liability_account === 'string'
+              ? corridor.import_tax_liability_account
+              : null,
+            duty_liability_account: typeof corridor?.duty_liability_account === 'string'
+              ? corridor.duty_liability_account
+              : null,
+            required_export_evidence: Array.isArray(corridor?.required_export_evidence)
+              ? corridor.required_export_evidence
+              : [],
+            required_customs_fields: Array.isArray(corridor?.required_customs_fields)
+              ? corridor.required_customs_fields
+              : [],
+            currency: quoteCurrency,
+            calculation_provider: typeof corridor?.calculation_provider === 'string'
+              ? corridor.calculation_provider
+              : resolvedTax.source,
+            calculation_reference: resolvedTax.taxRegion,
+            filing_liability_account: activatedTax.decision.control.filingLiabilityAccount,
+            source_urls: [...new Set([
+              ...activatedTax.decision.activation.sourceUrls,
+              ...activatedTax.decision.control.sourceUrls,
+              ...(Array.isArray(corridor?.source_urls) ? corridor.source_urls.filter((value): value is string => typeof value === 'string') : []),
+            ])],
+            reviewed_at: activatedTax.decision.control.reviewedAt,
+            review_due_at: activatedTax.decision.control.reviewDueAt,
+            decision_fingerprint: decisionFingerprint,
+            correlation_id: crypto.randomUUID(),
+          })
+          .select('id')
+          .single()
+        let resolvedSnapshot = snapshot
+        if (snapshotError?.code === '23505') {
+          const { data: existingSnapshot, error: existingSnapshotError } = await supabase
+            .from('tax_decision_snapshots')
+            .select('id')
+            .eq('decision_fingerprint', decisionFingerprint)
+            .eq('order_id', orderId)
+            .maybeSingle()
+          if (!existingSnapshotError && existingSnapshot) resolvedSnapshot = existingSnapshot
+        }
+        if (!resolvedSnapshot) {
+          log('error', FN, 'tax.snapshot_failed', { actor_id: caller.id, order_id: orderId, action, error: snapshotError?.message ?? 'missing snapshot' })
+          return jsonErrorResponse(cors, 503, 'CONTROL_RESOLUTION_FAILED', 'Tax rules could not be saved. No quote or payment was started.')
+        }
+        taxDecisionSnapshotId = resolvedSnapshot.id
+      }
+
+      const cleanBreakdown = breakdown || fundedAllocation
         ? {
-            laborAmount: typeof breakdown.laborAmount === 'number' ? breakdown.laborAmount : null,
-            sourcingAmount: typeof breakdown.sourcingAmount === 'number' ? breakdown.sourcingAmount : null,
-            rushAmount: typeof breakdown.rushAmount === 'number' ? breakdown.rushAmount : null,
+            laborAmount: typeof breakdown?.laborAmount === 'number' ? breakdown.laborAmount : null,
+            sourcingAmount: typeof breakdown?.sourcingAmount === 'number' ? breakdown.sourcingAmount : null,
+            rushAmount: typeof breakdown?.rushAmount === 'number' ? breakdown.rushAmount : null,
+            tailoringAmount: fundedAllocation?.tailoringAmount ?? null,
+            fabricAllowanceAmount: fundedAllocation?.fabricAllowanceAmount ?? null,
+            fabricAllowanceCoverage: fundedAllocation?.coverage ?? [],
+            fabricSourcingAssumptions: fundedAllocation?.sourcingAssumptions ?? null,
             consultationCreditAmount:
-              supportMeta.consultation?.feeCreditable && typeof order.consultation_fee === 'number' && order.consultation_fee > 0
-                ? Math.min(order.consultation_fee, amount)
-                : null,
-            included: breakdown.included?.map((value) => value.trim()).filter(Boolean) ?? [],
-            excluded: breakdown.excluded?.map((value) => value.trim()).filter(Boolean) ?? [],
-            summary: breakdown.summary?.trim() || null,
+              consultationCreditAmount > 0 ? consultationCreditAmount : null,
+            included: breakdown?.included?.map((value) => value.trim()).filter(Boolean) ?? [],
+            excluded: breakdown?.excluded?.map((value) => value.trim()).filter(Boolean) ?? [],
+            summary: breakdown?.summary?.trim() || null,
           }
         : null
 
@@ -2193,7 +2639,8 @@ Deno.serve(async (req) => {
 
       if (QUOTE_NEGOTIATION_V1) {
         const revisionBody = quoteBody.action === 'revise-quote' ? quoteBody : null
-        const { data, error: snapshotError } = await supabase.rpc('create_order_quote_snapshot', {
+        const quoteRpc = fundedAllocation ? 'create_funded_order_quote_snapshot' : 'create_order_quote_snapshot'
+        const { data, error: snapshotError } = await supabase.rpc(quoteRpc, {
           p_order_id: orderId,
           p_tailor_id: caller.id,
           p_expected_quote_id: revisionBody?.quoteId ?? null,
@@ -2210,15 +2657,44 @@ Deno.serve(async (req) => {
           p_breakdown: cleanBreakdown ? JSON.stringify(cleanBreakdown) : null,
           p_assumptions: quoteBody.note?.trim() || null,
           p_expires_at: quoteExpiry,
+          ...(fundedAllocation ? {
+            p_fabric_funding_policy_version: fundedAllocation.policyVersion,
+            p_fabric_source_snapshot: fundedAllocation.fabricSource,
+            p_tailoring_amount: fundedAllocation.tailoringAmount - consultationCreditAmount,
+            p_fabric_allowance_amount: fundedAllocation.fabricAllowanceAmount,
+            p_fabric_allowance_coverage: fundedAllocation.coverage,
+            p_fabric_sourcing_assumptions: fundedAllocation.sourcingAssumptions,
+            p_pricing_version: 1,
+          } : {}),
         })
 
         if (snapshotError) {
-          return quoteNegotiationErrorResponse(cors, snapshotError)
+          const failureReference = `Q-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+          await audit(supabase, {
+            event: 'quote.send_failed',
+            actor_id: caller.id,
+            actor_role: 'TAILOR',
+            order_id: orderId,
+            severity: 'error',
+            payload: {
+              function: FN,
+              action,
+              failure_reference: failureReference,
+              database_code: snapshotError.code ?? null,
+              database_message: snapshotError.message,
+              database_details: snapshotError.details ?? null,
+              database_hint: snapshotError.hint ?? null,
+              fulfillment_method: order.delivery_method ?? null,
+              tax_region: resolvedTax.taxRegion,
+              quote_currency: quoteCurrency,
+            },
+          })
+          return quoteNegotiationErrorResponse(cors, snapshotError, failureReference)
         }
 
         quoteResult = (data ?? {}) as Record<string, unknown>
         quotedOrder = { id: orderId }
-        const { error: projectionError } = await supabase
+          const { error: projectionError } = await supabase
           .from('orders')
           .update({
             fulfillment_payment_requested_at: null,
@@ -2230,6 +2706,13 @@ Deno.serve(async (req) => {
             tax_region: resolvedTax.taxRegion,
             tax_fallback: resolvedTax.fallback,
             tax_fallback_reason: resolvedTax.fallbackReason,
+            tax_decision_snapshot_id: taxDecisionSnapshotId,
+            import_tax_amount: internationalCharges.importTaxAmount,
+            duty_amount: internationalCharges.dutyAmount,
+            tax_collection_mode: activatedTax.status === 'RESOLVED' ? activatedTax.decision.collectionMode : null,
+            tax_responsible_party: activatedTax.status === 'RESOLVED' ? activatedTax.decision.control.responsibleParty : null,
+            pricing_invalidated_at: null,
+            pricing_invalidation_reason: null,
             special_note: serializeOrderSupportMeta(nextSupportMeta),
           })
           .eq('id', orderId)
@@ -2260,6 +2743,13 @@ Deno.serve(async (req) => {
             tax_region: resolvedTax.taxRegion,
             tax_fallback: resolvedTax.fallback,
             tax_fallback_reason: resolvedTax.fallbackReason,
+            tax_decision_snapshot_id: taxDecisionSnapshotId,
+            import_tax_amount: internationalCharges.importTaxAmount,
+            duty_amount: internationalCharges.dutyAmount,
+            tax_collection_mode: activatedTax.status === 'RESOLVED' ? activatedTax.decision.collectionMode : null,
+            tax_responsible_party: activatedTax.status === 'RESOLVED' ? activatedTax.decision.control.responsibleParty : null,
+            pricing_invalidated_at: null,
+            pricing_invalidation_reason: null,
             shipping_amount: lockedAmounts.shippingAmount,
             total_amount: lockedAmounts.totalAmount,
             quoted_completion_date: parsedDate.toISOString(),
@@ -2310,6 +2800,7 @@ Deno.serve(async (req) => {
       }
 
       await releaseConsultationSlot(supabase, orderId, 'COMPLETED')
+      await supabase.from('tailor_quote_drafts').delete().eq('order_id', orderId).eq('tailor_id', caller.id)
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
@@ -2330,6 +2821,9 @@ Deno.serve(async (req) => {
           quote_version: quoteResult.quoteVersion ?? null,
           revision_request_id: quoteResult.revisionRequestId ?? null,
           event_id: quoteResult.eventId ?? null,
+          order_review_acknowledged: true,
+          order_review_version: quoteBody.orderReview.version,
+          order_review_acknowledged_at: new Date().toISOString(),
         },
       })
 
@@ -2497,14 +2991,7 @@ Deno.serve(async (req) => {
 
       // Zod already validated consultationFee — extract safely
       const {
-        consultationFee = null,
-        currency,
-        creditFeeTowardOrder,
-        paymentTiming,
-        reschedulePolicy,
-        noShowPolicy,
-        expiryPolicy,
-        reminderEnabled,
+        callType,
         scheduledStartAt,
         timezone,
       } = body as Extract<typeof body, { action: 'request-consultation' }>
@@ -2516,21 +3003,53 @@ Deno.serve(async (req) => {
         )
       }
 
+      const { data: consultationPolicy, error: consultationPolicyError } = await supabase
+        .from('tailor_profiles')
+        .select('consultation_mode, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable, consultation_policy_version')
+        .eq('user_id', caller.id)
+        .maybeSingle()
+      if (consultationPolicyError) return jsonErrorResponse(cors, 500, 'CONSULTATION_POLICY_FAILED', 'Could not load your published consultation policy.')
+      if (consultationPolicy?.consultation_mode === 'UNAVAILABLE') return jsonErrorResponse(cors, 409, 'CONSULTATION_NOT_OFFERED', 'Your profile says consultations are not offered. Update your profile first.')
+      const publishedFeeAmount = consultationPolicy?.consultation_mode === 'PAID' ? consultationPolicy.consultation_fee_amount : null
+      const publishedFeeCurrency = publishedFeeAmount ? normalizeAccountCurrency(consultationPolicy?.consultation_currency) ?? normalizeAccountCurrency(order.currency) ?? 'USD' : null
+      const publishedDurationValue = Number(consultationPolicy?.consultation_duration_minutes)
+      const publishedDuration = ([15, 30, 45, 60].includes(publishedDurationValue) ? publishedDurationValue : 30) as 15 | 30 | 45 | 60
+      const publishedCallType = resolveConsultationCallType(
+        consultationPolicy?.consultation_call_type ?? 'VIDEO',
+        callType,
+      )
+      if (!publishedCallType) {
+        return jsonErrorResponse(cors, 400, 'CONSULTATION_CALL_TYPE_REQUIRED', 'Choose audio or video for this consultation.')
+      }
+
       const booking = await reserveConsultationSlot(supabase, {
         orderId,
         tailorId: caller.id,
         customerId: String(order.customer_id),
         scheduledStartAt: scheduledStartAt!,
+        durationMinutes: publishedDuration,
       })
       if (!booking.ok) {
         return jsonErrorResponse(cors, booking.status, booking.code, booking.error)
       }
 
       const supportMeta = parseOrderSupportMeta(order.special_note)
-      const feeAmount = typeof consultationFee === 'number' && consultationFee > 0 ? consultationFee : null
-      const feeCurrency = feeAmount
-        ? normalizeAccountCurrency(currency ?? order.currency ?? order.quoted_currency) ?? 'USD'
-        : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const feeAmount = typeof publishedFeeAmount === 'number' && publishedFeeAmount > 0 ? publishedFeeAmount : null
+      const feeCurrency = feeAmount ? publishedFeeCurrency : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const snapshotLocked = await lockConsultationCommercialSnapshot(supabase, {
+        bookingId: booking.bookingId,
+        policyVersion: consultationPolicy?.consultation_policy_version ?? 'consultation-2026-07-31-v1',
+        feeMode: feeAmount ? 'PAID' : 'FREE',
+        feeAmount,
+        feeCurrency,
+        feeCreditable: feeAmount ? consultationPolicy?.consultation_fee_creditable === true : false,
+        callType: publishedCallType,
+        durationMinutes: publishedDuration,
+      })
+      if (!snapshotLocked) {
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
+        return jsonErrorResponse(cors, 500, 'CONSULTATION_SNAPSHOT_FAILED', 'Could not lock the published consultation terms.')
+      }
       const now = new Date().toISOString()
       const consultationMeta = {
         ...(supportMeta.consultation ?? {}),
@@ -2539,17 +3058,17 @@ Deno.serve(async (req) => {
         feeMode: feeAmount ? 'PAID' as const : 'FREE' as const,
         feeAmount,
         feeCurrency,
-        feeCreditable: feeAmount ? creditFeeTowardOrder === true : false,
+        feeCreditable: feeAmount ? consultationPolicy?.consultation_fee_creditable === true : false,
         feeCreditedTowardQuote: false,
         paymentProvider: null,
         paymentIntentId: null,
         paymentCheckoutUrl: null,
-        paymentTiming: feeAmount ? (paymentTiming ?? 'BEFORE_CALL_STARTS') : 'WAIVED_OR_FREE' as const,
+        paymentTiming: feeAmount ? 'BEFORE_CALL_STARTS' as const : 'WAIVED_OR_FREE' as const,
         paidAt: null,
-        reschedulePolicy: reschedulePolicy ?? 'ONE_FREE_RESCHEDULE',
-        noShowPolicy: noShowPolicy ?? (feeAmount ? 'FEE_FORFEITED' : 'CASE_BY_CASE'),
-        expiryPolicy: expiryPolicy ?? 'EXPIRES_IN_14_DAYS',
-        reminderEnabled: reminderEnabled ?? true,
+        reschedulePolicy: 'ONE_FREE_RESCHEDULE' as const,
+        noShowPolicy: feeAmount ? 'FEE_FORFEITED' as const : 'CASE_BY_CASE' as const,
+        expiryPolicy: 'EXPIRES_IN_14_DAYS' as const,
+        reminderEnabled: true,
         requestNote: body.note?.trim() || null,
         requestedAt: now,
         proposedStartAt: scheduledStartAt!,
@@ -2565,6 +3084,9 @@ Deno.serve(async (req) => {
         reminder10SentAt: null,
         reminder5SentAt: null,
         reminderStartSentAt: null,
+        policyVersion: consultationPolicy?.consultation_policy_version ?? 'consultation-2026-07-31-v1',
+        durationMinutes: publishedDuration,
+        callType: publishedCallType,
       }
 
       const { data: updatedOrder, error } = await supabase
@@ -2618,7 +3140,7 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        payload: { action, from_stage: order.stage, to_stage: 'CONSULTATION', has_fee: consultationFee != null },
+        payload: { action, from_stage: order.stage, to_stage: 'CONSULTATION', has_fee: feeAmount != null },
       })
 
       log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: 'CONSULTATION' })
@@ -2663,14 +3185,7 @@ Deno.serve(async (req) => {
       }
 
       const {
-        consultationFee = null,
-        currency,
-        creditFeeTowardOrder,
-        paymentTiming,
-        reschedulePolicy,
-        noShowPolicy,
-        expiryPolicy,
-        reminderEnabled,
+        callType,
         scheduledStartAt,
         timezone,
       } = body as Extract<typeof body, { action: 'approve-consultation' }>
@@ -2682,20 +3197,52 @@ Deno.serve(async (req) => {
         )
       }
 
+      const { data: approvalConsultationPolicy, error: approvalPolicyError } = await supabase
+        .from('tailor_profiles')
+        .select('consultation_mode, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable, consultation_policy_version')
+        .eq('user_id', caller.id)
+        .maybeSingle()
+      if (approvalPolicyError) return jsonErrorResponse(cors, 500, 'CONSULTATION_POLICY_FAILED', 'Could not load your published consultation policy.')
+      if (approvalConsultationPolicy?.consultation_mode === 'UNAVAILABLE') return jsonErrorResponse(cors, 409, 'CONSULTATION_NOT_OFFERED', 'Your profile says consultations are not offered. Update your profile first.')
+      const approvalFeeAmount = approvalConsultationPolicy?.consultation_mode === 'PAID' ? approvalConsultationPolicy.consultation_fee_amount : null
+      const approvalFeeCurrency = approvalFeeAmount ? normalizeAccountCurrency(approvalConsultationPolicy?.consultation_currency) ?? normalizeAccountCurrency(order.currency) ?? 'USD' : null
+      const approvalDurationValue = Number(approvalConsultationPolicy?.consultation_duration_minutes)
+      const approvalDuration = ([15, 30, 45, 60].includes(approvalDurationValue) ? approvalDurationValue : 30) as 15 | 30 | 45 | 60
+      const approvalCallType = resolveConsultationCallType(
+        approvalConsultationPolicy?.consultation_call_type ?? 'VIDEO',
+        callType ?? existingConsultation.callType ?? null,
+      )
+      if (!approvalCallType) {
+        return jsonErrorResponse(cors, 400, 'CONSULTATION_CALL_TYPE_REQUIRED', 'Choose audio or video for this consultation.')
+      }
+
       const booking = await reserveConsultationSlot(supabase, {
         orderId,
         tailorId: caller.id,
         customerId: String(order.customer_id),
         scheduledStartAt,
+        durationMinutes: approvalDuration,
       })
       if (!booking.ok) {
         return jsonErrorResponse(cors, booking.status, booking.code, booking.error)
       }
 
-      const feeAmount = typeof consultationFee === 'number' && consultationFee > 0 ? consultationFee : null
-      const feeCurrency = feeAmount
-        ? normalizeAccountCurrency(currency ?? order.currency ?? order.quoted_currency) ?? 'USD'
-        : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const feeAmount = typeof approvalFeeAmount === 'number' && approvalFeeAmount > 0 ? approvalFeeAmount : null
+      const feeCurrency = feeAmount ? approvalFeeCurrency : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const snapshotLocked = await lockConsultationCommercialSnapshot(supabase, {
+        bookingId: booking.bookingId,
+        policyVersion: approvalConsultationPolicy?.consultation_policy_version ?? 'consultation-2026-07-31-v1',
+        feeMode: feeAmount ? 'PAID' : 'FREE',
+        feeAmount,
+        feeCurrency,
+        feeCreditable: feeAmount ? approvalConsultationPolicy?.consultation_fee_creditable === true : false,
+        callType: approvalCallType,
+        durationMinutes: approvalDuration,
+      })
+      if (!snapshotLocked) {
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
+        return jsonErrorResponse(cors, 500, 'CONSULTATION_SNAPSHOT_FAILED', 'Could not lock the published consultation terms.')
+      }
       const now = new Date().toISOString()
       const nextConsultationMeta = {
         ...existingConsultation,
@@ -2703,18 +3250,19 @@ Deno.serve(async (req) => {
         feeMode: feeAmount ? 'PAID' as const : 'FREE' as const,
         feeAmount,
         feeCurrency,
-        feeCreditable: feeAmount ? creditFeeTowardOrder === true : false,
+        feeCreditable: feeAmount ? approvalConsultationPolicy?.consultation_fee_creditable === true : false,
         feeCreditedTowardQuote: false,
         paymentProvider: null,
         paymentIntentId: null,
         paymentCheckoutUrl: null,
-        paymentTiming: feeAmount ? (paymentTiming ?? 'BEFORE_CALL_STARTS') : 'WAIVED_OR_FREE' as const,
+        paymentTiming: feeAmount ? 'BEFORE_CALL_STARTS' as const : 'WAIVED_OR_FREE' as const,
         paidAt: null,
-        reschedulePolicy: reschedulePolicy ?? 'ONE_FREE_RESCHEDULE',
-        noShowPolicy: noShowPolicy ?? (feeAmount ? 'FEE_FORFEITED' : 'CASE_BY_CASE'),
-        expiryPolicy: expiryPolicy ?? 'EXPIRES_IN_14_DAYS',
-        reminderEnabled: reminderEnabled ?? true,
+        reschedulePolicy: 'ONE_FREE_RESCHEDULE' as const,
+        noShowPolicy: feeAmount ? 'FEE_FORFEITED' as const : 'CASE_BY_CASE' as const,
+        expiryPolicy: 'EXPIRES_IN_14_DAYS' as const,
+        reminderEnabled: true,
         requestNote: body.note?.trim() || existingConsultation.requestNote || null,
+        requestExpiresAt: null,
         scheduledStartAt,
         scheduledEndAt: booking.scheduledEndAt,
         timezone: timezone?.trim() || existingConsultation.timezone || null,
@@ -2727,6 +3275,9 @@ Deno.serve(async (req) => {
         reminder10SentAt: null,
         reminder5SentAt: null,
         reminderStartSentAt: null,
+        policyVersion: approvalConsultationPolicy?.consultation_policy_version ?? 'consultation-2026-07-31-v1',
+        durationMinutes: approvalDuration,
+        callType: approvalCallType,
       }
 
       const { data: updatedOrder, error } = await supabase
@@ -2888,6 +3439,224 @@ Deno.serve(async (req) => {
       })
     }
 
+    // ── submit-sourced-fabric ─────────────────────────────────────────────────
+    if (action === 'submit-sourced-fabric') {
+      const { photoUrl, photoUrls, evidenceMedia, mediaFingerprints } = body as Extract<typeof body, { action: 'submit-sourced-fabric' }>
+      let privateMedia: PrivateProductionMedia[] = []
+      try { privateMedia = privateProductionMediaForOrder(orderId, evidenceMedia) } catch {
+        return jsonErrorResponse(cors, 400, 'PRIVATE_PRODUCTION_EVIDENCE_PATH_INVALID', 'Upload this proof again from the order before submitting it.')
+      }
+      const approvalPhotoUrls = uniquePhotoUrls(photoUrl, [...(photoUrls ?? []), ...privateProductionDisplayPaths(privateMedia)])
+      const approvalMediaFingerprints = uniqueMediaFingerprints(mediaFingerprints)
+
+      if (!isCustomOrder(order) || order.fabric_source !== 'TAILOR_SOURCES') {
+        return jsonErrorResponse(cors, 409, 'FABRIC_APPROVAL_NOT_REQUIRED', 'This order does not use tailor-sourced fabric approval.')
+      }
+      if (!canSubmitTailorFabricApproval({ orderKind: order.order_kind, fabricSource: order.fabric_source, stage: order.stage })) {
+        return jsonErrorResponse(cors, 409, 'FABRIC_APPROVAL_STAGE_CLOSED', 'Send the quote and wait for provider-confirmed payment before submitting fabric for customer approval.')
+      }
+      if (approvalPhotoUrls.length === 0) {
+        return jsonErrorResponse(cors, 400, 'FABRIC_APPROVAL_MEDIA_REQUIRED', 'Upload the exact fabric the customer is being asked to approve.')
+      }
+
+      let reusedApprovalMedia: string[] = []
+      try {
+        reusedApprovalMedia = await findReusedProductionMedia(
+          supabase,
+          orderId,
+          approvalPhotoUrls,
+          approvalMediaFingerprints,
+        )
+      } catch (error) {
+        log('error', FN, 'db.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          error: error instanceof Error ? error.message : String(error),
+          surface: 'fabric_approval_preflight_lookup',
+        })
+        return jsonResponse({ error: 'We could not verify this fabric proof right now. Please try again.' }, 500, cors)
+      }
+      if (reusedApprovalMedia.length > 0) {
+        return jsonErrorResponse(cors, 409, 'PRODUCTION_MEDIA_REUSED', 'Use fresh media of the exact fabric selection. Previously submitted sourcing or production media cannot be reused.')
+      }
+
+      const submittedAt = new Date().toISOString()
+      const evidenceError = await insertCustomProductionEvidence(supabase, {
+        orderId,
+        stageKey: 'FABRIC',
+        note: body.note.trim(),
+        photoUrls: approvalPhotoUrls,
+        actorId: caller.id,
+        metadata: {
+          order_stage: order.stage,
+          fabric_source: order.fabric_source,
+          evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL,
+          media_fingerprints: approvalMediaFingerprints,
+          media_count: approvalPhotoUrls.length,
+          media_assets: privateMedia,
+        },
+      })
+      if (evidenceError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+        return jsonResponse({ error: 'We could not save this fabric proof right now. Please try again.' }, 500, cors)
+      }
+
+      const { data: updatedDetail, error: detailError } = await supabase
+        .from('custom_order_details')
+        .update({
+          fabric_approval_status: 'PENDING_CUSTOMER_APPROVAL',
+          fabric_approval_requested_at: submittedAt,
+          fabric_approved_at: null,
+          fabric_changes_requested_at: null,
+        })
+        .eq('order_id', orderId)
+        .eq('fabric_approval_required', true)
+        .select('order_id')
+        .maybeSingle()
+
+      if (detailError || !updatedDetail?.order_id) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError?.message ?? 'Fabric approval detail was not updated.', surface: 'custom_order_details' })
+        return jsonResponse({ error: 'The proof was saved, but approval could not be requested. Please retry.' }, 500, cors)
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: body.note.trim(),
+        photo_url: privateMedia.length === 0 ? approvalPhotoUrls[0] ?? null : null,
+        evidence_media: privateMedia,
+      })
+
+      await audit(supabase, {
+        event: 'fabric.sourced_submitted',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { stage: order.stage, evidencePurpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL, mediaCount: approvalPhotoUrls.length },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['submit-sourced-fabric'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Review the selected fabric',
+          'Your tailor submitted the exact fabric selection for this order. Open the order to inspect it and approve it or request a change before cutting begins.',
+        )
+      }
+
+      return jsonResponse({ ok: true, fabricApprovalStatus: 'PENDING_CUSTOMER_APPROVAL' }, 200, cors)
+    }
+
+    // ── post-stage-progress ───────────────────────────────────────────────────
+    if (action === 'post-stage-progress') {
+      const { targetStage, photoUrl, photoUrls, evidenceMedia, mediaFingerprints } = body as Extract<typeof body, { action: 'post-stage-progress' }>
+      let privateMedia: PrivateProductionMedia[] = []
+      try { privateMedia = privateProductionMediaForOrder(orderId, evidenceMedia) } catch {
+        return jsonErrorResponse(cors, 400, 'PRIVATE_PRODUCTION_EVIDENCE_PATH_INVALID', 'Upload this proof again from the order before submitting it.')
+      }
+      const progressPhotoUrls = uniquePhotoUrls(photoUrl, [...(photoUrls ?? []), ...privateProductionDisplayPaths(privateMedia)])
+      const progressMediaFingerprints = uniqueMediaFingerprints(mediaFingerprints)
+
+      if (order.stage !== targetStage) {
+        return jsonErrorResponse(cors, 409, 'PROGRESS_STAGE_CHANGED', 'This order is no longer in that stage. Refresh before posting another update.')
+      }
+      if (progressPhotoUrls.length === 0) {
+        return jsonErrorResponse(cors, 400, 'PROGRESS_MEDIA_REQUIRED', 'Attach fresh media for this progress update.')
+      }
+
+      let reusedProgressMedia: string[] = []
+      try {
+        reusedProgressMedia = await findReusedProductionMedia(
+          supabase,
+          orderId,
+          progressPhotoUrls,
+          progressMediaFingerprints,
+        )
+      } catch (error) {
+        log('error', FN, 'db.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          target_stage: targetStage,
+          error: error instanceof Error ? error.message : String(error),
+          surface: 'production_progress_preflight_lookup',
+        })
+        return jsonResponse({ error: 'We could not verify this progress update right now. Please try again.' }, 500, cors)
+      }
+      if (reusedProgressMedia.length > 0) {
+        return jsonErrorResponse(cors, 409, 'PRODUCTION_MEDIA_REUSED', 'Use fresh media for this progress update. Previously submitted media cannot be reused.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: targetStage,
+        note: body.note.trim(),
+        photo_url: privateMedia.length === 0 ? progressPhotoUrls[0] ?? null : null,
+        evidence_media: privateMedia,
+      })
+
+      if (isCustomOrder(order)) {
+        const stageKey = customProductionStageForTarget(targetStage, order.delivery_method)
+        const evidenceError = await insertCustomProductionEvidence(supabase, {
+          orderId,
+          stageKey,
+          note: body.note.trim(),
+          photoUrls: progressPhotoUrls,
+          actorId: caller.id,
+          metadata: {
+            order_stage: targetStage,
+            fabric_source: order.fabric_source ?? null,
+            evidence_purpose: targetStage === 'SOURCING'
+              ? CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.SOURCING_PROGRESS
+              : CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.PRODUCTION_STAGE,
+            progress_update: true,
+            media_fingerprints: progressMediaFingerprints,
+            media_count: progressPhotoUrls.length,
+            media_assets: privateMedia,
+          },
+        })
+        if (evidenceError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+          return jsonResponse({ error: 'The timeline updated, but production evidence could not be recorded. Please retry.' }, 500, cors)
+        }
+      }
+
+      await audit(supabase, {
+        event: 'order.stage_progress_posted',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { stage: targetStage, mediaCount: progressPhotoUrls.length },
+      })
+
+      const progressNotification = customerNotificationForStage(targetStage, order)
+      if (order.customer_id && progressNotification) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...progressNotification,
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          progressNotification.title,
+          body.note.trim(),
+        )
+      }
+
+      return jsonResponse({ ok: true, stage: targetStage, progressOnly: true }, 200, cors)
+    }
+
     // ── advance-stage ─────────────────────────────────────────────────────────
     if (action === 'advance-stage') {
       // Zod already validated targetStage against the enum
@@ -2901,6 +3670,7 @@ Deno.serve(async (req) => {
         fulfillmentReference,
         fulfillmentContactName,
         fulfillmentContactPhone,
+        evidenceMedia,
         mediaFingerprints,
       } = body as Extract<typeof body, { action: 'advance-stage' }>
       const normalizedTrackingNumber = trackingNumber?.trim().toUpperCase() ?? ''
@@ -2908,7 +3678,11 @@ Deno.serve(async (req) => {
       const normalizedReference = fulfillmentReference?.trim() ?? ''
       const normalizedContactName = fulfillmentContactName?.trim() ?? ''
       const normalizedContactPhone = normalizeStoredPhone(fulfillmentContactPhone)
-      const productionPhotoUrls = uniquePhotoUrls(photoUrl, photoUrls)
+      let privateMedia: PrivateProductionMedia[] = []
+      try { privateMedia = privateProductionMediaForOrder(orderId, evidenceMedia) } catch {
+        return jsonErrorResponse(cors, 400, 'PRIVATE_PRODUCTION_EVIDENCE_PATH_INVALID', 'Upload this proof again from the order before submitting it.')
+      }
+      const productionPhotoUrls = uniquePhotoUrls(photoUrl, [...(photoUrls ?? []), ...privateProductionDisplayPaths(privateMedia)])
       const productionMediaFingerprints = uniqueMediaFingerprints(mediaFingerprints)
       const customStageKey = isCustomOrder(order)
         ? customProductionStageForTarget(targetStage, order.delivery_method)
@@ -2917,70 +3691,6 @@ Deno.serve(async (req) => {
 
       // Idempotent: if already in the target stage, the previous request succeeded
       if (order.stage === targetStage) {
-        if (customStageKey === 'FABRIC' && order.fabric_source === 'TAILOR_SOURCES' && productionPhotoUrls.length > 0) {
-          const { error: detailError } = await supabase
-            .from('custom_order_details')
-            .update({
-              fabric_approval_status: 'PENDING_CUSTOMER_APPROVAL',
-              fabric_approval_requested_at: new Date().toISOString(),
-            })
-            .eq('order_id', orderId)
-
-          if (detailError) {
-            log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
-            return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
-          }
-
-          await supabase.from('order_stage_updates').insert({
-            order_id: orderId,
-            stage: targetStage,
-            note: body.note.trim(),
-            photo_url: productionPhotoUrls[0] ?? null,
-          })
-
-          const evidenceError = await insertCustomProductionEvidence(supabase, {
-            orderId,
-            stageKey: 'FABRIC',
-            note: body.note.trim(),
-            photoUrls: productionPhotoUrls,
-            actorId: caller.id,
-            metadata: {
-              order_stage: targetStage,
-              fabric_source: order.fabric_source,
-              resubmission: true,
-              media_fingerprints: productionMediaFingerprints,
-              media_count: productionPhotoUrls.length,
-            },
-          })
-
-          if (evidenceError) {
-            log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
-            return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
-          }
-
-          await audit(supabase, {
-            event: 'fabric.sourced_submitted',
-            actor_id: caller.id,
-            actor_role: 'TAILOR',
-            order_id: orderId,
-            payload: { stage: order.stage, resubmission: true },
-          })
-
-          if (order.customer_id) {
-            EdgeRuntime.waitUntil(
-              sendPushToUser(supabase, order.customer_id.toString(), {
-                ...CUSTOMER_NOTIFICATION.SOURCING,
-                preferenceKey: 'orderUpdates',
-                data: { orderId },
-              })
-            )
-          }
-
-          return new Response(JSON.stringify({ ok: true, fabricApprovalStatus: 'PENDING_CUSTOMER_APPROVAL' }), {
-            headers: { ...cors, 'Content-Type': 'application/json' },
-          })
-        }
-
         const responseBody: Record<string, unknown> = { ok: true, idempotent: true }
         // Re-fetch collection_code if needed so UI still gets it on retry
         if (targetStage === 'READY_FOR_COLLECTION') {
@@ -3007,6 +3717,8 @@ Deno.serve(async (req) => {
         cuttingMaterialIssue.response === 'ASK_TAILOR_TO_SOURCE'
       let reusedProductionMedia: string[] = []
       let customFabricApproval: { required: boolean; status: string | null } | null = null
+      let fundedFabricAcquiredAndReconciled = false
+      let fabricV2CuttingBlockers: FabricV2CuttingBlocker[] = []
       try {
         if (order.stage !== targetStage && (productionPhotoUrls.length > 0 || productionMediaFingerprints.length > 0)) {
           reusedProductionMedia = await findReusedProductionMedia(
@@ -3016,8 +3728,44 @@ Deno.serve(async (req) => {
             productionMediaFingerprints,
           )
         }
-        if (targetStage === 'CUTTING' && order.fabric_source === 'TAILOR_SOURCES' && isCustomOrder(order)) {
-          customFabricApproval = await readCustomFabricApprovalForCutting(supabase, orderId)
+        if (targetStage === 'CUTTING' && isCustomOrder(order)) {
+          if (order.fabric_funding_policy_version === FABRIC_FUNDING_POLICY_V2_VERSION) {
+            const { data: blockerPayload, error: blockerError } = await supabase.rpc(
+              'get_order_fabric_cutting_blockers_v2',
+              { p_order_id: orderId },
+            )
+            if (blockerError) throw blockerError
+            fabricV2CuttingBlockers = Array.isArray(blockerPayload)
+              ? blockerPayload.filter((item): item is FabricV2CuttingBlocker => {
+                  if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+                  const value = item as Record<string, unknown>
+                  return typeof value.code === 'string'
+                    && typeof value.message === 'string'
+                    && typeof value.recoveryAction === 'string'
+                })
+              : []
+          } else if (order.fabric_source === 'TAILOR_SOURCES') {
+            customFabricApproval = await readCustomFabricApprovalForCutting(supabase, orderId)
+          }
+          if (
+            order.fabric_source === 'TAILOR_SOURCES' &&
+            order.fabric_funding_policy_version === FABRIC_FUNDING_POLICY_VERSION
+          ) {
+            const { data: reconciledAdvance, error: reconciledAdvanceError } = await supabase
+              .from('order_material_advances')
+              .select('id')
+              .eq('order_id', orderId)
+              .eq('funding_source', 'FUNDED_FABRIC_ALLOWANCE')
+              .eq('release_status', 'RELEASED')
+              .eq('provider_release_status', 'SUCCEEDED')
+              .eq('acquired_storage_bucket', 'commercial-evidence')
+              .not('acquired_storage_path', 'is', null)
+              .in('reconciliation_status', ['EXACT', 'RESOLVED'])
+              .limit(1)
+              .maybeSingle()
+            if (reconciledAdvanceError) throw reconciledAdvanceError
+            fundedFabricAcquiredAndReconciled = !!reconciledAdvance?.id
+          }
         }
       } catch (error) {
         log('error', FN, 'db.error', {
@@ -3029,6 +3777,31 @@ Deno.serve(async (req) => {
           surface: 'production_preflight_lookup',
         })
         return jsonResponse({ error: 'We could not verify this stage update right now. Please try again.' }, 500, cors)
+      }
+
+      if (targetStage === 'CUTTING' && fabricV2CuttingBlockers.length > 0) {
+        const blocker = fabricV2CuttingBlockers[0]
+        await audit(supabase, {
+          event: 'fabric.cutting_blocked',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          order_id: orderId,
+          severity: 'warn',
+          payload: {
+            policy_version: FABRIC_FUNDING_POLICY_V2_VERSION,
+            blocker_code: blocker.code,
+            component_code: blocker.componentCode ?? null,
+            recovery_action: blocker.recoveryAction,
+          },
+        })
+        return jsonResponse({
+          code: blocker.code,
+          error: blocker.message,
+          message: blocker.message,
+          recoveryAction: blocker.recoveryAction,
+          componentCode: blocker.componentCode ?? null,
+          blockers: fabricV2CuttingBlockers,
+        }, 409, cors)
       }
       const dispatchRecipientPhoneError =
         targetStage === 'READY_FOR_DRAPE_DISPATCH'
@@ -3138,7 +3911,12 @@ Deno.serve(async (req) => {
         },
         {
           name: 'fabric_received_before_cutting',
-          condition: targetStage !== 'CUTTING' || order.fabric_source !== 'CUSTOMER_SUPPLIES' || !!cuttingSupportMeta?.fabricReceivedAt || waitingOnTailorSourcing,
+          condition:
+            targetStage !== 'CUTTING' ||
+            order.fabric_funding_policy_version === FABRIC_FUNDING_POLICY_V2_VERSION ||
+            order.fabric_source !== 'CUSTOMER_SUPPLIES' ||
+            !!cuttingSupportMeta?.fabricReceivedAt ||
+            waitingOnTailorSourcing,
           errorCode: 'FABRIC_NOT_RECEIVED',
           message: 'Confirm that the customer fabric has been received before cutting starts.',
           field: 'fabric_source',
@@ -3153,6 +3931,7 @@ Deno.serve(async (req) => {
           name: 'tailor_sourced_fabric_approved_before_cutting',
           condition:
             targetStage !== 'CUTTING' ||
+            order.fabric_funding_policy_version === FABRIC_FUNDING_POLICY_V2_VERSION ||
             order.fabric_source !== 'TAILOR_SOURCES' ||
             !isCustomOrder(order) ||
             (customFabricApproval?.required === true && customFabricApproval?.status === 'APPROVED'),
@@ -3165,6 +3944,19 @@ Deno.serve(async (req) => {
             fabricApprovalRequired: customFabricApproval?.required ?? null,
             fabricApprovalStatus: customFabricApproval?.status ?? null,
           },
+        },
+        {
+          name: 'funded_fabric_acquired_and_reconciled_before_cutting',
+          condition:
+            targetStage !== 'CUTTING' ||
+            order.fabric_source !== 'TAILOR_SOURCES' ||
+            order.fabric_funding_policy_version !== FABRIC_FUNDING_POLICY_VERSION ||
+            fundedFabricAcquiredAndReconciled,
+          errorCode: 'FABRIC_ACQUIRED_AND_RECONCILED_REQUIRED',
+          message: 'Upload the final supplier receipt and acquired-fabric proof, then wait for any unused amount or overage review before cutting starts.',
+          field: 'fabric_reconciliation',
+          severity: 'BLOCKING',
+          actual: { fundedFabricAcquiredAndReconciled },
         },
         {
           name: 'material_issue_resolved_before_cutting',
@@ -3340,14 +4132,22 @@ Deno.serve(async (req) => {
         const materialIssue = supportMeta.materialIssue
         const waitingOnTailorSourcing = materialIssue?.status === 'CUSTOMER_RESPONDED' && materialIssue.response === 'ASK_TAILOR_TO_SOURCE'
 
-        if (order.fabric_source === 'CUSTOMER_SUPPLIES' && !supportMeta.fabricReceivedAt && !waitingOnTailorSourcing) {
+        if (
+          order.fabric_funding_policy_version !== FABRIC_FUNDING_POLICY_V2_VERSION &&
+          order.fabric_source === 'CUSTOMER_SUPPLIES' &&
+          !supportMeta.fabricReceivedAt &&
+          !waitingOnTailorSourcing
+        ) {
           return new Response(
             JSON.stringify({ error: 'Confirm that the customer fabric has been received before cutting starts.' }),
             { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
           )
         }
 
-        if (materialIssueBlocksCutting(supportMeta)) {
+        if (
+          order.fabric_funding_policy_version !== FABRIC_FUNDING_POLICY_V2_VERSION &&
+          materialIssueBlocksCutting(supportMeta)
+        ) {
           return new Response(
             JSON.stringify({ error: 'This order has an open material issue. Resolve it before cutting starts.' }),
             { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
@@ -3371,21 +4171,6 @@ Deno.serve(async (req) => {
             JSON.stringify({ error: 'Review the guided fit intake or request measurement confirmation before cutting starts.' }),
             { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
           )
-        }
-      }
-
-      if (customStageKey === 'FABRIC' && order.fabric_source === 'TAILOR_SOURCES') {
-        const { error: detailError } = await supabase
-          .from('custom_order_details')
-          .update({
-            fabric_approval_status: 'PENDING_CUSTOMER_APPROVAL',
-            fabric_approval_requested_at: new Date().toISOString(),
-          })
-          .eq('order_id', orderId)
-
-        if (detailError) {
-          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
-          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
         }
       }
 
@@ -3451,7 +4236,8 @@ Deno.serve(async (req) => {
         order_id: orderId,
         stage: targetStage,
         note: body.note?.trim() || null,
-        photo_url: productionPhotoUrls[0] ?? null,
+        photo_url: privateMedia.length === 0 ? productionPhotoUrls[0] ?? null : null,
+        evidence_media: privateMedia,
       })
 
       if (customStageKey) {
@@ -3465,11 +4251,15 @@ Deno.serve(async (req) => {
             order_stage: targetStage,
             from_stage: order.stage,
             fabric_source: order.fabric_source ?? null,
+            evidence_purpose: targetStage === 'SOURCING'
+              ? CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.SOURCING_PROGRESS
+              : CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.PRODUCTION_STAGE,
             delivery_method: order.delivery_method ?? null,
             tracking_number: normalizedTrackingNumber || null,
             carrier: normalizedProvider || null,
             media_fingerprints: productionMediaFingerprints,
             media_count: productionPhotoUrls.length,
+            media_assets: privateMedia,
           },
         })
 
@@ -3499,7 +4289,15 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, preferenceKey: 'orderUpdates', data: { orderId } })
         )
-        queueCustomerOrderEmail(supabase, order, stageNotif.title, stageNotif.body, productionPhotoUrls[0] ?? null)
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          stageNotif.title,
+          stageNotif.body,
+          productionPhotoUrls[0] ?? null,
+          `stage:${targetStage}`,
+          privateMedia.length > 0 ? 'commercial-evidence' : 'order-photos',
+        )
 
         const stageSms = buildCustomerStageSms({
           id: order.id,
@@ -3552,6 +4350,14 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({ error: `Cannot confirm-collection from stage ${order.stage}` }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+      if (order.delivery_method !== 'LOCAL_COLLECTION') {
+        return jsonErrorResponse(
+          cors,
+          409,
+          'COLLECTION_METHOD_INACTIVE',
+          'This order is using Drapeon delivery. A collection code becomes available only if the customer switches the order back to pickup.',
         )
       }
 

@@ -1,4 +1,4 @@
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Radius } from '@/constants/theme'
 import type { StorageImageBucket } from '@/lib/image-url'
@@ -18,6 +18,8 @@ type DrapeMediaMosaicProps = {
   onPressItem: (item: DrapeMediaMosaicItem, index: number) => void
   onLongPressItem?: (item: DrapeMediaMosaicItem, index: number) => void
   compact?: boolean
+  contentFit?: 'cover' | 'contain'
+  onLoadError?: (item: DrapeMediaMosaicItem) => void
   testID?: string
 }
 
@@ -28,6 +30,8 @@ function MediaTile({
   onPress,
   onLongPress,
   style,
+  contentFit,
+  onLoadError,
   testID,
 }: {
   item: DrapeMediaMosaicItem
@@ -36,12 +40,14 @@ function MediaTile({
   onPress: () => void
   onLongPress?: () => void
   style?: object
+  contentFit: 'cover' | 'contain'
+  onLoadError?: () => void
   testID?: string
 }) {
   return (
     <TouchableOpacity
       activeOpacity={0.9}
-      onPress={onPress}
+      onPress={item.uri ? onPress : (onLoadError ?? onPress)}
       onLongPress={onLongPress}
       delayLongPress={280}
       accessibilityRole="imagebutton"
@@ -55,7 +61,7 @@ function MediaTile({
           <PortfolioVideoPreview
             uri={item.uri}
             style={styles.asset}
-            contentFit="cover"
+            contentFit={contentFit}
             nativeControls={false}
             autoplay={false}
             isLooping={false}
@@ -66,15 +72,22 @@ function MediaTile({
             bucket={item.bucket}
             containerStyle={styles.asset}
             style={styles.asset}
-            contentFit="cover"
+            contentFit={contentFit}
             transition={120}
             surface="drape_media_mosaic"
-            fallback={<View style={[styles.asset, styles.fallback]} />}
+            onLoadError={onLoadError ? () => onLoadError() : undefined}
+            fallback={(
+              <View style={[styles.asset, styles.fallback]}>
+                <Feather name="refresh-cw" size={18} color={Colors.midGrey} />
+                <Text style={styles.fallbackLabel}>Tap to retry</Text>
+              </View>
+            )}
           />
         )
       ) : (
         <View style={[styles.asset, styles.fallback]}>
-          <ActivityIndicator size="small" color={Colors.midGrey} />
+          <Feather name="refresh-cw" size={18} color={Colors.midGrey} />
+          <Text style={styles.fallbackLabel}>Tap to refresh</Text>
         </View>
       )}
 
@@ -98,6 +111,8 @@ export function DrapeMediaMosaic({
   onPressItem,
   onLongPressItem,
   compact = false,
+  contentFit = 'cover',
+  onLoadError,
   testID,
 }: DrapeMediaMosaicProps) {
   const visibleItems = items.slice(0, 4)
@@ -115,6 +130,8 @@ export function DrapeMediaMosaic({
       onPress={() => onPressItem(item, index)}
       onLongPress={onLongPressItem ? () => onLongPressItem(item, index) : undefined}
       style={style}
+      contentFit={contentFit}
+      onLoadError={onLoadError ? () => onLoadError(item) : undefined}
       testID={testID ? `${testID}-item-${index}` : undefined}
     />
   )
@@ -126,7 +143,7 @@ export function DrapeMediaMosaic({
   if (visibleItems.length === 2) {
     return (
       <View style={[styles.mosaic, styles.row, heightStyle]} testID={testID}>
-        {visibleItems.map((item, index) => tile(item, index, styles.flexTile))}
+        {visibleItems.map((item, index) => tile(item, index, styles.equalRowTile))}
       </View>
     )
   }
@@ -146,12 +163,12 @@ export function DrapeMediaMosaic({
   return (
     <View style={[styles.mosaic, heightStyle]} testID={testID}>
       <View style={[styles.row, styles.flexTile]}>
-        {tile(visibleItems[0]!, 0, styles.flexTile)}
-        {tile(visibleItems[1]!, 1, styles.flexTile)}
+        {tile(visibleItems[0]!, 0, styles.equalRowTile)}
+        {tile(visibleItems[1]!, 1, styles.equalRowTile)}
       </View>
       <View style={[styles.row, styles.flexTile]}>
-        {tile(visibleItems[2]!, 2, styles.flexTile)}
-        {tile(visibleItems[3]!, 3, styles.flexTile)}
+        {tile(visibleItems[2]!, 2, styles.equalRowTile)}
+        {tile(visibleItems[3]!, 3, styles.equalRowTile)}
       </View>
     </View>
   )
@@ -171,6 +188,7 @@ const styles = StyleSheet.create({
   secondaryColumn: { flex: 0.82, gap: 3 },
   primaryTile: { flex: 1.18 },
   flexTile: { flex: 1 },
+  equalRowTile: { flexGrow: 1, flexBasis: 0 },
   fill: { width: '100%', height: '100%' },
   tile: {
     position: 'relative',
@@ -181,6 +199,7 @@ const styles = StyleSheet.create({
   },
   asset: { width: '100%', height: '100%' },
   fallback: { alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.boneDeep },
+  fallbackLabel: { marginTop: 6, color: Colors.midGrey, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   videoBadge: {
     position: 'absolute',
     left: '50%',

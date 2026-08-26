@@ -1,0 +1,9 @@
+export const COMMERCIAL_ADJUSTMENT_TYPES = [
+  'SCOPE', 'MATERIAL', 'RUSH_WORK', 'FIT_REVISION', 'FULFILLMENT',
+  'CUSTOMS', 'CORRECTION', 'DEADLINE_EXTENSION', 'OTHER_REVIEWED',
+] as const
+
+export type CommercialAdjustmentType = (typeof COMMERCIAL_ADJUSTMENT_TYPES)[number]
+
+export const COMMERCIAL_ADJUSTMENT_RESPONSIBILITIES = ['CUSTOMER', 'TAILOR', 'DRAPEON', 'SHARED', 'UNRESOLVED'] as const
+export type CommercialAdjustmentResponsibility = (typeof COMMERCIAL_ADJUSTMENT_RESPONSIBILITIES)[number]

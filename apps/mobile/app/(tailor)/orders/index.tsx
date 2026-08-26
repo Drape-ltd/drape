@@ -18,6 +18,8 @@ import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
+import { consultationOrderListState } from '@drape/shared/consultations'
+import { deriveFulfillmentAwareOrderStagePresentation } from '@drape/shared/drapeon-dispatch'
 
 type Tab = 'active' | 'completed'
 type TailorOrdersProfileRow = {
@@ -46,7 +48,6 @@ export default function TailorOrdersScreen() {
   const userId = user?.id
   const [tab, setTab] = useState<Tab>('active')
   const [completedSearch, setCompletedSearch] = useState('')
-  const [openingCallOrderId, setOpeningCallOrderId] = useState<string | null>(null)
   const [tailorProfile, setTailorProfile] = useState<{
     id: string
     displayName: string
@@ -73,6 +74,28 @@ export default function TailorOrdersScreen() {
   }, [params.tab])
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(userId, tab)
+  const consultationOrderIdsKey = orders
+    .filter((order) => order.stage === 'CONSULTATION')
+    .map((order) => order.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!consultationOrderIdsKey) return
+    const orderIds = consultationOrderIdsKey.split(',')
+    const channel = supabase.channel(`tailor-consultation-list:${userId ?? 'anonymous'}`)
+    for (const orderId of orderIds) {
+      for (const event of ['INSERT', 'UPDATE', 'DELETE'] as const) {
+        channel.on(
+          'postgres_changes',
+          { event, schema: 'public', table: 'consultation_attendance_reviews', filter: `order_id=eq.${orderId}` },
+          () => { void refetch() }
+        )
+      }
+    }
+    channel.subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [consultationOrderIdsKey, refetch, userId])
 
   const loadTailorProfile = useCallback(async () => {
     if (!userId) {
@@ -132,36 +155,6 @@ export default function TailorOrdersScreen() {
       o.reference.toLowerCase().includes(q)
     )
   })()
-
-  async function handleConsultationCall(item: typeof orders[number]) {
-    if (openingCallOrderId) return
-    if (item.videoCallUrl) {
-      setOpeningCallOrderId(item.id)
-      try {
-        router.push({
-          pathname: '/call-join',
-          params: {
-            orderId: item.id,
-            callKind: 'consultation',
-            callType: 'video',
-            historyChain: appendToHistory(undefined, '/(tailor)/orders'),
-          },
-        })
-      } finally {
-        setOpeningCallOrderId(null)
-      }
-      return
-    }
-
-    router.push({
-      pathname: '/(tailor)/orders/[id]',
-      params: {
-        id: item.id,
-        returnTo: '/(tailor)/orders',
-        historyChain: appendToHistory(undefined, '/(tailor)/orders'),
-      },
-    })
-  }
 
   function openRecoveryMenu() {
     Alert.alert('Where do you want to go?', 'Open a stable tailor area while Orders refreshes.', [
@@ -265,7 +258,18 @@ export default function TailorOrdersScreen() {
           renderItem={({ item }) => {
             const isPending = item.stage === 'PENDING_QUOTE'
             const isConsultation = item.stage === 'CONSULTATION'
-            const hint = orderHintForItem(item)
+            const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
+              orderStage: item.stage,
+              effectiveMethod: item.deliveryMethod,
+            })
+            const hint = stagePresentation.label
+              ? item.deliveryMethod === 'SHIPPING'
+                ? 'Shipping is being arranged. No collection code is needed.'
+                : 'Drapeon Dispatch is arranging delivery. No collection code is needed.'
+              : orderHintForItem(item)
+            const consultationState = isConsultation
+              ? consultationOrderListState({ actorRole: 'TAILOR', review: item.consultationReview })
+              : null
             return (
               <TouchableOpacity
                 style={[styles.card, isPending && styles.cardPending, isConsultation && styles.cardConsultation]}
@@ -288,8 +292,8 @@ export default function TailorOrdersScreen() {
                     <Text style={styles.customer}>{item.customerName}</Text>
                   </View>
                   <DrapeStatusChip
-                    value={item.stage}
-                    label={tailorOrderStageLabel(item.stage, item.orderKind ?? 'CUSTOM')}
+                    value={stagePresentation.stage ?? item.stage}
+                    label={stagePresentation.label ?? tailorOrderStageLabel(item.stage, item.orderKind ?? 'CUSTOM')}
                     domain="order"
                   />
                 </View>
@@ -306,37 +310,27 @@ export default function TailorOrdersScreen() {
                     </Text>
                   )}
                 </View>
-                {hint && (
+                {hint && !isConsultation && (
                   <Text style={item.stage === 'IN_DISPUTE' ? styles.statusHintDispute : isPending ? styles.pendingCta : styles.statusHint}>
                     {hint}
                   </Text>
                 )}
                 {isConsultation && (
-                  <View style={styles.consultationActions}>
-                    <TouchableOpacity
-                      style={styles.callButton}
-                      disabled={openingCallOrderId === item.id}
-                      onPress={(e) => {
-                        e.stopPropagation()
-                        if (openingCallOrderId === item.id) return
-                        if (item.videoCallUrl) {
-                          Alert.alert('Join call', 'Rejoin your consultation call.', [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Video', onPress: () => { void handleConsultationCall(item) } },
-                            { text: 'Audio', onPress: () => { void handleConsultationCall(item) } },
-                          ])
-                        } else {
-                          void handleConsultationCall(item)
-                        }
-                      }}
-                    >
-                      <Text style={styles.callButtonText}>
-                        {openingCallOrderId === item.id
-                          ? 'Opening…'
-                          : item.videoCallUrl ? 'Rejoin call' : 'Start call'}
-                      </Text>
-                    </TouchableOpacity>
-                    <Text style={styles.consultationHint}>Consultation in progress</Text>
+                  <View style={[
+                    styles.consultationState,
+                    consultationState?.needsAction && styles.consultationStateAttention,
+                  ]}>
+                    <View style={[
+                      styles.consultationDot,
+                      consultationState?.needsAction && styles.consultationDotAttention,
+                    ]} />
+                    <Text style={[
+                      styles.consultationStateText,
+                      consultationState?.needsAction && styles.consultationStateTextAttention,
+                    ]}>
+                      {consultationState?.label ?? 'Consultation scheduled'}
+                    </Text>
+                    <Feather name="chevron-right" size={16} color={Colors.midGrey} />
                   </View>
                 )}
               </TouchableOpacity>
@@ -498,14 +492,22 @@ const styles = StyleSheet.create({
   pendingCta: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.medium },
   statusHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   statusHintDispute: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
-  cardConsultation: { borderWidth: 1.5, borderColor: Colors.needleGreen },
-  consultationActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  callButton: {
-    backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
-    paddingHorizontal: 14, paddingVertical: 8, minHeight: 44, justifyContent: 'center',
+  cardConsultation: { borderWidth: 1, borderColor: Colors.needleGreen, paddingVertical: 12, gap: 7 },
+  consultationState: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
   },
-  callButtonText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
-  consultationHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  consultationStateAttention: { backgroundColor: Colors.accentLight },
+  consultationDot: { width: 7, height: 7, borderRadius: Radius.full, backgroundColor: Colors.midGrey },
+  consultationDotAttention: { backgroundColor: Colors.kanteRust },
+  consultationStateText: { flex: 1, fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  consultationStateTextAttention: { color: Colors.kanteRust },
   compactActionMenuButton: {
     minHeight: 46,
     borderRadius: Radius.md,

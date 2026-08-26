@@ -75,6 +75,13 @@ type TailorProfile = {
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
+  consultationMode: 'UNAVAILABLE' | 'FREE' | 'PAID'
+  consultationRequirement: 'OPTIONAL' | 'REQUIRED'
+  consultationFeeAmount: number | null
+  consultationCurrency: string | null
+  consultationDurationMinutes: number
+  consultationCallType: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'
+  consultationFeeCreditable: boolean
 }
 
 type Review = {
@@ -634,6 +641,26 @@ export default function TailorProfileScreen() {
               ) : null}
             </View>
           </View>
+
+          {profile.supportsCustomOrders ? (
+            <View style={styles.detailCard}>
+              <Text style={styles.detailLabel}>Before your custom brief</Text>
+              <Text style={styles.detailValue}>
+                {profile.consultationMode === 'UNAVAILABLE'
+                  ? 'No consultation offered'
+                  : `${profile.consultationRequirement === 'REQUIRED' ? 'Required' : 'Optional'} · ${profile.consultationDurationMinutes} min · ${profile.consultationMode === 'PAID' ? formatAmount(profile.consultationFeeAmount ?? 0, (profile.consultationCurrency ?? profile.currency) as CurrencyCode, currency, rates) : 'Free'}`}
+              </Text>
+              {profile.consultationMode !== 'UNAVAILABLE' ? (
+                <Text style={styles.detailSubvalue}>
+                  {profile.consultationCallType === 'AUDIO' ? 'Audio call' : profile.consultationCallType === 'VIDEO' ? 'Video call' : 'Audio or video'}
+                  {profile.consultationFeeCreditable ? ' · Fee credited toward an accepted order' : ''}
+                </Text>
+              ) : null}
+              {profile.consultationMode === 'PAID' ? (
+                <Text style={styles.detailSubvalue}>Payment is collected before the call. Cancellation and attendance terms are shown again before payment.</Text>
+              ) : null}
+            </View>
+          ) : null}
 
         </View>
       </ScrollView>

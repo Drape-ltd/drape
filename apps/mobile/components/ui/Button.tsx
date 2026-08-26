@@ -121,6 +121,13 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodyBold,
     fontWeight: FontWeight.bold,
     letterSpacing: 0,
+    // Android can under-measure the final word of custom-font text inside a
+    // row pressable and clip it at the measured boundary. Give the label a
+    // small measurement buffer and allow it to shrink as a complete string.
+    flexShrink: 1,
+    paddingHorizontal: 2,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   label_primary: { color: Colors.textInverse },
   label_secondary: { color: Colors.ink },

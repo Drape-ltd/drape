@@ -403,7 +403,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
   const [profileRes, reviewsRes, portfolioRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
-      .select('id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+      .select('id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable')
       .eq('id', tailorId)
       .eq('is_live', true)
       .maybeSingle(),
@@ -496,6 +496,13 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       pickupAvailable: profileRow.pickup_available === true,
       deliveryAvailable: profileRow.delivery_available === true,
       shippingAvailable: profileRow.shipping_available === true,
+      consultationMode: profileRow.consultation_mode ?? 'FREE',
+      consultationRequirement: profileRow.consultation_requirement ?? 'OPTIONAL',
+      consultationFeeAmount: profileRow.consultation_fee_amount ?? null,
+      consultationCurrency: profileRow.consultation_currency ?? null,
+      consultationDurationMinutes: profileRow.consultation_duration_minutes ?? 30,
+      consultationCallType: profileRow.consultation_call_type ?? 'VIDEO',
+      consultationFeeCreditable: profileRow.consultation_fee_creditable === true,
     },
     reviews: reviewsData.map((row) => {
       const orderRow = firstJoinedRow(row.orders as Record<string, unknown> | Record<string, unknown>[] | null)

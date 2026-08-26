@@ -12,6 +12,9 @@ import { appendToHistory } from '@/lib/navigation'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
+import { consultationOrderListState } from '@drape/shared/consultations'
+import { deriveFulfillmentAwareOrderStagePresentation } from '@drape/shared'
+import { supabase } from '@/lib/supabase'
 
 type Tab = 'active' | 'completed'
 
@@ -63,6 +66,28 @@ export default function OrdersListScreen() {
     isError,
     refetch,
   } = useCustomerOrders(user?.id, tab)
+  const consultationOrderIdsKey = orders
+    .filter((order) => order.stage === 'CONSULTATION')
+    .map((order) => order.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!consultationOrderIdsKey) return
+    const orderIds = consultationOrderIdsKey.split(',')
+    const channel = supabase.channel(`customer-consultation-list:${user?.id ?? 'anonymous'}`)
+    for (const orderId of orderIds) {
+      for (const event of ['INSERT', 'UPDATE', 'DELETE'] as const) {
+        channel.on(
+          'postgres_changes',
+          { event, schema: 'public', table: 'consultation_attendance_reviews', filter: `order_id=eq.${orderId}` },
+          () => { void refetch() }
+        )
+      }
+    }
+    channel.subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [consultationOrderIdsKey, refetch, user?.id])
 
   const sortedOrders =
     tab === 'active'
@@ -149,7 +174,16 @@ export default function OrdersListScreen() {
           }
           renderItem={({ item }) => {
             const showReviewNudge = ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(item.stage) && !item.hasReview
-            const hint = customerOrderHint(item.stage, item.orderKind)
+            const consultationState = item.stage === 'CONSULTATION'
+              ? consultationOrderListState({ actorRole: 'CUSTOMER', review: item.consultationReview })
+              : null
+            const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
+              orderStage: item.stage,
+              effectiveMethod: item.deliveryMethod,
+            })
+            const hint = consultationState?.label
+              ?? stagePresentation.label
+              ?? customerOrderHint(item.stage, item.orderKind)
             return (
               <TouchableOpacity
                 style={styles.card}
@@ -174,8 +208,8 @@ export default function OrdersListScreen() {
                     <Text style={styles.tailor}>{item.tailorName}</Text>
                   </View>
                   <DrapeStatusChip
-                    value={item.stage}
-                    label={customerOrderStageLabel(item.stage, item.orderKind)}
+                    value={stagePresentation.stage ?? item.stage}
+                    label={stagePresentation.label ?? customerOrderStageLabel(item.stage, item.orderKind)}
                     domain="order"
                   />
                 </View>
@@ -210,8 +244,14 @@ export default function OrdersListScreen() {
                   </View>
                 )}
                 {hint && !showReviewNudge && (
-                  <View style={styles.reviewNudge}>
-                    <Text style={styles.reviewNudgeText}>{hint}</Text>
+                  <View style={[
+                    styles.reviewNudge,
+                    consultationState?.needsAction && styles.reviewNudgeAttention,
+                  ]}>
+                    <Text style={[
+                      styles.reviewNudgeText,
+                      consultationState?.needsAction && styles.reviewNudgeTextAttention,
+                    ]}>{hint}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -339,6 +379,8 @@ const styles = StyleSheet.create({
     color: Colors.kanteRust,
     fontWeight: FontWeight.semibold,
   },
+  reviewNudgeAttention: { backgroundColor: Colors.accentLight },
+  reviewNudgeTextAttention: { color: Colors.kanteRust },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
   amount: {

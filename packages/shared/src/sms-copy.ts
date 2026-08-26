@@ -155,3 +155,20 @@ export function buildTailorReviewResolutionSms(
 
   return `Drapeon: We reviewed order #${ref}. It will continue from ${stageLabel(restoreStage ?? 'CONFIRMED')}.`
 }
+
+export function buildPayoutFailedSms(input: { provider: string; reference: string }) {
+  return `Drapeon: ${input.provider} could not complete payout ${input.reference}. Open Earnings for the reason and next step. Do not submit a duplicate payout.`
+}
+
+export function buildPayoutReversedSms(input: { provider: string; reference: string }) {
+  return `Drapeon: ${input.provider} reversed payout ${input.reference}. Your earnings are under review; open Earnings before taking another action.`
+}
+
+export function buildPayoutSetupNeedsAttentionSms(provider: string) {
+  return `Drapeon: Your ${provider} payout setup needs attention. Open Payout setup to complete verification. Eligible earnings remain protected.`
+}
+
+export function buildRefundFailedSms(input: { provider: string; orderReference?: string | null }) {
+  const order = input.orderReference?.trim() ? ` for order #${input.orderReference.trim().toUpperCase()}` : ''
+  return `Drapeon: ${input.provider} could not complete your approved refund${order}. Your case remains open. Open Drapeon for the next step and do not submit a duplicate request.`
+}

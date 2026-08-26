@@ -8,6 +8,32 @@ type CaptureMessageOptions = {
   extra?: Record<string, unknown>
 }
 
+const SENSITIVE_KEY = /(?:authorization|cookie|password|secret|token|api[_-]?key|card|bank[_-]?account|account[_-]?number|routing[_-]?number|phone|email|address|webhook[_-]?body|raw[_-]?body|evidence[_-]?(?:body|content))/iu
+const EMAIL_VALUE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu
+const PHONE_VALUE = /(?<!\w)\+?\d[\d\s().-]{7,}\d(?!\w)/gu
+
+function sanitizeValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return '[TRUNCATED]'
+  if (typeof value === 'string') {
+    return value
+      .slice(0, 1000)
+      .replace(EMAIL_VALUE, '[REDACTED_EMAIL]')
+      .replace(PHONE_VALUE, '[REDACTED_PHONE]')
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map((item) => sanitizeValue(item, depth + 1))
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        SENSITIVE_KEY.test(key) ? '[REDACTED]' : sanitizeValue(item, depth + 1),
+      ]),
+    )
+  }
+  return value
+}
+
 async function postSentryEvent(
   message: string,
   options: CaptureMessageOptions = {},
@@ -32,7 +58,7 @@ async function postSentryEvent(
       platform: 'javascript',
       timestamp: Math.floor(Date.now() / 1000),
       tags: options.tags ?? {},
-      extra: options.extra ?? {},
+      extra: sanitizeValue(options.extra ?? {}),
     }
 
     await fetch(`${dsnUrl.protocol}//${dsnUrl.host}/api/${projectId}/envelope/`, {

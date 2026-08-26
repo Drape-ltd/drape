@@ -10,6 +10,7 @@ import * as Notifications from 'expo-notifications'
 import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
 import type { Href } from 'expo-router'
+import { MATERIAL_FUNDING_EVENTS } from '@drape/shared'
 import { useUserRole } from './auth'
 import { registerPushInstallation } from './push-registration'
 import { Sentry } from './sentry'
@@ -39,6 +40,7 @@ const ALLOWED_SCREENS = new Set([
 
 const CALL_NOTIFICATION_CHANNEL_ID = 'calls'
 const CALL_START_NOTIFICATION_KEY_PREFIX = 'drapeon:call-start-notification'
+const MATERIAL_FUNDING_EVENT_SET = new Set<string>(MATERIAL_FUNDING_EVENTS)
 
 const EXPO_PROJECT_ID =
   process.env.EXPO_PUBLIC_PROJECT_ID?.trim()
@@ -146,6 +148,8 @@ function resolveNotificationPath(
   const orderId = isUuid(data.orderId) ? data.orderId : null
   const eventId = isUuid(data.eventId) ? data.eventId : null
   const messageId = isUuid(data.messageId) ? data.messageId : null
+  const advanceId = isUuid(data.advanceId) ? data.advanceId : null
+  const action = typeof data.action === 'string' ? data.action : null
   const rawCallKind = typeof data.callKind === 'string' ? data.callKind : null
   const rawCallType = typeof data.callType === 'string' ? data.callType : null
   const callKind = rawCallKind === 'consultation' || rawCallKind === 'ready-made' ? rawCallKind : null
@@ -170,11 +174,21 @@ function resolveNotificationPath(
   }
 
   if (orderId) {
-    return `${base}/orders/${orderId}`
+    const orderParams = new URLSearchParams()
+    if (action === 'MATERIAL_ADVANCE_RESPONSE' || (action && MATERIAL_FUNDING_EVENT_SET.has(action))) {
+      orderParams.set('action', action)
+    }
+    if (advanceId) orderParams.set('advanceId', advanceId)
+    const query = orderParams.toString()
+    return `${base}/orders/${orderId}${query ? `?${query}` : ''}`
   }
 
   if (role === 'TAILOR' && notificationType === 'tailor_verification_decision') {
     return '/(tailor)/profile'
+  }
+
+  if (role === 'TAILOR' && destination === 'PAYOUT') {
+    return '/(tailor)/profile/payout-setup'
   }
 
   if (screen && ALLOWED_SCREENS.has(screen)) {

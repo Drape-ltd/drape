@@ -10,6 +10,7 @@ import {
   findOverduePayoutsWithoutRows,
   PAYOUT_WATCHDOG_GRACE_MINUTES,
 } from '../_shared/payout-watchdog.ts'
+import { TAX_POLICY_CONTROLS } from '../../../packages/shared/src/tax.ts'
 
 const FN = 'service-health'
 
@@ -33,7 +34,9 @@ const REQUIRED_CRON_JOBS = [
   'finalize-account-deletions',
   'process-notification-jobs',
   'process-ops-jobs',
+  'process-payment-webhooks',
   'process-push-receipts',
+  'monitor-tax-controls',
 ] as const
 
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
@@ -151,6 +154,108 @@ function smsSecretCheck(): Check {
     ok: true,
     status: 'warn',
     message: 'SMS provider is not configured. Push and email fallback can still run.',
+  }
+}
+
+function taxPolicyReviewCheck(readinessTier: ReadinessTier, now = new Date()): Check {
+  const overdue = TAX_POLICY_CONTROLS.filter((policy) => {
+    const dueAt = new Date(`${policy.reviewDueAt}T23:59:59.999Z`).getTime()
+    return Number.isFinite(dueAt) && dueAt < now.getTime()
+  })
+  const blocked = TAX_POLICY_CONTROLS.filter((policy) => policy.mode === 'BLOCKED')
+  const nextReviewAt = TAX_POLICY_CONTROLS
+    .map((policy) => policy.reviewDueAt)
+    .sort()[0] ?? null
+
+  if (overdue.length > 0) {
+    return {
+      ok: readinessTier === 'beta',
+      status: readinessTier === 'beta' ? 'warn' : 'fail',
+      message: `${overdue.length} tax policy review(s) are overdue. Public checkout must remain blocked until official sources are reviewed.`,
+      details: {
+        overdue: overdue.map((policy) => policy.countryCode),
+        next_review_at: nextReviewAt,
+        blocked_jurisdictions: blocked.map((policy) => policy.countryCode),
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    status: blocked.length > 0 ? 'warn' : 'ok',
+    message: blocked.length > 0
+      ? `Tax policies are current; ${blocked.map((policy) => policy.countryCode).join(', ')} checkout remains intentionally blocked pending country-specific tax support.`
+      : 'Tax policies are within their official-source review window.',
+    details: {
+      next_review_at: nextReviewAt,
+      blocked_jurisdictions: blocked.map((policy) => policy.countryCode),
+      reviewed: TAX_POLICY_CONTROLS.map((policy) => ({
+        country_code: policy.countryCode,
+        mode: policy.mode,
+        reviewed_at: policy.reviewedAt,
+        review_due_at: policy.reviewDueAt,
+        source_url: policy.sourceUrl,
+      })),
+    },
+  }
+}
+
+async function activatedTaxControlHealthCheck(supabase: any, readinessTier: ReadinessTier): Promise<Check> {
+  const { data, error } = await supabase.from('tax_control_health')
+    .select('activation_id,environment,policy_version,jurisdiction_country_code,origin_country_code,destination_country_code,tax_transaction_type,fulfillment_classification,review_due_at,health_status,affected_open_reservations,correlation_id')
+  if (error) return { ok: false, status: 'fail', message: `Could not read activated tax-control health: ${error.message}` }
+  const rows = data ?? []
+  const expired = rows.filter((row: any) => row.health_status === 'EXPIRED')
+  const due = rows.filter((row: any) => row.health_status === 'REVIEW_DUE')
+  const productionExpired = expired.filter((row: any) => row.environment === 'PRODUCTION')
+  const fail = readinessTier === 'launch' && productionExpired.length > 0
+  return {
+    ok: !fail,
+    status: fail ? 'fail' : expired.length > 0 || due.length > 0 ? 'warn' : 'ok',
+    message: rows.length === 0
+      ? 'No reviewed tax scope is activated; legacy pricing remains in place.'
+      : `${rows.length} activated tax scope(s); ${expired.length} expired and ${due.length} due for review.`,
+    details: {
+      activated: rows.length,
+      expired: expired.map((row: any) => ({ activation_id: row.activation_id, environment: row.environment, correlation_id: row.correlation_id })),
+      review_due: due.map((row: any) => ({ activation_id: row.activation_id, environment: row.environment, review_due_at: row.review_due_at })),
+    },
+  }
+}
+
+async function reviewedTaxDependencyHealthCheck(supabase: any, readinessTier: ReadinessTier): Promise<Check> {
+  const sources = [
+    { table: 'tax_policy_versions', id: 'policy_version', type: 'POLICY', hasStatus: true },
+    { table: 'tax_registration_controls', id: 'id', type: 'REGISTRATION', hasStatus: true },
+    { table: 'tax_responsibility_controls', id: 'id', type: 'RESPONSIBILITY', hasStatus: true },
+    { table: 'tax_corridor_controls', id: 'id', type: 'CORRIDOR', hasStatus: true },
+    { table: 'tax_line_classification_controls', id: 'id', type: 'LINE_CLASSIFICATION', hasStatus: false },
+    { table: 'tax_registration_facts', id: 'id', type: 'REGISTRATION_FACT', hasStatus: false },
+  ] as const
+  const now = Date.now()
+  const warningAt = now + 30 * 24 * 60 * 60 * 1_000
+  const expired: Array<Record<string, string>> = []
+  const due: Array<Record<string, string>> = []
+  for (const source of sources) {
+    const { data, error } = await supabase.from(source.table)
+      .select(`${source.id},review_due_at${source.hasStatus ? ',status' : ''}`)
+    if (error) return { ok: false, status: 'fail', message: `Could not read ${source.type.toLowerCase()} review health: ${error.message}` }
+    for (const row of data ?? []) {
+      if (source.hasStatus && !['APPROVED', 'ACTIVE'].includes(row.status)) continue
+      const dueAt = new Date(row.review_due_at).getTime()
+      const safe = { control_type: source.type, control_id: String(row[source.id]), review_due_at: String(row.review_due_at) }
+      if (!Number.isFinite(dueAt) || dueAt <= now) expired.push(safe)
+      else if (dueAt <= warningAt) due.push(safe)
+    }
+  }
+  const fail = readinessTier === 'launch' && expired.length > 0
+  return {
+    ok: !fail,
+    status: fail ? 'fail' : expired.length > 0 || due.length > 0 ? 'warn' : 'ok',
+    message: expired.length > 0 || due.length > 0
+      ? `${expired.length} reviewed tax dependencies expired; ${due.length} due within 30 days.`
+      : 'Reviewed tax dependencies are within their review windows.',
+    details: { expired, review_due: due },
   }
 }
 
@@ -581,6 +686,9 @@ Deno.serve(async (req) => {
         : 'Missing required service role environment variable',
     },
     ...providerSecretChecks(readinessTier),
+    taxPolicyReview: taxPolicyReviewCheck(readinessTier),
+    activatedTaxControls: await activatedTaxControlHealthCheck(supabase, readinessTier),
+    reviewedTaxDependencies: await reviewedTaxDependencyHealthCheck(supabase, readinessTier),
     database: await databaseCheck(supabase),
     cron: await cronCheck(supabase),
     jobQueue: await jobQueueCheck(supabase),

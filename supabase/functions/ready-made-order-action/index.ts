@@ -19,8 +19,18 @@ import { normalizeStoredPhone, validateRecipientPhone } from '../_shared/phone.t
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 import { fetchFxQuote, convertMinorUnitsWithFx } from '../_shared/fx.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
+import { resolveActivatedTaxDecision } from '../_shared/tax-decision.ts'
+import { resolveAuthoritativeFulfillmentEligibility } from '../_shared/fulfillment-eligibility.ts'
 import { resolveDrapeManagedFulfillmentFee } from '../../../packages/shared/src/fulfillment-fees.ts'
-import { buildReadyMadeInquiryClosedTerminalRequest } from '../../../packages/shared/src/order-terminal.ts'
+import {
+  buildPaymentExpiredTerminalRequest,
+  buildReadyMadeInquiryClosedTerminalRequest,
+} from '../../../packages/shared/src/order-terminal.ts'
+import {
+  calculateReviewedInternationalCharges,
+  formatTaxDecisionBlockedReason,
+} from '../../../packages/shared/src/tax-decision.ts'
+import { fulfillmentEligibilityCopy } from '../../../packages/shared/src/fulfillment-eligibility.ts'
 import {
   hasSellerPayoutCurrencyMismatch,
   normalizeAccountCurrency,
@@ -29,7 +39,10 @@ import {
   type AccountCurrencyCode,
 } from '../../../packages/shared/src/currency-config.ts'
 import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/checkout-policy.ts'
-import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
+import {
+  normalizeTaxCountryCode,
+  resolveOrderTaxJurisdiction,
+} from '../../../packages/shared/src/tax.ts'
 
 const FN = 'ready-made-order-action'
 const ORDER_CONTRACT_VERSION = 1
@@ -55,6 +68,10 @@ const BodySchema = z.discriminatedUnion('action', [
     region: z.string().trim().max(120).optional(),
     postalCode: z.string().trim().max(40).optional(),
     countryCode: z.string().trim().max(32).optional(),
+    addressVerificationSource: z.string().trim().max(80).optional(),
+    addressVerificationReference: z.string().trim().max(200).optional(),
+    addressVerifiedAt: z.string().datetime().optional(),
+    fitGuidanceAcknowledged: z.boolean().optional(),
   }),
   z.object({
     action: z.literal('create-checkout'),
@@ -67,9 +84,13 @@ const BodySchema = z.discriminatedUnion('action', [
     region: z.string().trim().max(120).optional(),
     postalCode: z.string().trim().max(40).optional(),
     countryCode: z.string().trim().max(32).optional(),
+    addressVerificationSource: z.string().trim().max(80).optional(),
+    addressVerificationReference: z.string().trim().max(200).optional(),
+    addressVerifiedAt: z.string().datetime().optional(),
     recipientName: z.string().trim().max(120).optional(),
     recipientPhone: z.string().trim().max(40).optional(),
     cancellationPolicyAcknowledged: z.boolean().optional(),
+    fitGuidanceAcknowledged: z.boolean().optional(),
   }),
 ])
 
@@ -110,6 +131,7 @@ async function resolveCheckoutPricing(input: {
   region?: string | null
   postalCode?: string | null
   countryCode?: string | null
+  sellerPickupAddress?: string | null
   orderCurrency: AccountCurrencyCode
   accountRegionCode: string
   item: {
@@ -118,6 +140,8 @@ async function resolveCheckoutPricing(input: {
     price_amount: number
   }
   sellerProfileLocation: string | null
+  tailorId: string
+  fulfillmentEligibility: Extract<Awaited<ReturnType<typeof resolveAuthoritativeFulfillmentEligibility>>, { status: 'ELIGIBLE' }>
 }) {
   const sourceSubtotal = input.item.price_amount * input.quantity
   let fxQuote = null as Awaited<ReturnType<typeof fetchFxQuote>> | null
@@ -133,29 +157,96 @@ async function resolveCheckoutPricing(input: {
     fulfillment: input.fulfillment,
     orderCurrency: input.orderCurrency,
     sellerLocation: input.sellerProfileLocation,
+    destinationCountry: input.countryCode,
     destinationAddress: input.address,
   }).feeMinorUnits
+
+  const taxJurisdiction = resolveOrderTaxJurisdiction({
+    fulfillment: input.fulfillment,
+    deliveryCountryCode: input.countryCode,
+    deliveryAddress: input.address,
+    sellerLocation: input.sellerProfileLocation,
+    sellerPickupAddress: input.sellerPickupAddress,
+    customerRegionCode: input.accountRegionCode,
+  })
 
   const tax = await resolveOrderTax({
     supabase: input.supabase,
     orderId: null,
     currency: input.orderCurrency,
-    regionCode: input.accountRegionCode,
-    countryCode: input.countryCode,
-    address: input.address,
+    regionCode: taxJurisdiction.countryCode,
+    countryCode: taxJurisdiction.countryCode,
+    address: taxJurisdiction.address,
     postalCode: input.postalCode,
     stateRegion: input.region,
     city: input.city,
   })
 
-  const lockedAmounts = calculateLockedOrderAmountsWithTaxBase({
+  const taxEnvironment = (Deno.env.get('SUPABASE_URL') ?? '').includes('pqptfuqogvrajozfsqzi')
+    ? 'DEVELOPMENT' as const
+    : 'PRODUCTION' as const
+  if (!taxJurisdiction.countryCode) {
+    const error = new Error('We could not verify the tax location for this checkout. Check the fulfillment address and try again.')
+    Object.assign(error, { checkoutStatus: 409, checkoutCode: 'TAX_JURISDICTION_UNRESOLVED' })
+    throw error
+  }
+  const activatedTax = await resolveActivatedTaxDecision({
+    supabase: input.supabase,
+    environment: taxEnvironment,
+    jurisdictionCountryCode: taxJurisdiction.countryCode,
+    jurisdictionRegionCode: input.region ?? null,
+    originCountryCode: input.fulfillmentEligibility.origin.countryCode,
+    destinationCountryCode: input.fulfillmentEligibility.destination?.countryCode ?? null,
+    transactionType: 'READY_MADE_ORDER',
+    fulfillmentClassification: input.fulfillmentEligibility.fulfillmentClassification,
+    tailorId: input.tailorId,
+    customerId: input.callerId,
+    requiredLineKeys: [
+      'READY_MADE_ITEM',
+      ...(fulfillmentFee > 0 ? ['FULFILLMENT' as const] : []),
+    ],
+  })
+  if (activatedTax.status === 'BLOCKED') {
+    const error = new Error(formatTaxDecisionBlockedReason(activatedTax.reason))
+    Object.assign(error, { checkoutStatus: 409, checkoutCode: activatedTax.reason })
+    throw error
+  }
+
+  const domesticLockedAmounts = calculateLockedOrderAmountsWithTaxBase({
     subtotalAmount: subtotal,
     platformFeeAmount: 0,
     shippingAmount: fulfillmentFee,
-    taxRateBps: tax.rateBps,
-    shippingTaxable: tax.shippingTaxable,
+    taxRateBps: activatedTax.status === 'RESOLVED' && activatedTax.decision.collectionMode !== 'COLLECTED_AT_CHECKOUT'
+      ? 0
+      : tax.rateBps,
+    shippingTaxable: activatedTax.status === 'RESOLVED'
+      ? activatedTax.decision.shippingTaxable
+      : tax.shippingTaxable,
     platformFeeTaxable: tax.platformFeeTaxable,
   })
+  let internationalCharges = { importTaxAmount: 0, dutyAmount: 0 }
+  if (
+    activatedTax.status === 'RESOLVED'
+    && input.fulfillmentEligibility.fulfillmentClassification === 'INTERNATIONAL_SHIPPING'
+  ) {
+    const corridor = activatedTax.corridor as Record<string, unknown> | null
+    internationalCharges = calculateReviewedInternationalCharges({
+      subtotalAmount: domesticLockedAmounts.subtotalAmount,
+      shippingAmount: domesticLockedAmounts.shippingAmount,
+      rule: {
+        collectionMode: activatedTax.decision.collectionMode,
+        importTaxRateBps: typeof corridor?.import_tax_rate_bps === 'number' ? corridor.import_tax_rate_bps : null,
+        dutyRateBps: typeof corridor?.duty_rate_bps === 'number' ? corridor.duty_rate_bps : null,
+        importTaxBase: typeof corridor?.import_tax_base === 'string' ? corridor.import_tax_base as never : null,
+        dutyBase: typeof corridor?.duty_base === 'string' ? corridor.duty_base as never : null,
+      },
+    })
+  }
+  const lockedAmounts = {
+    ...domesticLockedAmounts,
+    taxAmount: domesticLockedAmounts.taxAmount + internationalCharges.importTaxAmount + internationalCharges.dutyAmount,
+    totalAmount: domesticLockedAmounts.totalAmount + internationalCharges.importTaxAmount + internationalCharges.dutyAmount,
+  }
 
   return {
     itemCurrency,
@@ -164,7 +255,101 @@ async function resolveCheckoutPricing(input: {
     fulfillmentFee,
     tax,
     lockedAmounts,
+    domesticTaxAmount: domesticLockedAmounts.taxAmount,
+    internationalCharges,
+    activatedTax,
+    taxEnvironment,
   }
+}
+
+async function persistReadyMadeTaxSnapshot(input: {
+  supabase: SupabaseClient
+  orderId: string
+  pricing: Awaited<ReturnType<typeof resolveCheckoutPricing>>
+  fulfillmentEligibility: Extract<Awaited<ReturnType<typeof resolveAuthoritativeFulfillmentEligibility>>, { status: 'ELIGIBLE' }>
+  currency: AccountCurrencyCode
+}) {
+  if (input.pricing.activatedTax.status !== 'RESOLVED') return null
+  const activatedTax = input.pricing.activatedTax
+  const corridor = activatedTax.corridor as Record<string, unknown> | null
+  const payload = {
+    environment: input.pricing.taxEnvironment,
+    orderId: input.orderId,
+    activationId: activatedTax.decision.activation.activationId,
+    policyVersion: activatedTax.decision.activation.policyVersion,
+    transactionType: 'READY_MADE_ORDER',
+    fulfillmentClassification: input.fulfillmentEligibility.fulfillmentClassification,
+    origin: input.fulfillmentEligibility.origin,
+    destination: input.fulfillmentEligibility.destination,
+    lines: activatedTax.decision.lines,
+    collectionMode: activatedTax.decision.collectionMode,
+    amounts: input.pricing.lockedAmounts,
+    internationalCharges: input.pricing.internationalCharges,
+    currency: input.currency,
+  }
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload)))
+  const fingerprint = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  const sourceUrls = [...new Set([
+    ...activatedTax.decision.activation.sourceUrls,
+    ...activatedTax.decision.control.sourceUrls,
+    ...(Array.isArray(corridor?.source_urls)
+      ? corridor.source_urls.filter((value): value is string => typeof value === 'string')
+      : []),
+  ])]
+  const { data, error } = await input.supabase.from('tax_decision_snapshots').insert({
+    environment: input.pricing.taxEnvironment,
+    order_id: input.orderId,
+    activation_id: activatedTax.decision.activation.activationId,
+    policy_version: activatedTax.decision.activation.policyVersion,
+    responsibility_control_id: activatedTax.decision.control.controlId,
+    registration_control_id: activatedTax.decision.control.registrationRuleId,
+    registration_fact_id: activatedTax.decision.registrationFactId,
+    corridor_control_id: typeof corridor?.id === 'string' ? corridor.id : null,
+    tax_transaction_type: 'READY_MADE_ORDER',
+    fulfillment_classification: input.fulfillmentEligibility.fulfillmentClassification,
+    origin_snapshot: input.fulfillmentEligibility.origin,
+    destination_snapshot: input.fulfillmentEligibility.destination,
+    jurisdiction_country_code: activatedTax.decision.control.jurisdictionCountryCode,
+    jurisdiction_region_code: activatedTax.decision.control.jurisdictionRegionCode,
+    corridor_key: typeof corridor?.control_key === 'string' ? corridor.control_key : null,
+    tax_supply_characterization: activatedTax.decision.control.supplyCharacterization,
+    liability_granularity: activatedTax.decision.control.liabilityGranularity,
+    responsible_party: activatedTax.decision.control.responsibleParty,
+    registration_subject: activatedTax.decision.control.registrationSubject,
+    registration_decision: activatedTax.decision.registrationDecision,
+    line_classifications: activatedTax.decision.lines,
+    collection_mode: activatedTax.decision.collectionMode,
+    export_treatment: typeof corridor?.export_treatment === 'string' ? corridor.export_treatment : null,
+    import_treatment: typeof corridor?.import_treatment === 'string' ? corridor.import_treatment : null,
+    shipping_taxable: activatedTax.decision.shippingTaxable,
+    carrier_constraints: corridor?.carrier_constraints ?? [],
+    subtotal_amount: input.pricing.lockedAmounts.subtotalAmount,
+    shipping_amount: input.pricing.lockedAmounts.shippingAmount,
+    tax_amount: input.pricing.domesticTaxAmount,
+    import_tax_amount: input.pricing.internationalCharges.importTaxAmount,
+    duty_amount: input.pricing.internationalCharges.dutyAmount,
+    import_tax_liability_account: typeof corridor?.import_tax_liability_account === 'string'
+      ? corridor.import_tax_liability_account
+      : null,
+    duty_liability_account: typeof corridor?.duty_liability_account === 'string'
+      ? corridor.duty_liability_account
+      : null,
+    required_export_evidence: Array.isArray(corridor?.required_export_evidence) ? corridor.required_export_evidence : [],
+    required_customs_fields: Array.isArray(corridor?.required_customs_fields) ? corridor.required_customs_fields : [],
+    currency: input.currency,
+    calculation_provider: typeof corridor?.calculation_provider === 'string'
+      ? corridor.calculation_provider
+      : input.pricing.tax.source,
+    calculation_reference: input.pricing.tax.taxRegion,
+    filing_liability_account: activatedTax.decision.control.filingLiabilityAccount,
+    source_urls: sourceUrls,
+    reviewed_at: activatedTax.decision.control.reviewedAt,
+    review_due_at: activatedTax.decision.control.reviewDueAt,
+    decision_fingerprint: fingerprint,
+    correlation_id: crypto.randomUUID(),
+  }).select('id').single()
+  if (error || !data?.id) throw new Error(error?.message ?? 'Tax decision snapshot was not persisted.')
+  return data.id as string
 }
 
 Deno.serve(async (req) => {
@@ -241,6 +426,8 @@ Deno.serve(async (req) => {
         description,
         sizes,
         size_inventory,
+        size_guide,
+        updated_at,
         currency,
         price_amount,
         is_live,
@@ -471,7 +658,6 @@ Deno.serve(async (req) => {
           order_kind: 'READY_MADE',
           seller_item_id: item.id,
           garment_type: item.title,
-          description: item.description ?? item.title,
           garment_description: item.description,
           fabric_source: 'TAILOR_SOURCES',
           delivery_method: preferredReadyMadeDeliveryMethod(item),
@@ -575,6 +761,24 @@ Deno.serve(async (req) => {
         available_sizes: availableSizes,
       })
     }
+    const hasStructuredSizeGuide =
+      availableSizes.length === 0 ||
+      (!!item.size_guide &&
+        typeof item.size_guide === 'object' &&
+        !Array.isArray(item.size_guide) &&
+        Object.keys(item.size_guide as Record<string, unknown>).length > 0)
+    if (!hasStructuredSizeGuide) {
+      return rejectRequest(409, 'This item needs a complete size guide before it can be purchased.', {
+        code: 'READY_MADE_SIZE_GUIDE_REQUIRED',
+        seller_item_id: item.id,
+      })
+    }
+    if (body.action === 'create-checkout' && body.fitGuidanceAcknowledged !== true) {
+      return rejectRequest(400, 'Review the size guide and confirm your selected size before payment.', {
+        code: 'READY_MADE_FIT_REVIEW_REQUIRED',
+        selected_size: nextSize || null,
+      })
+    }
     const selectedSizeInventory = readyMadeSizeQuantity({
       sizeInventory,
       requestedSize: nextSize || null,
@@ -590,6 +794,15 @@ Deno.serve(async (req) => {
     const normalizedRegion = needsAddress ? body.region?.trim() ?? '' : ''
     const normalizedPostalCode = needsAddress ? body.postalCode?.trim() ?? '' : ''
     const normalizedCountryCode = needsAddress ? normalizeTaxCountryCode(body.countryCode) ?? '' : ''
+    const normalizedVerificationSource = needsAddress
+      ? body.addressVerificationSource?.trim() || 'CUSTOMER_CONFIRMED_STRUCTURED'
+      : ''
+    const normalizedVerificationReference = needsAddress
+      ? body.addressVerificationReference?.trim() || null
+      : null
+    const normalizedVerifiedAt = needsAddress
+      ? body.addressVerifiedAt ?? new Date().toISOString()
+      : null
     const recipientName = needsAddress && body.action === 'create-checkout' ? body.recipientName?.trim() ?? '' : ''
     const recipientPhone = needsAddress && body.action === 'create-checkout' ? normalizeStoredPhone(body.recipientPhone) : ''
     if (needsAddress && !normalizedAddress) {
@@ -624,10 +837,11 @@ Deno.serve(async (req) => {
       })
     }
 
+    let sellerPickupAddress: string | null = null
     if (body.fulfillment === 'PICKUP') {
       const { data: pickupDetails, error: pickupDetailsError } = await supabase
         .from('tailor_pickup_details')
-        .select('pickup_address')
+        .select('pickup_address,pickup_address_line1,pickup_city,pickup_region,pickup_postal_code,pickup_country_code,pickup_location_verification_source,pickup_location_verification_reference,pickup_location_verified_at')
         .eq('user_id', sellerProfile.user_id)
         .maybeSingle()
 
@@ -639,6 +853,47 @@ Deno.serve(async (req) => {
       if (!pickupDetails?.pickup_address?.trim()) {
         return jsonError(cors, 409, 'This seller has not finished pickup details yet. Please choose delivery or shipping, or try again later.')
       }
+      sellerPickupAddress = pickupDetails.pickup_address.trim()
+    }
+
+    const fulfillmentMethod = body.fulfillment === 'PICKUP'
+      ? 'LOCAL_COLLECTION' as const
+      : body.fulfillment === 'DELIVERY'
+        ? 'LOCAL_DELIVERY' as const
+        : 'SHIPPING' as const
+    let fulfillmentEligibility
+    try {
+      fulfillmentEligibility = await resolveAuthoritativeFulfillmentEligibility({
+        supabase,
+        tailorProfileId: sellerProfile.id,
+        method: fulfillmentMethod,
+        transactionType: 'READY_MADE_ORDER',
+        destination: needsAddress
+          ? {
+              countryCode: normalizedCountryCode,
+              regionCode: normalizedRegion || null,
+              postalCode: normalizedPostalCode || null,
+              city: normalizedCity || null,
+              addressLine1: normalizedAddress,
+              verificationSource: normalizedVerificationSource,
+              verificationReference: normalizedVerificationReference,
+              verifiedAt: normalizedVerifiedAt,
+            }
+          : null,
+      })
+    } catch (eligibilityError) {
+      log('error', FN, 'fulfillment.resolve_failed', {
+        actor_id: caller.id,
+        seller_item_id: item.id,
+        error: eligibilityError instanceof Error ? eligibilityError.message : String(eligibilityError),
+      })
+      return jsonError(cors, 503, 'We could not verify this fulfillment route right now. Please try again.')
+    }
+    if (fulfillmentEligibility.status === 'BLOCKED') {
+      return jsonError(cors, 409, fulfillmentEligibilityCopy(fulfillmentEligibility), {
+        code: fulfillmentEligibility.reason,
+        suggestedFulfillment: fulfillmentEligibility.suggestedMethod,
+      })
     }
 
     let pricing
@@ -654,10 +909,13 @@ Deno.serve(async (req) => {
         region: needsAddress ? normalizedRegion : null,
         postalCode: needsAddress ? normalizedPostalCode : null,
         countryCode: needsAddress ? normalizedCountryCode || null : null,
+        sellerPickupAddress,
         orderCurrency,
         accountRegionCode,
         item,
         sellerProfileLocation: sellerProfile?.location ?? null,
+        tailorId: sellerProfile.user_id,
+        fulfillmentEligibility,
       })
     } catch (error) {
       log('warn', FN, 'checkout_pricing.unavailable', {
@@ -665,7 +923,20 @@ Deno.serve(async (req) => {
         seller_item_id: item.id,
         error: error instanceof Error ? error.message : String(error),
       })
-      return jsonError(cors, 503, 'We could not calculate taxes and totals for this checkout right now. Please try again in a moment.')
+      const checkoutStatus = typeof (error as { checkoutStatus?: unknown })?.checkoutStatus === 'number'
+        ? Number((error as { checkoutStatus: number }).checkoutStatus)
+        : 503
+      const checkoutCode = typeof (error as { checkoutCode?: unknown })?.checkoutCode === 'string'
+        ? (error as { checkoutCode: string }).checkoutCode
+        : undefined
+      return jsonError(
+        cors,
+        checkoutStatus,
+        error instanceof Error && checkoutStatus === 409
+          ? error.message
+          : 'We could not calculate taxes and totals for this checkout right now. Please try again in a moment.',
+        checkoutCode ? { code: checkoutCode } : {},
+      )
     }
 
     if (body.action === 'preview-checkout') {
@@ -819,7 +1090,6 @@ Deno.serve(async (req) => {
         order_kind: 'READY_MADE',
         seller_item_id: item.id,
         garment_type: item.title,
-        description: item.description ?? item.title,
         garment_description: item.description,
         fabric_source: 'TAILOR_SOURCES',
         item_title: item.title,
@@ -856,6 +1126,15 @@ Deno.serve(async (req) => {
         delivery_region: needsAddress ? normalizedRegion || null : null,
         delivery_postal_code: needsAddress ? normalizedPostalCode || null : null,
         delivery_country_code: needsAddress ? normalizedCountryCode || null : null,
+        fulfillment_contract_version: fulfillmentEligibility.contractVersion,
+        fulfillment_policy_version: fulfillmentEligibility.policyVersion,
+        fulfillment_classification: fulfillmentEligibility.fulfillmentClassification,
+        fulfillment_origin_snapshot: fulfillmentEligibility.origin,
+        fulfillment_destination_snapshot: fulfillmentEligibility.destination,
+        fulfillment_corridor_control_id: fulfillmentEligibility.corridorControlId,
+        fulfillment_collection_mode: fulfillmentEligibility.collectionMode,
+        fulfillment_fingerprint: fulfillmentEligibility.fingerprint,
+        fulfillment_resolved_at: new Date().toISOString(),
         recipient_name: needsAddress ? recipientName : null,
         recipient_phone: needsAddress ? recipientPhone : null,
         special_note: serializeOrderSupportMeta({
@@ -869,6 +1148,19 @@ Deno.serve(async (req) => {
             acknowledgedAt: new Date().toISOString(),
             acknowledgedBy: caller.id,
             policyName: 'order-cancellation-policy',
+          },
+          readyMadeFitReview: {
+            version: 1,
+            acknowledgedAt: new Date().toISOString(),
+            acknowledgedBy: caller.id,
+            selectedSize: nextSize || 'ONE_SIZE',
+            sellerItemId: item.id,
+            sellerItemUpdatedAt: item.updated_at ?? null,
+            sizeGuideVersion:
+              item.size_guide && typeof item.size_guide === 'object' && !Array.isArray(item.size_guide)
+                ? Number((item.size_guide as Record<string, unknown>).version ?? 1)
+                : null,
+            sizeGuideSnapshot: item.size_guide ?? null,
           },
         }),
         stage: 'PAYMENT_PENDING',
@@ -886,6 +1178,66 @@ Deno.serve(async (req) => {
 
       log('error', FN, 'db.error', { actor_id: caller.id, error: checkoutError?.message ?? 'checkout failed' })
       return jsonError(cors, 500, 'We could not start checkout right now. Your payment has not been charged.')
+    }
+
+    let taxDecisionSnapshotId: string | null = null
+    try {
+      taxDecisionSnapshotId = await persistReadyMadeTaxSnapshot({
+        supabase,
+        orderId: checkoutOrder.id,
+        pricing,
+        fulfillmentEligibility,
+        currency: orderCurrency,
+      })
+      if (taxDecisionSnapshotId) {
+        const { error: snapshotLinkError } = await supabase
+          .from('orders')
+          .update({ tax_decision_snapshot_id: taxDecisionSnapshotId })
+          .eq('id', checkoutOrder.id)
+        if (snapshotLinkError) throw snapshotLinkError
+      }
+    } catch (snapshotError) {
+      log('error', FN, 'tax.snapshot_failed', {
+        actor_id: caller.id,
+        order_id: checkoutOrder.id,
+        error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+      })
+      await finalizeOrderTerminal(
+        supabase,
+        checkoutOrder.id,
+        buildPaymentExpiredTerminalRequest({
+          fromStage: 'PAYMENT_PENDING',
+          orderKind: 'READY_MADE',
+          releaseReadyMadeInventory: true,
+        }),
+      )
+      return jsonError(cors, 503, 'Tax rules could not be saved. No payment was started; your stock hold was released.')
+    }
+
+    const { error: fulfillmentEventError } = await supabase.from('fulfillment_selection_events').insert({
+      customer_id: caller.id,
+      tailor_profile_id: sellerProfile.id,
+      order_id: checkoutOrder.id,
+      event_type: 'RESOLVED',
+      method: fulfillmentMethod,
+      status: 'ELIGIBLE',
+      next_fingerprint: fulfillmentEligibility.fingerprint,
+      policy_version: fulfillmentEligibility.policyVersion,
+      corridor_control_id: fulfillmentEligibility.corridorControlId,
+      metadata: {
+        contractVersion: fulfillmentEligibility.contractVersion,
+        classification: fulfillmentEligibility.fulfillmentClassification,
+        collectionMode: fulfillmentEligibility.collectionMode,
+        taxTransactionType: 'READY_MADE_ORDER',
+        taxDecisionSnapshotId,
+      },
+    })
+    if (fulfillmentEventError) {
+      log('warn', FN, 'fulfillment.event_failed', {
+        actor_id: caller.id,
+        order_id: checkoutOrder.id,
+        error: fulfillmentEventError.message,
+      })
     }
 
     const { data: openInquiries, error: openInquiriesError } = await supabase
@@ -938,6 +1290,11 @@ Deno.serve(async (req) => {
         seller_item_id: item.id,
         quantity: body.quantity,
         size: nextSize || null,
+        fit_guidance_acknowledged: true,
+        size_guide_version:
+          item.size_guide && typeof item.size_guide === 'object' && !Array.isArray(item.size_guide)
+            ? Number((item.size_guide as Record<string, unknown>).version ?? 1)
+            : null,
         fulfillment: body.fulfillment,
         inventory_remaining: reservedRow.inventory_quantity ?? null,
       },

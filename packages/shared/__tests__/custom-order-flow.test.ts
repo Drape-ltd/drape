@@ -6,13 +6,21 @@ import {
   CUSTOM_ORDER_MIN_DELIVERY_DAYS,
   CUSTOM_ORDER_RESUMABLE_STAGES,
   CUSTOM_PRODUCTION_STAGE_REQUIREMENTS,
+  CUSTOM_PRODUCTION_EVIDENCE_PURPOSES,
   customOrderBriefLineCount,
   customOrderDefaultDeadline,
   customOrderMinimumDeliveryDate,
   isAllowedCustomStyleReference,
   isCustomOrderBriefLongEnough,
   isKnownCustomGarmentType,
+  isFabricApprovalEvidence,
   isResumableCustomOrderStage,
+  latestFabricApprovalEvidence,
+  sourcedFabricDecisionFromNote,
+  sourcedFabricChangeFeedbackFromUpdates,
+  styleAlignmentChangeFeedbackFromUpdates,
+  styleAlignmentDecisionFromNote,
+  styleAlignmentEventFromNote,
 } from '../src/custom-order-flow'
 
 describe('isResumableCustomOrderStage', () => {
@@ -86,5 +94,84 @@ describe('custom production stage contract', () => {
     expect(CUSTOM_PRODUCTION_STAGE_REQUIREMENTS.SEWING.photoRequired).toBe(true)
     expect(CUSTOM_PRODUCTION_STAGE_REQUIREMENTS.FINISHING.minPhotoCount).toBe(2)
     expect(CUSTOM_PRODUCTION_STAGE_REQUIREMENTS.DISPATCHED.noteRequired).toBe(true)
+  })
+
+  it('keeps sourcing progress separate from exact fabric approval evidence', () => {
+    expect(isFabricApprovalEvidence({
+      stageKey: 'FABRIC',
+      metadata: { evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL },
+    })).toBe(true)
+    expect(isFabricApprovalEvidence({
+      stageKey: 'PRE_CUTTING',
+      metadata: { evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.SOURCING_PROGRESS },
+    })).toBe(false)
+    expect(isFabricApprovalEvidence({ stageKey: 'FABRIC', metadata: {} })).toBe(false)
+  })
+
+  it('keeps the approval card scoped to the latest fabric submission batch', () => {
+    const latest = latestFabricApprovalEvidence([
+      {
+        id: 'old-approval',
+        stage_key: 'FABRIC',
+        metadata: { evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL },
+        created_at: '2026-08-01T09:00:00Z',
+        photo_urls: ['old.jpg'],
+      },
+      {
+        id: 'sourcing-update',
+        stage_key: 'PRE_CUTTING',
+        metadata: { evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.SOURCING_PROGRESS },
+        created_at: '2026-08-01T09:30:00Z',
+        photo_urls: ['market.jpg'],
+      },
+      {
+        id: 'replacement-approval',
+        stage_key: 'FABRIC',
+        metadata: { evidence_purpose: CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL },
+        created_at: '2026-08-01T10:00:00Z',
+        photo_urls: ['replacement.mp4'],
+      },
+    ])
+
+    expect(latest?.id).toBe('replacement-approval')
+    expect(latest?.photo_urls).toEqual(['replacement.mp4'])
+  })
+
+  it('returns the latest complete sourced-fabric change request', () => {
+    expect(sourcedFabricChangeFeedbackFromUpdates([
+      { note: 'Customer requested sourced fabric changes: Use a darker green.', created_at: '2026-08-01T10:00:00Z' },
+      { note: 'Sourcing update from the market.', created_at: '2026-08-01T10:02:00Z' },
+      { note: 'Customer requested sourced fabric changes: Keep the darker green, but find a lighter weave for warm weather.', created_at: '2026-08-01T10:04:00Z' },
+    ])).toEqual({
+      feedback: 'Keep the darker green, but find a lighter weave for warm weather.',
+      createdAt: '2026-08-01T10:04:00Z',
+    })
+  })
+
+  it('ignores empty and unrelated stage notes', () => {
+    expect(sourcedFabricChangeFeedbackFromUpdates([
+      { note: 'Customer requested sourced fabric changes:   ', createdAt: '2026-08-01T10:00:00Z' },
+      { note: 'Fabric sourced at the market.', createdAt: '2026-08-01T10:01:00Z' },
+    ])).toBeNull()
+  })
+
+  it('classifies authoritative fabric decision timeline notes', () => {
+    expect(sourcedFabricDecisionFromNote('Customer approved the tailor-sourced fabric.')).toBe('APPROVED')
+    expect(sourcedFabricDecisionFromNote('Customer requested sourced fabric changes: Send a video.')).toBe('CHANGES_REQUESTED')
+    expect(sourcedFabricDecisionFromNote('Tailor visited a supplier.')).toBeNull()
+  })
+
+  it('classifies style decisions and preserves the latest full clarification', () => {
+    expect(styleAlignmentEventFromNote('Tailor requested style approval before cutting: Keep the same neckline.')).toBe('REQUESTED')
+    expect(styleAlignmentDecisionFromNote('Customer approved the tailor style interpretation before cutting.')).toBe('APPROVED')
+    expect(styleAlignmentDecisionFromNote('Customer requested style clarification before cutting: Make the neckline larger.')).toBe('CHANGES_REQUESTED')
+    expect(styleAlignmentDecisionFromNote('Tailor started designing.')).toBeNull()
+    expect(styleAlignmentChangeFeedbackFromUpdates([
+      { note: 'Customer requested style clarification before cutting: Make the neckline larger.', createdAt: '2026-08-01T10:00:00Z' },
+      { note: 'Customer requested style clarification before cutting: Keep the larger neckline and remove the chest embroidery.', createdAt: '2026-08-01T10:05:00Z' },
+    ])).toEqual({
+      feedback: 'Keep the larger neckline and remove the chest embroidery.',
+      createdAt: '2026-08-01T10:05:00Z',
+    })
   })
 })

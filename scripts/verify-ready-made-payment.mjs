@@ -96,7 +96,20 @@ const readyMadeOrders = orders.filter((order) => String(order.order_kind ?? '').
 const candidate = readyMadeOrders.find((order) => Number(order.item_quantity ?? 0) === EXPECTED_QUANTITY) ?? readyMadeOrders[0]
 if (!candidate?.id) throw new Error(`No ready-made order found for ${CUSTOMER_EMAIL}`)
 
-const [payments, webhooks, payouts, events, jobs, opsIssues, itemRows] = await Promise.all([
+const [
+  payments,
+  webhooks,
+  payouts,
+  events,
+  jobs,
+  opsIssues,
+  itemRows,
+  benefitReservations,
+  benefitRedemptions,
+  pricingReservations,
+  receipts,
+  ledgerTransactions,
+] = await Promise.all([
   fetchJson(
     `${supabaseUrl}/rest/v1/order_payments?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=created_at.desc`,
     { headers },
@@ -140,6 +153,36 @@ const [payments, webhooks, payouts, events, jobs, opsIssues, itemRows] = await P
         true,
       )
     : Promise.resolve([]),
+  fetchJson(
+    `${supabaseUrl}/rest/v1/commercial_benefit_reservations?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=created_at.desc`,
+    { headers },
+    'Find benefit reservations',
+    true,
+  ),
+  fetchJson(
+    `${supabaseUrl}/rest/v1/commercial_benefit_redemptions?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=created_at.desc`,
+    { headers },
+    'Find benefit redemptions',
+    true,
+  ),
+  fetchJson(
+    `${supabaseUrl}/rest/v1/commercial_pricing_reservations?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=created_at.desc`,
+    { headers },
+    'Find pricing reservations',
+    true,
+  ),
+  fetchJson(
+    `${supabaseUrl}/rest/v1/commercial_receipts?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=issued_at.desc`,
+    { headers },
+    'Find commercial receipts',
+    true,
+  ),
+  fetchJson(
+    `${supabaseUrl}/rest/v1/commercial_ledger_transactions?select=*&order_id=eq.${encodeURIComponent(candidate.id)}&order=created_at.desc`,
+    { headers },
+    'Find commercial ledger transactions',
+    true,
+  ),
 ])
 
 const relevantJobs = Array.isArray(jobs)
@@ -148,6 +191,14 @@ const relevantJobs = Array.isArray(jobs)
 const succeededPayments = payments.filter((payment) => String(payment.status).toUpperCase() === 'SUCCEEDED')
 const payment = succeededPayments[0] ?? payments[0] ?? null
 const item = Array.isArray(itemRows) ? itemRows[0] : null
+const activeBenefit = Array.isArray(benefitReservations)
+  ? benefitReservations.find((reservation) => String(reservation.status).toUpperCase() === 'RESERVED') ?? null
+  : null
+const consumedBenefit = Array.isArray(benefitReservations)
+  ? benefitReservations.find((reservation) => String(reservation.status).toUpperCase() === 'CONSUMED') ?? null
+  : null
+const latestPricing = Array.isArray(pricingReservations) ? pricingReservations[0] ?? null : null
+const promotionAmount = Number(consumedBenefit?.total_benefit_amount ?? activeBenefit?.total_benefit_amount ?? latestPricing?.breakdown?.promotionAmount ?? 0)
 
 const expectedSubtotal =
   typeof candidate.item_unit_price === 'number'
@@ -213,10 +264,42 @@ const result = {
   paymentAssertions: {
     hasPayment: payments.length > 0,
     hasSucceededPayment: succeededPayments.length > 0,
-    amountMatchesOrderTotal: payment ? Number(payment.amount) === Number(candidate.total_amount) : false,
+    amountPlusBenefitMatchesOrderTotal: payment
+      ? Number(payment.amount) + promotionAmount === Number(candidate.total_amount)
+      : false,
     currencyMatchesOrder: payment ? payment.currency === candidate.currency : false,
     providerMatchesOrder: payment ? payment.provider === candidate.payment_provider : false,
   },
+  benefit: activeBenefit
+    ? {
+        id: activeBenefit.id,
+        status: activeBenefit.status,
+        currency: activeBenefit.currency,
+        amount: activeBenefit.total_benefit_amount,
+        amountDisplay: money(activeBenefit.total_benefit_amount, activeBenefit.currency),
+        customerDueAmount: activeBenefit.customer_due_amount,
+        customerDueDisplay: money(activeBenefit.customer_due_amount, activeBenefit.currency),
+        expiresAt: activeBenefit.expires_at,
+      }
+    : null,
+  benefitAssertions: {
+    hasActiveReservationAfterPayment: Boolean(payment?.status === 'SUCCEEDED' && activeBenefit),
+    hasConsumedReservation: Boolean(consumedBenefit),
+    hasRedemption: Array.isArray(benefitRedemptions) && benefitRedemptions.length > 0,
+    redemptionCount: Array.isArray(benefitRedemptions) ? benefitRedemptions.length : 0,
+  },
+  benefitRedemptions,
+  latestPricingReservation: latestPricing
+    ? {
+        id: latestPricing.id,
+        status: latestPricing.status,
+        currency: latestPricing.currency,
+        totalAmount: latestPricing.total_amount,
+        promotionAmount: latestPricing.breakdown?.promotionAmount ?? 0,
+        idempotencyKey: latestPricing.idempotency_key,
+        expiresAt: latestPricing.expires_at,
+      }
+    : null,
   sellerItem: item
     ? {
         id: item.id,
@@ -231,6 +314,8 @@ const result = {
     hasPayoutRow: Array.isArray(payouts) ? payouts.length > 0 : false,
     expectedPayout,
   },
+  receipts,
+  ledgerTransactions,
   webhooks,
   domainEvents: events,
   relevantJobs,

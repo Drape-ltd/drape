@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
 
@@ -47,6 +47,55 @@ function constantTimeEqual(left: string, right: string) {
     difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
   }
   return difference === 0
+}
+
+async function releaseVerifiedConsultation(
+  supabase: SupabaseClient,
+  bookingId: string,
+  evidence: Record<string, unknown> | null,
+) {
+  if (evidence?.derived_outcome !== 'ATTENDED') return
+  const { data: booking, error } = await supabase
+    .from('consultation_bookings')
+    .select('id,order_id,fee_mode,fee_amount,payment_status,settlement_status,commercial_correlation_id')
+    .eq('id', bookingId)
+    .maybeSingle()
+  if (error || !booking) throw error ?? new Error('Consultation booking was not found.')
+  if (booking.fee_mode !== 'PAID' || booking.payment_status !== 'PAID') {
+    await supabase.from('consultation_bookings').update({
+      settlement_status: 'NOT_REQUIRED',
+      settlement_outcome: 'ATTENDED',
+      settled_at: new Date().toISOString(),
+    }).eq('id', booking.id)
+    return
+  }
+  if (booking.settlement_status !== 'HELD') return
+  const now = new Date().toISOString()
+  const { data: claimed, error: claimError } = await supabase.from('consultation_bookings').update({
+    settlement_status: 'EARNED',
+    settlement_outcome: 'ATTENDED',
+    earned_amount: booking.fee_amount ?? 0,
+    refunded_amount: 0,
+    settlement_eligible_at: now,
+    settlement_failure_reason: null,
+  }).eq('id', booking.id).eq('settlement_status', 'HELD').select('id').maybeSingle()
+  if (claimError) throw claimError
+  if (!claimed?.id) return
+  await supabase.from('consultation_commercial_events').insert({
+    booking_id: booking.id,
+    order_id: booking.order_id,
+    event_type: 'ATTENDANCE_EARNED',
+    actor_role: 'SYSTEM',
+    amount: booking.fee_amount ?? 0,
+    correlation_id: booking.commercial_correlation_id,
+    payload: { attendance_outcome: 'ATTENDED', verified_overlap_seconds: evidence?.verified_overlap_seconds ?? null },
+  })
+  const { error: releaseError } = await supabase.functions.invoke('release-consultation-earning', {
+    body: { bookingId: booking.id },
+  })
+  if (releaseError) {
+    log('error', FN, 'consultation_release_invoke_failed', { booking_id: booking.id, error: releaseError.message })
+  }
 }
 
 async function verifySignature(
@@ -137,7 +186,7 @@ Deno.serve(async (request) => {
 
     const { data: callRoom } = await supabase
       .from('order_call_rooms')
-      .select('id, order_id')
+      .select('id, order_id, consultation_booking_id')
       .eq('provider', 'DAILY')
       .eq('provider_room_name', room)
       .maybeSingle()
@@ -213,6 +262,26 @@ Deno.serve(async (request) => {
           : {}),
       }, { onConflict: 'provider_session_id' })
       if (error) throw error
+    }
+
+    if (callRoom?.consultation_booking_id) {
+      const { data: evidence, error: evidenceError } = await supabase.rpc(
+        'refresh_consultation_attendance_evidence',
+        { p_booking_id: callRoom.consultation_booking_id },
+      )
+      if (evidenceError) {
+        log('warn', FN, 'attendance_evidence_refresh_failed', {
+          event_id: event.id,
+          booking_id: callRoom.consultation_booking_id,
+          error: evidenceError.message,
+        })
+      } else if (event.type === 'meeting.ended') {
+        await releaseVerifiedConsultation(
+          supabase,
+          callRoom.consultation_booking_id,
+          evidence && typeof evidence === 'object' ? evidence as Record<string, unknown> : null,
+        )
+      }
     }
 
     await supabase

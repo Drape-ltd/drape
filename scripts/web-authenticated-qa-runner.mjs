@@ -2987,6 +2987,7 @@ async function main() {
       const completionDate = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString()
       const result = await invokeEdgeFunction('tailor-order-action', disposableQa.tailorAccessToken, {
         action: 'send-quote',
+        orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
         orderId: order.id,
         amount: 12500,
         currency: 'USD',
@@ -3171,6 +3172,7 @@ async function main() {
       const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'PENDING_QUOTE')
       const result = await invokeEdgeFunctionRaw('tailor-order-action', disposableQa.tailorAccessToken, {
         action: 'send-quote',
+        orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
         orderId: order.id,
         amount: 0,
         currency: 'USD',

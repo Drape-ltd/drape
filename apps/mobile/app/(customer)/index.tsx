@@ -40,6 +40,7 @@ import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { TierBadge } from '@/components/ui'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { deriveFulfillmentAwareOrderStagePresentation } from '@drape/shared'
 import type { StorageImageBucket } from '@/lib/image-url'
 
 const RECENT_SEARCHES_KEY = 'drape_recent_searches'
@@ -80,6 +81,7 @@ type ActiveOrder = {
   stage: OrderStage
   tailorName: string
   estimatedDate: string | null
+  deliveryMethod: string | null
 }
 
 type ActiveOrderRow = {
@@ -89,6 +91,7 @@ type ActiveOrderRow = {
   order_kind?: 'CUSTOM' | 'READY_MADE' | null
   stage: OrderStage
   quoted_completion_date: string | null
+  delivery_method: string | null
   tailor_profiles?: { display_name?: string | null } | null
 }
 
@@ -476,7 +479,7 @@ export default function CustomerHomeScreen() {
           .from('orders')
           .select(
             `
-            id, reference, garment_type, order_kind, stage,
+            id, reference, garment_type, order_kind, stage, delivery_method,
             tailor_profiles!tailor_profile_id(display_name),
             quoted_completion_date
           `
@@ -521,6 +524,7 @@ export default function CustomerHomeScreen() {
             stage: o.stage,
             tailorName: o.tailor_profiles?.display_name ?? '',
             estimatedDate: o.quoted_completion_date,
+            deliveryMethod: o.delivery_method,
           }))
           .sort((a, b) => orderPriority(a.stage) - orderPriority(b.stage))
       )
@@ -1178,6 +1182,10 @@ function ActiveOrderCard({
   onPress: () => void
   wide?: boolean
 }) {
+  const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
+    orderStage: order.stage,
+    effectiveMethod: order.deliveryMethod,
+  })
   return (
     <TouchableOpacity
       style={[styles.orderCard, wide && styles.orderCardWide]}
@@ -1189,8 +1197,8 @@ function ActiveOrderCard({
       <View style={styles.orderCardBody}>
         <View style={styles.orderCardMeta}>
           <DrapeStatusChip
-            value={order.stage}
-            label={customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+            value={stagePresentation.stage ?? order.stage}
+            label={stagePresentation.label ?? customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
             domain="order"
             style={styles.orderStatusChip}
           />

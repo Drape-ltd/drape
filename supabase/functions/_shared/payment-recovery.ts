@@ -1,4 +1,5 @@
-type PaymentProvider = 'STRIPE' | 'PAYSTACK'
+type PaymentProvider = 'STRIPE' | 'PAYSTACK' | 'COVERAGE'
+type ExternalPaymentProvider = Exclude<PaymentProvider, 'COVERAGE'>
 
 type PaymentAttemptLike = {
   provider: PaymentProvider
@@ -6,8 +7,18 @@ type PaymentAttemptLike = {
   provider_checkout_url?: string | null
 }
 
+type PaymentAttemptStatus = 'INITIATED' | 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'REFUNDED'
+
+export function canReplacePreparedPaymentAfterAmountChange(input: {
+  action: 'prepare-payment' | 'confirm-payment'
+  attemptStatus?: PaymentAttemptStatus | null
+}) {
+  return input.action === 'prepare-payment'
+    && (input.attemptStatus === 'FAILED' || input.attemptStatus === 'CANCELED')
+}
+
 export function resolvePreparedPaymentReference(input: {
-  expectedProvider: PaymentProvider
+  expectedProvider: ExternalPaymentProvider
   storedPaymentIntentId?: string | null
   storedCheckoutUrl?: string | null
   latestAttempt?: PaymentAttemptLike | null

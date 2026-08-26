@@ -1,6 +1,23 @@
 # V1 Decisions: Fabric Sourcing, Handoff, And Billing
 
+> Historical decision record. Its prohibition on separate material funding is superseded by the typed, customer-approved, Ops-released material-advance contract in `drapeon-commercial-money-tax-and-resolution-architecture.md`. Fabric suitability and evidence protections remain valid.
+
 Date: April 2, 2026
+
+## August 2026 Evidence Contract Amendment
+
+Sourcing progress and fabric approval are separate records:
+
+- `SOURCING_PROGRESS` can show a market visit, supplier options, comparisons, or the search in progress. It remains an informational production-timeline update and never requests customer approval.
+- `FABRIC_APPROVAL` must show the exact fabric selection the customer is being asked to approve. It creates the formal approve/request-change decision and blocks cutting until approved.
+
+Entering the `SOURCING` order stage must not automatically change `fabric_approval_status`. The tailor explicitly submits the final selection through `submit-sourced-fabric`; its `order_production_evidence` row uses `stage_key = FABRIC` and `metadata.evidence_purpose = FABRIC_APPROVAL`. Sourcing-stage evidence uses `metadata.evidence_purpose = SOURCING_PROGRESS` and must never be rendered as the approval selection.
+
+While an order remains in `SOURCING`, `post-stage-progress` lets the tailor add further market, supplier, or comparison updates without changing the stage or replacing the fabric approval selection.
+
+Every customer fabric decision must persist an order-timeline event and reach the tailor through in-app history, push, and email. The tailor order detail must show a visible approved acknowledgment while pre-cutting remains active, or an actionable changes-requested state with the customer's full feedback. Notification destinations must open the exact order.
+
+Legacy `FABRIC` evidence without the explicit purpose marker remains visible in the general timeline but is not authoritative approval media. This prevents an old market or sourcing image from becoming the fabric the customer supposedly approved.
 
 ## Why This Exists
 

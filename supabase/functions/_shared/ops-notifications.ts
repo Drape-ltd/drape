@@ -169,3 +169,34 @@ export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNo
 
   return { ok: true as const, skipped: false as const }
 }
+
+type OpsActionRequiredInput = {
+  title: string
+  description: string
+  orderId: string
+  orderReference: string
+  source: string
+  actionPath: string
+  idempotencyKey: string
+}
+
+export async function sendOpsActionRequiredNotification(input: OpsActionRequiredInput) {
+  const apiKey = Deno.env.get('RESEND_API_KEY')
+  if (!apiKey) return { ok: false as const, skipped: true as const }
+  const recipients = getOpsRecipients()
+  if (!recipients.length) return { ok: false as const, skipped: true as const }
+  const baseUrl = (Deno.env.get('WEB_APP_URL') ?? Deno.env.get('PUBLIC_WEB_URL') ?? 'https://drapeon.co').replace(/\/$/u, '')
+  const actionUrl = `${baseUrl}${input.actionPath}`
+  const response = await fetch(RESEND_API, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'User-Agent': 'drape-ops-notifications/1.0', 'Idempotency-Key': input.idempotencyKey },
+    body: JSON.stringify({
+      from: getOpsNotificationFrom(), to: recipients,
+      subject: `${input.title} · ${input.orderReference}`,
+      html: `<div style="font-family:Calibri,Arial,sans-serif;max-width:640px;margin:0 auto;color:#17211c"><p style="color:#287253;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Ops action required</p><h1>${escapeHtml(input.title)}</h1><p style="font-size:16px;line-height:1.7">${escapeHtml(input.description)}</p><p><a href="${escapeHtml(actionUrl)}" style="display:inline-block;border-radius:999px;background:#287253;color:white;padding:12px 20px;text-decoration:none;font-weight:700">Open Dispatch Queue</a></p><p style="color:#777">Source: ${escapeHtml(input.source)}</p></div>`,
+      text: `${input.title}\n\n${input.description}\n\nOpen Dispatch Queue: ${actionUrl}`,
+    }),
+  })
+  if (!response.ok) return { ok: false as const, skipped: false as const }
+  return { ok: true as const, skipped: false as const }
+}

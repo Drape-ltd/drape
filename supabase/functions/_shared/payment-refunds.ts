@@ -1,4 +1,9 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  assertCommercialPaymentRefundReady,
+  recordCommercialPaymentRefund,
+} from './commercial-ledger.ts'
+import { Sentry } from './sentry.ts'
 import { audit } from './logger.ts'
 import { markPaymentAttemptStatus } from './payment-ledger.ts'
 import { createOrRefreshOpsIssue } from './ops-issues.ts'
@@ -6,9 +11,19 @@ import { refundPaystackTransaction, type PaystackRefund } from './paystack.ts'
 import { refundStripePaymentIntent, type StripeRefund } from './stripe.ts'
 
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
-type PaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT'
+type PaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT' | 'MATERIAL_ADVANCE'
 type PaymentStatus = 'INITIATED' | 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'PARTIAL_REFUND' | 'REFUNDED'
 type ActorRole = 'OPS' | 'CUSTOMER' | 'TAILOR' | 'SYSTEM'
+export type ExactRefundRestoration = {
+  refundResolutionId: string
+  tailorWorkAmount: number
+  platformFeeAmount: number
+  taxAmount: number
+  fulfillmentAmount: number
+  consultationAmount: number
+  promotionAmount: number
+  drapeonFundedAmount: number
+}
 
 export type RefundablePaymentAttemptRow = {
   id: string
@@ -36,16 +51,97 @@ export type RefundedAttemptSummary = {
   partial: boolean
 }
 
+export type PendingRefundSummary = {
+  id: string
+  provider: PaymentProvider
+  providerPaymentId: string
+  providerRefundId: string | null
+  phase: PaymentPhase
+  amount: number
+  currency: string
+  status: string
+}
+
 export type RefundSettledOrderPaymentsResult = {
   refundedAttempts: RefundedAttemptSummary[]
+  pendingAttempts: PendingRefundSummary[]
   alreadyRefundedAttemptIds: string[]
 }
 
 export type PartialRefundOrderPaymentsResult = {
   refundedAttempts: RefundedAttemptSummary[]
+  pendingAttempts: PendingRefundSummary[]
   alreadyRefundedAttemptIds: string[]
   totalRefundedAmount: number
   remainingRefundableAmount: number
+}
+
+function paystackRefundId(response: PaystackRefund) {
+  return typeof response.id === 'number' ? String(response.id) : null
+}
+
+function paystackRefundIsTerminal(response: PaystackRefund) {
+  return response.status?.trim().toLowerCase() === 'processed'
+}
+
+function stripeRefundIsTerminal(response: StripeRefund) {
+  return response.status?.trim().toLowerCase() === 'succeeded'
+}
+
+function activeProviderRefundRequest(attempt: RefundablePaymentAttemptRow) {
+  if (!attempt.provider_response || typeof attempt.provider_response !== 'object') return null
+  const request = attempt.provider_response.latest_refund_request
+  if (!request || typeof request !== 'object') return null
+  const response = (request as Record<string, unknown>).response
+  if (!response || typeof response !== 'object') return null
+  const status = typeof (response as Record<string, unknown>).status === 'string'
+    ? ((response as Record<string, unknown>).status as string).trim().toLowerCase()
+    : ''
+  if (!['pending', 'processing', 'needs-attention', 'requires_action'].includes(status)) return null
+  const refundAmount = (request as Record<string, unknown>).refund_amount
+  const rawId = (response as Record<string, unknown>).id ?? (response as Record<string, unknown>).refund_reference
+  return {
+    amount: typeof refundAmount === 'number' ? refundAmount : null,
+    id: typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId) : null,
+    status: status.toUpperCase(),
+  }
+}
+
+async function recordPendingRefundRequest(
+  supabase: SupabaseClient,
+  input: {
+    attempt: RefundablePaymentAttemptRow
+    refundAmount: number
+    providerResponse: RefundProviderResponse
+    actorRole: ActorRole
+    actorId?: string | null
+    reason?: string | null
+    exactRestoration?: ExactRefundRestoration
+  },
+) {
+  const existing = input.attempt.provider_response && typeof input.attempt.provider_response === 'object'
+    ? input.attempt.provider_response
+    : {}
+  const request = {
+    requested_at: new Date().toISOString(),
+    refund_amount: input.refundAmount,
+    currency: input.attempt.currency,
+    actor_role: input.actorRole,
+    actor_id: input.actorId ?? null,
+    reason: input.reason ?? null,
+    refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null,
+    exact_restoration: input.exactRestoration ?? null,
+    response: input.providerResponse,
+  }
+  const pendingRefunds = Array.isArray(existing.pending_refunds) ? existing.pending_refunds : []
+  const providerResponse = {
+    ...existing,
+    latest_refund_request: request,
+    pending_refunds: [...pendingRefunds, request],
+  }
+  const { error } = await supabase.from('order_payments').update({ provider_response: providerResponse }).eq('id', input.attempt.id)
+  if (error) throw new Error(error.message)
+  input.attempt.provider_response = providerResponse
 }
 
 type RefundProviderResponse = StripeRefund | PaystackRefund
@@ -54,12 +150,56 @@ type RefundDependencies = {
   refundStripePaymentIntent: typeof refundStripePaymentIntent
   refundPaystackTransaction: typeof refundPaystackTransaction
   markPaymentAttemptStatus: typeof markPaymentAttemptStatus
+  recordCommercialPaymentRefund: typeof recordCommercialPaymentRefund
+  assertCommercialPaymentRefundReady?: typeof assertCommercialPaymentRefundReady
 }
 
 const DEFAULT_DEPS: RefundDependencies = {
   refundStripePaymentIntent,
   refundPaystackTransaction,
   markPaymentAttemptStatus,
+  recordCommercialPaymentRefund,
+  assertCommercialPaymentRefundReady,
+}
+
+export class RefundLedgerReconciliationError extends Error {
+  readonly paymentId: string
+  readonly providerRefundCompleted = true
+
+  constructor(paymentId: string, causeMessage: string) {
+    super('The provider refund completed, but ledger reconciliation is still pending. Do not retry the provider refund.')
+    this.name = 'RefundLedgerReconciliationError'
+    this.paymentId = paymentId
+    this.cause = new Error(causeMessage)
+  }
+}
+
+async function assertRefundAttemptReady(
+  supabase: SupabaseClient,
+  input: {
+    attempt: RefundablePaymentAttemptRow
+    refundAmount: number
+    reason?: string | null
+    actorRole: ActorRole
+    actorId?: string | null
+    exactRestoration?: ExactRefundRestoration
+  },
+  deps: RefundDependencies,
+) {
+  if (!deps.assertCommercialPaymentRefundReady) return
+  const beforeRefunded = currentRefundedAmount(input.attempt)
+  await deps.assertCommercialPaymentRefundReady(supabase, {
+    paymentId: input.attempt.id,
+    orderId: input.attempt.order_id,
+    refundAmount: input.refundAmount,
+    idempotencyKey: `payment-refund:${input.attempt.id}:${beforeRefunded}:${input.refundAmount}`,
+    metadata: {
+      actor_role: input.actorRole,
+      actor_id: input.actorId ?? null,
+      reason: input.reason ?? null,
+    },
+    exactRestoration: input.exactRestoration,
+  })
 }
 
 function currentRefundedAmount(attempt: RefundablePaymentAttemptRow) {
@@ -105,7 +245,7 @@ function appendRefundProviderResponse(input: {
   }
 }
 
-async function recordRefundOnAttempt(
+export async function finalizeRefundOnAttempt(
   supabase: SupabaseClient,
   input: {
     attempt: RefundablePaymentAttemptRow
@@ -114,7 +254,9 @@ async function recordRefundOnAttempt(
     actorRole: ActorRole
     actorId?: string | null
     reason?: string | null
+    exactRestoration?: ExactRefundRestoration
   },
+  deps: RefundDependencies = DEFAULT_DEPS,
 ) {
   const beforeRefunded = currentRefundedAmount(input.attempt)
   const totalRefundedAmount = Math.min(input.attempt.amount, beforeRefunded + input.refundAmount)
@@ -153,6 +295,61 @@ async function recordRefundOnAttempt(
   input.attempt.partial_refund_count = patch.partial_refund_count as number
   input.attempt.provider_response = providerResponse
 
+  try {
+    const rawProviderReference = (input.providerResponse as Record<string, unknown>).id
+    await deps.recordCommercialPaymentRefund(supabase, {
+      paymentId: input.attempt.id,
+      orderId: input.attempt.order_id,
+      refundAmount: input.refundAmount,
+      idempotencyKey: `payment-refund:${input.attempt.id}:${beforeRefunded}:${input.refundAmount}`,
+      providerReference: typeof rawProviderReference === 'string' || typeof rawProviderReference === 'number'
+        ? String(rawProviderReference)
+        : null,
+      metadata: {
+        actor_role: input.actorRole,
+        actor_id: input.actorId ?? null,
+        reason: input.reason ?? null,
+      },
+      exactRestoration: input.exactRestoration,
+    })
+  } catch (ledgerError) {
+    const ledgerMessage = ledgerError instanceof Error ? ledgerError.message : String(ledgerError)
+    await createOrRefreshOpsIssue(supabase, {
+      issueType: 'REFUND_FAILED',
+      severity: 'CRITICAL',
+      source: 'commercial-ledger',
+      actorId: input.actorId ?? null,
+      actorRole: input.actorRole,
+      orderId: input.attempt.order_id,
+      provider: input.attempt.provider,
+      title: 'Refund completed but ledger reconciliation failed',
+      description: 'The provider refund and payment record succeeded, but Drapeon could not post the balanced refund journal.',
+      recommendedAction: 'Do not retry the provider refund. Reconcile the existing provider refund against the commercial ledger and close this issue only after the journal is posted.',
+      dedupeKey: `refund-ledger-missing:${input.attempt.id}:${beforeRefunded}:${input.refundAmount}`,
+      metadata: {
+        payment_id: input.attempt.id,
+        refund_amount: input.refundAmount,
+        refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null,
+        error: ledgerMessage,
+      },
+    })
+    try {
+      await Sentry.captureMessage('Refund completed without a commercial ledger journal', {
+        level: 'error',
+        tags: { component: 'commercial-ledger', provider: input.attempt.provider },
+        extra: {
+          order_id: input.attempt.order_id,
+          payment_id: input.attempt.id,
+          refund_amount: input.refundAmount,
+          error: ledgerMessage,
+        },
+      })
+    } catch {
+      // Observability must never hide the reconciliation error that tells Ops not to retry the provider.
+    }
+    throw new RefundLedgerReconciliationError(input.attempt.id, ledgerMessage)
+  }
+
   return {
     remainingRefundableAmount: remainingAmount,
     totalRefundedAmount,
@@ -189,6 +386,7 @@ export async function refundSettledOrderPayments(
     actorRole: ActorRole
     actorId?: string | null
     allowedPhases?: PaymentPhase[]
+    exactRestoration?: ExactRefundRestoration
   },
   deps: RefundDependencies = DEFAULT_DEPS,
 ): Promise<RefundSettledOrderPaymentsResult> {
@@ -203,6 +401,7 @@ export async function refundSettledOrderPayments(
     .map((attempt) => attempt.id)
 
   const refundedAttempts: RefundedAttemptSummary[] = []
+  const pendingAttempts: PendingRefundSummary[] = []
 
   for (const attempt of succeededAttempts) {
     const refundAmount = remainingRefundableAmount(attempt)
@@ -248,12 +447,38 @@ export async function refundSettledOrderPayments(
 
     const providerPaymentId = attempt.provider_payment_id.trim()
     try {
+      const activeRefund = activeProviderRefundRequest(attempt)
+      if (activeRefund) {
+        if (activeRefund.amount !== refundAmount) {
+          throw new Error(`A different ${attempt.provider === 'STRIPE' ? 'Stripe' : 'Paystack'} refund is already processing for this payment. Do not create a second refund.`)
+        }
+        pendingAttempts.push({
+          id: attempt.id,
+          provider: attempt.provider,
+          providerPaymentId,
+          providerRefundId: activeRefund.id,
+          phase: attempt.phase,
+          amount: refundAmount,
+          currency: attempt.currency,
+          status: activeRefund.status,
+        })
+        continue
+      }
+      await assertRefundAttemptReady(supabase, {
+        attempt,
+        refundAmount,
+        reason: input.reason ?? null,
+        actorRole: input.actorRole,
+        actorId: input.actorId ?? null,
+        exactRestoration: input.exactRestoration,
+      }, deps)
       const providerResponse: RefundProviderResponse = attempt.provider === 'STRIPE'
         ? await deps.refundStripePaymentIntent({
             paymentIntentId: providerPaymentId,
             amount: refundAmount,
             idempotencyKey: `refund:${attempt.id}:${currentRefundedAmount(attempt)}:${refundAmount}`,
             reasonNote: input.reason ?? null,
+            metadata: { drapeon_payment_id: attempt.id, drapeon_order_id: attempt.order_id, refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null },
           })
         : await deps.refundPaystackTransaction({
             reference: providerPaymentId,
@@ -262,14 +487,41 @@ export async function refundSettledOrderPayments(
             reasonNote: input.reason ?? null,
           })
 
-      const recorded = await recordRefundOnAttempt(supabase, {
+      const refundTerminal = attempt.provider === 'STRIPE'
+        ? stripeRefundIsTerminal(providerResponse as StripeRefund)
+        : paystackRefundIsTerminal(providerResponse as PaystackRefund)
+      if (!refundTerminal) {
+        await recordPendingRefundRequest(supabase, {
+          attempt,
+          refundAmount,
+          providerResponse,
+          actorRole: input.actorRole,
+          actorId: input.actorId ?? null,
+          reason: input.reason ?? null,
+          exactRestoration: input.exactRestoration,
+        })
+        pendingAttempts.push({
+          id: attempt.id,
+          provider: attempt.provider,
+          providerPaymentId,
+          providerRefundId: attempt.provider === 'STRIPE' ? (providerResponse as StripeRefund).id : paystackRefundId(providerResponse as PaystackRefund),
+          phase: attempt.phase,
+          amount: refundAmount,
+          currency: attempt.currency,
+          status: providerResponse.status?.trim().toUpperCase() || 'PENDING',
+        })
+        continue
+      }
+
+      const recorded = await finalizeRefundOnAttempt(supabase, {
         attempt,
         refundAmount,
         providerResponse,
         actorRole: input.actorRole,
         actorId: input.actorId ?? null,
         reason: input.reason ?? null,
-      })
+        exactRestoration: input.exactRestoration,
+      }, deps)
 
       refundedAttempts.push({
         id: attempt.id,
@@ -283,6 +535,7 @@ export async function refundSettledOrderPayments(
         partial: recorded.partial,
       })
     } catch (error) {
+      if (error instanceof RefundLedgerReconciliationError) throw error
       const message = error instanceof Error ? error.message : String(error)
 
       await createOrRefreshOpsIssue(supabase, {
@@ -317,6 +570,7 @@ export async function refundSettledOrderPayments(
     order_id: input.orderId,
     payload: {
       refunded_attempts: refundedAttempts,
+      pending_attempts: pendingAttempts,
       already_refunded_attempt_ids: alreadyRefundedAttemptIds,
       reason: input.reason ?? null,
       allowed_phases: allowedPhases,
@@ -325,6 +579,7 @@ export async function refundSettledOrderPayments(
 
   return {
     refundedAttempts,
+    pendingAttempts,
     alreadyRefundedAttemptIds,
   }
 }
@@ -338,6 +593,7 @@ export async function partiallyRefundOrderPayments(
     actorRole: ActorRole
     actorId?: string | null
     allowedPhases?: PaymentPhase[]
+    exactRestoration?: ExactRefundRestoration
   },
   deps: RefundDependencies = DEFAULT_DEPS,
 ): Promise<PartialRefundOrderPaymentsResult> {
@@ -366,6 +622,7 @@ export async function partiallyRefundOrderPayments(
 
   let amountLeft = input.amount
   const refundedAttempts: RefundedAttemptSummary[] = []
+  const pendingAttempts: PendingRefundSummary[] = []
 
   for (const attempt of refundableAttempts) {
     if (amountLeft <= 0) break
@@ -378,12 +635,39 @@ export async function partiallyRefundOrderPayments(
 
     const refundAmount = Math.min(amountLeft, refundable)
     const providerPaymentId = attempt.provider_payment_id.trim()
+    const activeRefund = activeProviderRefundRequest(attempt)
+    if (activeRefund) {
+      if (activeRefund.amount !== refundAmount) {
+        throw new Error(`A different ${attempt.provider === 'STRIPE' ? 'Stripe' : 'Paystack'} refund is already processing for this payment. Do not create a second refund.`)
+      }
+      pendingAttempts.push({
+        id: attempt.id,
+        provider: attempt.provider,
+        providerPaymentId,
+        providerRefundId: activeRefund.id,
+        phase: attempt.phase,
+        amount: refundAmount,
+        currency: attempt.currency,
+        status: activeRefund.status,
+      })
+      amountLeft -= refundAmount
+      continue
+    }
+    await assertRefundAttemptReady(supabase, {
+      attempt,
+      refundAmount,
+      reason: input.reason ?? null,
+      actorRole: input.actorRole,
+      actorId: input.actorId ?? null,
+      exactRestoration: input.exactRestoration,
+    }, deps)
     const providerResponse: RefundProviderResponse = attempt.provider === 'STRIPE'
       ? await deps.refundStripePaymentIntent({
           paymentIntentId: providerPaymentId,
           amount: refundAmount,
           idempotencyKey: `partial-refund:${attempt.id}:${currentRefundedAmount(attempt)}:${refundAmount}`,
           reasonNote: input.reason ?? null,
+          metadata: { drapeon_payment_id: attempt.id, drapeon_order_id: attempt.order_id, refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null },
         })
       : await deps.refundPaystackTransaction({
           reference: providerPaymentId,
@@ -392,14 +676,42 @@ export async function partiallyRefundOrderPayments(
           reasonNote: input.reason ?? null,
         })
 
-    const recorded = await recordRefundOnAttempt(supabase, {
+    const refundTerminal = attempt.provider === 'STRIPE'
+      ? stripeRefundIsTerminal(providerResponse as StripeRefund)
+      : paystackRefundIsTerminal(providerResponse as PaystackRefund)
+    if (!refundTerminal) {
+      await recordPendingRefundRequest(supabase, {
+        attempt,
+        refundAmount,
+        providerResponse,
+        actorRole: input.actorRole,
+        actorId: input.actorId ?? null,
+        reason: input.reason ?? null,
+        exactRestoration: input.exactRestoration,
+      })
+      pendingAttempts.push({
+        id: attempt.id,
+        provider: attempt.provider,
+        providerPaymentId,
+        providerRefundId: attempt.provider === 'STRIPE' ? (providerResponse as StripeRefund).id : paystackRefundId(providerResponse as PaystackRefund),
+        phase: attempt.phase,
+        amount: refundAmount,
+        currency: attempt.currency,
+        status: providerResponse.status?.trim().toUpperCase() || 'PENDING',
+      })
+      amountLeft -= refundAmount
+      continue
+    }
+
+    const recorded = await finalizeRefundOnAttempt(supabase, {
       attempt,
       refundAmount,
       providerResponse,
       actorRole: input.actorRole,
       actorId: input.actorId ?? null,
       reason: input.reason ?? null,
-    })
+      exactRestoration: input.exactRestoration,
+    }, deps)
 
     refundedAttempts.push({
       id: attempt.id,
@@ -427,6 +739,7 @@ export async function partiallyRefundOrderPayments(
     order_id: input.orderId,
     payload: {
       refunded_attempts: refundedAttempts,
+      pending_attempts: pendingAttempts,
       already_refunded_attempt_ids: alreadyRefundedAttemptIds,
       requested_amount: input.amount,
       reason: input.reason ?? null,
@@ -436,6 +749,7 @@ export async function partiallyRefundOrderPayments(
 
   return {
     refundedAttempts,
+    pendingAttempts,
     alreadyRefundedAttemptIds,
     totalRefundedAmount: refundedAttempts.reduce((sum, attempt) => sum + attempt.amount, 0),
     remainingRefundableAmount: Math.max(totalRemainingRefundable - input.amount, 0),

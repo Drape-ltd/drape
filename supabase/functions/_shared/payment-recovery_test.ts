@@ -1,5 +1,16 @@
 import { assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.ts'
-import { resolvePreparedPaymentReference } from './payment-recovery.ts'
+import {
+  canReplacePreparedPaymentAfterAmountChange,
+  resolvePreparedPaymentReference,
+} from './payment-recovery.ts'
+
+Deno.test('a changed total may replace only a terminal failed or canceled prepare attempt', () => {
+  assertEquals(canReplacePreparedPaymentAfterAmountChange({ action: 'prepare-payment', attemptStatus: 'FAILED' }), true)
+  assertEquals(canReplacePreparedPaymentAfterAmountChange({ action: 'prepare-payment', attemptStatus: 'CANCELED' }), true)
+  assertEquals(canReplacePreparedPaymentAfterAmountChange({ action: 'prepare-payment', attemptStatus: 'PENDING' }), false)
+  assertEquals(canReplacePreparedPaymentAfterAmountChange({ action: 'prepare-payment', attemptStatus: 'SUCCEEDED' }), false)
+  assertEquals(canReplacePreparedPaymentAfterAmountChange({ action: 'confirm-payment', attemptStatus: 'FAILED' }), false)
+})
 
 Deno.test('resolvePreparedPaymentReference recovers a missing payment reference from the latest matching ledger attempt', () => {
   const result = resolvePreparedPaymentReference({

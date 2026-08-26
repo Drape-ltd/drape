@@ -28,7 +28,10 @@ const checks = [
   ['pnpm', ['--dir', 'apps/web', 'typecheck']],
   ['pnpm', ['--dir', 'apps/web', 'lint']],
   ['pnpm', ['--filter', '@drape/shared', 'test']],
-  ['deno', ['check', ...edgeFunctionEntrypoints()]],
+  // Shared workspace packages use TypeScript's extensionless imports. Deno's
+  // sloppy-import compatibility mode resolves those imports the same way the
+  // package compiler and production bundler do.
+  ['deno', ['check', '--sloppy-imports', ...edgeFunctionEntrypoints()]],
 ]
 
 if (withSupabase) {

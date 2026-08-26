@@ -277,6 +277,30 @@ export default function TailorShopScreen() {
     }, [loadShop])
   )
 
+  useEffect(() => {
+    if (!profile?.id) return
+
+    const channel = supabase
+      .channel(`tailor-shop-inventory:${profile.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'seller_items',
+          filter: `tailor_profile_id=eq.${profile.id}`,
+        },
+        () => {
+          void loadShop(false)
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [loadShop, profile?.id])
+
   async function onRefresh() {
     setRefreshing(true)
     await loadShop(false)

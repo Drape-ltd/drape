@@ -1,5 +1,7 @@
 # V1 Decisions: Consultation No-Show, Reschedule, And Expiry Policy
 
+> Historical decision record. Its unpaid-consultation and no-forfeiture assumptions are superseded by the evidence-gated paid-consultation policy in `drapeon-commercial-money-tax-and-resolution-architecture.md`. Message fallback and scrutiny of seller-side stall remain valid.
+
 Date: April 2, 2026
 
 ## Why This Exists
@@ -57,6 +59,8 @@ The goal is alignment, not punishing one missed meeting.
 ### Chosen rule
 
 V1 should tolerate one lightweight reschedule without penalty.
+
+The consultation appointment does not hold the order hostage after its booked window. The order returns to quote preparation as soon as the window ends while attendance and fee settlement complete independently. A make-up conversation after the window is optional and free; it never returns the main order to paid consultation mode.
 
 ### Why
 

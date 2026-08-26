@@ -6,6 +6,7 @@ import { resetTo } from '@/lib/navigation'
 import { useCustomerProfile } from '@/lib/customerProfile'
 import { useAuth } from '@/lib/auth'
 import { useUnreadMessageCount } from '@/lib/unread-messages'
+import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { DrapeCapsuleNav, DrapeCapsuleNavProvider } from '@/components/ui/DrapeCapsuleNav'
 import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
@@ -17,6 +18,17 @@ function pressableTabProps<T extends { ref?: unknown }>(props: T): Omit<T, 'ref'
   const { ref, ...buttonProps } = props
   void ref
   return buttonProps
+}
+
+function useActiveOrderCount() {
+  const { user } = useAuth()
+  const { data: activeOrders = [], refetch } = useCustomerOrders(user?.id, 'active')
+
+  useRefreshOnFocus(() => {
+    void refetch()
+  }, 0)
+
+  return activeOrders.length
 }
 
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
@@ -41,6 +53,7 @@ export default function CustomerTabLayout() {
   const segments = useSegments()
   const { user } = useAuth()
   const unreadMessages = useUnreadMessageCount(user?.id, 'CUSTOMER')
+  const activeOrderCount = useActiveOrderCount()
   const hideTabBar = segments[0] === '(customer)' && segments.length > 2
 
   return (
@@ -79,7 +92,6 @@ export default function CustomerTabLayout() {
         options={{
           title: 'Explore',
           tabBarButtonTestID: 'tab-home',
-          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable
@@ -97,7 +109,6 @@ export default function CustomerTabLayout() {
         options={{
           title: 'Wishlists',
           tabBarButtonTestID: 'tab-saved',
-          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable
@@ -116,13 +127,15 @@ export default function CustomerTabLayout() {
           title: 'Orders',
           tabBarButtonTestID: 'tab-orders',
           popToTopOnBlur: true,
+          tabBarBadge: activeOrderCount > 0 ? (activeOrderCount > 99 ? '99+' : activeOrderCount) : undefined,
+          tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           tabBarButton: (props) => (
             <Pressable
               {...pressableTabProps(props)}
               testID="tab-orders"
               accessibilityRole="button"
-              accessibilityLabel="Orders tab"
+              accessibilityLabel={activeOrderCount > 0 ? `Orders tab, ${activeOrderCount} active` : 'Orders tab'}
               onPress={() => resetTo(router, { pathname: '/(customer)/orders', params: { tab: 'active' } })}
             />
           ),

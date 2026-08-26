@@ -29,7 +29,15 @@ import {
   rateLimit,
   rateLimitExceededResponse,
 } from '../_shared/rateLimit.ts'
-import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
+import {
+  deliveryWebhookLogistics,
+  enqueueVerifiedDeliveryWebhook,
+  identifyDeliveryWebhook,
+  loadQueuedDeliveryWebhook,
+  type DeliveryProvider,
+} from '../_shared/delivery-webhook.ts'
+import { enqueueDispatchReconciliation } from '../_shared/drapeon-dispatch-reconciliation.ts'
 import {
   buildCustomerStageSms,
   buildTailorStageSms,
@@ -72,6 +80,7 @@ async function verifyHmacSha512(secret: string, incomingHex: string, payload: st
 
 // Shippo tracking statuses that mean "delivered"
 const SHIPPO_DELIVERED_STATUSES = new Set(['DELIVERED'])
+const SHIPPO_ACCEPTED_STATUSES = new Set(['TRANSIT', 'OUT_FOR_DELIVERY'])
 
 // Topship event types that mean "delivered"
 const TOPSHIP_DELIVERED_EVENTS = new Set([
@@ -79,6 +88,7 @@ const TOPSHIP_DELIVERED_EVENTS = new Set([
   'DELIVERED',
   'delivery_confirmed',
 ])
+const TOPSHIP_ACCEPTED_EVENTS = new Set(['shipment.picked_up', 'shipment.in_transit', 'shipment.out_for_delivery', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY'])
 
 // Shippo tracking statuses that mean "out for delivery" → advance to SHIPPED (already there, but update timestamp)
 // We only act on DELIVERED for now
@@ -101,7 +111,7 @@ function detectProvider(req: Request): Provider {
 }
 
 /** Parse a Shippo tracking_updated webhook payload. Returns tracking number and whether delivered. */
-function parseShippo(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean } {
+function parseShippo(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean; isAccepted: boolean } {
   const data = body?.data ?? body
   const trackingNumber: string | null = data?.tracking_number ?? data?.tracking?.tracking_number ?? null
   const carrier: string | null = data?.carrier ?? data?.tracking?.carrier ?? null
@@ -110,11 +120,12 @@ function parseShippo(body: any): { trackingNumber: string | null; carrier: strin
     trackingNumber: trackingNumber?.toUpperCase() ?? null,
     carrier,
     isDelivered: SHIPPO_DELIVERED_STATUSES.has(status.toUpperCase()),
+    isAccepted: SHIPPO_ACCEPTED_STATUSES.has(status.toUpperCase()),
   }
 }
 
 /** Parse a Topship webhook payload. Returns tracking number and whether delivered. */
-function parseTopship(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean } {
+function parseTopship(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean; isAccepted: boolean } {
   const event: string = body?.event ?? body?.type ?? ''
   const data = body?.data ?? body
   const trackingNumber: string | null = data?.tracking_number ?? data?.trackingId ?? data?.tracking_id ?? null
@@ -123,11 +134,12 @@ function parseTopship(body: any): { trackingNumber: string | null; carrier: stri
     trackingNumber: trackingNumber?.toUpperCase() ?? null,
     carrier,
     isDelivered: TOPSHIP_DELIVERED_EVENTS.has(event),
+    isAccepted: TOPSHIP_ACCEPTED_EVENTS.has(event),
   }
 }
 
 /** Parse a Shipbubble webhook payload. */
-function parseShipbubble(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean } {
+function parseShipbubble(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean; isAccepted: boolean } {
   const event: string = body?.event ?? ''
   const status = typeof body?.status === 'string'
     ? body.status
@@ -146,7 +158,27 @@ function parseShipbubble(body: any): { trackingNumber: string | null; carrier: s
     isDelivered:
       event === 'shipment.status.changed' &&
       (normalizedStatus === 'completed' || normalizedStatus === 'delivered'),
+    isAccepted:
+      event === 'shipment.status.changed' &&
+      ['picked up', 'picked_up', 'in transit', 'in_transit', 'out for delivery', 'out_for_delivery'].includes(normalizedStatus),
   }
+}
+
+function dispatchEventType(provider: Provider, body: any, delivered: boolean) {
+  if (delivered) return 'DELIVERED'
+  const data = body?.data ?? body
+  const raw = String(
+    data?.tracking_status?.status ??
+    data?.status ??
+    body?.status ??
+    body?.event ??
+    body?.type ??
+    '',
+  ).trim().toUpperCase().replace(/[. -]+/g, '_')
+  if (raw.includes('OUT_FOR_DELIVERY')) return 'OUT_FOR_DELIVERY'
+  if (raw.includes('IN_TRANSIT') || raw === 'TRANSIT') return 'IN_TRANSIT'
+  if (raw.includes('PICKED_UP') || raw.includes('COLLECTED')) return 'COLLECTED'
+  return provider === 'unknown' ? 'IN_TRANSIT' : 'CARRIER_ACCEPTED'
 }
 
 async function auditDeliveryWebhookEvent(
@@ -172,32 +204,50 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
-  const clientIp = getClientIp(req)
-  const limit = await rateLimit(
-    supabase,
-    clientIp,
-    FN,
-    RATE_LIMITS.webhook.limit,
-    RATE_LIMITS.webhook.windowMs,
-    { ip: clientIp, userAgent: req.headers.get('user-agent') },
-  )
-  if (!limit.allowed) return rateLimitExceededResponse(corsHeaders, limit.retryAfter)
-
-  // Read raw body first — needed for HMAC verification before JSON parsing
+  const serviceRoleKey = getServiceRoleKey()
+  const supabase = createClient(getSupabaseUrl(), serviceRoleKey)
+  const queuedWebhookEventId = req.headers.get('x-drape-delivery-webhook-event-id')?.trim() || null
+  let provider: Provider
+  let queuedProviderEventId: string | null = null
   let rawBody: string
-  try {
-    rawBody = await req.text()
-  } catch {
-    return new Response('Could not read body', { status: 400 })
+
+  if (queuedWebhookEventId) {
+    if (req.headers.get('authorization') !== `Bearer ${serviceRoleKey}`) {
+      return new Response('Unauthorized replay', { status: 401 })
+    }
+    const queued = await loadQueuedDeliveryWebhook(supabase, queuedWebhookEventId)
+    provider = queued.provider.toLowerCase() as Provider
+    queuedProviderEventId = queued.provider_event_id
+    rawBody = JSON.stringify(queued.payload)
+  } else {
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.webhook.limit,
+      RATE_LIMITS.webhook.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(corsHeaders, limit.retryAfter)
+    try {
+      rawBody = await req.text()
+    } catch {
+      return new Response('Could not read body', { status: 400 })
+    }
+    provider = detectProvider(req)
+    if (provider === 'unknown') {
+      return new Response('Unknown delivery provider', {
+        status: 400,
+        headers: { ...corsHeaders, 'Cache-Control': 'no-store' },
+      })
+    }
   }
 
   // ── HMAC signature verification ──────────────────────────────────────────
   // When a webhook secret is configured, reject requests that fail verification.
   // This is the primary defence against spoofed delivery events.
-  const provider = detectProvider(req)
-
-  if (provider === 'shippo' || provider === 'unknown') {
+  if (!queuedWebhookEventId && provider === 'shippo') {
     const shippoSecret = Deno.env.get('SHIPPO_WEBHOOK_SECRET')
     if (!shippoSecret) {
       // Fail closed — a missing secret is a misconfiguration, not an acceptable default
@@ -216,7 +266,7 @@ Deno.serve(async (req) => {
     }
   }
 
-  if (provider === 'topship' || provider === 'unknown') {
+  if (!queuedWebhookEventId && provider === 'topship') {
     const topshipSecret = Deno.env.get('TOPSHIP_WEBHOOK_SECRET')
     if (!topshipSecret) {
       console.error('[delivery-webhook] TOPSHIP_WEBHOOK_SECRET not set — rejecting request to prevent spoofing')
@@ -234,7 +284,7 @@ Deno.serve(async (req) => {
     }
   }
 
-  if (provider === 'shipbubble') {
+  if (!queuedWebhookEventId && provider === 'shipbubble') {
     const shipbubbleSecret =
       Deno.env.get('SHIPBUBBLE_WEBHOOK_SECRET') ??
       Deno.env.get('SHIPBUBBLE_SECRET_KEY')
@@ -261,16 +311,36 @@ Deno.serve(async (req) => {
     return new Response('Invalid JSON', { status: 400 })
   }
 
+  if (!queuedWebhookEventId) {
+    const identity = await identifyDeliveryWebhook({
+      provider: provider.toUpperCase() as DeliveryProvider,
+      payload: body,
+      rawPayload: rawBody,
+    })
+    const queued = await enqueueVerifiedDeliveryWebhook(supabase, {
+      provider: provider.toUpperCase() as DeliveryProvider,
+      providerEventId: identity.providerEventId,
+      eventType: identity.eventType,
+      payload: body,
+      payloadHash: identity.payloadHash,
+    })
+    return new Response(JSON.stringify({ ok: true, queued: true, ...queued }), {
+      status: 202,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    })
+  }
+
   let trackingNumber: string | null = null
   let carrier: string | null = null
   let isDelivered = false
+  let isAccepted = false
 
   if (provider === 'shippo') {
-    ;({ trackingNumber, carrier, isDelivered } = parseShippo(body))
+    ;({ trackingNumber, carrier, isDelivered, isAccepted } = parseShippo(body))
   } else if (provider === 'topship') {
-    ;({ trackingNumber, carrier, isDelivered } = parseTopship(body))
+    ;({ trackingNumber, carrier, isDelivered, isAccepted } = parseTopship(body))
   } else if (provider === 'shipbubble') {
-    ;({ trackingNumber, carrier, isDelivered } = parseShipbubble(body))
+    ;({ trackingNumber, carrier, isDelivered, isAccepted } = parseShipbubble(body))
   } else {
     // Try both parsers as a fallback
     const fromShippo = parseShippo(body)
@@ -279,6 +349,7 @@ Deno.serve(async (req) => {
     trackingNumber = fromShippo.trackingNumber ?? fromTopship.trackingNumber ?? fromShipbubble.trackingNumber
     carrier = fromShippo.carrier ?? fromTopship.carrier ?? fromShipbubble.carrier
     isDelivered = fromShippo.isDelivered || fromTopship.isDelivered || fromShipbubble.isDelivered
+    isAccepted = fromShippo.isAccepted || fromTopship.isAccepted || fromShipbubble.isAccepted
   }
 
   if (!trackingNumber) {
@@ -293,30 +364,42 @@ Deno.serve(async (req) => {
     })
   }
 
-  if (!isDelivered) {
+  if (!isDelivered && !isAccepted) {
     log('info', FN, 'webhook.skipped', {
       provider,
-      reason: 'not_delivered',
+      reason: 'not_financial_evidence',
       tracking_number: trackingNumber,
       carrier,
     })
     await auditDeliveryWebhookEvent(supabase, 'shipping.webhook_skipped', 'info', {
       provider,
-      reason: 'not_delivered',
+      reason: 'not_financial_evidence',
       tracking_number: trackingNumber,
       carrier,
     })
-    return new Response(JSON.stringify({ ok: true, skipped: 'not_delivered' }), {
+    return new Response(JSON.stringify({ ok: true, skipped: 'not_financial_evidence' }), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  // Find the matching order
-  const { data: order } = await supabase
+  // Dispatch v2 owns tracking on the parcel. Keep the legacy order-level lookup
+  // only as a compatibility fallback for shipments created before v2.
+  const { data: parcel, error: parcelError } = await supabase
+    .from('order_fulfillment_parcels')
+    .select('order_id')
+    .ilike('tracking_number', trackingNumber)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (parcelError) throw new Error(`Could not match dispatch parcel: ${parcelError.message}`)
+
+  const orderQuery = supabase
     .from('orders')
     .select('id, stage, reference, order_kind, garment_type, item_title, item_size, delivery_method, recipient_phone, fulfillment_provider, customer_id, tailor_id, carrier')
-    .eq('tracking_number', trackingNumber)
-    .single()
+  const { data: order, error: orderError } = parcel?.order_id
+    ? await orderQuery.eq('id', parcel.order_id).maybeSingle()
+    : await orderQuery.ilike('tracking_number', trackingNumber).maybeSingle()
+  if (orderError) throw new Error(`Could not load dispatch order: ${orderError.message}`)
 
   if (!order) {
     log('warn', FN, 'delivery.order_missing', { provider, tracking_number: trackingNumber, carrier })
@@ -330,83 +413,132 @@ Deno.serve(async (req) => {
     })
   }
 
-  // Only advance if currently SHIPPED (avoid double-processing)
-  if (order.stage !== 'SHIPPED') {
-    log('info', FN, 'delivery.skipped_wrong_stage', {
-      provider,
-      order_id: order.id,
-      reference: order.reference,
-      tracking_number: trackingNumber,
-      stage: order.stage,
+  const occurredAt = new Date().toISOString()
+  const eventType = dispatchEventType(provider, body, isDelivered)
+  const providerEventId = queuedProviderEventId ?? `${provider}:${trackingNumber}:${eventType}:${occurredAt}`
+  const providerLabel = carrier ?? provider
+  const logistics = deliveryWebhookLogistics(body)
+  const providerEvidence = [{
+    kind: 'PROVIDER_CONFIRMATION',
+    provider: provider.toUpperCase(),
+    providerEventId,
+    trackingNumber,
+  }]
+
+  // A signed transport event is trusted custody evidence. Record custody first
+  // so a provider whose first callback is DELIVERED still satisfies the gate.
+  if (eventType !== 'CARRIER_ACCEPTED') {
+    const { error: custodyError } = await supabase.rpc('record_order_fulfillment_event', {
+      p_order_id: order.id,
+      p_parcel_number: 1,
+      p_event_type: 'CARRIER_ACCEPTED',
+      p_source: 'PROVIDER',
+      p_actor_id: null,
+      p_actor_role: 'SYSTEM',
+      p_provider_event_id: `${providerEventId}:custody`,
+      p_idempotency_key: `dispatch-provider-custody:${provider.toLowerCase()}:${providerEventId}`,
+      p_provider_name: providerLabel,
+      p_service_level: null,
+      p_provider_reference: providerEventId,
+      p_tracking_number: trackingNumber,
+      p_tracking_url: logistics.trackingUrl,
+      p_contact_name: null,
+      p_contact_phone: null,
+      p_customer_note: `${providerLabel} confirmed custody of the parcel.`,
+      p_internal_note: null,
+      p_evidence_media: providerEvidence,
+      p_location: logistics.location,
+      p_eta_at: logistics.etaAt,
+      p_eta_timezone: logistics.etaTimezone,
+      p_occurred_at: occurredAt,
+      p_payload: { signedWebhook: true, provider, carrier, inboxEventId: queuedWebhookEventId },
     })
-    await auditDeliveryWebhookEvent(supabase, 'shipping.delivery_skipped_wrong_stage', 'info', {
-      provider,
-      reference: order.reference,
-      tracking_number: trackingNumber,
-      carrier,
-      stage: order.stage,
-    }, order.id)
-    return new Response(JSON.stringify({ ok: true, skipped: 'wrong_stage', stage: order.stage }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    if (custodyError) throw custodyError
   }
 
-  // Advance to DELIVERED
-  const updates: Record<string, unknown> = {
-    stage: 'DELIVERED',
-    stage_updated_at: new Date().toISOString(),
-    handoff_completed_at: new Date().toISOString(),
-    handoff_confirmation_source: 'CARRIER_WEBHOOK',
-  }
-  if (!order.carrier && carrier) {
-    updates.carrier = carrier
-  }
-
-  const { error: updateError } = await supabase
-    .from('orders')
-    .update(updates)
-    .eq('id', order.id)
-
-  if (updateError) {
-    log('error', FN, 'delivery.update_failed', {
-      provider,
-      order_id: order.id,
-      reference: order.reference,
-      tracking_number: trackingNumber,
-      error: updateError.message,
-    })
-    await auditDeliveryWebhookEvent(supabase, 'shipping.delivery_update_failed', 'error', {
-      provider,
-      reference: order.reference,
-      tracking_number: trackingNumber,
-      carrier,
-      error: updateError.message,
-    }, order.id)
-    return new Response('DB update failed', { status: 500 })
-  }
-
-  // Insert a stage update record for the timeline
-  await supabase.from('order_stage_updates').insert({
-    order_id: order.id,
-    stage: 'DELIVERED',
-    note: `Automatically confirmed as delivered by ${carrier ?? provider} tracking (${trackingNumber}).`,
+  const customerNote = eventType === 'DELIVERED'
+    ? `${providerLabel} confirmed delivery.`
+    : eventType === 'OUT_FOR_DELIVERY'
+      ? `Your Drapeon delivery is on the way.`
+      : eventType === 'IN_TRANSIT'
+        ? `Your order is moving through the delivery network.`
+        : `${providerLabel} collected the parcel.`
+  const { data: dispatchResult, error: dispatchError } = await supabase.rpc('record_order_fulfillment_event', {
+    p_order_id: order.id,
+    p_parcel_number: 1,
+    p_event_type: eventType,
+    p_source: 'PROVIDER',
+    p_actor_id: null,
+    p_actor_role: 'SYSTEM',
+    p_provider_event_id: providerEventId,
+    p_idempotency_key: `dispatch-provider-event:${provider.toLowerCase()}:${providerEventId}`,
+    p_provider_name: providerLabel,
+    p_service_level: null,
+    p_provider_reference: providerEventId,
+    p_tracking_number: trackingNumber,
+    p_tracking_url: logistics.trackingUrl,
+    p_contact_name: null,
+    p_contact_phone: null,
+    p_customer_note: customerNote,
+    p_internal_note: null,
+    p_evidence_media: providerEvidence,
+    p_location: logistics.location,
+    p_eta_at: logistics.etaAt,
+    p_eta_timezone: logistics.etaTimezone,
+    p_occurred_at: occurredAt,
+    p_payload: { signedWebhook: true, provider, carrier, inboxEventId: queuedWebhookEventId },
   })
+  if (dispatchError) throw dispatchError
+  if (eventType === 'DELIVERED') {
+    const dispatchRecord = dispatchResult && typeof dispatchResult === 'object' && !Array.isArray(dispatchResult)
+      ? dispatchResult as Record<string, unknown>
+      : {}
+    const runId = typeof dispatchRecord.runId === 'string' ? dispatchRecord.runId : null
+    if (runId) {
+      await enqueueDispatchReconciliation(supabase, {
+        runId,
+        orderId: order.id,
+        sourceId: `provider:${providerEventId}`,
+      })
+    }
+  }
+
+  const evidenceKind = eventType === 'DELIVERED' ? 'VERIFIED_DELIVERY' : 'CARRIER_ACCEPTED'
+  const { error: evidenceError } = await supabase.rpc('record_order_settlement_evidence', {
+    p_order_id: order.id,
+    p_evidence_kind: evidenceKind,
+    p_source: 'TRUSTED_CARRIER',
+    p_occurred_at: occurredAt,
+    p_external_reference: trackingNumber,
+    p_recorded_by: null,
+    p_metadata: { provider, carrier, signed_webhook: true, provider_event_id: providerEventId },
+  })
+  if (evidenceError && !evidenceError.message.includes('ledger-recorded initial payment')) {
+    log('error', FN, 'settlement.delivery_evidence_failed', { order_id: order.id, error: evidenceError.message })
+  }
+
+  const notificationTitle = eventType === 'DELIVERED'
+    ? 'Delivered'
+    : eventType === 'OUT_FOR_DELIVERY'
+      ? 'Your delivery is on the way'
+      : 'Delivery update'
+  const notificationBody = customerNote
 
   if (order.customer_id) {
     await enqueuePushJob(supabase, {
       userId: order.customer_id.toString(),
       source: FN,
       orderId: order.id,
-      idempotencyKey: `delivery-confirmed:${order.id}:customer:push`,
+      idempotencyKey: `dispatch:${providerEventId}:customer:push`,
       priority: 15,
       notification: {
-        title: 'Delivered ✅',
-        body: 'Your carrier marked this order as delivered.',
+        title: notificationTitle,
+        body: notificationBody,
         preferenceKey: 'orderUpdates',
         data: { orderId: order.id },
       },
     })
-    const customerSms = buildCustomerStageSms({
+    const customerSms = eventType === 'DELIVERED' ? buildCustomerStageSms({
       id: order.id,
       reference: order.reference ?? null,
       orderKind: order.order_kind ?? null,
@@ -416,7 +548,7 @@ Deno.serve(async (req) => {
       deliveryMethod: order.delivery_method ?? null,
       fulfillmentProvider: order.fulfillment_provider ?? null,
       carrier: carrier ?? order.carrier ?? null,
-    }, 'DELIVERED')
+    }, 'DELIVERED') : null
     if (customerSms) {
       await enqueueSmsJob(supabase, {
         userId: order.customer_id.toString(),
@@ -426,8 +558,23 @@ Deno.serve(async (req) => {
         body: customerSms,
         fallbackPhone: order.recipient_phone ?? null,
         source: FN,
-        idempotencyKey: `delivery-confirmed:${order.id}:customer:sms`,
+        idempotencyKey: `dispatch:${providerEventId}:customer:sms`,
         priority: 15,
+      })
+    }
+    if (eventType === 'DELIVERED' || eventType === 'OUT_FOR_DELIVERY') {
+      await enqueueOrderEventEmailJob(supabase, {
+        order: { ...order, id: order.id },
+        recipientUserId: order.customer_id.toString(),
+        audience: 'CUSTOMER',
+        subject: eventType === 'DELIVERED' ? 'Your Drapeon order was delivered' : 'Your Drapeon delivery is on the way',
+        headline: notificationTitle,
+        body: `${notificationBody} Tracking: ${trackingNumber}.`,
+        ctaLabel: 'View delivery',
+        action: 'DISPATCH_UPDATE',
+        source: FN,
+        idempotencyKey: `dispatch:${providerEventId}:customer:email`,
+        priority: 18,
       })
     }
   }
@@ -437,16 +584,16 @@ Deno.serve(async (req) => {
       userId: order.tailor_id.toString(),
       source: FN,
       orderId: order.id,
-      idempotencyKey: `delivery-confirmed:${order.id}:tailor:push`,
+      idempotencyKey: `dispatch:${providerEventId}:tailor:push`,
       priority: 20,
       notification: {
-        title: 'Order delivered 📦',
-        body: 'Tracking confirmed that the customer received this order.',
+        title: eventType === 'DELIVERED' ? 'Order delivered' : 'Delivery updated',
+        body: eventType === 'DELIVERED' ? 'The provider confirmed that the customer received this order.' : customerNote,
         preferenceKey: 'newOrders',
         data: { orderId: order.id },
       },
     })
-    const tailorSms = buildTailorStageSms({
+    const tailorSms = eventType === 'DELIVERED' ? buildTailorStageSms({
       id: order.id,
       reference: order.reference ?? null,
       orderKind: order.order_kind ?? null,
@@ -456,7 +603,7 @@ Deno.serve(async (req) => {
       deliveryMethod: order.delivery_method ?? null,
       fulfillmentProvider: order.fulfillment_provider ?? null,
       carrier: carrier ?? order.carrier ?? null,
-    }, 'DELIVERED')
+    }, 'DELIVERED') : null
     if (tailorSms) {
       await enqueueSmsJob(supabase, {
         userId: order.tailor_id.toString(),
@@ -465,7 +612,24 @@ Deno.serve(async (req) => {
         event: 'order.stage_delivered',
         body: tailorSms,
         source: FN,
-        idempotencyKey: `delivery-confirmed:${order.id}:tailor:sms`,
+        idempotencyKey: `dispatch:${providerEventId}:tailor:sms`,
+        priority: 20,
+      })
+    }
+    if (eventType === 'DELIVERED' || eventType === 'OUT_FOR_DELIVERY') {
+      await enqueueOrderEventEmailJob(supabase, {
+        order: { ...order, id: order.id },
+        recipientUserId: order.tailor_id.toString(),
+        audience: 'TAILOR',
+        subject: eventType === 'DELIVERED' ? 'The Drapeon order was delivered' : 'The Drapeon order is out for delivery',
+        headline: eventType === 'DELIVERED' ? 'Delivery confirmed' : 'The parcel is on the way',
+        body: eventType === 'DELIVERED'
+          ? `The provider confirmed that the customer received this order. Tracking: ${trackingNumber}.`
+          : `The provider has the parcel out for delivery. Tracking: ${trackingNumber}.`,
+        ctaLabel: 'View delivery',
+        action: 'DISPATCH_UPDATE',
+        source: FN,
+        idempotencyKey: `dispatch:${providerEventId}:tailor:email`,
         priority: 20,
       })
     }
@@ -478,14 +642,20 @@ Deno.serve(async (req) => {
     tracking_number: trackingNumber,
     carrier: carrier ?? order.carrier ?? null,
   })
-  await auditDeliveryWebhookEvent(supabase, 'shipping.delivered', 'info', {
+  await auditDeliveryWebhookEvent(supabase, `shipping.${eventType.toLowerCase()}`, 'info', {
     provider,
     reference: order.reference,
     tracking_number: trackingNumber,
     carrier: carrier ?? order.carrier ?? null,
   }, order.id)
 
-  return new Response(JSON.stringify({ ok: true, orderId: order.id, stage: 'DELIVERED' }), {
+  return new Response(JSON.stringify({
+    ok: true,
+    orderId: order.id,
+    eventType,
+    fulfillmentEventId: (dispatchResult as { eventId?: string } | null)?.eventId ?? null,
+    runId: (dispatchResult as { runId?: string } | null)?.runId ?? null,
+  }), {
     headers: { 'Content-Type': 'application/json' },
   })
 })

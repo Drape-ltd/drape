@@ -4,7 +4,7 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getPaystackCallbackUrl, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
-import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { createOrRefreshOpsIssue, resolveOpsIssueByDedupeKey } from '../_shared/ops-issues.ts'
 import { markInitialOrderPaymentFailed } from '../_shared/payment-failure.ts'
 import {
   findLatestPaymentAttemptForOrderPhase,
@@ -39,8 +39,18 @@ import {
   resolvePaymentProviderForCurrency,
   type AccountCurrencyCode,
 } from '../../../packages/shared/src/currency-config.ts'
-import { resolvePreparedPaymentReference } from '../_shared/payment-recovery.ts'
+import {
+  canReplacePreparedPaymentAfterAmountChange,
+  resolvePreparedPaymentReference,
+} from '../_shared/payment-recovery.ts'
 import { getProviderCircuit, recordProviderHealth } from '../_shared/provider-health.ts'
+import {
+  prepareCommercialPricingReservation,
+  type PreparedCommercialPricing,
+} from '../_shared/commercial-ledger.ts'
+import { taxSnapshotNeedsRefresh } from '../../../packages/shared/src/tax.ts'
+import { Sentry } from '../_shared/sentry.ts'
+import { finalizeDispatchShortfallFunding } from '../_shared/drapeon-dispatch.ts'
 
 const FN = 'payment-action'
 const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
@@ -63,7 +73,8 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
 ])
 
-type PaymentProvider = 'STRIPE' | 'PAYSTACK'
+type PaymentProvider = 'STRIPE' | 'PAYSTACK' | 'COVERAGE'
+type ExternalPaymentProvider = Exclude<PaymentProvider, 'COVERAGE'>
 type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
 type OrderCurrency = AccountCurrencyCode
 
@@ -79,6 +90,9 @@ type OrderRow = {
   quoted_currency?: string | null
   currency?: string | null
   quote_expires_at?: string | null
+  tax_rate_bps?: number | null
+  tax_region?: string | null
+  tax_fallback?: boolean | null
   consultation_fee?: number | null
   special_note?: string | null
   delivery_method?: string | null
@@ -100,19 +114,20 @@ type OrderRow = {
 }
 
 function isPaymentProvider(value: string | null | undefined): value is PaymentProvider {
-  return value === 'STRIPE' || value === 'PAYSTACK'
+  return value === 'STRIPE' || value === 'PAYSTACK' || value === 'COVERAGE'
 }
 
 function normalizeOrderCurrency(value: string | null | undefined): OrderCurrency | null {
   return normalizeAccountCurrency(value)
 }
 
-function paymentProviderForCurrency(currency: OrderCurrency): PaymentProvider {
+function paymentProviderForCurrency(currency: OrderCurrency): ExternalPaymentProvider {
   return resolvePaymentProviderForCurrency(currency)
 }
 
-function resolveStoredProvider(value: string | null | undefined, currency: OrderCurrency): PaymentProvider | null {
+function resolveStoredProvider(value: string | null | undefined, currency: OrderCurrency): ExternalPaymentProvider | null {
   if (!isPaymentProvider(value)) return null
+  if (value === 'COVERAGE') return null
   return value === paymentProviderForCurrency(currency) ? value : null
 }
 
@@ -234,6 +249,18 @@ function providerFailureMessage(provider: PaymentProvider, _currency: OrderCurre
     : 'We could not confirm the Stripe payment right now. Please refresh and try again.'
 }
 
+function safeErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object') {
+    const value = error as Record<string, unknown>
+    return ['code', 'message', 'details', 'hint']
+      .map((key) => typeof value[key] === 'string' && value[key] ? `${key}: ${value[key]}` : null)
+      .filter((part): part is string => !!part)
+      .join(' | ') || 'Unknown structured error'
+  }
+  return error == null ? 'Unknown error' : String(error)
+}
+
 async function recordPaymentProviderEvent(
   supabase: SupabaseClient,
   input: {
@@ -251,7 +278,7 @@ async function recordPaymentProviderEvent(
     provider: input.provider,
     operation: 'PAYMENT',
     succeeded: input.succeeded,
-    error: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+    error: input.error ? safeErrorMessage(input.error) : null,
     metadata: {
       function: FN,
       action: input.action,
@@ -311,8 +338,48 @@ async function auditPaymentBlocked(
   })
 }
 
+async function auditPaymentIncomplete(
+  supabase: SupabaseClient,
+  callerId: string,
+  order: Pick<OrderRow, 'id' | 'stage' | 'order_kind' | 'delivery_method' | 'payment_provider'>,
+  payload: Record<string, unknown>,
+) {
+  await audit(supabase, {
+    event: 'payment.incomplete',
+    actor_id: callerId,
+    actor_role: 'CUSTOMER',
+    order_id: order.id,
+    severity: 'info',
+    payload: {
+      function: FN,
+      order_kind: order.order_kind ?? 'CUSTOM',
+      stage: order.stage,
+      provider: order.payment_provider ?? null,
+      delivery_method: order.delivery_method ?? null,
+      ...payload,
+    },
+  })
+}
+
+async function resolveRecoveredPaymentPreparationIssues(
+  supabase: SupabaseClient,
+  orderId: string,
+  provider: PaymentProvider,
+  paymentIntentId: string,
+) {
+  const metadata = {
+    recovery: 'HEALTHY_PAYMENT_PREPARATION',
+    provider,
+    payment_intent_id: paymentIntentId,
+  }
+  await Promise.all([
+    resolveOpsIssueByDedupeKey(supabase, `payment-blocked:${orderId}:prepare_provider_error`, metadata),
+    resolveOpsIssueByDedupeKey(supabase, `payment-blocked:${orderId}:confirm_status_not_success`, metadata),
+  ])
+}
+
 function isFulfillmentPaymentPending(order: OrderRow) {
-  return order.stage === 'FINISHING'
+  return ['FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)
     && order.delivery_method !== 'LOCAL_COLLECTION'
     && typeof order.fulfillment_fee === 'number'
     && order.fulfillment_fee > 0
@@ -447,6 +514,7 @@ async function finalizeSuccessfulPayment(
   phase: PaymentPhase,
 ) {
   if (phase === 'CONSULTATION') {
+    if (provider === 'COVERAGE') throw new Error('Consultations cannot be paid with complimentary order coverage.')
     const supportMeta = parseOrderSupportMeta(order.special_note)
     const consultation = supportMeta.consultation
 
@@ -546,10 +614,23 @@ async function finalizeSuccessfulPayment(
   }
 
   if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) {
+    if (provider !== 'COVERAGE') {
+      await finalizeDispatchShortfallFunding(supabase, {
+        orderId: order.id,
+        actorId: callerId,
+        actorRole: 'CUSTOMER',
+        provider,
+        providerPaymentId: paymentIntentId,
+      })
+    }
     return { alreadyConfirmed: true as const, stage: order.stage }
   }
 
   if (phase === 'FULFILLMENT') {
+    if (provider === 'COVERAGE') {
+      throw new Error('Fulfillment charges require an external payment provider.')
+    }
+
     const { data: updatedOrder, error: updateError } = await supabase
       .from('orders')
       .update({
@@ -586,6 +667,14 @@ async function finalizeSuccessfulPayment(
         payment_phase: phase,
         stage: order.stage,
       },
+    })
+
+    await finalizeDispatchShortfallFunding(supabase, {
+      orderId: order.id,
+      actorId: callerId,
+      actorRole: 'CUSTOMER',
+      provider,
+      providerPaymentId: paymentIntentId,
     })
 
     await audit(supabase, {
@@ -881,6 +970,9 @@ Deno.serve(async (req) => {
         quoted_currency,
         currency,
         quote_expires_at,
+        tax_rate_bps,
+        tax_region,
+        tax_fallback,
         consultation_fee,
         special_note,
         seller_item_id,
@@ -925,12 +1017,18 @@ Deno.serve(async (req) => {
     const phase = parsed.data.action === 'confirm-payment'
       ? resolveConfirmPhase(row, parsed.data.paymentIntentId)
       : resolveActivePaymentPhase(row)
-    const amount =
+    let amount =
       phase === 'FULFILLMENT'
         ? fulfillmentPaymentAmount(row)
         : phase === 'CONSULTATION'
           ? consultationPaymentAmount(row)
           : initialPaymentAmount(row)
+    let activeBenefit: { reservation_token: string; total_benefit_amount: number; customer_due_amount: number; correlation_id: string } | null = null
+    if (phase === 'INITIAL_ORDER') {
+      const { data: benefit } = await supabase.from('commercial_benefit_reservations').select('reservation_token, total_benefit_amount, customer_due_amount, correlation_id').eq('order_id', row.id).eq('customer_id', caller.id).eq('status', 'RESERVED').gt('expires_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(1).maybeSingle()
+      activeBenefit = benefit
+      if (activeBenefit) amount = activeBenefit.customer_due_amount
+    }
     const provider = resolveProviderForPhase(row, phase, orderCurrency)
     const latestAttempt = await findLatestPaymentAttemptForOrderPhase(supabase, {
       orderId: row.id,
@@ -1046,6 +1144,10 @@ Deno.serve(async (req) => {
           ? consultationMetaForOrder(row)?.paymentProvider
           : row.payment_provider
 
+    if (phase === 'INITIAL_ORDER' && row.stage === 'CONFIRMED' && storedProviderForPhase === 'COVERAGE') {
+      return jsonResponse({ ok: true, confirmed: true, alreadyPaid: true, provider: 'COVERAGE', orderId: row.id, paymentIntentId: row.payment_intent_id, authorizationUrl: null, stage: 'CONFIRMED', amount: 0, currency: orderCurrency }, 200, cors)
+    }
+
     if (storedProviderForPhase && !isPaymentProvider(storedProviderForPhase)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'provider_not_supported')
       return jsonError(cors, 409, 'This order is tied to an unsupported payment provider.')
@@ -1083,7 +1185,19 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'This order has a payment-currency mismatch. Refresh the order and try again.')
     }
 
-    if (typeof latestAttempt?.amount === 'number' && latestAttempt.amount !== amount) {
+    const replaceTerminalAttemptAfterAmountChange =
+      typeof latestAttempt?.amount === 'number'
+      && latestAttempt.amount !== amount
+      && canReplacePreparedPaymentAfterAmountChange({
+        action: parsed.data.action,
+        attemptStatus: latestAttempt.status,
+      })
+
+    if (
+      typeof latestAttempt?.amount === 'number'
+      && latestAttempt.amount !== amount
+      && !replaceTerminalAttemptAfterAmountChange
+    ) {
       await auditPaymentBlocked(supabase, caller.id, row, 'ledger_amount_mismatch', {
         expected_amount: amount,
         recovered_amount: latestAttempt.amount,
@@ -1094,12 +1208,37 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'This order total changed after payment was prepared. Contact support so we can refresh the payment safely.')
     }
 
+    if (replaceTerminalAttemptAfterAmountChange) {
+      await audit(supabase, {
+        event: 'payment.amount_changed_after_terminal_attempt',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: row.id,
+        payload: {
+          function: FN,
+          payment_phase: phase,
+          previous_attempt_id: latestAttempt?.id ?? null,
+          previous_status: latestAttempt?.status ?? null,
+          previous_amount: latestAttempt?.amount ?? null,
+          next_amount: amount,
+          currency: orderCurrency,
+        },
+      })
+    }
+
     if (parsed.data.action === 'prepare-payment') {
       const quoteExpired =
         phase === 'INITIAL_ORDER'
         && orderKind === 'CUSTOM'
         && !!row.quote_expires_at
         && new Date(row.quote_expires_at).getTime() <= Date.now()
+      const staleTaxSnapshot = phase === 'INITIAL_ORDER'
+        && orderKind === 'CUSTOM'
+        && taxSnapshotNeedsRefresh({
+          taxRegion: row.tax_region,
+          taxRateBps: row.tax_rate_bps,
+          taxFallback: row.tax_fallback,
+        })
       const preflight = runPreflight([
         {
           name: 'order_belongs_to_customer',
@@ -1133,6 +1272,15 @@ Deno.serve(async (req) => {
           actual: { quote_expires_at: row.quote_expires_at ?? null },
         },
         {
+          name: 'quote_tax_current',
+          condition: !staleTaxSnapshot,
+          errorCode: 'QUOTE_TAX_REFRESH_REQUIRED',
+          message: 'This quote uses an older Ghana tax snapshot. Ask the tailor to refresh it before payment.',
+          field: 'tax_rate_bps',
+          severity: 'BLOCKING',
+          actual: { tax_region: row.tax_region ?? null, tax_rate_bps: row.tax_rate_bps ?? null },
+        },
+        {
           name: 'payment_not_already_succeeded',
           condition: latestAttempt?.status !== 'SUCCEEDED',
           errorCode: 'PAYMENT_ALREADY_SUCCEEDED',
@@ -1146,7 +1294,7 @@ Deno.serve(async (req) => {
         },
         {
           name: 'payment_amount_positive',
-          condition: typeof amount === 'number' && amount > 0 && Number.isInteger(amount),
+          condition: typeof amount === 'number' && amount >= 0 && Number.isInteger(amount) && (amount > 0 || !!activeBenefit),
           errorCode: 'PAYMENT_AMOUNT_INVALID',
           message: 'This order is missing payment details.',
           field: 'amount',
@@ -1218,12 +1366,12 @@ Deno.serve(async (req) => {
         return preflightFailureResponse(preflight, cors, 409)
       }
 
-      const circuit = await getProviderCircuit(supabase, provider, 'PAYMENT')
+      const circuit = amount === 0 ? { open: false } : await getProviderCircuit(supabase, provider, 'PAYMENT')
       if (circuit.open) {
         return jsonError(cors, 503, providerFailureMessage(provider, orderCurrency, 'prepare'), {
           code: 'PAYMENT_PROVIDER_DEGRADED',
           provider,
-          retryAt: circuit.circuitOpenUntil,
+          retryAt: 'circuitOpenUntil' in circuit ? circuit.circuitOpenUntil : null,
         })
       }
     }
@@ -1303,7 +1451,7 @@ Deno.serve(async (req) => {
             provider: 'PAYSTACK',
             payment_intent_id: preparedPaymentIntentId,
             payment_phase: phase,
-            error: error instanceof Error ? error.message : String(error),
+            error: safeErrorMessage(error),
           })
           return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'confirm'))
         }
@@ -1333,7 +1481,7 @@ Deno.serve(async (req) => {
             })
             nextStage = failure.stage
           }
-          await auditPaymentBlocked(supabase, caller.id, row, 'confirm_status_not_success', {
+          await auditPaymentIncomplete(supabase, caller.id, row, {
             provider: 'PAYSTACK',
             payment_status: transaction.status,
             payment_intent_id: preparedPaymentIntentId,
@@ -1387,7 +1535,7 @@ Deno.serve(async (req) => {
           provider: 'STRIPE',
           payment_intent_id: preparedPaymentIntentId,
           payment_phase: phase,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         })
         return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'confirm'))
       }
@@ -1423,7 +1571,7 @@ Deno.serve(async (req) => {
             : paymentIntent.status === 'canceled'
               ? 'Payment was canceled. Start payment again to continue.'
               : `Payment is not complete yet (${paymentIntent.status}).`
-        await auditPaymentBlocked(supabase, caller.id, row, 'confirm_status_not_success', {
+        await auditPaymentIncomplete(supabase, caller.id, row, {
           provider: 'STRIPE',
           payment_status: paymentIntent.status,
           payment_intent_id: preparedPaymentIntentId,
@@ -1492,7 +1640,7 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'This order is not awaiting a delivery or shipping payment right now.')
     }
 
-    if (!amount || amount <= 0) {
+    if (amount == null || amount < 0 || (amount === 0 && !activeBenefit)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'payment_details_missing', {
         amount,
         currency: orderCurrency,
@@ -1506,6 +1654,24 @@ Deno.serve(async (req) => {
       return jsonError(cors, 409, 'Delivery address is required before payment can start.')
     }
 
+    let preparedCommercialPricing: PreparedCommercialPricing | null = null
+
+    if (phase === 'INITIAL_ORDER' && amount === 0 && activeBenefit) {
+      const pricingResult = await prepareCommercialPricingReservation(supabase, {
+        idempotencyKey: `coverage-pricing:${activeBenefit.reservation_token}`,
+        orderId: row.id,
+        phase,
+        currency: orderCurrency,
+        amount,
+        benefit: { reservationToken: activeBenefit.reservation_token, totalBenefitAmount: activeBenefit.total_benefit_amount, customerDueAmount: 0 },
+      })
+      if (pricingResult.skipped) return jsonError(cors, 409, 'Complimentary coverage is available only for the current commercial policy.')
+      const coverageReference = `coverage:${activeBenefit.reservation_token}`
+      await upsertPreparedPaymentAttempt(supabase, { orderId: row.id, phase, provider: 'COVERAGE', currency: orderCurrency, amount: 0, idempotencyKey: coverageReference, providerPaymentId: coverageReference, status: 'PENDING', providerResponse: { coverage: true, benefitReservationToken: activeBenefit.reservation_token }, preparedCommercialPricing: pricingResult })
+      const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'COVERAGE', coverageReference, phase)
+      return jsonResponse({ ok: true, confirmed: true, alreadyPaid: false, provider: 'COVERAGE', orderId: row.id, paymentIntentId: coverageReference, authorizationUrl: null, existing: false, stage: finalized.stage, amount: 0, currency: orderCurrency }, 200, cors)
+    }
+
     if (provider === 'PAYSTACK') {
       if (!caller.email?.trim()) {
         await auditPaymentBlocked(supabase, caller.id, row, 'paystack_email_missing', {
@@ -1516,9 +1682,9 @@ Deno.serve(async (req) => {
 
       const preparedPayment = resolvePreparedPaymentReference({
         expectedProvider: 'PAYSTACK',
-        storedPaymentIntentId: paymentIntentForPhase(row, phase),
-        storedCheckoutUrl: paymentCheckoutUrlForPhase(row, phase),
-        latestAttempt,
+        storedPaymentIntentId: replaceTerminalAttemptAfterAmountChange ? null : paymentIntentForPhase(row, phase),
+        storedCheckoutUrl: replaceTerminalAttemptAfterAmountChange ? null : paymentCheckoutUrlForPhase(row, phase),
+        latestAttempt: replaceTerminalAttemptAfterAmountChange ? null : latestAttempt,
       })
 
       if (preparedPayment.providerMismatch) {
@@ -1552,7 +1718,7 @@ Deno.serve(async (req) => {
             provider: 'PAYSTACK',
             payment_intent_id: paymentReference,
             payment_phase: phase,
-            error: error instanceof Error ? error.message : String(error),
+            error: safeErrorMessage(error),
           })
           return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'))
         }
@@ -1565,6 +1731,7 @@ Deno.serve(async (req) => {
           currency: orderCurrency,
           paymentIntentId: paymentReference,
         })
+        await resolveRecoveredPaymentPreparationIssues(supabase, row.id, 'PAYSTACK', transaction.reference)
 
         if (transaction.status === 'success') {
           const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'PAYSTACK', transaction.reference, phase)
@@ -1618,6 +1785,17 @@ Deno.serve(async (req) => {
           if (!paymentReference) {
             paystackIdempotencyKey = await buildPaystackReferenceForNewAttempt(supabase, row, phase)
           }
+          if (phase === 'INITIAL_ORDER') {
+            const pricingResult = await prepareCommercialPricingReservation(supabase, {
+              idempotencyKey: `checkout-pricing:${paystackIdempotencyKey}`,
+              orderId: row.id,
+              phase,
+              currency: orderCurrency,
+              amount,
+              benefit: activeBenefit ? { reservationToken: activeBenefit.reservation_token, totalBenefitAmount: activeBenefit.total_benefit_amount, customerDueAmount: activeBenefit.customer_due_amount } : null,
+            })
+            preparedCommercialPricing = pricingResult.skipped ? null : pricingResult
+          }
           transaction = await initializePaystackTransaction({
             amount,
             currency: orderCurrency,
@@ -1630,6 +1808,8 @@ Deno.serve(async (req) => {
               order_kind: orderKind,
               payment_phase: phase,
               idempotency_key: paystackIdempotencyKey,
+              pricing_reservation_id: preparedCommercialPricing?.reservation.id ?? null,
+              correlation_id: preparedCommercialPricing?.reservation.correlationId ?? null,
             },
           })
         } catch (error) {
@@ -1645,7 +1825,7 @@ Deno.serve(async (req) => {
           })
           await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
             provider: 'PAYSTACK',
-            error: error instanceof Error ? error.message : String(error),
+            error: safeErrorMessage(error),
             currency: orderCurrency,
             payment_phase: phase,
           })
@@ -1660,6 +1840,7 @@ Deno.serve(async (req) => {
           currency: orderCurrency,
           paymentIntentId: transaction.reference,
         })
+        await resolveRecoveredPaymentPreparationIssues(supabase, row.id, 'PAYSTACK', transaction.reference)
 
         paymentReference = transaction.reference
         checkoutUrl = transaction.authorization_url ?? null
@@ -1747,6 +1928,7 @@ Deno.serve(async (req) => {
           checkout_url: checkoutUrl,
         },
         status: 'PENDING',
+        preparedCommercialPricing,
       })
 
       await audit(supabase, {
@@ -1775,6 +1957,8 @@ Deno.serve(async (req) => {
         stage: movedToPaymentPending ? 'PAYMENT_PENDING' : row.stage,
         amount,
         currency: orderCurrency,
+        pricingBreakdown: preparedCommercialPricing?.pricing ?? null,
+        pricingExpiresAt: preparedCommercialPricing?.reservation.expiresAt ?? null,
       }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
@@ -1784,9 +1968,9 @@ Deno.serve(async (req) => {
     let existing = false
     const preparedPayment = resolvePreparedPaymentReference({
       expectedProvider: 'STRIPE',
-      storedPaymentIntentId: paymentIntentForPhase(row, phase),
-      storedCheckoutUrl: paymentCheckoutUrlForPhase(row, phase),
-      latestAttempt,
+      storedPaymentIntentId: replaceTerminalAttemptAfterAmountChange ? null : paymentIntentForPhase(row, phase),
+      storedCheckoutUrl: replaceTerminalAttemptAfterAmountChange ? null : paymentCheckoutUrlForPhase(row, phase),
+      latestAttempt: replaceTerminalAttemptAfterAmountChange ? null : latestAttempt,
     })
     if (preparedPayment.providerMismatch) {
       await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_recovery_mismatch', {
@@ -1816,7 +2000,7 @@ Deno.serve(async (req) => {
           provider: 'STRIPE',
           payment_intent_id: existingPaymentIntentId,
           payment_phase: phase,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         })
         return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'prepare'))
       }
@@ -1829,6 +2013,7 @@ Deno.serve(async (req) => {
         currency: orderCurrency,
         paymentIntentId: existingPaymentIntentId,
       })
+      await resolveRecoveredPaymentPreparationIssues(supabase, row.id, 'STRIPE', paymentIntent.id)
       if (paymentIntent.status === 'succeeded') {
         const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'STRIPE', paymentIntent.id, phase)
 
@@ -1861,6 +2046,17 @@ Deno.serve(async (req) => {
 
     if (!paymentIntent) {
       try {
+        if (phase === 'INITIAL_ORDER') {
+          const pricingResult = await prepareCommercialPricingReservation(supabase, {
+            idempotencyKey: `checkout-pricing:${stripeIdempotencyKey}`,
+            orderId: row.id,
+            phase,
+            currency: orderCurrency,
+            amount,
+            benefit: activeBenefit ? { reservationToken: activeBenefit.reservation_token, totalBenefitAmount: activeBenefit.total_benefit_amount, customerDueAmount: activeBenefit.customer_due_amount } : null,
+          })
+          preparedCommercialPricing = pricingResult.skipped ? null : pricingResult
+        }
         paymentIntent = await createStripePaymentIntent({
           amount,
           currency: orderCurrency,
@@ -1872,6 +2068,8 @@ Deno.serve(async (req) => {
             order_kind: orderKind,
             payment_phase: phase,
             idempotency_key: stripeIdempotencyKey,
+            pricing_reservation_id: preparedCommercialPricing?.reservation.id ?? '',
+            correlation_id: preparedCommercialPricing?.reservation.correlationId ?? '',
           },
         })
       } catch (error) {
@@ -1887,7 +2085,7 @@ Deno.serve(async (req) => {
         })
         await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
           provider: 'STRIPE',
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
           currency: orderCurrency,
           payment_phase: phase,
         })
@@ -1902,6 +2100,7 @@ Deno.serve(async (req) => {
         currency: orderCurrency,
         paymentIntentId: paymentIntent.id,
       })
+      await resolveRecoveredPaymentPreparationIssues(supabase, row.id, 'STRIPE', paymentIntent.id)
     }
 
     if (!paymentIntent.client_secret) {
@@ -1985,6 +2184,7 @@ Deno.serve(async (req) => {
         status: paymentIntent.status,
       },
       status: 'PENDING',
+      preparedCommercialPricing,
     })
 
     await audit(supabase, {
@@ -2014,11 +2214,18 @@ Deno.serve(async (req) => {
       stage: movedToPaymentPending ? 'PAYMENT_PENDING' : row.stage,
       amount,
       currency: orderCurrency,
+      pricingBreakdown: preparedCommercialPricing?.pricing ?? null,
+      pricingExpiresAt: preparedCommercialPricing?.reservation.expiresAt ?? null,
     }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
+    await Sentry.captureMessage('Customer payment action failed', {
+      level: 'error',
+      tags: { function: FN, failure_class: 'payment_action' },
+      extra: { error: safeErrorMessage(error) },
+    })
+    log('error', FN, 'unhandled', { error: safeErrorMessage(error) })
     return jsonError(cors, 500, 'Payment could not start cleanly. Please refresh the order and try again.')
   }
 })

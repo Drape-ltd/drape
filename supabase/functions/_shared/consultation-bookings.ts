@@ -5,7 +5,11 @@ type SupabaseLike = {
 };
 
 type BookingResult =
-  | { ok: true; scheduledEndAt: string; reservationState?: "created" | "existing" }
+  | { ok: true; bookingId: string; scheduledEndAt: string; reservationState?: "created" | "existing" }
+  | { ok: false; status: number; code: string; error: string };
+
+type AvailabilityResult =
+  | { ok: true; scheduledEndAt: string }
   | { ok: false; status: number; code: string; error: string };
 
 function isConstraintConflict(error: { code?: string | null; message?: string | null } | null | undefined) {
@@ -27,9 +31,10 @@ export async function assertConsultationSlotAvailable(
     tailorId: string;
     scheduledStartAt: string;
     scheduledEndAt?: string | null;
+    durationMinutes?: 15 | 30 | 45 | 60;
   },
-): Promise<BookingResult> {
-  const scheduledEndAt = input.scheduledEndAt ?? consultationScheduledEndAt(input.scheduledStartAt);
+): Promise<AvailabilityResult> {
+  const scheduledEndAt = input.scheduledEndAt ?? consultationScheduledEndAt(input.scheduledStartAt, input.durationMinutes);
   const { data, error } = await supabase
     .from("consultation_bookings")
     .select("id, order_id, scheduled_start_at, scheduled_end_at")
@@ -69,9 +74,10 @@ export async function reserveConsultationSlot(
     customerId: string;
     scheduledStartAt: string;
     scheduledEndAt?: string | null;
+    durationMinutes?: 15 | 30 | 45 | 60;
   },
 ): Promise<BookingResult> {
-  const scheduledEndAt = input.scheduledEndAt ?? consultationScheduledEndAt(input.scheduledStartAt);
+  const scheduledEndAt = input.scheduledEndAt ?? consultationScheduledEndAt(input.scheduledStartAt, input.durationMinutes);
   const { data: existing, error: lookupError } = await supabase
     .from("consultation_bookings")
     .select("id, scheduled_start_at, scheduled_end_at")
@@ -95,7 +101,7 @@ export async function reserveConsultationSlot(
     const requestedEnd = new Date(scheduledEndAt).getTime();
 
     if (existingStart === requestedStart && existingEnd === requestedEnd) {
-      return { ok: true, scheduledEndAt: existing.scheduled_end_at, reservationState: "existing" };
+      return { ok: true, bookingId: existing.id, scheduledEndAt: existing.scheduled_end_at, reservationState: "existing" };
     }
 
     return {
@@ -140,7 +146,40 @@ export async function reserveConsultationSlot(
     };
   }
 
-  return { ok: true, scheduledEndAt, reservationState: "created" };
+  return { ok: true, bookingId: result.data.id, scheduledEndAt, reservationState: "created" };
+}
+
+export async function lockConsultationCommercialSnapshot(
+  supabase: SupabaseLike,
+  input: {
+    bookingId: string;
+    policyVersion: string;
+    feeMode: "FREE" | "PAID";
+    feeAmount: number | null;
+    feeCurrency: string | null;
+    feeCreditable: boolean;
+    callType: "AUDIO" | "VIDEO";
+    durationMinutes: 15 | 30 | 45 | 60;
+  },
+) {
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("consultation_bookings")
+    .update({
+      policy_version: input.policyVersion,
+      fee_mode: input.feeMode,
+      fee_amount: input.feeMode === "PAID" ? input.feeAmount : null,
+      fee_currency: input.feeMode === "PAID" ? input.feeCurrency : null,
+      fee_creditable: input.feeMode === "PAID" && input.feeCreditable,
+      payment_status: input.feeMode === "PAID" ? "PENDING" : "NOT_REQUIRED",
+      call_type: input.callType,
+      duration_minutes: input.durationMinutes,
+      commercial_snapshot_locked_at: now,
+      updated_at: now,
+    })
+    .eq("id", input.bookingId)
+    .is("commercial_snapshot_locked_at", null);
+  return !error;
 }
 
 export async function releaseConsultationSlot(

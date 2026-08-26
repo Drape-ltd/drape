@@ -126,12 +126,41 @@ limit 200;
 circuits, payout watchdog state, Android registration freshness, and required
 cron jobs.
 
+## Commercial payment alert taxonomy
+
+Stripe and Paystack use the same alert boundary. Sentry receives stable event
+names plus internal order, payment, payout, webhook-event, refund-resolution,
+settlement, and correlation identifiers. It must not receive webhook bodies,
+bank or card details, evidence contents, contact data, or notification copy.
+
+| Alert | Level | Operational meaning |
+| --- | --- | --- |
+| Repeated webhook signature rejection | warning/error after threshold | Possible provider-secret/configuration failure or repeated abuse; individual invalid requests do not page Ops |
+| Provider webhook processing failed | error | A valid provider event could not reach an authoritative terminal database outcome |
+| Refund reached terminal failure | error | Customer refund failed at Stripe or Paystack; the resolution remains open and duplicate refund attempts are blocked |
+| Transfer/payout reached terminal failure | error | Tailor release failed at the provider and requires the provider-specific recovery path |
+| Provider money movement succeeded but ledger posting failed | fatal/error | Never retry the provider movement blindly; reconcile the exact provider fact and balanced journal through Ops |
+| Charge reversal or dispute opened/lost | error | Freeze unreleased settlement, preserve the provider fact, and surface the recovery case to both parties and Ops |
+| Settlement monitor or payout watchdog failed | error | Lifecycle observation failed; payout status must remain conservative until the monitor recovers |
+| Background job reached `DEAD` | error | Push, email, SMS, or another queued side effect exhausted retries and has a recorded terminal outcome |
+
+Every payment alert must share its correlation ID with the audit row and Ops
+issue when available. Provider references may be included only as opaque IDs.
+Customer-facing status must still come from the authoritative database state;
+Sentry is triage evidence, never a business-state source.
+
 ## External probe
 
 The workflow at `.github/workflows/beta-service-health.yml` checks public
 liveness every five minutes. Add the GitHub repository secret
 `DRAPE_HEALTHCHECK_SECRET` to enable protected readiness. GitHub Actions then
 becomes the external uptime history and failure notification surface.
+
+The workflow persists only `ok` or `fail` as a short-lived Actions artifact.
+A new failure sends one failed-run notification. Repeated probes for the same
+open incident stay visible as warnings without sending another failure email;
+recovery is recorded on the first healthy run. The probe response and state
+artifact must never contain secrets, contact data, or business payloads.
 
 ## Incident order
 

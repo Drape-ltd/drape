@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import {
   View,
   Text,
@@ -43,17 +43,19 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
-import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
+import { composeStructuredAddress } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
 import {
   Button,
+  AddressAutocompleteInput,
   ChoiceSheet,
   DrapeCapsuleButton,
   DrapeFloatingActionDock,
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
+  MoneyInput,
   MeasurementModule,
   PhoneNumberInput,
   PortfolioVideoPreview,
@@ -74,6 +76,7 @@ import {
 import { SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
 import {
   CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS,
+  CUSTOM_ORDER_DRAFT_VERSION,
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
   CUSTOM_ORDER_GARMENT_TAXONOMY,
   CUSTOM_ORDER_GENDER_PRESENTATIONS,
@@ -94,6 +97,7 @@ import {
   getCustomOrderFabricIssues,
   isAllowedCustomStyleReference,
   isCustomOrderBriefLongEnough,
+  isMeaningfulCustomOrderDraft,
   measurementCoreCompleteness,
   hasCustomOrderMeasurementFallback,
   missingCustomOrderMeasurements,
@@ -103,6 +107,10 @@ import {
   stripDrapeVisionFit360DraftFields,
 } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
+import {
+  fulfillmentEligibilityCopy,
+  type FulfillmentEligibilityResult,
+} from '@drape/shared/fulfillment-eligibility'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -130,12 +138,6 @@ type MeasurementProfileRow = {
   last_measured_at: string | null
   updated_at: string | null
 }
-type NominatimSuggestion = {
-  place_id?: string | number
-  display_name?: string
-  address?: Record<string, string | undefined>
-}
-
 type BriefMediaAsset = {
   id: string
   uri: string
@@ -424,6 +426,10 @@ export default function OrderBriefScreen() {
   const [showMeasPrompt, setShowMeasPrompt] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
+  const [draftStatus, setDraftStatus] = useState<'loading' | 'restored' | 'saving' | 'saved' | 'error' | null>(null)
+  const [draftAttachmentWarning, setDraftAttachmentWarning] = useState(false)
+  const draftLoadStartedRef = useRef(false)
+  const draftHydratedRef = useRef(false)
 
   // Step 1
   const [garmentType, setGarmentType] = useState('')
@@ -501,17 +507,17 @@ export default function OrderBriefScreen() {
   const [deliveryStateRegion, setDeliveryStateRegion] = useState('')
   const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
   const [deliveryCountry, setDeliveryCountry] = useState('')
+  const [deliveryVerificationSource, setDeliveryVerificationSource] = useState('')
+  const [deliveryVerificationReference, setDeliveryVerificationReference] = useState('')
+  const [deliveryVerifiedAt, setDeliveryVerifiedAt] = useState('')
+  const [fulfillmentEligibility, setFulfillmentEligibility] = useState<FulfillmentEligibilityResult | null>(null)
+  const [checkingFulfillment, setCheckingFulfillment] = useState(false)
   const [recipientMode, setRecipientMode] = useState<RecipientMode>('SELF')
   const [recipientName, setRecipientName] = useState('')
   const [recipientPhone, setRecipientPhone] = useState('')
   const [recipientContactError, setRecipientContactError] = useState('')
   const [deliveryAddressError, setDeliveryAddressError] = useState('')
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
-  const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<
-    NominatimSuggestion[]
-  >([])
-  const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
-  const suppressNextDeliveryLookup = useRef(false)
   const handledLaunchRef = useRef<string | null>(null)
 
   const garmentSearchTerm = garmentSearch.trim().toLowerCase()
@@ -654,8 +660,6 @@ export default function OrderBriefScreen() {
     setRecipientContactError('')
     setDeliveryAddressError('')
     setDeliveryAddressSearch('')
-    setDeliveryAddressSuggestions([])
-    setShowDeliverySuggestions(false)
     setFabricBudgetCurrency('USD')
   }
 
@@ -788,6 +792,112 @@ export default function OrderBriefScreen() {
     }, [loadInitialData])
   )
 
+  const draftFields = useMemo(() => ({
+    garmentType, garmentTypeOther, genderPresentation, description, occasion,
+    deadline: deadline?.toISOString() ?? null,
+    isBulkOrder, bulkRecipientCount, bulkLabel, bulkNotes, bulkMemberNames,
+    wearerMode, wearerName, photos, inspirationLinks, styleNotes, styleAttributes,
+    measurements, fitNote, fabricSource, fabricHandoffMode, fabricDescription,
+    fabricBudgetAmount, fabricBudgetCurrency,
+    fabricReferenceMedia, fabricReferenceLinks, fabricSubstitutionPreference,
+    bulkFabricMode, fabricVendorName, fabricVendorLocation, fabricVendorLink,
+    fabricVendorNotes, fabricSourcingDeadlineDays, deliveryMethod, shippingPreference,
+    deliveryInstructions, deliveryAddressLine1, deliveryAddressLine2, deliveryCity,
+    deliveryStateRegion, deliveryPostalCode, deliveryCountry, deliveryVerificationSource,
+    deliveryVerificationReference, deliveryVerifiedAt, recipientMode,
+    recipientName, recipientPhone, cancellationPolicyAcknowledged,
+  }), [
+    garmentType, garmentTypeOther, genderPresentation, description, occasion, deadline,
+    isBulkOrder, bulkRecipientCount, bulkLabel, bulkNotes, bulkMemberNames, wearerMode,
+    wearerName, photos, inspirationLinks, styleNotes, styleAttributes, measurements,
+    fitNote, fabricSource, fabricHandoffMode, fabricDescription, fabricBudgetAmount,
+    fabricBudgetCurrency, fabricReferenceMedia, fabricReferenceLinks,
+    fabricSubstitutionPreference, bulkFabricMode, fabricVendorName, fabricVendorLocation,
+    fabricVendorLink, fabricVendorNotes, fabricSourcingDeadlineDays, deliveryMethod,
+    shippingPreference, deliveryInstructions, deliveryAddressLine1, deliveryAddressLine2,
+    deliveryCity, deliveryStateRegion, deliveryPostalCode, deliveryCountry,
+    deliveryVerificationSource, deliveryVerificationReference, deliveryVerifiedAt, recipientMode,
+    recipientName, recipientPhone, cancellationPolicyAcknowledged,
+  ])
+
+  useEffect(() => {
+    if (!userId || !tailorId || initialLoading || draftLoadStartedRef.current) return
+    draftLoadStartedRef.current = true
+    setDraftStatus('loading')
+    void invokeFunction<{
+      ok: boolean
+      draft?: { version: string; current_step: number; fields: Record<string, unknown>; has_device_only_attachments: boolean } | null
+    }>('custom-order-draft-action', { body: { action: 'load', tailorProfileId: tailorId } })
+      .then(({ data, error }) => {
+        const draft = data?.draft
+        if (error || !draft || draft.version !== CUSTOM_ORDER_DRAFT_VERSION) {
+          draftHydratedRef.current = true
+          setDraftStatus(error ? 'error' : null)
+          return
+        }
+        const f = draft.fields ?? {}
+        const text = (key: string) => typeof f[key] === 'string' ? f[key] as string : ''
+        const list = (key: string) => Array.isArray(f[key]) ? f[key] as string[] : []
+        const dateValue = text('deadline')
+        setStep(Number.isInteger(draft.current_step) ? Math.max(0, Math.min(STEP_TITLES.length - 1, draft.current_step)) : 0)
+        setGarmentType(text('garmentType')); setGarmentTypeOther(text('garmentTypeOther'))
+        if (f.genderPresentation === 'Menswear' || f.genderPresentation === 'Womenswear' || f.genderPresentation === 'Unisex') setGenderPresentation(f.genderPresentation)
+        setDescription(text('description')); setOccasion(text('occasion'))
+        if (dateValue && Number.isFinite(new Date(dateValue).getTime())) setDeadline(new Date(dateValue))
+        setIsBulkOrder(f.isBulkOrder === true); setBulkRecipientCount(text('bulkRecipientCount'))
+        setBulkLabel(text('bulkLabel')); setBulkNotes(text('bulkNotes')); setBulkMemberNames(text('bulkMemberNames'))
+        if (f.wearerMode === 'SELF' || f.wearerMode === 'OTHER') setWearerMode(f.wearerMode)
+        setWearerName(text('wearerName')); setPhotos(list('photos')); setInspirationLinks(list('inspirationLinks'))
+        setStyleNotes(text('styleNotes')); setStyleAttributes(list('styleAttributes'))
+        if (f.measurements && typeof f.measurements === 'object' && !Array.isArray(f.measurements)) setMeasurements(f.measurements as MeasurementRecord)
+        setFitNote(text('fitNote'))
+        if (f.fabricSource === 'TAILOR_SOURCES' || f.fabricSource === 'CUSTOMER_SUPPLIES') setFabricSource(f.fabricSource)
+        if (typeof f.fabricHandoffMode === 'string') setFabricHandoffMode(f.fabricHandoffMode as FabricHandoffMode)
+        setFabricDescription(text('fabricDescription')); setFabricBudgetAmount(text('fabricBudgetAmount'))
+        if (typeof f.fabricBudgetCurrency === 'string') setFabricBudgetCurrency(f.fabricBudgetCurrency as CurrencyCode)
+        if (Array.isArray(f.fabricReferenceMedia)) setFabricReferenceMedia(f.fabricReferenceMedia as BriefMediaAsset[])
+        setFabricReferenceLinks(list('fabricReferenceLinks'))
+        if (typeof f.fabricSubstitutionPreference === 'string') setFabricSubstitutionPreference(f.fabricSubstitutionPreference as FabricSubstitutionPreference)
+        if (typeof f.bulkFabricMode === 'string') setBulkFabricMode(f.bulkFabricMode as BulkFabricMode)
+        setFabricVendorName(text('fabricVendorName')); setFabricVendorLocation(text('fabricVendorLocation'))
+        setFabricVendorLink(text('fabricVendorLink')); setFabricVendorNotes(text('fabricVendorNotes'))
+        if (typeof f.fabricSourcingDeadlineDays === 'number') setFabricSourcingDeadlineDays(f.fabricSourcingDeadlineDays)
+        if (f.deliveryMethod === 'SHIPPING' || f.deliveryMethod === 'LOCAL_DELIVERY' || f.deliveryMethod === 'LOCAL_COLLECTION') setDeliveryMethod(f.deliveryMethod)
+        if (f.shippingPreference === 'STANDARD' || f.shippingPreference === 'EXPRESS') setShippingPreference(f.shippingPreference)
+        setDeliveryInstructions(text('deliveryInstructions')); setDeliveryAddressLine1(text('deliveryAddressLine1'))
+        setDeliveryAddressLine2(text('deliveryAddressLine2')); setDeliveryCity(text('deliveryCity'))
+        setDeliveryStateRegion(text('deliveryStateRegion')); setDeliveryPostalCode(text('deliveryPostalCode'))
+        setDeliveryCountry(text('deliveryCountry'))
+        setDeliveryVerificationSource(text('deliveryVerificationSource'))
+        setDeliveryVerificationReference(text('deliveryVerificationReference'))
+        setDeliveryVerifiedAt(text('deliveryVerifiedAt'))
+        if (f.recipientMode === 'SELF' || f.recipientMode === 'OTHER') setRecipientMode(f.recipientMode)
+        setRecipientName(text('recipientName')); setRecipientPhone(text('recipientPhone'))
+        setCancellationPolicyAcknowledged(f.cancellationPolicyAcknowledged === true)
+        setDraftAttachmentWarning(draft.has_device_only_attachments)
+        draftHydratedRef.current = true
+        setDraftStatus('restored')
+      })
+  }, [initialLoading, tailorId, userId])
+
+  useEffect(() => {
+    if (!userId || !tailorId || !draftHydratedRef.current || submitting || !isMeaningfulCustomOrderDraft(draftFields)) return
+    setDraftStatus((current) => current === 'restored' ? current : 'saving')
+    const timer = setTimeout(() => {
+      void invokeFunction<{ ok: boolean; updatedAt?: string; fulfillment?: FulfillmentEligibilityResult }>('custom-order-draft-action', {
+        body: {
+          action: 'save', tailorProfileId: tailorId, version: CUSTOM_ORDER_DRAFT_VERSION,
+          currentStep: step, fields: draftFields,
+          hasDeviceOnlyAttachments: photos.length > 0 || fabricReferenceMedia.length > 0,
+        },
+      }).then(({ data, error }) => {
+        setDraftStatus(error || !data?.ok ? 'error' : 'saved')
+        if (data?.fulfillment) setFulfillmentEligibility(data.fulfillment)
+      })
+    }, 650)
+    return () => clearTimeout(timer)
+  }, [draftFields, fabricReferenceMedia.length, photos.length, step, submitting, tailorId, userId])
+
   function validateDescription(text: string) {
     const placeholder = rejectPlaceholder(text, 'Description')
     if (placeholder) {
@@ -899,67 +1009,92 @@ export default function OrderBriefScreen() {
     })
   }
 
-  useEffect(() => {
-    const text = deliveryAddressSearch.trim()
-    if (suppressNextDeliveryLookup.current) {
-      suppressNextDeliveryLookup.current = false
-      return
+  function clearDeliveryVerification() {
+    setDeliveryVerificationSource('')
+    setDeliveryVerificationReference('')
+    setDeliveryVerifiedAt('')
+    setFulfillmentEligibility(null)
+  }
+
+  async function resolveFulfillment(
+    method: DeliveryMethod,
+    override?: {
+      addressLine1: string
+      city: string
+      regionCode: string
+      postalCode: string
+      countryCode: string
+      verificationSource: string
+      verificationReference: string
+      verifiedAt: string
+    },
+  ) {
+    if (checkingFulfillment) return null
+    setCheckingFulfillment(true)
+    const destination = method === 'LOCAL_COLLECTION' ? null : {
+      addressLine1: override?.addressLine1 ?? deliveryAddressLine1.trim(),
+      city: override?.city ?? deliveryCity.trim(),
+      regionCode: override?.regionCode ?? deliveryStateRegion.trim(),
+      postalCode: override?.postalCode ?? deliveryPostalCode.trim(),
+      countryCode: (override?.countryCode ?? deliveryCountry.trim()).toUpperCase(),
+      verificationSource: override?.verificationSource ?? deliveryVerificationSource,
+      verificationReference: override?.verificationReference ?? deliveryVerificationReference,
+      verifiedAt: override?.verifiedAt ?? deliveryVerifiedAt,
     }
-    if (text.length < 5) {
-      const resetTimer = setTimeout(() => {
-        setDeliveryAddressSuggestions([])
-        setShowDeliverySuggestions(false)
-      }, 0)
-      return () => clearTimeout(resetTimer)
+    const { data, error } = await invokeFunction<{ ok: boolean; fulfillment?: FulfillmentEligibilityResult }>(
+      'custom-order-draft-action',
+      { body: { action: 'resolve-fulfillment', tailorProfileId: tailorId, method, destination } },
+    )
+    setCheckingFulfillment(false)
+    if (error || !data?.fulfillment) {
+      setDeliveryAddressError('Could not check this fulfillment option. Try again.')
+      return null
     }
-
-    const hideTimer = setTimeout(() => {
-      setShowDeliverySuggestions(false)
-    }, 0)
-    const timeout = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
-        )
-        const data = (await res.json()) as unknown
-        const filtered = Array.isArray(data)
-          ? data.filter(
-              (item): item is NominatimSuggestion =>
-                !!item &&
-                typeof item === 'object' &&
-                typeof (item as NominatimSuggestion).display_name === 'string' &&
-                !!(item as NominatimSuggestion).address
-            )
-          : []
-        setDeliveryAddressSuggestions(filtered)
-        setShowDeliverySuggestions(filtered.length > 0)
-      } catch {
-        setDeliveryAddressSuggestions([])
-        setShowDeliverySuggestions(false)
-      }
-    }, 400)
-
-    return () => {
-      clearTimeout(hideTimer)
-      clearTimeout(timeout)
+    const result = data.fulfillment
+    setFulfillmentEligibility(result)
+    setDeliveryAddressError(result.status === 'BLOCKED' ? fulfillmentEligibilityCopy(result) : '')
+    if (result.status === 'BLOCKED' && result.reason === 'LOCAL_DELIVERY_COUNTRY_MISMATCH') {
+      Alert.alert(
+        'Switch to international shipping?',
+        `This address is outside ${result.originCountryCode ?? 'the tailor’s country'}.`,
+        [
+          { text: 'Edit address', style: 'cancel' },
+          {
+            text: 'Switch to shipping',
+            onPress: () => {
+              setDeliveryMethod('SHIPPING')
+              void resolveFulfillment('SHIPPING', override)
+            },
+          },
+        ],
+      )
     }
-  }, [deliveryAddressSearch])
+    return result
+  }
 
-  function selectDeliverySuggestion(item: NominatimSuggestion) {
-    const parsed = parseNominatimSuggestion(item)
-
-    suppressNextDeliveryLookup.current = true
-    setDeliveryAddressSearch(parsed.displayValue)
-    setDeliveryAddressLine1(parsed.line1)
-    setDeliveryAddressLine2(parsed.line2)
-    setDeliveryCity(parsed.city)
-    setDeliveryStateRegion(parsed.stateRegion)
-    setDeliveryPostalCode(parsed.postcode)
-    setDeliveryCountry(parsed.country)
+  function chooseDeliveryMethod(method: DeliveryMethod) {
+    setDeliveryMethod(method)
+    setFulfillmentEligibility(null)
     setDeliveryAddressError('')
-    setDeliveryAddressSuggestions([])
-    setShowDeliverySuggestions(false)
+    if (method === 'LOCAL_COLLECTION') void resolveFulfillment(method)
+  }
+
+  async function confirmStructuredDeliveryAddress() {
+    if (!validateDeliveryAddress()) return
+    const verifiedAt = new Date().toISOString()
+    setDeliveryVerificationSource('CUSTOMER_CONFIRMED_STRUCTURED')
+    setDeliveryVerificationReference('')
+    setDeliveryVerifiedAt(verifiedAt)
+    await resolveFulfillment(deliveryMethod ?? 'LOCAL_DELIVERY', {
+      addressLine1: deliveryAddressLine1.trim(),
+      city: deliveryCity.trim(),
+      regionCode: deliveryStateRegion.trim(),
+      postalCode: deliveryPostalCode.trim(),
+      countryCode: deliveryCountry.trim(),
+      verificationSource: 'CUSTOMER_CONFIRMED_STRUCTURED',
+      verificationReference: '',
+      verifiedAt,
+    })
   }
 
   function validateDeliveryAddress() {
@@ -1400,6 +1535,9 @@ export default function OrderBriefScreen() {
     }
     if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateDeliveryAddress()) return
     if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateRecipientContact()) return
+    if (!deliveryMethod) return
+    const eligibility = await resolveFulfillment(deliveryMethod)
+    if (!eligibility || eligibility.status !== 'ELIGIBLE') return
     setSubmitting(true)
 
     const wearerLabel = isBulkOrder
@@ -1666,6 +1804,9 @@ export default function OrderBriefScreen() {
         deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
         deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
         deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
+        deliveryVerificationSource: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryVerificationSource : null,
+        deliveryVerificationReference: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryVerificationReference || null : null,
+        deliveryVerifiedAt: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryVerifiedAt : null,
         recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
         recipientPhone:
           deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
@@ -1684,29 +1825,30 @@ export default function OrderBriefScreen() {
       setSubmitting(false)
       if (preflightError) {
         const payload = await readFunctionErrorPayload(preflightError)
-        const errorCode =
+        const reportedErrorCode =
           typeof payload?.code === 'string'
             ? payload.code
             : typeof payload?.errorCode === 'string'
               ? payload.errorCode
-              : 'CUSTOM_ORDER_PREFLIGHT_FAILED'
-        const serverMessage =
-          typeof payload?.message === 'string'
-            ? payload.message
-            : typeof payload?.error === 'string'
-              ? payload.error
-              : 'Custom order preflight failed'
-        Sentry.captureException(new Error(`${errorCode}: ${serverMessage}`), {
-          extra: {
-            context: 'custom_order_preflight',
-            tailorId,
-            errorCode,
-            missingMeasurements:
-              errorCode === 'MEASUREMENTS_INCOMPLETE'
-                ? missingSnapshotMeasurements
-                : undefined,
-          },
-        })
+              : null
+        const errorCode = reportedErrorCode ?? 'CUSTOM_ORDER_PREFLIGHT_FAILED'
+        const diagnostic = {
+          context: 'custom_order_preflight',
+          tailorId,
+          errorCode,
+          missingMeasurements: errorCode === 'MEASUREMENTS_INCOMPLETE' ? missingSnapshotMeasurements : undefined,
+        }
+        if (reportedErrorCode) {
+          // Authoritative business gates are expected outcomes, not application crashes.
+          Sentry.addBreadcrumb({
+            category: 'custom_order_preflight',
+            level: 'warning',
+            message: reportedErrorCode,
+            data: diagnostic,
+          })
+        } else {
+          Sentry.captureException(preflightError, { extra: diagnostic })
+        }
       }
       const message = await resolveOrderSubmitErrorMessage(preflightError)
       if (message.toLowerCase().includes('delivery address')) {
@@ -1789,6 +1931,10 @@ export default function OrderBriefScreen() {
       bulk_order: isBulkOrder,
       wearer_mode: wearerContext.mode,
       has_deadline: !!deadline,
+    })
+
+    await invokeFunction('custom-order-draft-action', {
+      body: { action: 'delete', tailorProfileId: tailorId },
     })
 
     resetTo(router, {
@@ -2098,7 +2244,19 @@ export default function OrderBriefScreen() {
           }}
           {...actionDockScroll}
         >
-          <View style={styles.content}>
+        <View style={styles.content}>
+          {draftStatus ? (
+            <View style={styles.guideCard} accessibilityLiveRegion="polite">
+              <Text style={styles.guideTitle}>
+                {draftStatus === 'loading' ? 'Checking for a saved request…' : draftStatus === 'restored' ? 'Request restored' : draftStatus === 'saving' ? 'Saving request…' : draftStatus === 'saved' ? 'Request saved' : 'Draft could not save'}
+              </Text>
+              {draftStatus === 'restored' || draftAttachmentWarning ? (
+                <Text style={styles.guideText}>
+                  {draftAttachmentWarning ? 'Your written details were restored. Recheck photo and video attachments on this device before submitting.' : 'You can continue from where you stopped on any signed-in Drapeon device.'}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
             <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
             <Text style={styles.stepSubtitle}>{STEP_SUBS[step]}</Text>
             {/* ── Step 0: Garment details ── */}
@@ -2874,12 +3032,11 @@ export default function OrderBriefScreen() {
                       showCharacterCount
                     />
                     <View>
-                      <Input
+                      <MoneyInput
                         label="Fabric budget"
-                        placeholder="e.g. 75000"
                         value={fabricBudgetAmount}
-                        onChangeText={(value) => setFabricBudgetAmount(value.replace(/[^\d]/g, ''))}
-                        keyboardType="number-pad"
+                        onChangeText={setFabricBudgetAmount}
+                        currency={fabricBudgetCurrency}
                         required
                         hint="Set the maximum fabric sourcing budget before the tailor quotes."
                       />
@@ -3026,19 +3183,19 @@ export default function OrderBriefScreen() {
                       title="Local delivery"
                       hint="A local rider or delivery partner brings the finished garment to you."
                       active={deliveryMethod === 'LOCAL_DELIVERY'}
-                      onPress={() => setDeliveryMethod('LOCAL_DELIVERY')}
+                      onPress={() => chooseDeliveryMethod('LOCAL_DELIVERY')}
                     />
                     <OptionCard
                       title="Ship to me"
                       hint="Tailor ships your finished garment directly to you."
                       active={deliveryMethod === 'SHIPPING'}
-                      onPress={() => setDeliveryMethod('SHIPPING')}
+                      onPress={() => chooseDeliveryMethod('SHIPPING')}
                     />
                     <OptionCard
                       title="Local collection"
                       hint="You collect in person. A 4-digit code confirms the handover."
                       active={deliveryMethod === 'LOCAL_COLLECTION'}
-                      onPress={() => setDeliveryMethod('LOCAL_COLLECTION')}
+                      onPress={() => chooseDeliveryMethod('LOCAL_COLLECTION')}
                     />
                   </View>
                 </View>
@@ -3125,38 +3282,48 @@ export default function OrderBriefScreen() {
                       }
                       required
                     />
-                    <Input
+                    <AddressAutocompleteInput
                       label="Search address"
                       placeholder="Search address, area, or landmark"
                       value={deliveryAddressSearch}
                       onChangeText={(v) => {
                         setDeliveryAddressSearch(v)
+                        clearDeliveryVerification()
                         if (deliveryAddressError) setDeliveryAddressError('')
                       }}
+                      onSelectAddress={(parsed) => {
+                        setDeliveryAddressLine1(parsed.line1)
+                        setDeliveryAddressLine2(parsed.line2)
+                        setDeliveryCity(parsed.city)
+                        setDeliveryStateRegion(parsed.stateRegion)
+                        setDeliveryPostalCode(parsed.postcode)
+                        setDeliveryCountry(parsed.countryCode || parsed.country)
+                        const verifiedAt = new Date().toISOString()
+                        setDeliveryVerificationSource('ADDRESS_SEARCH')
+                        setDeliveryVerificationReference(parsed.reference)
+                        setDeliveryVerifiedAt(verifiedAt)
+                        setDeliveryAddressError('')
+                        if (deliveryMethod) {
+                          void resolveFulfillment(deliveryMethod, {
+                            addressLine1: parsed.line1,
+                            city: parsed.city,
+                            regionCode: parsed.stateRegion,
+                            postalCode: parsed.postcode,
+                            countryCode: parsed.countryCode ?? '',
+                            verificationSource: 'ADDRESS_SEARCH',
+                            verificationReference: parsed.reference,
+                            verifiedAt,
+                          })
+                        }
+                      }}
                     />
-                    {showDeliverySuggestions ? (
-                      <View style={styles.suggestionsBox}>
-                        {deliveryAddressSuggestions.map((item, index) => (
-                          <TouchableOpacity
-                            key={`${item.place_id ?? item.display_name}-${index}`}
-                            style={[
-                              styles.suggestionRow,
-                              index === deliveryAddressSuggestions.length - 1 &&
-                                styles.suggestionRowLast,
-                            ]}
-                            onPress={() => selectDeliverySuggestion(item)}
-                          >
-                            <Text style={styles.suggestionText}>{item.display_name}</Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    ) : null}
                     <Input
                       label="Address line 1"
                       placeholder="Street address"
                       value={deliveryAddressLine1}
                       onChangeText={(v) => {
                         setDeliveryAddressLine1(v)
+                        clearDeliveryVerification()
                         if (deliveryAddressError) setDeliveryAddressError('')
                       }}
                       onBlur={validateDeliveryAddress}
@@ -3168,6 +3335,7 @@ export default function OrderBriefScreen() {
                       value={deliveryAddressLine2}
                       onChangeText={(v) => {
                         setDeliveryAddressLine2(v)
+                        clearDeliveryVerification()
                         if (deliveryAddressError) setDeliveryAddressError('')
                       }}
                     />
@@ -3179,6 +3347,7 @@ export default function OrderBriefScreen() {
                           value={deliveryCity}
                           onChangeText={(v) => {
                             setDeliveryCity(v)
+                            clearDeliveryVerification()
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
@@ -3192,6 +3361,7 @@ export default function OrderBriefScreen() {
                           value={deliveryStateRegion}
                           onChangeText={(v) => {
                             setDeliveryStateRegion(v)
+                            clearDeliveryVerification()
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
@@ -3207,6 +3377,7 @@ export default function OrderBriefScreen() {
                           value={deliveryPostalCode}
                           onChangeText={(v) => {
                             setDeliveryPostalCode(v)
+                            clearDeliveryVerification()
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
@@ -3219,6 +3390,7 @@ export default function OrderBriefScreen() {
                           value={deliveryCountry}
                           onChangeText={(v) => {
                             setDeliveryCountry(v)
+                            clearDeliveryVerification()
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
@@ -3231,6 +3403,15 @@ export default function OrderBriefScreen() {
                         ? 'Your tailor or a local rider will use these details to deliver the finished garment. If search misses your area, you can still enter the address manually in full.'
                         : 'Your tailor ships the finished garment here. If search misses your area, you can still enter the address manually in full.'}
                     </Text>
+                    <Button
+                      label={checkingFulfillment ? 'Checking…' : 'Confirm delivery address'}
+                      variant="secondary"
+                      disabled={checkingFulfillment}
+                      onPress={() => void confirmStructuredDeliveryAddress()}
+                    />
+                    {fulfillmentEligibility?.status === 'ELIGIBLE' ? (
+                      <Text style={styles.fieldHint}>{fulfillmentEligibilityCopy(fulfillmentEligibility)}</Text>
+                    ) : null}
                     <Text style={styles.fieldHint}>
                       Drapeon includes a standard{' '}
                       {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee when you
@@ -3254,6 +3435,11 @@ export default function OrderBriefScreen() {
                       you have collected the order. Try to collect within 7 days of the ready notice;
                       after 14 days Drapeon may follow up so the tailor is not left storing finished work.
                     </Text>
+                    {fulfillmentEligibility ? (
+                      <Text style={fulfillmentEligibility.status === 'BLOCKED' ? styles.linkError : styles.fieldHint}>
+                        {fulfillmentEligibilityCopy(fulfillmentEligibility)}
+                      </Text>
+                    ) : null}
                   </View>
                 ) : null}
 

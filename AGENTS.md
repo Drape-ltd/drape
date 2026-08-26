@@ -44,6 +44,10 @@ For Drapeon Vision, read `docs/drapeon-vision-design-and-regression-runbook.md` 
 3. Do not retain React synthetic events for asynchronous work. Copy primitive values synchronously.
 4. Icon-only controls require mobile accessibility labels and web tooltips.
 5. Validate narrow iPhone and Android layouts, text scaling, keyboard movement, and dark/light themes where supported.
+6. Persistent action docks may contain only one dominant full-width action. Never stack competing full-width CTAs, duplicate a header action in the footer, or leave a workflow-invalid action visible. Put secondary actions inline, in a compact menu, or on the preceding screen.
+7. A disabled primary action must have a concise nearby explanation tied to the missing requirement. Never leave users to infer why a large grey CTA cannot be used.
+8. Persistent primary CTAs float in the established Drapeon inset capsule dock; they do not attach as edge-to-edge footer slabs. On mobile, extend `DrapeFloatingActionDock`. On web, use the equivalent inset floating or sticky capsule only when persistence is needed, and always reserve enough content clearance beneath it.
+9. Reusing a Drapeon primitive means preserving its complete established behavior: motion, scroll response, compact state, keyboard handling, safe-area placement, accessibility, and content clearance. Floating CTA docks must compact on scroll and restore near the top. Do not disable standard behavior or ship a visual-only imitation unless the exception is documented and verified for that flow.
 
 ## Completion Gates
 
@@ -58,6 +62,8 @@ Do not say a change is fixed merely because it compiles.
 
 ## Cross-Role Workflow Proof
 
+Every product workflow must be designed and implemented as one cross-platform system. The default scope always includes iOS, Android, customer web, tailor web, Ops, shared domain contracts, authoritative database/Edge transitions, realtime state, and notification/delivery outcomes. A request that begins on one screen does not narrow this scope. If a surface is intentionally not applicable, record why instead of silently omitting it.
+
 A customer-to-tailor or tailor-to-customer workflow is not complete until all six layers are verified:
 
 1. The initiating device confirms the action without discarding the user's input.
@@ -68,6 +74,13 @@ A customer-to-tailor or tailor-to-customer workflow is not complete until all si
 6. The same action is replayed from the counterpart role or an adjacent valid stage to catch asymmetric gates.
 
 Typechecks, HTTP 2xx responses, queued jobs, or a foreground realtime update are not delivery evidence on their own. Preserve the IDs and provider outcomes used to prove the pass.
+
+## Replacement Workflow Completion
+
+1. A replacement workflow—such as pickup to delivery, payout destination change, reschedule, refund outcome, or material replacement—is never complete when only the request row is saved. Trace and implement the pending, accepted, paid, rejected, failed, cancelled, and recovered outcomes across shared state, mobile, web, Ops, database/Edge, realtime, and communications.
+2. As soon as a replacement request becomes authoritative, every surface must stop presenting the superseded path as the active path. Hide or disable stale credentials and actions (for example, a pickup code during an accepted pickup-to-delivery switch), and show one explicit pending state plus the available cancel or recovery action.
+3. A terminal replacement must atomically update the authoritative record, derived status, active credentials, audit/event history, Ops work item, and counterpart notifications. Historical values may remain in the audit trail but must not remain usable or appear current.
+4. Do not call a replacement workflow finished until the initiating acknowledgement, Ops visibility, terminal decision, stale-state cleanup, customer and counterpart rendering, notification deep links, and failure recovery have all been exercised. A new card layered over contradictory old UI is a regression, not completion.
 
 ## Tailor Trust Verification Boundary
 

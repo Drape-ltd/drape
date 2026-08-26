@@ -5,12 +5,12 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { invokeFunction } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
-import { loadPayoutAccountStatus, type TailorPayoutStatus } from '@/lib/payout-setup'
+import { loadPayoutAccountStatus, type PendingPayoutChange, type TailorPayoutStatus } from '@/lib/payout-setup'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
 import { appendToHistory } from '@/lib/navigation'
@@ -19,6 +19,7 @@ import type { TailorStockAlert } from '@/lib/ready-made-stock'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { MANUAL_BANK_ENTRY_NOTE } from '@drape/shared/payout-setup'
+import { deriveFulfillmentAwareOrderStagePresentation } from '@drape/shared/drapeon-dispatch'
 import { DrapeStatusChip } from '@/components/ui'
 import { DRAPE_CAPSULE_NAV_CONTENT_CLEARANCE, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 
@@ -61,8 +62,11 @@ type DashboardStats = {
   payoutReverificationRequired: boolean | null
   payoutAccountVerified: boolean | null
   payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  payoutBankName: string | null
+  payoutAccountMasked: string | null
   paystackRecipientCode: string | null
   stripeConnectAccountId: string | null
+  fulfillmentLocationReady: boolean
 }
 
 type ActiveOrderRow = {
@@ -71,6 +75,7 @@ type ActiveOrderRow = {
   garmentType: string
   orderKind: 'CUSTOM' | 'READY_MADE'
   stage: OrderStage
+  deliveryMethod: string | null
   customerName: string
   estimatedDate: string | null
   quotedAmount: number | null
@@ -89,6 +94,7 @@ export default function TailorDashboard() {
   const [availModal, setAvailModal] = useState(false)
   const [availSaving, setAvailSaving] = useState(false)
   const [payoutStatus, setPayoutStatus] = useState<TailorPayoutStatus | null>(null)
+  const [pendingPayoutChange, setPendingPayoutChange] = useState<PendingPayoutChange | null>(null)
   const [payoutStatusLoading, setPayoutStatusLoading] = useState(true)
   const [payoutStatusError, setPayoutStatusError] = useState('')
   const [timeOfDay, setTimeOfDay] = useState(() => getTimeOfDayGreeting())
@@ -120,6 +126,7 @@ export default function TailorDashboard() {
   const loadPayoutSummary = useCallback(async () => {
     if (!userId) {
       setPayoutStatus(null)
+      setPendingPayoutChange(null)
       setPayoutStatusLoading(false)
       return
     }
@@ -128,12 +135,14 @@ export default function TailorDashboard() {
     const result = await loadPayoutAccountStatus()
     if (result.error || !result.profile) {
       setPayoutStatus(null)
+      setPendingPayoutChange(null)
       setPayoutStatusError(result.error ?? 'Could not load payout status.')
       setPayoutStatusLoading(false)
       return
     }
 
     setPayoutStatus(result.profile)
+    setPendingPayoutChange(result.pendingPayoutChange)
     setPayoutStatusError('')
     setPayoutStatusLoading(false)
   }, [userId])
@@ -157,6 +166,28 @@ export default function TailorDashboard() {
     void refetch()
     void loadPayoutSummary()
   }, 0)
+
+  useEffect(() => {
+    if (!userId) return undefined
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const queueRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => { void refetch() }, 180)
+    }
+    const channel = supabase
+      .channel(`tailor-dashboard-orders:${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'orders',
+        filter: `tailor_id=eq.${userId}`,
+      }, queueRefresh)
+      .subscribe()
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      void supabase.removeChannel(channel)
+    }
+  }, [refetch, userId])
 
   async function onRefresh() {
     setRefreshing(true)
@@ -212,7 +243,7 @@ export default function TailorDashboard() {
   const operationalStatusHint = [customOrderStatus, shopOrderStatus].filter(Boolean).join(' · ') || availabilityTileHint
   const pendingWorkCount = (stats?.pendingQuotes ?? 0) + (stats?.itemInquiries ?? 0)
   const payoutSnapshot = stats
-    ? payoutSummary(stats, payoutStatus, payoutStatusLoading, payoutStatusError)
+    ? payoutSummary(stats, payoutStatus, pendingPayoutChange, payoutStatusLoading, payoutStatusError)
     : null
   const payoutTileTitle = payoutSnapshot?.tone === 'verified'
     ? 'Payout ready'
@@ -222,6 +253,12 @@ export default function TailorDashboard() {
     : payoutSnapshot?.detail
   const topStockAlert = stockAlerts[0] ?? null
   const highlightedOrder = orders[0] ?? null
+  const highlightedOrderStage = highlightedOrder
+    ? deriveFulfillmentAwareOrderStagePresentation({
+        orderStage: highlightedOrder.stage,
+        effectiveMethod: highlightedOrder.deliveryMethod,
+      })
+    : null
   const todayFocus = (() => {
     if ((stats?.pendingQuotes ?? 0) > 0) {
       return {
@@ -246,7 +283,9 @@ export default function TailorDashboard() {
         tone: 'default' as const,
         eyebrow: 'Today',
         title: highlightedOrder.garmentType,
-        body: tailorOrderHint(highlightedOrder.stage, highlightedOrder.orderKind) ?? tailorOrderStageLabel(highlightedOrder.stage, highlightedOrder.orderKind),
+        body: highlightedOrderStage?.label
+          ?? tailorOrderHint(highlightedOrder.stage, highlightedOrder.orderKind)
+          ?? tailorOrderStageLabel(highlightedOrder.stage, highlightedOrder.orderKind),
         meta: `${highlightedOrder.customerName} · #${highlightedOrder.reference}`,
       }
     }
@@ -443,6 +482,30 @@ export default function TailorDashboard() {
               </View>
             </View>
 
+            {!stats.fulfillmentLocationReady &&
+            (stats.supportsCustomOrders || stats.supportsReadyMade) ? (
+              <TouchableOpacity
+                style={[styles.nextMoveCard, styles.nextMoveCardWarning]}
+                onPress={() => router.push({
+                  pathname: '/(tailor)/profile/edit',
+                  params: {
+                    focus: 'fulfillment',
+                    returnTo: '/(tailor)',
+                    historyChain: appendToHistory(undefined, '/(tailor)'),
+                  },
+                })}
+                accessibilityRole="button"
+                accessibilityLabel="Confirm fulfillment location"
+              >
+                <Text style={styles.nextMoveEyebrow}>Orders paused</Text>
+                <Text style={styles.nextMoveTitle}>Confirm where orders start</Text>
+                <Text style={styles.nextMoveBody}>
+                  Add a complete pickup or dispatch address so customers can place local delivery, collection, or shipping orders.
+                </Text>
+                <Text style={styles.cockpitQueueLink}>Fix fulfillment location</Text>
+              </TouchableOpacity>
+            ) : null}
+
             {orders.length > 0 ? (
               <View style={styles.cockpitQueue}>
                 <View style={styles.cockpitQueueHeader}>
@@ -451,8 +514,12 @@ export default function TailorDashboard() {
                     <Text style={styles.cockpitQueueLink}>See all</Text>
                   </TouchableOpacity>
                 </View>
-                {orders.slice(0, 2).map((order) => (
-                  <TouchableOpacity
+                {orders.slice(0, 2).map((order) => {
+                  const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
+                    orderStage: order.stage,
+                    effectiveMethod: order.deliveryMethod,
+                  })
+                  return <TouchableOpacity
                     key={order.id}
                     style={styles.cockpitOrderRow}
                     onPress={() => router.push({
@@ -469,12 +536,12 @@ export default function TailorDashboard() {
                       <Text style={styles.cockpitOrderMeta} numberOfLines={1}>{order.customerName} · #{order.reference}</Text>
                     </View>
                     <DrapeStatusChip
-                      value={order.stage}
-                      label={tailorOrderStageLabel(order.stage, order.orderKind)}
+                      value={stagePresentation.stage ?? order.stage}
+                      label={stagePresentation.label ?? tailorOrderStageLabel(order.stage, order.orderKind)}
                       domain="order"
                     />
                   </TouchableOpacity>
-                ))}
+                })}
               </View>
             ) : null}
           </View>
@@ -638,13 +705,14 @@ function payoutProviderName(stats: DashboardStats, status?: TailorPayoutStatus |
 function payoutSummary(
   stats: DashboardStats,
   status: TailorPayoutStatus | null,
+  pendingChange: PendingPayoutChange | null,
   loading: boolean,
   error: string,
 ) {
   const verified = status?.payoutAccountVerified ?? stats.payoutAccountVerified
   const needsReview = status?.payoutReverificationRequired ?? stats.payoutReverificationRequired
-  const bankName = status?.payoutBankName ?? null
-  const maskedAccount = status?.payoutAccountMasked ?? null
+  const bankName = status?.payoutBankName ?? stats.payoutBankName
+  const maskedAccount = status?.payoutAccountMasked ?? stats.payoutAccountMasked
   const holdUntil = futureDateLabel(status?.payoutDestinationHoldUntil)
   const hasSavedDetails =
     !!bankName
@@ -655,6 +723,46 @@ function payoutSummary(
     || !!stats.paystackAccountId
     || !!stats.stripeAccountId
   const last4 = lastFour(maskedAccount)
+
+  if (verified === true && needsReview !== true && pendingChange) {
+    const requested = pendingChange.requestedDestination
+    const requestedLast4 = lastFour(requested?.payoutAccountMasked ?? null)
+    const requestedLabel = requested?.payoutBankName
+      ? `${requested.payoutBankName}${requestedLast4 ? ` ending ${requestedLast4}` : ''}`
+      : 'replacement payout account'
+    if (pendingChange.lifecycleState === 'AWAITING_CONFIRMATION') {
+      const expires = futureDateLabel(pendingChange.confirmationExpiresAt)
+      return {
+        badge: 'Confirm change',
+        badgeStyle: styles.payoutBadgeReview,
+        badgeTextStyle: styles.payoutBadgeTextReview,
+        title: bankName ?? payoutProviderName(stats, status),
+        detail: `Current account active · confirm ${requestedLabel}${expires ? ` by ${expires}` : ' within 48 hours'}`,
+        cta: 'Confirm or cancel',
+        tone: 'review' as const,
+      }
+    }
+    if (pendingChange.lifecycleState === 'SECURITY_HOLD') {
+      return {
+        badge: 'Activating',
+        badgeStyle: styles.payoutBadgeReview,
+        badgeTextStyle: styles.payoutBadgeTextReview,
+        title: bankName ?? payoutProviderName(stats, status),
+        detail: `${requestedLabel} is being activated now without an extra payout-account hold`,
+        cta: 'View payout change',
+        tone: 'review' as const,
+      }
+    }
+    return {
+      badge: 'Drapeon review',
+      badgeStyle: styles.payoutBadgeReview,
+      badgeTextStyle: styles.payoutBadgeTextReview,
+      title: bankName ?? payoutProviderName(stats, status),
+      detail: `Current account active · ${requestedLabel} needs an account-safety review`,
+      cta: 'View payout change',
+      tone: 'review' as const,
+    }
+  }
 
   if (loading && !status && verified !== true && !hasSavedDetails) {
     return {
@@ -670,13 +778,15 @@ function payoutSummary(
 
   if (!status && error) {
     return {
-      badge: 'Not set up',
-      badgeStyle: styles.payoutBadgeSetup,
-      badgeTextStyle: styles.payoutBadgeTextSetup,
+      badge: hasSavedDetails || verified === true ? 'Refresh' : 'Unavailable',
+      badgeStyle: hasSavedDetails || verified === true ? styles.payoutBadgeReview : styles.payoutBadgeSetup,
+      badgeTextStyle: hasSavedDetails || verified === true ? styles.payoutBadgeTextReview : styles.payoutBadgeTextSetup,
       title: 'Payout status unavailable',
-      detail: 'Open payout setup to refresh your account status.',
-      cta: 'Open payout',
-      tone: 'setup' as const,
+      detail: hasSavedDetails || verified === true
+        ? 'Your saved payout account is unchanged. Open it to refresh the latest status.'
+        : 'We could not check payout status. This does not mean your setup was removed.',
+      cta: 'Refresh payout',
+      tone: hasSavedDetails || verified === true ? 'review' as const : 'setup' as const,
     }
   }
 
@@ -719,11 +829,11 @@ function payoutSummary(
   }
 
   return {
-    badge: 'Not set up',
+    badge: 'Action needed',
     badgeStyle: styles.payoutBadgeSetup,
     badgeTextStyle: styles.payoutBadgeTextSetup,
-    title: 'No payout account yet',
-    detail: 'Set up payouts before paid orders can release earnings.',
+    title: 'Payout setup needed',
+    detail: 'Add a payout account before paid orders can release earnings.',
     cta: 'Set up payout',
     tone: 'setup' as const,
   }

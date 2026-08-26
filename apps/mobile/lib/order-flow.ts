@@ -99,7 +99,7 @@ export function customerOrderHint(stage: OrderStage, orderKind: MobileOrderKind)
     case 'PENDING_QUOTE':
       return orderKind === 'READY_MADE' ? 'Inquiry open' : 'Waiting for quote'
     case 'CONSULTATION':
-      return 'Consultation in progress'
+      return 'Consultation scheduled'
     case 'QUOTE_SENT':
       return 'Waiting for you'
     case 'PAYMENT_PENDING':
@@ -141,7 +141,7 @@ export function tailorOrderHint(stage: OrderStage, orderKind: MobileOrderKind): 
     case 'PENDING_QUOTE':
       return orderKind === 'READY_MADE' ? 'Customer inquiry' : 'Quote needed'
     case 'CONSULTATION':
-      return 'Consultation in progress'
+      return 'Consultation scheduled'
     case 'QUOTE_SENT':
       return 'Waiting for customer'
     case 'PAYMENT_PENDING':

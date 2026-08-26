@@ -1,6 +1,7 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { log } from './logger.ts'
 import { normalizeDrapeonSender, renderDrapeonTransactionalEmail } from './email-template.ts'
+import { formatTaxRate, taxLinesForReceiptSnapshot } from '../../../packages/shared/src/tax.ts'
 
 const FN = 'order-email'
 const RESEND_API = 'https://api.resend.com/emails'
@@ -24,6 +25,53 @@ type OrderEmailContext = {
   currency?: string | null
   consultation_fee?: number | null
   fulfillment_fee?: number | null
+}
+
+type InitialReceiptContext = {
+  receipt_number: string
+  currency: string
+  subtotal_amount: number
+  consultation_credit_amount: number
+  promotion_amount: number
+  platform_fee_amount: number
+  tax_amount: number
+  import_tax_amount: number
+  duty_amount: number
+  tax_collection_mode: string | null
+  shipping_amount: number
+  total_amount: number
+  tax_jurisdiction: string | null
+  provider: string
+  provider_reference: string
+}
+
+function receiptDetails(receipt: InitialReceiptContext | null) {
+  if (!receipt) return []
+  const grossWorkAmount = receipt.subtotal_amount
+    + receipt.consultation_credit_amount
+    + receipt.promotion_amount
+  const domesticTaxAmount = Math.max(receipt.tax_amount - receipt.import_tax_amount - receipt.duty_amount, 0)
+  const taxLines = taxLinesForReceiptSnapshot({
+    taxJurisdiction: receipt.tax_jurisdiction,
+    taxAmount: domesticTaxAmount,
+  })
+  return [
+    { label: 'Receipt', value: receipt.receipt_number },
+    { label: 'Tailor work and included materials', value: formatMoney(grossWorkAmount, receipt.currency) },
+    ...(receipt.consultation_credit_amount > 0 ? [{ label: 'Consultation fee credit', value: `−${formatMoney(receipt.consultation_credit_amount, receipt.currency)}` }] : []),
+    ...(receipt.promotion_amount > 0 ? [{ label: 'Drapeon-funded benefit', value: `−${formatMoney(receipt.promotion_amount, receipt.currency)}` }] : []),
+    ...(receipt.platform_fee_amount > 0 ? [{ label: 'Drapeon service fee', value: formatMoney(receipt.platform_fee_amount, receipt.currency) }] : []),
+    { label: 'Fulfillment', value: receipt.shipping_amount > 0 ? formatMoney(receipt.shipping_amount, receipt.currency) : 'Free' },
+    ...taxLines.map((line) => ({
+      label: line.rateBps > 0 ? `${line.label} (${formatTaxRate(line.rateBps)})` : line.label,
+      value: formatMoney(line.amount, receipt.currency),
+    })),
+    ...(receipt.import_tax_amount > 0 ? [{ label: 'Import tax', value: formatMoney(receipt.import_tax_amount, receipt.currency) }] : []),
+    ...(receipt.duty_amount > 0 ? [{ label: 'Customs duty', value: formatMoney(receipt.duty_amount, receipt.currency) }] : []),
+    ...(receipt.tax_collection_mode === 'PAYABLE_ON_IMPORT' ? [{ label: 'Import charges', value: 'Not collected at checkout; customs or the carrier may collect them from the responsible importer.' }] : []),
+    { label: 'Total paid', value: formatMoney(receipt.total_amount, receipt.currency) },
+    { label: 'Provider reference', value: `${receipt.provider} · ${receipt.provider_reference}` },
+  ]
 }
 
 function getSiteUrl() {
@@ -95,11 +143,14 @@ function orderPhotoStoragePath(value: string | null | undefined) {
 async function signedEmailEvidenceUrl(
   supabase: SupabaseClient,
   value: string | null | undefined,
+  bucket: 'order-photos' | 'commercial-evidence' = 'order-photos',
 ) {
-  const path = orderPhotoStoragePath(value)
+  const path = bucket === 'commercial-evidence'
+    ? value?.trim().replace(/^\/+|^commercial-evidence\//gu, '').split(/[?#]/u)[0] ?? null
+    : orderPhotoStoragePath(value)
   if (!path) return null
   const { data, error } = await supabase.storage
-    .from('order-photos')
+    .from(bucket)
     .createSignedUrl(path, EMAIL_MEDIA_TTL_SECONDS)
   if (error || !data?.signedUrl) {
     log('warn', FN, 'evidence.sign_failed', { path, error: error?.message ?? 'missing signed URL' })
@@ -112,6 +163,7 @@ function customerOrderConfirmationEmail(input: {
   customerName: string
   order: OrderEmailContext
   phase: PaymentPhase
+  receipt: InitialReceiptContext | null
 }) {
   const ref = orderReference(input.order)
   const label = orderLabel(input.order)
@@ -158,7 +210,7 @@ function customerOrderConfirmationEmail(input: {
         { label: 'Order', value: `#${ref}` },
         { label: 'Item', value: label },
         ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
-        {
+        ...(!input.receipt ? [{
           label:
             input.phase === 'CONSULTATION'
               ? 'Consultation fee'
@@ -166,7 +218,7 @@ function customerOrderConfirmationEmail(input: {
                 ? fulfillmentLabel(input.order.delivery_method)
                 : 'Amount',
           value: amount,
-        },
+        }] : []),
         ...(input.phase === 'INITIAL_ORDER' && input.order.delivery_method
           ? [
               {
@@ -175,6 +227,7 @@ function customerOrderConfirmationEmail(input: {
               },
             ]
           : []),
+        ...receiptDetails(input.receipt),
       ],
       ctaLabel: 'Open order',
       ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
@@ -189,6 +242,7 @@ function tailorOrderConfirmationEmail(input: {
   customerName: string
   order: OrderEmailContext
   phase: PaymentPhase
+  receipt: InitialReceiptContext | null
 }) {
   const ref = orderReference(input.order)
   const label = orderLabel(input.order)
@@ -240,7 +294,7 @@ function tailorOrderConfirmationEmail(input: {
         { label: 'Customer', value: input.customerName },
         { label: 'Item', value: label },
         ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
-        {
+        ...(!input.receipt ? [{
           label:
             input.phase === 'CONSULTATION'
               ? 'Consultation fee'
@@ -248,7 +302,8 @@ function tailorOrderConfirmationEmail(input: {
                 ? fulfillmentLabel(input.order.delivery_method)
                 : 'Amount paid',
           value: amount,
-        },
+        }] : []),
+        ...receiptDetails(input.receipt),
       ],
       ctaLabel: 'Open order',
       ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
@@ -355,6 +410,8 @@ function orderEventEmail(input: {
   headline: string
   body: string
   ctaLabel?: string
+  materialAdvanceId?: string | null
+  action?: string | null
   evidenceImageUrl?: string | null
 }) {
   const ref = orderReference(input.order)
@@ -362,6 +419,12 @@ function orderEventEmail(input: {
   const appUrl = getSiteUrl()
   const ctaLabel = input.ctaLabel?.trim() || 'Open Drapeon'
   const evidenceImageUrl = input.evidenceImageUrl?.trim()
+  const focusParams = new URLSearchParams()
+  if (input.materialAdvanceId?.trim()) focusParams.set('advanceId', input.materialAdvanceId.trim())
+  if (input.action?.trim()) focusParams.set('action', input.action.trim())
+  const focusQuery = focusParams.toString()
+  const webOrderUrl = `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}${focusQuery ? `?${focusQuery}` : ''}${input.materialAdvanceId?.trim() ? `#material-advance-${encodeURIComponent(input.materialAdvanceId.trim())}` : ''}`
+  const appOrderUrl = `drapeon://orders/${encodeURIComponent(input.order.id)}${focusQuery ? `?${focusQuery}` : ''}`
   return renderDrapeonTransactionalEmail({
     preheader: `${input.headline} for order #${ref}.`,
     eyebrow: 'Order update',
@@ -374,9 +437,9 @@ function orderEventEmail(input: {
       ...(input.order.item_size ? [{ label: 'Size', value: input.order.item_size }] : []),
     ],
     ctaLabel,
-    ctaUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}`,
+    ctaUrl: webOrderUrl,
     secondaryCtaLabel: 'Open in Drapeon',
-    secondaryCtaUrl: `drapeon://orders/${encodeURIComponent(input.order.id)}`,
+    secondaryCtaUrl: appOrderUrl,
     evidenceImageUrl,
     evidenceImageAlt: `Latest production photo for order #${ref}`,
     evidenceLinkUrl: `${appUrl}/account/orders/${encodeURIComponent(input.order.id)}#order-media`,
@@ -393,7 +456,10 @@ export async function sendOrderEventEmail(
     headline?: string
     body: string
     ctaLabel?: string
+    materialAdvanceId?: string | null
+    action?: string | null
     evidenceImageUrl?: string | null
+    evidenceStorageBucket?: 'order-photos' | 'commercial-evidence' | null
   }
 ) {
   const email = await lookupUserEmail(supabase, input.recipientUserId)
@@ -403,7 +469,11 @@ export async function sendOrderEventEmail(
     input.audience === 'CUSTOMER'
       ? await lookupCustomerName(supabase, input.recipientUserId)
       : await lookupTailorName(supabase, input.recipientUserId)
-  const evidenceImageUrl = await signedEmailEvidenceUrl(supabase, input.evidenceImageUrl)
+  const evidenceImageUrl = await signedEmailEvidenceUrl(
+    supabase,
+    input.evidenceImageUrl,
+    input.evidenceStorageBucket ?? 'order-photos',
+  )
 
   const payload = orderEventEmail({
     recipientName,
@@ -411,6 +481,8 @@ export async function sendOrderEventEmail(
     headline: input.headline ?? input.subject,
     body: input.body,
     ctaLabel: input.ctaLabel,
+    materialAdvanceId: input.materialAdvanceId,
+    action: input.action,
     evidenceImageUrl,
   })
   const result = await sendEmail(email, input.subject, payload.html, payload.text)
@@ -422,18 +494,29 @@ export async function sendOrderConfirmationEmails(
   order: OrderEmailContext,
   phase: PaymentPhase
 ) {
-  const [customerEmail, tailorEmail, customerName, tailorName] = await Promise.all([
+  const [customerEmail, tailorEmail, customerName, tailorName, receiptResult] = await Promise.all([
     lookupUserEmail(supabase, order.customer_id),
     lookupUserEmail(supabase, order.tailor_id),
     lookupCustomerName(supabase, order.customer_id),
     lookupTailorName(supabase, order.tailor_id),
+    phase === 'INITIAL_ORDER'
+      ? supabase
+          .from('commercial_receipts')
+          .select('receipt_number, currency, subtotal_amount, consultation_credit_amount, promotion_amount, platform_fee_amount, tax_amount, import_tax_amount, duty_amount, tax_collection_mode, shipping_amount, total_amount, tax_jurisdiction, provider, provider_reference')
+          .eq('order_id', order.id)
+          .order('issued_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ])
+  const receipt = receiptResult.error ? null : receiptResult.data as InitialReceiptContext | null
 
   if (customerEmail) {
     const customerEmailPayload = customerOrderConfirmationEmail({
       customerName,
       order,
       phase,
+      receipt,
     })
     await sendEmail(
       customerEmail,
@@ -449,6 +532,7 @@ export async function sendOrderConfirmationEmails(
       customerName,
       order,
       phase,
+      receipt,
     })
     await sendEmail(
       tailorEmail,

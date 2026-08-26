@@ -77,6 +77,7 @@ import {
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
+  MoneyInput,
   PhoneNumberInput,
   RemoteImage,
   AvatarImage,
@@ -105,6 +106,7 @@ import {
   type TailorSetupFieldErrors,
   type TailorSetupStep,
 } from '@drape/shared/tailor-setup'
+import type { AccountCurrencyCode } from '@drape/shared'
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
   MEDIA_LIMITS_BYTES,
@@ -176,6 +178,10 @@ type UserCurrencyRow = {
 
 type PickupDetailsRow = {
   pickup_address: string | null
+  pickup_city: string | null
+  pickup_region: string | null
+  pickup_postal_code: string | null
+  pickup_country_code: string | null
   pickup_instructions: string | null
 }
 
@@ -667,6 +673,10 @@ export default function TailorSetupScreen() {
   const [readyMadeItemCount, setReadyMadeItemCount] = useState(0)
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
+  const [pickupCity, setPickupCity] = useState('')
+  const [pickupRegion, setPickupRegion] = useState('')
+  const [pickupPostalCode, setPickupPostalCode] = useState('')
+  const [pickupCountryCode, setPickupCountryCode] = useState('')
   const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
@@ -867,7 +877,7 @@ export default function TailorSetupScreen() {
 
     supabase
       .from('tailor_pickup_details')
-      .select('pickup_address, pickup_instructions')
+      .select('pickup_address, pickup_city, pickup_region, pickup_postal_code, pickup_country_code, pickup_instructions')
       .eq('user_id', user.id)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -879,6 +889,10 @@ export default function TailorSetupScreen() {
 
         const row = data as PickupDetailsRow
         if (typeof row.pickup_address === 'string') setPickupAddress(row.pickup_address)
+        if (typeof row.pickup_city === 'string') setPickupCity(row.pickup_city)
+        if (typeof row.pickup_region === 'string') setPickupRegion(row.pickup_region)
+        if (typeof row.pickup_postal_code === 'string') setPickupPostalCode(row.pickup_postal_code)
+        if (typeof row.pickup_country_code === 'string') setPickupCountryCode(row.pickup_country_code)
         if (typeof row.pickup_instructions === 'string')
           setPickupInstructions(row.pickup_instructions)
         setPickupHydrated(true)
@@ -1979,6 +1993,18 @@ export default function TailorSetupScreen() {
   async function finish() {
     if (saving || uploadingId || uploadingMedia) return
 
+    if (pickupAvailable && (
+      pickupAddress.trim().length < 8
+      || !pickupCity.trim()
+      || !/^[A-Za-z]{2}$/u.test(pickupCountryCode.trim())
+    )) {
+      setStep(3)
+      setSetupView('section')
+      setVisibleErrors({ pickupAddress: 'Confirm the pickup address, city, and 2-letter country code.' })
+      focusFirstSetupError({ pickupAddress: 'Confirm the pickup address, city, and 2-letter country code.' }, 3)
+      return
+    }
+
     const phoneVerifiedForSubmit = await ensurePhoneVerifiedForSetup('finish')
     if (!phoneVerifiedForSubmit) {
       setStep(0)
@@ -2035,6 +2061,14 @@ export default function TailorSetupScreen() {
           shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
+          pickupAddressLine1: pickupAddress.trim() || null,
+          pickupCity: pickupCity.trim() || null,
+          pickupRegion: pickupRegion.trim() || null,
+          pickupPostalCode: pickupPostalCode.trim() || null,
+          pickupCountryCode: pickupCountryCode.trim().toUpperCase() || null,
+          pickupLocationVerificationSource: pickupAvailable ? 'TAILOR_CONFIRMED_STRUCTURED' : null,
+          pickupLocationVerificationReference: null,
+          pickupLocationVerifiedAt: pickupAvailable ? new Date().toISOString() : null,
           pickupInstructions: pickupInstructions.trim() || null,
           deliveryAvailable,
           shippingAvailable,
@@ -2811,7 +2845,7 @@ export default function TailorSetupScreen() {
                       </View>
                     ) : null}
                     <View style={styles.priceRow}>
-                      <Input
+                      <MoneyInput
                         label="From"
                         placeholder="50"
                         value={priceMin}
@@ -2821,11 +2855,11 @@ export default function TailorSetupScreen() {
                         }}
                         onFocus={() => focusTextField('priceMin')}
                         onBlur={() => blurTextField('priceMin')}
-                        keyboardType="decimal-pad"
+                        currency={currency as AccountCurrencyCode}
                         required
                         containerStyle={styles.priceInput}
                       />
-                      <Input
+                      <MoneyInput
                         label="To"
                         placeholder="500"
                         value={priceMax}
@@ -2835,7 +2869,7 @@ export default function TailorSetupScreen() {
                         }}
                         onFocus={() => focusTextField('priceMax')}
                         onBlur={() => blurTextField('priceMax')}
-                        keyboardType="decimal-pad"
+                        currency={currency as AccountCurrencyCode}
                         required
                         containerStyle={styles.priceInput}
                       />
@@ -3020,10 +3054,43 @@ export default function TailorSetupScreen() {
                             setPickupAddress(value)
                             clearVisibleError('pickupAddress')
                           }}
+                          onSelectAddress={(address) => {
+                            setPickupAddress(address.line1 || address.displayValue)
+                            setPickupCity(address.city)
+                            setPickupRegion(address.stateRegion)
+                            setPickupPostalCode(address.postcode)
+                            if (address.countryCode) setPickupCountryCode(address.countryCode)
+                            clearVisibleError('pickupAddress')
+                          }}
                           onFocus={() => focusTextField('pickupAddress')}
                           onBlur={() => blurTextField('pickupAddress')}
                           hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
                           multiline
+                        />
+                        <Input
+                          label="Pickup city"
+                          placeholder="City"
+                          value={pickupCity}
+                          onChangeText={setPickupCity}
+                        />
+                        <Input
+                          label="State / region"
+                          placeholder="State or region"
+                          value={pickupRegion}
+                          onChangeText={setPickupRegion}
+                        />
+                        <Input
+                          label="Postcode / ZIP (optional)"
+                          placeholder="Postcode / ZIP"
+                          value={pickupPostalCode}
+                          onChangeText={setPickupPostalCode}
+                        />
+                        <Input
+                          label="Pickup country code"
+                          placeholder="e.g. GH"
+                          value={pickupCountryCode}
+                          onChangeText={(value) => setPickupCountryCode(value.toUpperCase().slice(0, 2))}
+                          hint="Use the 2-letter country code."
                         />
                         <Input
                           label="Pickup instructions (optional)"

@@ -44,12 +44,14 @@ import {
   Search,
   Send,
   Share2,
+  ShieldCheck,
   Settings,
   ShoppingBag,
   SlidersHorizontal,
   Square,
   Star,
   Trash2,
+  Truck,
   UserRound,
   Users,
   Video,
@@ -60,10 +62,22 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type { Session, RealtimeChannel } from '@supabase/supabase-js'
+import { ConsultationAttendancePanel } from './consultation-attendance-panel'
+import { ConsultationReschedulePanel } from './consultation-reschedule-panel'
+import { ConsultationLifecyclePanel } from './consultation-lifecycle-panel'
+import { FabricWorkflowPanel } from './fabric-workflow-panel'
+import { MoneyInput } from './money-input'
+import { StructuredAddressSearch } from './structured-address-search'
+import {
+  fulfillmentEligibilityCopy,
+  type FulfillmentEligibilityResult,
+} from '@drape/shared/fulfillment-eligibility'
 import {
   CONTACTS,
   CORE_MEASUREMENT_FIELDS,
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
+  FABRIC_FUNDING_POLICY_V2_VERSION,
+  CUSTOM_ORDER_DRAFT_VERSION,
   CUSTOM_ORDER_MAX_REFERENCE_PHOTOS,
   CUSTOM_ORDER_MAX_STYLE_LINKS,
   SUPPORTED_ACCOUNT_CURRENCIES,
@@ -75,17 +89,23 @@ import {
   currencySymbol,
   isAllowedCustomStyleReference,
   isCustomOrderBriefLongEnough,
+  isMeaningfulCustomOrderDraft,
+  latestFabricApprovalEvidence,
+  sourcedFabricChangeFeedbackFromUpdates,
+  styleAlignmentChangeFeedbackFromUpdates,
   isMeasurementFieldKey,
   isTransientMeasurementMetadataKey,
   measurementCoreCompleteness,
   mergeMeasurementRecords,
   normalizeAccountCurrency,
   normalizePhoneForStorage,
+  payoutBlockRecovery,
   payoutBlockReasonMessage,
   promoteSpecialistMeasurementsToProfileValues,
   readMeasurementValue,
   specialistMeasurementProfileValueKeys,
   stripDrapeVisionFit360DraftFields,
+  taxCollectionPromise,
   TAILOR_SETUP_VALIDATION,
   buildWhatsAppSupportUrl,
   getOnboardingProofItemIssues,
@@ -102,6 +122,17 @@ import {
   parseScheduledOrderCallMessage,
   formatExplicitZonedDateTime,
   ORDER_EVENT_LABELS,
+  QUOTE_ORDER_REVIEW_COPY,
+  QUOTE_ORDER_REVIEW_VERSION,
+  TAILOR_QUOTE_DRAFT_VERSION,
+  canSubmitTailorFabricApproval,
+  formatMoneyInputValue,
+  isMeaningfulTailorQuoteDraft,
+  parseMoneyInputToMinorUnits,
+  formatTaxRate,
+  taxLinesForReceiptSnapshot,
+  taxLinesForSnapshot,
+  taxSnapshotNeedsRefresh,
   QUOTE_REVISION_REASON_LABELS,
   type OrderConversationAction,
   type OrderEventType,
@@ -113,6 +144,51 @@ import {
   type ConversationTranslationPreference,
   type MessageTranslation,
   type TranslationLanguage,
+  CUSTOMER_CONCERN_REASONS,
+  CUSTOMER_CONCERN_REASON_LABELS,
+  FINANCIAL_CASE_REQUESTED_OUTCOMES,
+  FINANCIAL_CASE_REQUESTED_OUTCOME_LABELS,
+  evidencePromptsForConcern,
+  type CustomerConcernReason,
+  type FinancialCaseRequestedOutcome,
+  COMMERCIAL_ADJUSTMENT_LABELS,
+  COMMERCIAL_ADJUSTMENT_TYPES,
+  COMMERCIAL_ADJUSTMENT_RESPONSIBILITIES,
+  type CommercialAdjustmentType,
+  RETURN_REASONS,
+  RETURN_REASON_LABELS,
+  RESOLUTION_REMEDIES,
+  type ReturnReason,
+  type ResolutionRemedy,
+  orderHistorySummary,
+  MATERIAL_ADVANCE_DECLINE_REASONS,
+  MATERIAL_ADVANCE_DECLINE_REASON_LABELS,
+  materialAdvanceDeclineReasonLabel,
+  materialReconciliationCopy,
+  OPS_PARTIAL_REFUND_ORDER_OUTCOME_COPY,
+  refundProviderTimingCopy,
+  consultationOrderListState,
+  type ConsultationAttendanceReviewSnapshot,
+  type OpsPartialRefundOrderOutcome,
+  type MaterialAdvanceDeclineReason,
+  type AccountCurrencyCode,
+  type TailorQuoteDraftFields,
+  derivePayoutDeliveryState,
+  payoutDeliveryExplanation,
+  payoutDeliveryLabel,
+  presentProviderDispute,
+  type ProviderDisputeStatus,
+  dispatchBlockerCopy,
+  deriveDispatchFulfillmentPresentation,
+  deriveDispatchCustomerChargePresentation,
+  deriveFulfillmentAwareHistoryLabel,
+  deriveFulfillmentAwareOrderStagePresentation,
+  isCompletedOrderStage,
+  type DispatchCustomerDecision,
+  type DispatchRunStatus,
+  formatPayoutPurpose,
+  formatOrderPaymentPhase,
+  type PayoutPurpose,
 } from '@drape/shared'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
@@ -121,6 +197,7 @@ import {
   formatCallCountdown,
   getCallLifecycleState,
   isCallSchedulingStartValid,
+  recommendedSchedulingStartDate,
 } from '@drape/shared/call-scheduling-policy'
 import {
   ALLOWED_MESSAGE_MEDIA_CONTENT_TYPES,
@@ -224,8 +301,12 @@ const ORDER_REALTIME_CHILD_TABLES = [
   'messages',
   'order_material_advances',
   'order_payments',
+  'provider_disputes',
+  'order_settlement_plans',
+  'order_settlement_tranches',
   'order_production_evidence',
   'order_stage_updates',
+  'consultation_attendance_reviews',
   'reviews',
   ...(QUOTE_NEGOTIATION_UI_ENABLED
     ? ['order_quotes', 'quote_revision_requests', 'order_events'] as const
@@ -258,6 +339,7 @@ type JoinedProfile = {
   accepts_custom_orders_now?: boolean | null
   shop_paused?: boolean | null
   is_live?: boolean | null
+  consultation_call_type?: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO' | null
 }
 
 type AccountOrder = {
@@ -275,6 +357,7 @@ type AccountOrder = {
   recipient_name?: string | null
   recipient_phone?: string | null
   fabric_source: string | null
+  fabric_funding_policy_version: string | null
   special_note: string | null
   fabric_tracking: string | null
   tracking_number?: string | null
@@ -290,6 +373,13 @@ type AccountOrder = {
   fulfillment_fee: number | null
   shipping_amount: number | null
   tax_amount: number | null
+  import_tax_amount?: number | null
+  duty_amount?: number | null
+  tax_collection_mode?: 'COLLECTED_AT_CHECKOUT' | 'PAYABLE_ON_IMPORT' | 'BLOCKED' | null
+  tax_responsible_party?: 'TAILOR' | 'DRAPEON_MARKETPLACE_FACILITATOR' | 'CUSTOMER_IMPORTER' | null
+  tax_rate_bps?: number | null
+  tax_region?: string | null
+  tax_fallback?: boolean | null
   platform_fee_amount: number | null
   total_amount: number | null
   currency: string | null
@@ -298,6 +388,7 @@ type AccountOrder = {
   updated_at: string | null
   deadline: string | null
   quoted_completion_date: string | null
+  quote_expires_at?: string | null
   customer_id: string | null
   tailor_id: string | null
   tailor_profile_id: string | null
@@ -332,6 +423,9 @@ type AccountOrderQuote = {
   currency: string
   subtotal_amount: number
   tax_amount: number
+  import_tax_amount: number
+  duty_amount: number
+  tax_collection_mode: string | null
   platform_fee_amount: number
   delivery_fee_amount: number
   total_amount: number
@@ -340,6 +434,12 @@ type AccountOrderQuote = {
   assumptions: string | null
   expires_at: string | null
   created_at: string
+  fabric_funding_policy_version: string | null
+  fabric_source_snapshot: string | null
+  tailoring_amount: number | null
+  fabric_allowance_amount: number | null
+  fabric_allowance_coverage: string[] | null
+  fabric_sourcing_assumptions: string | null
 }
 
 type AccountQuoteRevision = {
@@ -385,6 +485,57 @@ type AccountPayment = {
   refunded_at: string | null
 }
 
+type AccountCommercialReceipt = {
+  receipt_number: string
+  order_id: string
+  payment_id: string
+  provider: string
+  provider_reference: string
+  currency: string
+  subtotal_amount: number
+  consultation_credit_amount: number
+  promotion_amount: number
+  platform_fee_amount: number
+  tax_amount: number
+  import_tax_amount: number
+  duty_amount: number
+  tax_collection_mode: 'COLLECTED_AT_CHECKOUT' | 'PAYABLE_ON_IMPORT' | 'BLOCKED' | null
+  tax_responsible_party: 'TAILOR' | 'DRAPEON_MARKETPLACE_FACILITATOR' | 'CUSTOMER_IMPORTER' | null
+  import_treatment: string | null
+  shipping_amount: number
+  total_amount: number
+  tax_jurisdiction: string | null
+  paid_at: string
+  fabric_funding_policy_version: string | null
+  tailoring_amount: number | null
+  fabric_allowance_amount: number | null
+}
+
+type AccountSettlementPlan = {
+  id: string
+  order_id: string
+  method: 'SHIPPED' | 'LOCAL_HANDOFF'
+  currency: string
+  entitlement_amount: number
+  seller_subtotal_amount: number | null
+  excluded_fabric_allowance_amount: number
+  material_recovery_offset_amount: number
+  status: 'ACTIVE' | 'FROZEN' | 'SETTLED' | 'CANCELLED'
+  frozen_reason: string | null
+}
+
+type AccountSettlementTranche = {
+  id: string
+  plan_id: string
+  code: string
+  sequence: number
+  amount: number
+  currency: string
+  status: 'LOCKED' | 'ELIGIBLE' | 'RELEASE_REQUESTED' | 'RELEASED' | 'BLOCKED' | 'CANCELLED'
+  eligible_at: string | null
+  released_at: string | null
+}
+
 type AccountMessage = {
   id: string
   order_id: string
@@ -417,6 +568,7 @@ type StageUpdate = {
   stage: string | null
   note: string | null
   photo_url: string | null
+  evidence_media?: unknown
   created_at: string | null
 }
 
@@ -426,6 +578,7 @@ type ProductionEvidence = {
   stage_key: string | null
   note: string | null
   photo_urls: string[] | null
+  metadata: Record<string, unknown> | null
   created_at: string | null
 }
 
@@ -465,6 +618,13 @@ type TailorProfile = {
   pickup_available: boolean | null
   delivery_available: boolean | null
   shipping_available: boolean | null
+  consultation_mode?: 'UNAVAILABLE' | 'FREE' | 'PAID' | null
+  consultation_requirement?: 'OPTIONAL' | 'REQUIRED' | null
+  consultation_fee_amount?: number | null
+  consultation_currency?: string | null
+  consultation_duration_minutes?: number | null
+  consultation_call_type?: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO' | null
+  consultation_fee_creditable?: boolean | null
   portfolio_photo_urls: string[] | null
   portfolio_video_urls: string[] | null
   avatar_url: string | null
@@ -508,6 +668,11 @@ type TailorProfile = {
 type TailorPickupDetails = {
   user_id: string
   pickup_address: string | null
+  pickup_address_line1: string | null
+  pickup_city: string | null
+  pickup_region: string | null
+  pickup_postal_code: string | null
+  pickup_country_code: string | null
   pickup_instructions: string | null
   updated_at: string | null
 }
@@ -682,15 +847,51 @@ type MaterialAdvance = {
   status: string | null
   release_status: string | null
   estimate_photo_url?: string | null
+  estimate_storage_bucket?: string | null
+  estimate_storage_path?: string | null
   receipt_url?: string | null
+  receipt_storage_bucket?: string | null
+  receipt_storage_path?: string | null
   receipt_note?: string | null
+  actual_spent_amount?: number | null
+  reconciliation_status?: string | null
+  reconciliation_outcome?: string | null
+  reconciliation_resolution?: string | null
+  customer_refund_amount?: number | null
+  unapproved_overage_amount?: number | null
+  acquired_storage_bucket?: string | null
+  acquired_storage_path?: string | null
+  reconciled_at?: string | null
   customer_response_note?: string | null
+  customer_response_reason?: string | null
   payment_provider?: string | null
   provider_checkout_url?: string | null
   payment_id?: string | null
   created_at: string | null
   updated_at: string | null
+  funding_source?: 'LEGACY_SEPARATE_PAYMENT' | 'FUNDED_FABRIC_ALLOWANCE' | null
+  provider_release_status?: string | null
 }
+
+type AccountCommercialAdjustment = {
+  id: string
+  reference: string
+  order_id: string
+  proposed_by_role: 'CUSTOMER' | 'TAILOR' | 'OPS'
+  adjustment_type: CommercialAdjustmentType
+  status: 'PROPOSED' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'PAYMENT_PENDING' | 'PAID' | 'OPS_REVIEW' | 'COMPLETED'
+  summary: string
+  reason: string
+  responsibility: string
+  amount_delta: number
+  currency: string
+  original_deadline: string | null
+  proposed_deadline: string | null
+  requires_payment: boolean
+  created_at: string
+}
+type AccountReturnRequest = { id:string; reference:string; order_id:string; requester_role:'CUSTOMER'|'TAILOR'; reason_code:ReturnReason; requested_remedy:ResolutionRemedy; summary:string; eligibility_status:string; eligibility_reason:string; return_required:boolean; status:string; response_due_at:string; created_at:string }
+type AccountResolutionProposal = { id:string; return_request_id:string; version:number; proposed_by_role:'CUSTOMER'|'TAILOR'|'OPS'; remedy:ResolutionRemedy; amount:number|null; currency:string|null; return_required:boolean; return_shipping_responsibility:string|null; note:string; status:string; created_at:string }
 
 type CustomOrderDetail = {
   order_id: string
@@ -721,13 +922,42 @@ type AccountPayout = {
   currency: string | null
   provider: string | null
   status: string | null
+  payout_purpose: PayoutPurpose
   provider_payout_id: string | null
+  provider_transfer_status: string | null
+  bank_settlement_status: string | null
+  provider_bank_payout_id: string | null
+  bank_settlement_expected_at: string | null
+  bank_settlement_completed_at: string | null
+  bank_settlement_failure_code: string | null
   blocked_reason: string | null
   order_id: string | null
   initiated_at: string | null
   completed_at: string | null
   failed_at: string | null
   processed_at: string | null
+}
+
+type AccountProviderDispute = {
+  status: ProviderDisputeStatus
+  amount: number
+  currency: string
+  evidence_due_at: string | null
+  money_movement_blocked: boolean
+  updated_at: string
+}
+
+type AccountProviderPayoutEvent = {
+  id: string
+  provider: string | null
+  provider_bank_payout_id: string | null
+  amount: number | null
+  currency: string | null
+  status: string | null
+  arrival_at: string | null
+  failure_code: string | null
+  failure_message: string | null
+  created_at: string | null
 }
 
 type AccountBaseData = {
@@ -791,6 +1021,10 @@ type OrdersSurfaceData = {
   orders: AccountOrder[]
   payments: AccountPayment[]
   messages: AccountMessage[]
+  consultationAttendanceReviews: Array<ConsultationAttendanceReviewSnapshot & {
+    orderId: string
+    createdAt: string
+  }>
   warning: string | null
 }
 
@@ -799,17 +1033,40 @@ type OrdersRenderData = OrdersSurfaceData & OrderActorData
 type OrderDetailSurfaceData = {
   order: AccountOrder | null
   payments: AccountPayment[]
+  receipts: AccountCommercialReceipt[]
+  settlementPlan: AccountSettlementPlan | null
+  settlementTranches: AccountSettlementTranche[]
+  providerDisputes: AccountProviderDispute[]
   messages: AccountMessage[]
   stageUpdates: StageUpdate[]
   productionEvidence: ProductionEvidence[]
   materialAdvances: MaterialAdvance[]
+  commercialAdjustments: AccountCommercialAdjustment[]
+  returnRequests: AccountReturnRequest[]
+  resolutionProposals: AccountResolutionProposal[]
+  benefitReservations: AccountBenefitReservation[]
+  tips: AccountOrderTip[]
   customOrderDetail: CustomOrderDetail | null
   reviews: AccountReview[]
   quotes: AccountOrderQuote[]
   quoteRevisions: AccountQuoteRevision[]
   orderEvents: AccountOrderEvent[]
+  consultationBooking: {
+    status: string | null
+    scheduled_start_at: string | null
+    scheduled_end_at: string | null
+    fee_mode: string | null
+    fee_amount: number | null
+    fee_currency: string | null
+    payment_status: string | null
+    paid_at: string | null
+    call_type: string | null
+  } | null
   warning: string | null
 }
+
+type AccountBenefitReservation = { id:string; order_id:string; total_benefit_amount:number; customer_due_amount:number; currency:string; status:string; expires_at:string }
+type AccountOrderTip = { id:string; order_id:string; amount:number; currency:string; status:string; customer_id:string; tailor_id:string }
 
 type OrderDetailRenderData = OrderDetailSurfaceData & OrderActorData & {
   customerProfile: CustomerProfile | null
@@ -865,6 +1122,7 @@ type BriefRenderData = BriefSurfaceData & {
 type CheckoutSurfaceData = {
   orders: AccountOrder[]
   payments: AccountPayment[]
+  receipts: AccountCommercialReceipt[]
   quotes: AccountOrderQuote[]
   warning: string | null
 }
@@ -875,6 +1133,7 @@ type CheckoutRenderData = CheckoutSurfaceData & {
 
 type EarningsSurfaceData = {
   payouts: AccountPayout[]
+  bankActivity: AccountProviderPayoutEvent[]
   orders: AccountOrder[]
   warning: string | null
 }
@@ -978,21 +1237,32 @@ const emptyOrdersSurfaceData: OrdersSurfaceData = {
   orders: [],
   payments: [],
   messages: [],
+  consultationAttendanceReviews: [],
   warning: null,
 }
 
 const emptyOrderDetailSurfaceData: OrderDetailSurfaceData = {
   order: null,
   payments: [],
+  receipts: [],
+  settlementPlan: null,
+  settlementTranches: [],
+  providerDisputes: [],
   messages: [],
   stageUpdates: [],
   productionEvidence: [],
   materialAdvances: [],
+  commercialAdjustments: [],
+  returnRequests: [],
+  resolutionProposals: [],
+  benefitReservations: [],
+  tips: [],
   customOrderDetail: null,
   reviews: [],
   quotes: [],
   quoteRevisions: [],
   orderEvents: [],
+  consultationBooking: null,
   warning: null,
 }
 
@@ -1023,12 +1293,14 @@ const emptyBriefSurfaceData: BriefSurfaceData = {
 const emptyCheckoutSurfaceData: CheckoutSurfaceData = {
   orders: [],
   payments: [],
+  receipts: [],
   quotes: [],
   warning: null,
 }
 
 const emptyEarningsSurfaceData: EarningsSurfaceData = {
   payouts: [],
+  bankActivity: [],
   orders: [],
   warning: null,
 }
@@ -1226,6 +1498,16 @@ function payoutBlockedReasonCopy(value: string | null | undefined) {
   }
 }
 
+function payoutBlockedRecovery(value: string | null | undefined, orderId: string | null) {
+  if (!value) return null
+  const recovery = payoutBlockRecovery(value as Parameters<typeof payoutBlockRecovery>[0])
+  if (recovery.destination === 'PAYOUT_SETUP') return { ...recovery, href: '/account/payout' as Route }
+  if ((recovery.destination === 'ORDER' || recovery.destination === 'OPS_REVIEW') && orderId) {
+    return { ...recovery, href: `/account/orders/${orderId}` as Route }
+  }
+  return { ...recovery, href: null }
+}
+
 function stringList(value: string[] | null | undefined) {
   return Array.isArray(value) ? value.filter(Boolean) : []
 }
@@ -1406,10 +1688,10 @@ const TAILOR_CANCELLATION_REASON_OPTIONS = [
 ] as const
 
 const TAILOR_DELIVERY_REASON_OPTIONS = [
-  { value: 'DISPATCH_DELAY', label: 'Dispatch delay' },
-  { value: 'DELIVERY_FAILED', label: 'Delivery failed' },
-  { value: 'RETURN_TO_SENDER', label: 'Return to sender' },
-  { value: 'RECIPIENT_UNREACHABLE', label: 'Recipient unreachable' },
+  { value: 'DRAPEON_COLLECTION_MISSED', label: 'Drapeon collection was missed' },
+  { value: 'CUSTODY_SCAN_MISMATCH', label: 'Custody acknowledgement is missing or wrong' },
+  { value: 'PARCEL_RETURNED_TO_TAILOR', label: 'Parcel was returned to me' },
+  { value: 'HANDOFF_DAMAGE', label: 'Damage was found during handoff' },
   { value: 'OTHER', label: 'Other' },
 ] as const
 
@@ -1423,6 +1705,9 @@ function orderNeedsMeasurementConfirmation(order: AccountOrder) {
 }
 
 const ORDER_CALL_STAGES = new Set([
+  'QUOTE_SENT',
+  'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -1438,6 +1723,19 @@ const ORDER_CALL_STAGES = new Set([
 ])
 
 type OrderSupportMeta = {
+  quoteBreakdown?: {
+    laborAmount?: number | null
+    sourcingAmount?: number | null
+    rushAmount?: number | null
+    consultationCreditAmount?: number | null
+    tailoringAmount?: number | null
+    fabricAllowanceAmount?: number | null
+    fabricAllowanceCoverage?: string[] | null
+    fabricSourcingAssumptions?: string | null
+    included?: string[] | null
+    excluded?: string[] | null
+    summary?: string | null
+  } | null
   consultation?: {
     status?: string | null
     requestedBy?: string | null
@@ -1446,6 +1744,7 @@ type OrderSupportMeta = {
     feeCreditable?: boolean | null
     requestNote?: string | null
     requestedAt?: string | null
+    requestExpiresAt?: string | null
     proposedStartAt?: string | null
     scheduledStartAt?: string | null
     scheduledEndAt?: string | null
@@ -1453,6 +1752,7 @@ type OrderSupportMeta = {
     paidAt?: string | null
     paymentTiming?: string | null
     reminderStartSentAt?: string | null
+    callType?: 'AUDIO' | 'VIDEO' | null
   } | null
   orderCall?: {
     status?: string | null
@@ -2357,7 +2657,7 @@ function mediaFingerprint(file: File) {
 }
 
 const publicTailorProfileSelect =
-  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, accepts_custom_orders_now, shop_paused, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, portfolio_video_urls, avatar_url'
+  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, accepts_custom_orders_now, shop_paused, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable, portfolio_photo_urls, portfolio_video_urls, avatar_url'
 
 const ownTailorProfileSelect =
   `${publicTailorProfileSelect}, profile_completed, id_verification_status, trust_verification_video_path, trust_verification_challenge_id, trust_verification_challenge_text, id_verification_submitted_at, id_verification_rejection_reason, id_verification_rejected_at, id_verification_metadata, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
@@ -2509,12 +2809,12 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
 const accountOrderSelect = `
   id, reference, order_kind, garment_type, item_title, item_size, garment_description, occasion, stage, delivery_method,
   delivery_address, recipient_name, recipient_phone,
-  fabric_source, special_note, fabric_tracking, tracking_number, carrier, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos, customer_measurements_snapshot, quoted_amount, subtotal_amount, fulfillment_fee, shipping_amount,
-  tax_amount, platform_fee_amount, total_amount, currency, quoted_currency, created_at, updated_at, deadline,
-  quoted_completion_date, customer_id, tailor_id, tailor_profile_id, seller_item_id, payment_provider,
+  fabric_source, fabric_funding_policy_version, special_note, fabric_tracking, tracking_number, carrier, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos, customer_measurements_snapshot, quoted_amount, subtotal_amount, fulfillment_fee, shipping_amount,
+  tax_amount, import_tax_amount, duty_amount, tax_collection_mode, tax_responsible_party, tax_rate_bps, tax_region, tax_fallback, platform_fee_amount, total_amount, currency, quoted_currency, created_at, updated_at, deadline,
+  quoted_completion_date, quote_expires_at, customer_id, tailor_id, tailor_profile_id, seller_item_id, payment_provider,
   fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
   consultation_fee, video_call_url, escrow_released, auto_release_at, collection_code, collection_code_expiry, collection_code_used,
-  tailor_profiles!tailor_profile_id(display_name, business_name, avatar_url, location)
+  tailor_profiles!tailor_profile_id(display_name, business_name, avatar_url, location, consultation_call_type)
 `
 
 async function fetchNegotiationSurfaceData(
@@ -2533,7 +2833,7 @@ async function fetchNegotiationSurfaceData(
   const [quotesRes, revisionsRes, eventsRes] = await Promise.all([
     supabase
       .from('order_quotes')
-      .select('id, order_id, version, status, change_kind, currency, subtotal_amount, tax_amount, platform_fee_amount, delivery_fee_amount, total_amount, completion_date, breakdown, assumptions, expires_at, created_at')
+      .select('id, order_id, version, status, change_kind, currency, subtotal_amount, tax_amount, platform_fee_amount, delivery_fee_amount, total_amount, completion_date, breakdown, assumptions, expires_at, created_at, fabric_funding_policy_version, fabric_source_snapshot, tailoring_amount, fabric_allowance_amount, fabric_allowance_coverage, fabric_sourcing_assumptions')
       .in('order_id', orderIds)
       .order('version', { ascending: false }),
     supabase
@@ -2982,11 +3282,7 @@ function splitList(value: string) {
 }
 
 function parseMinorUnits(value: string) {
-  const cleaned = value.replace(/[^\d.]/g, '')
-  if (!cleaned) return null
-  const amount = Number.parseFloat(cleaned)
-  if (!Number.isFinite(amount) || amount <= 0) return null
-  return Math.round(amount * 100)
+  return parseMoneyInputToMinorUnits(value)
 }
 
 function minorUnitsInput(value: number | null | undefined) {
@@ -3214,19 +3510,24 @@ function StageProgressBar({ order }: { order: AccountOrder }) {
 }
 
 function StageTimeline({ order }: { order: AccountOrder }) {
-  const current = asOrderStage(order.stage)
-  const currentIndex = current ? CUSTOMER_STAGE_FLOW.indexOf(current) : -1
+  const presentation = deriveFulfillmentAwareOrderStagePresentation({
+    orderStage: order.stage,
+    effectiveMethod: order.delivery_method,
+  })
+  const current = asOrderStage(presentation.stage)
+  const visibleStages = CUSTOMER_STAGE_FLOW.filter((stage) => filterFulfillmentStage(order, stage))
+  const currentIndex = current ? visibleStages.indexOf(current) : -1
   return (
     <div className="rounded-[8px] border border-ink/6 bg-bone/55 p-4">
       <div className="flex items-center justify-between gap-4">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">Stage progress</p>
-        <StagePill stage={order.stage} />
+        {presentation.label ?? <StagePill stage={presentation.stage ?? order.stage} />}
       </div>
       <div className="mt-4">
         <StageProgressBar order={order} />
       </div>
       <ol className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {CUSTOMER_STAGE_FLOW.map((stage, index) => {
+        {visibleStages.map((stage, index) => {
           const reached = currentIndex >= 0 && index <= currentIndex
           const active = current === stage
           return (
@@ -3288,6 +3589,10 @@ function datetimeLocalToIso(value: string) {
   if (!value) return null
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function dateToDatetimeLocal(value: Date) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
 
 const MESSAGE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
@@ -3531,6 +3836,11 @@ async function reencodeImageFile(file: File) {
 }
 
 async function uploadPublicFile(bucket: string, pathPrefix: string, file: File) {
+  const uploaded = await uploadPublicFileWithLocation(bucket, pathPrefix, file)
+  return uploaded.publicUrl
+}
+
+async function uploadPublicFileWithLocation(bucket: string, pathPrefix: string, file: File) {
   const supabase = createClient()
   const ext = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
   const filePath = `${pathPrefix}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
@@ -3539,7 +3849,7 @@ async function uploadPublicFile(bucket: string, pathPrefix: string, file: File) 
     upsert: false,
   })
   if (error) throw new Error('The media could not upload. Try a smaller file.')
-  return supabase.storage.from(bucket).getPublicUrl(filePath).data.publicUrl
+  return { publicUrl: supabase.storage.from(bucket).getPublicUrl(filePath).data.publicUrl, bucket, path: filePath }
 }
 
 async function uploadPrivateFile(bucket: string, pathPrefix: string, file: File) {
@@ -3614,7 +3924,7 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
       .maybeSingle(),
     supabase
       .from('tailor_pickup_details')
-      .select('user_id, pickup_address, pickup_instructions, updated_at')
+      .select('user_id, pickup_address, pickup_address_line1, pickup_city, pickup_region, pickup_postal_code, pickup_country_code, pickup_instructions, updated_at')
       .eq('user_id', userId)
       .maybeSingle(),
   ])
@@ -3783,9 +4093,10 @@ async function fetchOrdersSurfaceData(userId: string, tailorProfileId?: string |
 
   let payments: AccountPayment[] = []
   let messages: AccountMessage[] = []
+  let consultationAttendanceReviews: OrdersSurfaceData['consultationAttendanceReviews'] = []
   const orderIds = orders.map((order) => order.id)
   if (orderIds.length > 0) {
-    const [paymentsRes, messagesRes] = await Promise.all([
+    const [paymentsRes, messagesRes, attendanceReviewsRes] = await Promise.all([
       supabase
         .from('order_payments')
         .select('id, order_id, phase, provider, currency, amount, status, confirmed_at, created_at, refunded_at')
@@ -3798,20 +4109,40 @@ async function fetchOrdersSurfaceData(userId: string, tailorProfileId?: string |
         .in('order_id', orderIds)
         .order('created_at', { ascending: false })
         .limit(100),
+      supabase
+        .from('consultation_attendance_reviews')
+        .select('order_id, status, reported_by_role, resolution_code, created_at')
+        .in('order_id', orderIds)
+        .order('created_at', { ascending: false }),
     ])
 
-    if (paymentsRes.error || messagesRes.error) {
+    if (paymentsRes.error || messagesRes.error || attendanceReviewsRes.error) {
       warning = warning ?? 'Latest order updates are unavailable. Refresh to retry.'
-    } else {
-      payments = (paymentsRes.data ?? []) as AccountPayment[]
-      messages = (messagesRes.data ?? []) as AccountMessage[]
     }
+    payments = paymentsRes.error ? [] : (paymentsRes.data ?? []) as AccountPayment[]
+    messages = messagesRes.error ? [] : (messagesRes.data ?? []) as AccountMessage[]
+    consultationAttendanceReviews = attendanceReviewsRes.error
+      ? []
+      : ((attendanceReviewsRes.data ?? []) as Array<{
+          order_id: string
+          status: string | null
+          reported_by_role: 'CUSTOMER' | 'TAILOR' | null
+          resolution_code: string | null
+          created_at: string
+        }>).map((review) => ({
+          orderId: review.order_id,
+          status: review.status,
+          reportedByRole: review.reported_by_role,
+          resolutionCode: review.resolution_code,
+          createdAt: review.created_at,
+        }))
   }
 
   return {
     orders,
     payments,
     messages,
+    consultationAttendanceReviews,
     warning,
   }
 }
@@ -3849,13 +4180,35 @@ async function fetchOrderDetailSurfaceData(
     }
   }
 
-  const [paymentsRes, messagesRes, stageUpdatesRes, productionEvidenceRes, materialAdvancesRes, customOrderDetailRes, reviewsRes] = await Promise.all([
+  const [paymentsRes, receiptsRes, settlementPlanRes, settlementTranchesRes, providerDisputesRes, messagesRes, stageUpdatesRes, productionEvidenceRes, materialAdvancesRes, commercialAdjustmentsRes, returnRequestsRes, resolutionProposalsRes, benefitReservationsRes, tipsRes, customOrderDetailRes, reviewsRes, consultationBookingRes] = await Promise.all([
     supabase
       .from('order_payments')
       .select('id, order_id, phase, provider, currency, amount, status, confirmed_at, created_at, refunded_at')
       .eq('order_id', order.id)
       .order('created_at', { ascending: false })
       .limit(80),
+    supabase
+      .from('commercial_receipts')
+      .select('receipt_number, order_id, payment_id, provider, provider_reference, currency, subtotal_amount, consultation_credit_amount, promotion_amount, platform_fee_amount, tax_amount, import_tax_amount, duty_amount, tax_collection_mode, shipping_amount, total_amount, tax_jurisdiction, paid_at, fabric_funding_policy_version, tailoring_amount, fabric_allowance_amount')
+      .eq('order_id', order.id)
+      .order('paid_at', { ascending: false })
+      .limit(10),
+    supabase
+      .from('order_settlement_plans')
+      .select('id, order_id, method, currency, entitlement_amount, seller_subtotal_amount, excluded_fabric_allowance_amount, material_recovery_offset_amount, status, frozen_reason')
+      .eq('order_id', order.id)
+      .maybeSingle(),
+    supabase
+      .from('order_settlement_tranches')
+      .select('id, plan_id, code, sequence, amount, currency, status, eligible_at, released_at')
+      .eq('order_id', order.id)
+      .order('sequence'),
+    supabase
+      .from('provider_disputes')
+      .select('status, amount, currency, evidence_due_at, money_movement_blocked, updated_at')
+      .eq('order_id', order.id)
+      .order('updated_at', { ascending: false })
+      .limit(3),
     supabase
       .from('messages')
       .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at, is_deleted, edited_at, reply_to_id')
@@ -3864,22 +4217,42 @@ async function fetchOrderDetailSurfaceData(
       .limit(100),
     supabase
       .from('order_stage_updates')
-      .select('id, order_id, stage, note, photo_url, created_at')
+      .select('id, order_id, stage, note, photo_url, evidence_media, created_at')
       .eq('order_id', order.id)
       .order('created_at', { ascending: false })
       .limit(100),
     supabase
       .from('order_production_evidence')
-      .select('id, order_id, stage_key, note, photo_urls, created_at')
+      .select('id, order_id, stage_key, note, photo_urls, metadata, created_at')
       .eq('order_id', order.id)
       .order('created_at', { ascending: false })
       .limit(100),
     supabase
       .from('order_material_advances')
-      .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, receipt_url, receipt_note, customer_response_note, payment_provider, provider_checkout_url, payment_id, created_at, updated_at')
+      .select('id, order_id, customer_id, tailor_id, requested_by, title, description, amount, currency, status, release_status, estimate_photo_url, estimate_storage_bucket, estimate_storage_path, receipt_url, receipt_storage_bucket, receipt_storage_path, receipt_note, actual_spent_amount, reconciliation_status, reconciliation_outcome, reconciliation_resolution, customer_refund_amount, unapproved_overage_amount, acquired_storage_bucket, acquired_storage_path, reconciled_at, customer_response_note, customer_response_reason, payment_provider, provider_checkout_url, payment_id, created_at, updated_at, funding_source, provider_release_status')
       .eq('order_id', order.id)
       .order('created_at', { ascending: false })
       .limit(60),
+    supabase
+      .from('commercial_adjustments')
+      .select('id, reference, order_id, proposed_by_role, adjustment_type, status, summary, reason, responsibility, amount_delta, currency, original_deadline, proposed_deadline, requires_payment, created_at')
+      .eq('order_id', order.id)
+      .order('created_at', { ascending: false })
+      .limit(40),
+    supabase
+      .from('order_return_requests')
+      .select('id, reference, order_id, requester_role, reason_code, requested_remedy, summary, eligibility_status, eligibility_reason, return_required, status, response_due_at, created_at')
+      .eq('order_id', order.id)
+      .order('created_at', { ascending: false })
+      .limit(20),
+    supabase
+      .from('order_resolution_proposals')
+      .select('id, return_request_id, version, proposed_by_role, remedy, amount, currency, return_required, return_shipping_responsibility, note, status, created_at')
+      .eq('order_id', order.id)
+      .order('version', { ascending: false })
+      .limit(40),
+    supabase.from('commercial_benefit_reservations').select('id, order_id, total_benefit_amount, customer_due_amount, currency, status, expires_at').eq('order_id', order.id).order('created_at', { ascending: false }).limit(10),
+    supabase.from('order_tips').select('id, order_id, amount, currency, status, customer_id, tailor_id').eq('order_id', order.id).limit(1),
     supabase
       .from('custom_order_details')
       .select('order_id, garment_type_other, gender_presentation, social_reference_links, style_notes, body_note, fabric_description, fabric_budget_amount, fabric_budget_currency, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at, fabric_approval_required, fabric_approval_status, fabric_approval_requested_at, fabric_approved_at, fabric_changes_requested_at, shipping_preference, delivery_instructions, target_delivery_date')
@@ -3890,26 +4263,62 @@ async function fetchOrderDetailSurfaceData(
       .select('id, order_id, rating, created_at')
       .eq('order_id', order.id)
       .limit(80),
+    supabase
+      .from('consultation_bookings')
+      .select('status, scheduled_start_at, scheduled_end_at, fee_mode, fee_amount, fee_currency, payment_status, paid_at, call_type')
+      .eq('order_id', order.id)
+      .eq('status', 'CONFIRMED')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
-  if (paymentsRes.error || messagesRes.error || stageUpdatesRes.error || productionEvidenceRes.error || materialAdvancesRes.error || customOrderDetailRes.error || reviewsRes.error) {
+  if (paymentsRes.error || receiptsRes.error || settlementPlanRes.error || settlementTranchesRes.error || providerDisputesRes.error || messagesRes.error || stageUpdatesRes.error || productionEvidenceRes.error || materialAdvancesRes.error || commercialAdjustmentsRes.error || returnRequestsRes.error || resolutionProposalsRes.error || benefitReservationsRes.error || tipsRes.error || customOrderDetailRes.error || reviewsRes.error || consultationBookingRes.error) {
     warning = warning ?? 'Latest order updates are unavailable. Refresh to retry.'
   }
   const negotiation = await fetchNegotiationSurfaceData(supabase, [order.id])
   warning = warning ?? negotiation.warning
 
+  const stageUpdates = await Promise.all((((stageUpdatesRes.data ?? []) as StageUpdate[])).map(async (update) => {
+    if (update.photo_url || !Array.isArray(update.evidence_media)) return update
+    const asset = update.evidence_media.find((item) => item && typeof item === 'object') as Record<string, unknown> | undefined
+    const path = typeof asset?.displayPath === 'string' ? asset.displayPath : typeof asset?.originalPath === 'string' ? asset.originalPath : null
+    if (!path) return update
+    const { data: signed, error } = await supabase.storage.from('commercial-evidence').createSignedUrl(path, 10 * 60)
+    return { ...update, photo_url: error ? null : signed?.signedUrl ?? null }
+  }))
+  const productionEvidence = await Promise.all((((productionEvidenceRes.data ?? []) as ProductionEvidence[])).map(async (row) => ({
+    ...row,
+    photo_urls: (await Promise.all(stringList(row.photo_urls).map(async (value) => {
+      if (/^https?:\/\//iu.test(value)) return value
+      if (!value.includes('/production/')) return null
+      const { data: signed, error } = await supabase.storage.from('commercial-evidence').createSignedUrl(value, 10 * 60)
+      return error ? null : signed?.signedUrl ?? null
+    }))).filter((value): value is string => !!value),
+  })))
+
   return {
     order,
     payments: paymentsRes.error ? [] : ((paymentsRes.data ?? []) as AccountPayment[]),
+    receipts: receiptsRes.error ? [] : ((receiptsRes.data ?? []) as AccountCommercialReceipt[]),
+    settlementPlan: settlementPlanRes.error ? null : ((settlementPlanRes.data ?? null) as AccountSettlementPlan | null),
+    settlementTranches: settlementTranchesRes.error ? [] : ((settlementTranchesRes.data ?? []) as AccountSettlementTranche[]),
+    providerDisputes: providerDisputesRes.error ? [] : ((providerDisputesRes.data ?? []) as AccountProviderDispute[]),
     messages: messagesRes.error ? [] : ((messagesRes.data ?? []) as AccountMessage[]),
-    stageUpdates: stageUpdatesRes.error ? [] : ((stageUpdatesRes.data ?? []) as StageUpdate[]),
-    productionEvidence: productionEvidenceRes.error ? [] : ((productionEvidenceRes.data ?? []) as ProductionEvidence[]),
+    stageUpdates: stageUpdatesRes.error ? [] : stageUpdates,
+    productionEvidence: productionEvidenceRes.error ? [] : productionEvidence,
     materialAdvances: materialAdvancesRes.error ? [] : ((materialAdvancesRes.data ?? []) as MaterialAdvance[]),
+    commercialAdjustments: commercialAdjustmentsRes.error ? [] : ((commercialAdjustmentsRes.data ?? []) as AccountCommercialAdjustment[]),
+    returnRequests: returnRequestsRes.error ? [] : ((returnRequestsRes.data ?? []) as AccountReturnRequest[]),
+    resolutionProposals: resolutionProposalsRes.error ? [] : ((resolutionProposalsRes.data ?? []) as AccountResolutionProposal[]),
+    benefitReservations: benefitReservationsRes.error ? [] : ((benefitReservationsRes.data ?? []) as AccountBenefitReservation[]),
+    tips: tipsRes.error ? [] : ((tipsRes.data ?? []) as AccountOrderTip[]),
     customOrderDetail: customOrderDetailRes.error ? null : ((customOrderDetailRes.data ?? null) as CustomOrderDetail | null),
     reviews: reviewsRes.error ? [] : ((reviewsRes.data ?? []) as AccountReview[]),
     quotes: negotiation.quotes,
     quoteRevisions: negotiation.quoteRevisions,
     orderEvents: negotiation.orderEvents,
+    consultationBooking: consultationBookingRes.error ? null : (consultationBookingRes.data ?? null),
     warning,
   }
 }
@@ -4005,6 +4414,7 @@ async function fetchWorkSurfaceData(userId: string, tailorProfileId?: string | n
     } else {
       payments = (paymentsRes.data ?? []) as AccountPayment[]
     }
+
   }
 
   const sellerItemsRes = await supabase
@@ -4231,6 +4641,7 @@ async function fetchCheckoutSurfaceData(userId: string): Promise<CheckoutSurface
 
   const orderIds = orders.map((order) => order.id)
   let payments: AccountPayment[] = []
+  let receipts: AccountCommercialReceipt[] = []
 
   if (orderIds.length > 0) {
     const paymentsRes = await supabase
@@ -4245,6 +4656,18 @@ async function fetchCheckoutSurfaceData(userId: string): Promise<CheckoutSurface
     } else {
       payments = (paymentsRes.data ?? []) as AccountPayment[]
     }
+
+    const receiptsRes = await supabase
+      .from('commercial_receipts')
+      .select('receipt_number, order_id, payment_id, provider, provider_reference, currency, subtotal_amount, consultation_credit_amount, promotion_amount, platform_fee_amount, tax_amount, import_tax_amount, duty_amount, tax_collection_mode, shipping_amount, total_amount, tax_jurisdiction, paid_at, fabric_funding_policy_version, tailoring_amount, fabric_allowance_amount')
+      .in('order_id', orderIds)
+      .order('paid_at', { ascending: false })
+      .limit(80)
+    if (receiptsRes.error) {
+      warning = warning ?? 'Authoritative payment receipts could not load. Refresh to retry.'
+    } else {
+      receipts = (receiptsRes.data ?? []) as AccountCommercialReceipt[]
+    }
   }
   const negotiation = await fetchNegotiationSurfaceData(supabase, orderIds)
   warning = warning ?? negotiation.warning
@@ -4252,6 +4675,7 @@ async function fetchCheckoutSurfaceData(userId: string): Promise<CheckoutSurface
   return {
     orders,
     payments,
+    receipts,
     quotes: negotiation.quotes,
     warning,
   }
@@ -4262,14 +4686,21 @@ async function fetchEarningsSurfaceData(userId: string, tailorProfileId?: string
 
   const supabase = createClient()
   let warning: string | null = null
-  const [payoutsRes, ordersRes] = await Promise.all([
+  const [payoutsRes, bankActivityRes, ordersRes] = await Promise.all([
     supabase
       .from('payouts')
-      .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
+      .select('id, tailor_profile_id, amount, currency, provider, status, payout_purpose, provider_payout_id, provider_transfer_status, bank_settlement_status, provider_bank_payout_id, bank_settlement_expected_at, bank_settlement_completed_at, bank_settlement_failure_code, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
       .eq('tailor_profile_id', tailorProfileId)
       .order('initiated_at', { ascending: false, nullsFirst: false })
       .order('processed_at', { ascending: false, nullsFirst: false })
       .limit(80),
+    supabase
+      .from('provider_payout_events')
+      .select('id, provider, provider_bank_payout_id, amount, currency, status, arrival_at, failure_code, failure_message, created_at')
+      .eq('tailor_profile_id', tailorProfileId)
+      .is('payout_id', null)
+      .order('created_at', { ascending: false })
+      .limit(40),
     supabase
       .from('orders')
       .select(accountOrderSelect)
@@ -4281,12 +4712,16 @@ async function fetchEarningsSurfaceData(userId: string, tailorProfileId?: string
   if (payoutsRes.error) {
     warning = 'Payout records could not load. Refresh to retry.'
   }
+  if (bankActivityRes.error) {
+    warning = warning ?? 'Stripe bank activity could not load. Refresh to retry.'
+  }
   if (ordersRes.error) {
     warning = warning ?? 'Payout order context could not load. Refresh to retry.'
   }
 
   return {
     payouts: payoutsRes.error ? [] : ((payoutsRes.data ?? []) as AccountPayout[]),
+    bankActivity: bankActivityRes.error ? [] : ((bankActivityRes.data ?? []) as AccountProviderPayoutEvent[]),
     orders: ordersRes.error ? [] : await hydrateOrderCustomerProfiles(supabase, (ordersRes.data ?? []) as AccountOrder[]),
     warning,
   }
@@ -4989,6 +5424,7 @@ function MutedVideo({
 }
 
 function PhotoTile({ src, label }: { src: string | null; label: string }) {
+  const [expanded, setExpanded] = useState(false)
   const safeSrc = safeMediaUrl(src)
   if (!safeSrc) {
     return (
@@ -4999,24 +5435,114 @@ function PhotoTile({ src, label }: { src: string | null; label: string }) {
   }
   if (isVideoMediaUrl(safeSrc)) {
     return (
-      <MutedVideo
-        src={safeSrc}
-        className="aspect-[4/3] w-full rounded-[8px] bg-ink object-cover"
-        ariaLabel={label}
-        showMuteToggle={false}
-      />
+      <>
+        <button type="button" onClick={() => setExpanded(true)} className="block w-full overflow-hidden rounded-[8px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle" aria-label={`Open ${label} full screen`}>
+          <MutedVideo
+            src={safeSrc}
+            className="pointer-events-none aspect-[4/3] w-full bg-ink object-cover"
+            ariaLabel={label}
+            showMuteToggle={false}
+          />
+        </button>
+        {expanded ? <MediaViewerOverlay src={safeSrc} label={label} video onClose={() => setExpanded(false)} /> : null}
+      </>
     )
   }
   return (
-    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[8px]">
-      <Image
-        src={safeSrc}
-        alt={label}
-        fill
-        sizes="(min-width: 1280px) 30vw, (min-width: 768px) 45vw, 90vw"
-        className="object-cover"
-        unoptimized
-      />
+    <>
+      <button type="button" onClick={() => setExpanded(true)} className="relative block aspect-[4/3] w-full overflow-hidden rounded-[8px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle" aria-label={`Open ${label} full screen`}>
+        <Image
+          src={safeSrc}
+          alt={label}
+          fill
+          sizes="(min-width: 1280px) 30vw, (min-width: 768px) 45vw, 90vw"
+          className="object-cover"
+          unoptimized
+        />
+      </button>
+      {expanded ? <MediaViewerOverlay src={safeSrc} label={label} onClose={() => setExpanded(false)} /> : null}
+    </>
+  )
+}
+
+function MediaViewerOverlay({ src, label, video = false, onClose }: { src: string; label: string; video?: boolean; onClose: () => void }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={label} className="fixed inset-0 z-[100] grid place-items-center bg-black/88 p-3 sm:p-8" onMouseDown={onClose}>
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 grid size-11 place-items-center rounded-full bg-white text-ink shadow-xl" aria-label="Close media viewer"><X className="size-5" /></button>
+      <div className="relative h-full max-h-[92vh] w-full max-w-6xl" onMouseDown={(event) => event.stopPropagation()}>
+        {video ? (
+          <video src={src} controls playsInline autoPlay className="h-full w-full rounded-[8px] bg-black object-contain" aria-label={label} />
+        ) : (
+          <Image src={src} alt={label} fill sizes="100vw" className="object-contain" unoptimized />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function LocalEvidencePreview({
+  file,
+  index,
+  onRemove,
+  onReplace,
+}: {
+  file: File
+  index: number
+  onRemove: () => void
+  onReplace: (file: File) => void
+}) {
+  const [previewUrl] = useState(() => URL.createObjectURL(file))
+  const [expanded, setExpanded] = useState(false)
+  const video = isVideoContentType(extensionBackedMediaContentType(file, ORDER_EVIDENCE_CONTENT_TYPES))
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(previewUrl)
+  }, [previewUrl])
+
+  return (
+    <div className="overflow-hidden rounded-[8px] border border-ink/10 bg-bone/55">
+      <button
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="relative block aspect-[4/3] w-full overflow-hidden bg-ink/8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle"
+        aria-label={`Preview proof item ${index + 1}`}
+      >
+        {previewUrl ? (
+          video
+            ? <video src={previewUrl} muted playsInline className="h-full w-full object-cover" />
+            : <img src={previewUrl} alt={`Proof item ${index + 1}`} className="h-full w-full object-cover" />
+        ) : null}
+      </button>
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <span className="min-w-0 truncate text-xs text-ink/55">{file.name}</span>
+        <div className="flex shrink-0 items-center gap-3">
+          <label className="cursor-pointer text-xs font-semibold text-needle">
+            Replace
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+              className="sr-only"
+              onChange={(event) => {
+                const replacement = event.target.files?.[0]
+                if (replacement) onReplace(replacement)
+                event.currentTarget.value = ''
+              }}
+            />
+          </label>
+          <button type="button" onClick={onRemove} className="text-xs font-semibold text-rust-700">Remove</button>
+        </div>
+      </div>
+      {expanded && previewUrl ? (
+        <MediaViewerOverlay src={previewUrl} label={`Proof item ${index + 1}`} video={video} onClose={() => setExpanded(false)} />
+      ) : null}
     </div>
   )
 }
@@ -5571,8 +6097,17 @@ function CheckoutAction({
     amount?: number | null
     currency?: string | null
   } | null>(null)
+  const quoteTaxNeedsRefresh = taxSnapshotNeedsRefresh({
+    taxRegion: order.tax_region,
+    taxRateBps: order.tax_rate_bps,
+    taxFallback: order.tax_fallback,
+  })
 
   async function handleCheckout() {
+    if (quoteTaxNeedsRefresh) {
+      setError('This quote uses an older Ghana tax snapshot. The tailor must refresh it before payment.')
+      return
+    }
     if (
       QUOTE_NEGOTIATION_UI_ENABLED &&
       order.order_kind === 'CUSTOM' &&
@@ -5683,10 +6218,10 @@ function CheckoutAction({
       <button
         type="button"
         onClick={handleCheckout}
-        disabled={busy}
+        disabled={busy || quoteTaxNeedsRefresh}
         className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
       >
-        {busy ? 'Preparing checkout...' : checkoutActionLabel(order)}
+        {busy ? 'Preparing checkout...' : quoteTaxNeedsRefresh ? 'Tax update needed' : checkoutActionLabel(order)}
       </button>
       {order.order_kind === 'CUSTOM' && order.stage === 'QUOTE_SENT' ? (
         <button
@@ -5728,6 +6263,476 @@ function CheckoutAction({
   )
 }
 
+type AccountDispatchRun = {
+  id: string
+  order_id: string
+  method: string
+  status: DispatchRunStatus
+  funding_status: string
+  currency: string
+  captured_allowance_amount: number
+  actual_provider_cost_amount: number | null
+  shortfall_subtotal_amount: number
+  shortfall_tax_amount: number
+  shortfall_fee_amount: number
+  shortfall_total_amount: number
+  customer_refund_amount: number
+  customer_refund_tax_amount: number
+  subsidy_restored_amount: number
+  provider_name: string | null
+  provider_quote_evidence: AccountDispatchEvidence[]
+}
+
+type AccountDispatchEvidence = {
+  id: string
+  signedUrl: string
+  mimeType: string
+  mediaType: 'IMAGE' | 'VIDEO' | string
+  label: string
+  expiresInSeconds: number
+}
+
+type AccountDispatchState = {
+  ok: boolean
+  role: 'CUSTOMER' | 'TAILOR'
+  paymentConfirmed?: boolean
+  paymentReconciliationPending?: boolean
+  currentMethod?: string | null
+  canRequestDelivery?: boolean
+  deliveryDetails?: {
+    recipientName: string
+    recipientPhone: string
+    address: string
+    city: string
+    region: string
+    postalCode: string
+    countryCode: string
+  }
+  run: AccountDispatchRun | null
+  parcels: Array<{
+    id: string
+    status: string
+    provider_name: string | null
+    tracking_number: string | null
+    tracking_url: string | null
+    eta_at: string | null
+    last_location: {
+      label?: string | null
+      latitude?: number | null
+      longitude?: number | null
+    } | null
+  }>
+  events: Array<{
+    id: string
+    event_type: string
+    customer_note: string | null
+    occurred_at: string
+    evidence_media: AccountDispatchEvidence[]
+  }>
+}
+
+const accountDispatchStatusCopy: Record<DispatchRunStatus, { title: string; body: string }> = {
+  QUOTE_REQUIRED: { title: 'Delivery price being confirmed', body: 'Drapeon is confirming the rider or carrier cost.' },
+  AWAITING_CUSTOMER_DECISION: { title: 'Delivery choice needed', body: 'Review the provider price and choose how to continue.' },
+  AWAITING_SHORTFALL_PAYMENT: { title: 'Extra delivery payment needed', body: 'Only the disclosed difference is due.' },
+  READY_TO_BOOK: { title: 'Delivery funding ready', body: 'Drapeon can now book the rider or carrier.' },
+  BOOKED: { title: 'Delivery booked', body: 'The rider or carrier has been arranged.' },
+  IN_TRANSIT: { title: 'On the way', body: 'The latest delivery update appears below.' },
+  DELIVERED: { title: 'Delivered', body: 'Delivery proof is recorded and reconciliation is underway.' },
+  PICKUP_READY: { title: 'Ready for pickup', body: 'Use the collection instructions and code on this order.' },
+  PICKED_UP: { title: 'Pickup complete', body: 'The collection handoff is recorded.' },
+  CANCELLED: { title: 'Delivery cancelled', body: 'Any refundable delivery amount is returning automatically.' },
+  EXCEPTION: { title: 'Delivery needs attention', body: 'Drapeon is resolving a provider or evidence issue.' },
+  RECONCILED: { title: 'Delivery complete', body: 'Provider cost and customer funding are balanced.' },
+}
+
+const accountDispatchEventLabels: Record<string, string> = {
+  QUOTE_RECORDED: 'Provider price confirmed',
+  CHEAPER_OPTION_REQUESTED: 'Cheaper option requested',
+  DISPATCH_OPTION_DECLINED: 'Delivery option declined',
+  SHORTFALL_REQUESTED: 'Delivery payment requested',
+  SHORTFALL_PAID: 'Delivery payment confirmed',
+  PICKUP_SELECTED: 'Switched to pickup',
+  BOOKED: 'Rider or carrier booked',
+  CARRIER_ACCEPTED: 'Carrier accepted the parcel',
+  COLLECTED: 'Parcel collected',
+  AT_HUB: 'Parcel at carrier hub',
+  IN_TRANSIT: 'Parcel in transit',
+  OUT_FOR_DELIVERY: 'Out for delivery',
+  DELIVERY_ATTEMPTED: 'Delivery attempted',
+  DELIVERED: 'Delivered',
+  PICKUP_READY: 'Ready for pickup',
+  PICKED_UP: 'Picked up',
+  RETURNING: 'Returning',
+  RETURNED: 'Returned',
+  CANCELLED: 'Delivery cancelled',
+  REFUND_COMPLETED: 'Delivery refund completed',
+  LOCAL_DELIVERY_REQUESTED: 'Local delivery requested',
+  SHIPPING_REQUESTED: 'Shipping requested',
+  EXCEPTION_RECORDED: 'Delivery issue recorded',
+  RECONCILED: 'Delivery reconciled',
+}
+
+function AccountDispatchEvidenceGrid({ items, label }: { items: AccountDispatchEvidence[]; label: string }) {
+  if (items.length === 0) return null
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {items.map((item, index) => {
+        const video = item.mediaType === 'VIDEO' || item.mimeType.startsWith('video/') || isVideoMediaUrl(item.signedUrl)
+        return (
+          <MediaViewerDialog key={item.id} src={item.signedUrl} kind={video ? 'video' : 'image'} title={`${label} ${index + 1}`}>
+            <button type="button" className="relative aspect-[4/3] overflow-hidden rounded-[8px] border border-ink/8 bg-bone text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35" aria-label={`Open ${label.toLowerCase()} ${index + 1}`}>
+              {video
+                ? <video src={item.signedUrl} muted playsInline preload="metadata" className="size-full object-cover" />
+                : <img src={item.signedUrl} alt={`${label} ${index + 1}`} className="size-full object-cover" />}
+              <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-1 text-[10px] font-semibold text-white">Open proof</span>
+            </button>
+          </MediaViewerDialog>
+        )
+      })}
+    </div>
+  )
+}
+
+function AccountDrapeonDispatchCard({ order, viewerRole, onRefresh }: {
+  order: AccountOrder
+  viewerRole: 'CUSTOMER' | 'TAILOR'
+  onRefresh: () => void
+}) {
+  const completedOrder = isCompletedOrderStage(order.stage)
+  const [state, setState] = useState<AccountDispatchState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<DispatchCustomerDecision | null>(null)
+  const [methodBusy, setMethodBusy] = useState<'LOCAL_DELIVERY' | 'SHIPPING' | null>(null)
+  const [selectedMethod, setSelectedMethod] = useState<'LOCAL_DELIVERY' | 'SHIPPING'>('LOCAL_DELIVERY')
+  const [note, setNote] = useState('')
+  const [deliveryDetails, setDeliveryDetails] = useState({ recipientName: '', recipientPhone: '', address: '', city: '', region: '', postalCode: '', countryCode: '' })
+  const [deliveryDetailsDirty, setDeliveryDetailsDirty] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const dispatchDetailsRef = useRef<HTMLDetailsElement>(null)
+
+  const refreshDispatch = useCallback(async () => {
+    if (completedOrder) {
+      setLoading(false)
+      return
+    }
+    setLoadError(null)
+    try {
+      const result = await invokeAccountFunction<AccountDispatchState>('drapeon-dispatch-action', { action: 'get-state', orderId: order.id })
+      setState(result.ok ? result : null)
+      if (!deliveryDetailsDirty && result.deliveryDetails) setDeliveryDetails(result.deliveryDetails)
+    } catch (cause) {
+      setLoadError(friendlyActionError(cause, 'Delivery status could not be loaded.'))
+    } finally {
+      setLoading(false)
+    }
+  }, [completedOrder, deliveryDetailsDirty, order.id])
+
+  useEffect(() => {
+    let active = true
+    const initialRefresh = window.setTimeout(() => {
+      if (active) void refreshDispatch()
+    }, 0)
+    const supabase = createClient()
+    const channel = supabase.channel(`web:drapeon-dispatch:${order.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_fulfillment_runs', filter: `order_id=eq.${order.id}` }, () => { if (active) void refreshDispatch() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_fulfillment_parcels', filter: `order_id=eq.${order.id}` }, () => { if (active) void refreshDispatch() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_fulfillment_events', filter: `order_id=eq.${order.id}` }, () => { if (active) void refreshDispatch() })
+      .subscribe()
+    return () => {
+      active = false
+      window.clearTimeout(initialRefresh)
+      void supabase.removeChannel(channel)
+    }
+  }, [order.id, refreshDispatch])
+
+  const run = state?.run ?? null
+  const fulfillmentPresentation = deriveDispatchFulfillmentPresentation({
+    orderMethod: state?.currentMethod ?? order.delivery_method,
+    orderStage: order.stage,
+    runMethod: run?.method,
+    runStatus: run?.status,
+  })
+  if (completedOrder) return null
+  if (loading && !run) {
+    return (
+      <div role="status" aria-live="polite" className="flex min-h-14 w-full items-center gap-3 rounded-[8px] border border-needle/14 bg-white/86 px-4 py-3 shadow-sm">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle/10 text-needle"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /></span>
+        <span><span className="block text-xs font-semibold uppercase tracking-[0.14em] text-needle">Drapeon Dispatch</span><span className="block text-sm font-semibold text-ink">Loading delivery status</span></span>
+      </div>
+    )
+  }
+  if (loadError && !run) {
+    return (
+      <button type="button" className="flex min-h-14 w-full items-center gap-3 rounded-[8px] border border-rust/24 bg-rust/6 px-4 py-3 text-left shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35" onClick={() => { setLoading(true); void refreshDispatch() }}>
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-rust/10 text-rust"><CircleHelp className="size-4" aria-hidden="true" /></span>
+        <span className="min-w-0 flex-1"><span className="block text-xs font-semibold uppercase tracking-[0.14em] text-needle">Drapeon Dispatch</span><span className="block text-sm font-semibold text-ink">Delivery status unavailable</span></span>
+        <span className="text-xs font-semibold text-needle">Retry</span>
+      </button>
+    )
+  }
+  async function requestDelivery(method: 'LOCAL_DELIVERY' | 'SHIPPING') {
+    if (methodBusy) return
+    const preparedDetails = {
+      ...deliveryDetails,
+      recipientName: deliveryDetails.recipientName.trim(),
+      recipientPhone: deliveryDetails.recipientPhone.trim(),
+      address: deliveryDetails.address.trim(),
+      countryCode: deliveryDetails.countryCode.trim().toUpperCase(),
+    }
+    if (!preparedDetails.recipientName || !preparedDetails.recipientPhone || !preparedDetails.address || preparedDetails.countryCode.length !== 2) {
+      setError('Add the recipient and phone number, then choose an address from the search results.')
+      return
+    }
+    setMethodBusy(method)
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await invokeAccountFunction<{ acknowledgement?: string }>('drapeon-dispatch-action', {
+        action: 'request-method-change', orderId: order.id, method,
+        note: note.trim() || null,
+        deliveryDetails: preparedDetails,
+        idempotencyKey: `web:dispatch-method:${order.id}:${method}:${Date.now()}`,
+      })
+      setNote('')
+      setDeliveryDetailsDirty(false)
+      setSuccess(result.acknowledgement ?? 'Your delivery request is saved.')
+      await refreshDispatch()
+      onRefresh()
+    } catch (cause) {
+      setError(friendlyActionError(cause, 'Confirm the delivery address and recipient details, then try again.'))
+    } finally {
+      setMethodBusy(null)
+    }
+  }
+
+  const deliveryDetailsEditor = (
+    <div className="grid gap-4 rounded-[8px] border border-ink/8 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-needle/10 text-needle"><UserRound className="size-4" aria-hidden="true" /></span>
+        <span><span className="block text-sm font-semibold text-ink">Who should receive it?</span><span className="block text-xs text-ink/55">Used by the rider or carrier for this order.</span></span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1.5"><span className="sr-only">Recipient name</span><input value={deliveryDetails.recipientName} onChange={(event) => { setDeliveryDetailsDirty(true); setDeliveryDetails((current) => ({ ...current, recipientName: event.target.value })) }} autoComplete="name" placeholder="Recipient name" aria-label="Recipient name" className="min-h-12 rounded-[8px] border border-ui-border bg-white px-3 text-base text-ink outline-none focus:border-needle/50" /></label>
+        <PhoneNumberField value={deliveryDetails.recipientPhone} onValueChange={(recipientPhone) => { setDeliveryDetailsDirty(true); setDeliveryDetails((current) => ({ ...current, recipientPhone })) }} placeholder="Phone number" aria-label="Recipient phone number" />
+      </div>
+      <div className="h-px bg-ink/8" />
+      <div className="flex items-center gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-needle/10 text-needle"><MapPin className="size-4" aria-hidden="true" /></span>
+        <span><span className="block text-sm font-semibold text-ink">Where is it going?</span><span className="block text-xs text-ink/55">Search once. City, region, and country fill automatically.</span></span>
+      </div>
+      {deliveryDetails.address && deliveryDetails.countryCode.length === 2 ? (
+        <div className="flex min-h-16 items-center gap-3 rounded-[8px] border border-needle/30 bg-needle/6 px-3 py-2.5">
+          <MapPin className="size-4 shrink-0 text-needle" aria-hidden="true" />
+          <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-ink">{deliveryDetails.address}</span>
+          <button type="button" className="min-h-10 shrink-0 px-2 text-xs font-bold text-needle" onClick={() => { setDeliveryDetailsDirty(true); setDeliveryDetails((current) => ({ ...current, address: '', city: '', region: '', postalCode: '', countryCode: '' })) }}>Change</button>
+        </div>
+      ) : (
+        <StructuredAddressSearch onSelect={(selected) => { setDeliveryDetailsDirty(true); setDeliveryDetails((current) => ({ ...current, address: selected.displayValue, city: selected.city, region: selected.stateRegion, postalCode: selected.postcode, countryCode: selected.countryCode ?? '' })) }} />
+      )}
+    </div>
+  )
+
+  const deliveryMethodPicker = (
+    <div className="grid gap-2">
+      <div role="radiogroup" aria-label="Choose delivery method" className="grid grid-cols-2 gap-1 rounded-[8px] border border-ui-border bg-white p-1">
+        {([
+          ['LOCAL_DELIVERY', 'Local delivery'],
+          ['SHIPPING', 'Shipping'],
+        ] as const).map(([value, label]) => {
+          const selected = selectedMethod === value
+          return (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              className={`min-h-11 rounded-[6px] px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35 ${selected ? 'bg-needle text-white' : 'text-needle hover:bg-needle/6'}`}
+              onClick={() => setSelectedMethod(value)}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
+      <p className="text-xs leading-5 text-ink/55">{selectedMethod === 'LOCAL_DELIVERY' ? 'For a nearby rider or local delivery provider.' : 'For a carrier shipping across regions or countries.'}</p>
+    </div>
+  )
+
+  if (!run) {
+    if (viewerRole !== 'CUSTOMER' || state?.currentMethod !== 'LOCAL_COLLECTION' || !state.canRequestDelivery) return null
+    return (
+      <details className="group w-full rounded-[8px] border border-needle/14 bg-white/86 shadow-sm">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35">
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle/10 text-needle"><Truck className="size-4" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1"><span className="block text-xs font-semibold uppercase tracking-[0.14em] text-needle">Fulfilment</span><span className="block text-sm font-semibold text-ink">Need delivery instead of pickup?</span></span>
+          <ChevronDown className="size-4 text-ink/45 transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="grid gap-3 border-t border-ink/8 p-4">
+          <div className="rounded-[8px] border border-needle/14 bg-needle/6 px-3 py-2.5"><p className="text-sm font-semibold text-ink">Replace pickup with delivery</p><p className="mt-0.5 text-xs leading-5 text-ink/58">Saving this request retires the collection code. You will see provider proof and any price difference before payment.</p></div>
+          {deliveryMethodPicker}
+          {deliveryDetailsEditor}
+          <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Optional delivery note" />
+          <ActionNotice error={error} success={success} />
+          <Button disabled={!!methodBusy} onClick={() => { void requestDelivery(selectedMethod) }}>{methodBusy === selectedMethod ? 'Requesting…' : selectedMethod === 'LOCAL_DELIVERY' ? 'Request local delivery' : 'Request shipping'}</Button>
+        </div>
+      </details>
+    )
+  }
+  const parcel = state?.parcels[0] ?? null
+  const currentLocation = parcel?.last_location?.label?.trim()
+    || (typeof parcel?.last_location?.latitude === 'number' && typeof parcel?.last_location?.longitude === 'number'
+      ? `${parcel.last_location.latitude.toFixed(4)}, ${parcel.last_location.longitude.toFixed(4)}`
+      : null)
+  const decisionNeeded = viewerRole === 'CUSTOMER' && run.status === 'AWAITING_CUSTOMER_DECISION'
+  const pickupRecoveryAvailable = viewerRole === 'CUSTOMER'
+    && ['QUOTE_REQUIRED', 'AWAITING_SHORTFALL_PAYMENT', 'READY_TO_BOOK'].includes(run.status)
+  const paymentNeeded = viewerRole === 'CUSTOMER' && run.status === 'AWAITING_SHORTFALL_PAYMENT' && !state?.paymentConfirmed
+  const paymentUpdating = run.status === 'AWAITING_SHORTFALL_PAYMENT' && !!state?.paymentConfirmed
+  const chargePresentation = deriveDispatchCustomerChargePresentation(run.captured_allowance_amount)
+  const presentation = paymentUpdating
+    ? { title: 'Delivery payment received', body: 'Drapeon Dispatch is confirming the provider record. You will not be charged again.' }
+    : fulfillmentPresentation.replacementPending && run.status === 'QUOTE_REQUIRED'
+      ? { title: 'Delivery requested', body: 'Delivery has replaced pickup. Drapeon is confirming the provider price and proof.' }
+    : run.status === 'AWAITING_SHORTFALL_PAYMENT'
+      ? { title: chargePresentation.paymentStatusTitle, body: chargePresentation.paymentStatusBody }
+      : accountDispatchStatusCopy[run.status]
+  const refund = run.customer_refund_amount + run.customer_refund_tax_amount
+  const deliveryQuoteIsCurrent = !['PICKUP_READY', 'CANCELLED'].includes(run.status)
+
+  async function decide(decision: DispatchCustomerDecision) {
+    if (busy) return
+    setBusy(decision)
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await invokeAccountFunction<{ acknowledgement?: string }>('drapeon-dispatch-action', {
+        action: 'decide-quote',
+        orderId: order.id,
+        decision,
+        note: note.trim() || null,
+        idempotencyKey: `web:dispatch:${order.id}:${decision}:${Date.now()}`,
+      })
+      setNote('')
+      setSuccess(result.acknowledgement ?? 'Your delivery choice is saved.')
+      await refreshDispatch()
+      onRefresh()
+      if (decision === 'SWITCH_TO_PICKUP') dispatchDetailsRef.current?.removeAttribute('open')
+    } catch (cause) {
+      setError(friendlyActionError(cause, 'The delivery choice could not be saved. Refresh and try again.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <details ref={dispatchDetailsRef} className={`group w-full rounded-[8px] border bg-white/86 shadow-sm ${decisionNeeded || paymentNeeded || run.status === 'EXCEPTION' ? 'border-rust/24' : 'border-needle/14'}`}>
+      <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle/10 text-needle"><Truck className="size-4" aria-hidden="true" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold uppercase tracking-[0.14em] text-needle">Drapeon Dispatch</span>
+          <span className="block truncate text-sm font-semibold text-ink">{presentation.title}</span>
+        </span>
+        {(decisionNeeded || paymentNeeded) ? <span className="size-2 rounded-full bg-rust" aria-hidden="true" /> : null}
+        <ChevronDown className="size-4 shrink-0 text-ink/45 transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="grid gap-4 border-t border-ink/8 p-4">
+        {loadError ? <ActionNotice error="Latest delivery update could not load. Retry from the collapsed delivery row." success={null} /> : null}
+        <div className="rounded-[8px] bg-needle/8 p-4">
+          <h3 className="text-lg font-semibold text-ink">{presentation.title}</h3>
+          <p className="mt-1 text-sm leading-6 text-ink/62">{presentation.body}</p>
+          <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+            {parcel?.provider_name || run.provider_name ? <SummaryLine label="Provider" value={parcel?.provider_name ?? run.provider_name ?? ''} /> : null}
+            {parcel?.tracking_number ? <SummaryLine label="Tracking" value={parcel.tracking_number} /> : null}
+            {parcel?.eta_at ? <SummaryLine label="Estimated arrival" value={formatDate(parcel.eta_at) ?? 'Pending'} /> : null}
+            {currentLocation ? <SummaryLine label="Current location" value={currentLocation} /> : null}
+          </div>
+        </div>
+
+        {deliveryQuoteIsCurrent && run.actual_provider_cost_amount != null ? (
+          <div className="grid gap-2 rounded-[8px] border border-ink/8 p-4 text-sm">
+            <h3 className="mb-1 font-semibold text-ink">Delivery price</h3>
+            <AccountDispatchEvidenceGrid items={run.provider_quote_evidence ?? []} label="Provider quote proof" />
+            {chargePresentation.isTopUp ? <SummaryLine label="Protected delivery allowance" value={formatMoney(run.captured_allowance_amount, run.currency)} /> : null}
+            <SummaryLine label="Provider price" value={formatMoney(run.actual_provider_cost_amount, run.currency)} />
+            {chargePresentation.isTopUp && run.shortfall_subtotal_amount > 0 ? <SummaryLine label={chargePresentation.subtotalLabel} value={formatMoney(run.shortfall_subtotal_amount, run.currency)} /> : null}
+            {run.shortfall_tax_amount > 0 ? <SummaryLine label={chargePresentation.taxLabel} value={formatMoney(run.shortfall_tax_amount, run.currency)} /> : null}
+            {run.shortfall_fee_amount > 0 ? <SummaryLine label="Payment fee" value={formatMoney(run.shortfall_fee_amount, run.currency)} /> : null}
+            {run.shortfall_total_amount > 0 ? <SummaryLine label="Due now" value={<strong>{formatMoney(run.shortfall_total_amount, run.currency)}</strong>} /> : null}
+            {refund > 0 ? <SummaryLine label="Returning to customer" value={<strong>{formatMoney(refund, run.currency)}</strong>} /> : null}
+            <p className="pt-1 text-xs leading-5 text-ink/52">Delivery money is separate from the tailor&apos;s earnings.</p>
+          </div>
+        ) : null}
+
+        <ActionNotice error={error} success={success} />
+
+        {paymentUpdating ? (
+          <p role="status" className="rounded-[8px] border border-needle/14 bg-needle/6 p-4 text-sm leading-6 text-ink/66">
+            Delivery payment received. Drapeon Dispatch is reconciling the provider confirmation; you will not be charged again.
+          </p>
+        ) : null}
+
+        {decisionNeeded ? (
+          <div className="grid gap-3">
+            <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Optional note for Drapeon Dispatch" />
+            <p className="text-sm leading-6 text-ink/62">{chargePresentation.decisionBody}</p>
+            <Button disabled={!!busy} onClick={() => { void decide('PAY_SHORTFALL') }}>{busy === 'PAY_SHORTFALL' ? 'Saving…' : `Pay ${formatMoney(run.shortfall_total_amount, run.currency)} ${chargePresentation.actionSuffix}`}</Button>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Button variant="secondary" disabled={!!busy} onClick={() => { void decide('REQUEST_CHEAPER_OPTION') }}>Find a cheaper option</Button>
+              <Button variant="secondary" disabled={!!busy} onClick={() => { void decide('SWITCH_TO_PICKUP') }}>Switch to pickup</Button>
+              <Button variant="destructive" disabled={!!busy} onClick={() => { void decide('DECLINE_DISPATCH') }}>Decline delivery</Button>
+            </div>
+          </div>
+        ) : null}
+
+        {pickupRecoveryAvailable ? (
+          <div className="grid gap-2 rounded-[8px] border border-ink/8 p-4">
+            <h3 className="font-semibold text-ink">Prefer pickup?</h3>
+            <p className="text-sm leading-6 text-ink/62">Switch back before the provider is booked. Delivery stops, any eligible delivery money is returned, and a fresh pickup code appears when the order is ready.</p>
+            <div><Button variant="secondary" disabled={!!busy} onClick={() => { void decide('SWITCH_TO_PICKUP') }}>Switch back to pickup</Button></div>
+          </div>
+        ) : null}
+
+        {paymentNeeded ? (
+          <div className="rounded-[8px] border border-needle/14 bg-needle/6 p-4">
+            <h3 className="font-semibold text-ink">{chargePresentation.paymentTitle}</h3>
+            <p className="mt-1 text-sm leading-6 text-ink/62">{chargePresentation.paymentBody}</p>
+            <div className="mt-3"><CheckoutAction order={order} onRefresh={onRefresh} /></div>
+          </div>
+        ) : null}
+
+        {viewerRole === 'CUSTOMER' && state?.canRequestDelivery && ['PICKUP_READY', 'CANCELLED'].includes(run.status) ? (
+          <div className="grid gap-3 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
+            <div><h3 className="font-semibold text-ink">Need delivery instead?</h3><p className="mt-1 text-sm leading-6 text-ink/62">Add the order-specific destination, then request a provider quote. Saving the request retires the collection code.</p></div>
+            {deliveryMethodPicker}
+            {deliveryDetailsEditor}
+            <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Optional delivery note" />
+            <Button disabled={!!methodBusy} onClick={() => { void requestDelivery(selectedMethod) }}>{methodBusy === selectedMethod ? 'Requesting…' : selectedMethod === 'LOCAL_DELIVERY' ? 'Request local delivery' : 'Request shipping'}</Button>
+          </div>
+        ) : null}
+
+        {run.status === 'EXCEPTION' ? (
+          <p className="rounded-[8px] border border-rust/18 bg-rust/8 p-4 text-sm leading-6 text-ink/66">{dispatchBlockerCopy('OPEN_FULFILLMENT_EXCEPTION').action} Drapeon records the provider outcome before retrying money movement.</p>
+        ) : null}
+
+        {(state?.events.length ?? 0) > 0 ? (
+          <div className="grid gap-3">
+            <h3 className="font-semibold text-ink">Delivery history</h3>
+            {state?.events.map((event) => (
+              <div key={event.id} className="grid grid-cols-[8px_1fr] gap-3 border-t border-ink/8 pt-3">
+                <span className="mt-1.5 size-2 rounded-full bg-needle" aria-hidden="true" />
+                <div className="grid gap-2"><p className="text-sm font-semibold text-ink">{accountDispatchEventLabels[event.event_type] ?? 'Delivery updated'}</p>{event.customer_note ? <p className="text-sm text-ink/60">{event.customer_note}</p> : null}<AccountDispatchEvidenceGrid items={event.evidence_media ?? []} label="Delivery update proof" /><p className="text-xs text-ink/45">{formatRelative(event.occurred_at)} · shown in your timezone</p></div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </details>
+  )
+}
+
 type CustomerOrderActionName =
   | 'confirm-measurements'
   | 'cancel-order'
@@ -5754,11 +6759,15 @@ const CUSTOMER_CANCELLATION_REASON_OPTIONS = [
 ] as const
 
 const CUSTOMER_DELIVERY_REASON_OPTIONS = [
-  { value: 'DISPATCH_DELAY', label: 'Dispatch is taking too long' },
-  { value: 'DELIVERY_FAILED', label: 'Delivery failed' },
-  { value: 'RETURN_TO_SENDER', label: 'Returned to sender' },
-  { value: 'MARKED_DELIVERED_NOT_RECEIVED', label: 'Marked delivered, not received' },
-  { value: 'WRONG_ITEM_RECEIVED', label: 'Wrong item arrived' },
+  { value: 'TRACKING_STALLED', label: 'Tracking has stopped updating' },
+  { value: 'SIGNIFICANT_DELAY', label: 'Delivery is significantly delayed' },
+  { value: 'NOT_RECEIVED', label: 'Order was not received' },
+  { value: 'WRONG_ADDRESS_OR_RECIPIENT', label: 'Delivered to the wrong address or person' },
+  { value: 'DAMAGED_IN_TRANSIT', label: 'Parcel was damaged in transit' },
+  { value: 'MISSING_CONTENTS', label: 'Something is missing from the parcel' },
+  { value: 'RETURNED_TO_DRAPEON', label: 'Parcel was returned to Drapeon' },
+  { value: 'CUSTOMS_OR_CARRIER_CHARGE', label: 'Unexpected customs or carrier charge' },
+  { value: 'RECIPIENT_CONTACT_PROBLEM', label: 'Courier could not reach the recipient' },
   { value: 'OTHER', label: 'Other' },
 ] as const
 
@@ -5770,25 +6779,48 @@ const CUSTOMER_AFTERCARE_OPTIONS = [
   { value: 'OTHER', label: 'Other' },
 ] as const
 
-const CUSTOMER_DISPUTE_REASON_OPTIONS = [
-  'Item was not received',
-  'Quality or workmanship issue',
-  'Delivery or pickup problem',
-  'Timeline changed',
-  'Wrong item or details',
-  'Other',
-] as const
-
 function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder; data: OrderDetailRenderData; onRefresh: () => void }) {
   const stage = order.stage ?? ''
-  const supportMeta = parseOrderSupportMeta(order.special_note)
+  const rawSupportMeta = parseOrderSupportMeta(order.special_note)
+  const booking = data.consultationBooking
+  const bookingConsultation: typeof rawSupportMeta.consultation = !rawSupportMeta.consultation && booking?.status === 'CONFIRMED' && booking.scheduled_start_at
+    ? {
+        status: 'SCHEDULED' as const,
+        feeAmount: booking.fee_amount,
+        feeCurrency: booking.fee_currency,
+        paymentTiming: booking.fee_mode === 'PAID' ? 'BEFORE_CALL_STARTS' as const : 'WAIVED_OR_FREE' as const,
+        paidAt: booking.payment_status === 'PAID' ? booking.paid_at : null,
+        scheduledStartAt: booking.scheduled_start_at,
+        scheduledEndAt: booking.scheduled_end_at,
+        callType: booking.call_type === 'AUDIO' ? 'AUDIO' as const : 'VIDEO' as const,
+      }
+    : null
+  const supportMeta = bookingConsultation
+    ? { ...rawSupportMeta, consultation: bookingConsultation }
+    : rawSupportMeta
+  const latestSourcedFabricEvidence = latestFabricApprovalEvidence(
+    productionEvidenceFor(order.id, data.productionEvidence),
+  )
+  const sourcedFabricProofUrls = Array.from(new Set(
+    stringList(latestSourcedFabricEvidence?.photo_urls),
+  ))
   const viewerIsCustomer = order.customer_id === data.userId
   const canConfirmMeasurements = orderNeedsMeasurementConfirmation(order)
   const canRespondStyleAlignment = order.order_kind === 'CUSTOM' &&
     PRE_CUTTING_STAGES.has(stage) &&
     supportMeta.styleAlignment?.requiredBeforeCutting === true &&
     supportMeta.styleAlignment.status === 'PENDING_CUSTOMER_APPROVAL'
+  const styleChangeFeedback = styleAlignmentChangeFeedbackFromUpdates(
+    stageUpdatesFor(order.id, data.stageUpdates),
+  )
+  const showStyleClarification = order.order_kind === 'CUSTOM' &&
+    PRE_CUTTING_STAGES.has(stage) &&
+    supportMeta.styleAlignment?.status === 'CHANGES_REQUESTED'
+  const showStyleApproved = order.order_kind === 'CUSTOM' &&
+    PRE_CUTTING_STAGES.has(stage) &&
+    supportMeta.styleAlignment?.status === 'APPROVED'
   const canRespondSourcedFabric = order.order_kind === 'CUSTOM' &&
+    order.fabric_funding_policy_version !== FABRIC_FUNDING_POLICY_V2_VERSION &&
     order.fabric_source === 'TAILOR_SOURCES' &&
     PRE_CUTTING_STAGES.has(stage) &&
     data.customOrderDetail?.fabric_approval_required === true &&
@@ -5808,16 +6840,20 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
   const canCancelScopeChange = scopeChangeOpen && supportMeta.scopeChange?.requestedBy === 'CUSTOMER'
   const canSelfCancel = CUSTOMER_SELF_CANCEL_STAGES.has(stage)
   const canRequestCancellationReview = CUSTOMER_CANCELLATION_REVIEW_STAGES.has(stage) && !cancellationReviewOpen
-  const canRequestDeliveryReview = CUSTOMER_DELIVERY_REVIEW_STAGES.has(stage) && !deliveryReviewOpen && !cancellationReviewOpen
+  const initialPaymentLikelyPaid = !['PENDING_QUOTE','CONSULTATION','QUOTE_SENT','PAYMENT_PENDING','PAYMENT_FAILED','DECLINED','EXPIRED'].includes(stage)
+  const completedOrder = isCompletedOrderStage(stage)
+  const canRequestDeliveryReview = initialPaymentLikelyPaid && !deliveryReviewOpen && stage !== 'IN_DISPUTE' && !completedOrder
   const canOpenDispute = CUSTOMER_DISPUTE_STAGES.has(stage)
   const canConfirmReceipt = CUSTOMER_RECEIPT_STAGES.has(stage)
   const canCompleteOrder = CUSTOMER_COMPLETE_STAGES.has(stage)
   const canRequestAftercare = CUSTOMER_AFTERCARE_STAGES.has(stage)
-  const canRequestEmergencySupport = !isTerminalOrder(order) || CUSTOMER_AFTERCARE_STAGES.has(stage)
+  const canRequestEmergencySupport = !completedOrder && !isTerminalOrder(order)
   const canSaveFabricTracking = order.fabric_source === 'CUSTOMER_SUPPLIES' && CUSTOMER_FABRIC_TRACKING_STAGES.has(stage)
   const hasActions =
     canConfirmMeasurements ||
     canRespondStyleAlignment ||
+    showStyleClarification ||
+    showStyleApproved ||
     canRespondSourcedFabric ||
     canRespondMaterialIssue ||
     canRequestScopeChange ||
@@ -5837,6 +6873,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
   const [cancelArmed, setCancelArmed] = useState(false)
   const [fabricTracking, setFabricTracking] = useState(order.fabric_tracking ?? '')
   const [styleChangeNote, setStyleChangeNote] = useState('')
+  const [showStyleChangeFeedback, setShowStyleChangeFeedback] = useState(false)
   const [fabricChangeNote, setFabricChangeNote] = useState('')
   const [materialIssueResponse, setMaterialIssueResponse] = useState<(typeof MATERIAL_ISSUE_RESPONSE_OPTIONS)[number]['value']>('REPLACE_FABRIC')
   const [materialIssueNote, setMaterialIssueNote] = useState('')
@@ -5847,17 +6884,27 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
   const [scopeChangeResponseNote, setScopeChangeResponseNote] = useState('')
   const [cancellationReason, setCancellationReason] = useState<(typeof CUSTOMER_CANCELLATION_REASON_OPTIONS)[number]['value']>('CUSTOMER_CHANGED_MIND')
   const [cancellationNote, setCancellationNote] = useState('')
-  const [deliveryReason, setDeliveryReason] = useState<(typeof CUSTOMER_DELIVERY_REASON_OPTIONS)[number]['value']>('DISPATCH_DELAY')
+  const [deliveryReason, setDeliveryReason] = useState<(typeof CUSTOMER_DELIVERY_REASON_OPTIONS)[number]['value']>('TRACKING_STALLED')
   const [deliveryNote, setDeliveryNote] = useState('')
   const [aftercareType, setAftercareType] = useState<(typeof CUSTOMER_AFTERCARE_OPTIONS)[number]['value']>('FIT_ISSUE')
   const [aftercareNote, setAftercareNote] = useState('')
   const [emergencyNote, setEmergencyNote] = useState('')
-  const [disputeReason, setDisputeReason] = useState<(typeof CUSTOMER_DISPUTE_REASON_OPTIONS)[number]>('Quality or workmanship issue')
+  const [disputeReason, setDisputeReason] = useState<CustomerConcernReason>('NOT_AS_DESCRIBED')
+  const [disputeRequestedOutcome, setDisputeRequestedOutcome] = useState<FinancialCaseRequestedOutcome>('OPS_HELP')
   const [disputeDescription, setDisputeDescription] = useState('')
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!showStyleChangeFeedback) return
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowStyleChangeFeedback(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [showStyleChangeFeedback])
 
   if (!viewerIsCustomer || !hasActions) return null
 
@@ -6039,7 +7086,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
     await runCustomerAction(
       'request-delivery-review',
       { deliveryReason, note: note || undefined },
-      'Delivery review opened. Drapeon will check dispatch and handoff evidence.',
+      'Shipping or delivery help recorded. Drapeon applied the appropriate risk protection and Ops follow-up.',
     )
     setDeliveryNote('')
   }
@@ -6059,7 +7106,7 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
     }
     await runCustomerAction(
       'open-dispute',
-      { reason: disputeReason, description },
+      { reason: disputeReason, requestedOutcome: disputeRequestedOutcome, description },
       'Concern opened. The order is paused for review.',
     )
     setDisputeDescription('')
@@ -6072,7 +7119,6 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
       setError('Add proof media before confirming receipt.')
       return
     }
-
     setBusyAction('confirm-receipt')
     try {
       setUploadStatus('Preparing proof media...')
@@ -6233,6 +7279,69 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
           </DisclosurePanel>
         ) : null}
 
+        {showStyleClarification ? (
+          <div className="grid gap-3 rounded-[8px] border border-rust/18 bg-rust/6 p-4">
+            <div>
+              <h3 className="text-lg font-semibold text-ink">Style clarification requested</h3>
+              <p className="mt-1 line-clamp-3 text-sm leading-6 text-ink/62">
+                {safeUserText(
+                  supportMeta.styleAlignment?.tailorInterpretation,
+                  'The tailor needs to send an updated style plan before cutting.',
+                )}
+              </p>
+            </div>
+            {styleChangeFeedback ? (
+              <button
+                type="button"
+                onClick={() => setShowStyleChangeFeedback(true)}
+                className="inline-flex w-fit cursor-pointer items-center gap-1 rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35"
+                aria-haspopup="dialog"
+              >
+                View changes
+                <ChevronRight className="size-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            <p className="text-sm leading-6 text-ink/62">The tailor must update the style plan before you can approve it.</p>
+          </div>
+        ) : null}
+
+        {showStyleApproved ? (
+          <div className="flex items-start gap-3 rounded-[8px] border border-needle/20 bg-needle/8 p-4" role="status">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle text-white">
+              <CheckCheck className="size-4" aria-hidden="true" />
+            </span>
+            <div>
+              <h3 className="text-base font-semibold text-needle">Style plan approved</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/68">Your approved interpretation is recorded with this order before cutting.</p>
+            </div>
+          </div>
+        ) : null}
+
+        {showStyleChangeFeedback && styleChangeFeedback ? (
+          <div
+            className="fixed inset-0 z-[100] grid place-items-end bg-ink/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="customer-style-change-feedback-title"
+            onMouseDown={() => setShowStyleChangeFeedback(false)}
+          >
+            <div className="max-h-[75vh] w-full max-w-lg overflow-y-auto rounded-[16px] bg-white p-5 shadow-2xl sm:p-6" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Your feedback</p>
+                  <h3 id="customer-style-change-feedback-title" className="mt-1 text-xl font-semibold text-ink">Requested style clarification</h3>
+                </div>
+                <button type="button" onClick={() => setShowStyleChangeFeedback(false)} className="grid size-10 shrink-0 place-items-center rounded-full border border-ink/10 text-ink" aria-label="Close requested style clarification">
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <p className="mt-5 whitespace-pre-wrap break-words text-sm leading-6 text-ink/78">
+                {safeUserText(styleChangeFeedback.feedback, 'No feedback was provided.')}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {canRespondSourcedFabric ? (
           <DisclosurePanel
             title="Sourced fabric"
@@ -6240,6 +7349,17 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
             defaultOpen
           >
             <div className="grid gap-3">
+              {sourcedFabricProofUrls.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {sourcedFabricProofUrls.map((src, index) => (
+                    <PhotoTile key={src} src={src} label={`Sourced fabric proof ${index + 1}`} />
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-[8px] border border-rust/14 bg-rust/6 p-3 text-sm text-rust-700">
+                  Fabric proof is missing. Ask the tailor to upload it before approving.
+                </p>
+              )}
               <textarea
                 value={fabricChangeNote}
                 onChange={(event) => setFabricChangeNote(event.target.value)}
@@ -6419,20 +7539,23 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
         ) : null}
 
         {canSelfCancel ? (
-          <DisclosurePanel title="Cancel order" summary="Close an early order before live production starts.">
-            <button
-              type="button"
-              onClick={() => { void cancelOrder() }}
-              disabled={busyAction === 'cancel-order'}
-              className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
-            >
-              {busyAction === 'cancel-order' ? 'Cancelling...' : cancelArmed ? 'Confirm cancellation' : 'Cancel order'}
-            </button>
-          </DisclosurePanel>
+          <div className="order-[90]">
+            <DisclosurePanel title="Cancel order" summary="Close an early order before live production starts.">
+              <button
+                type="button"
+                onClick={() => { void cancelOrder() }}
+                disabled={busyAction === 'cancel-order'}
+                className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
+              >
+                {busyAction === 'cancel-order' ? 'Cancelling...' : cancelArmed ? 'Confirm cancellation' : 'Cancel order'}
+              </button>
+            </DisclosurePanel>
+          </div>
         ) : null}
 
         {canRequestCancellationReview ? (
-          <DisclosurePanel title="Cancellation review" summary="Ask Drapeon to review cancellation after production has started.">
+          <div className="order-[90]">
+            <DisclosurePanel title="Cancellation review" summary="Ask Drapeon to review cancellation after production has started.">
             <div className="grid gap-3">
               <select
                 value={cancellationReason}
@@ -6458,11 +7581,13 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 {busyAction === 'request-cancellation-review' ? 'Opening review...' : 'Open cancellation review'}
               </button>
             </div>
-          </DisclosurePanel>
+            </DisclosurePanel>
+          </div>
         ) : null}
 
         {canRequestDeliveryReview ? (
-          <DisclosurePanel title="Delivery review" summary="Use this if dispatch, delivery, or handoff looks wrong.">
+          <div className="order-[80]">
+            <DisclosurePanel title="Shipping & delivery help" summary="Available after payment, including after completion. High-risk reports pause protected steps; routine follow-up does not.">
             <div className="grid gap-3">
               <select
                 value={deliveryReason}
@@ -6485,10 +7610,11 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
                 disabled={busyAction === 'request-delivery-review'}
                 className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20"
               >
-                {busyAction === 'request-delivery-review' ? 'Opening review...' : 'Open delivery review'}
+                {busyAction === 'request-delivery-review' ? 'Sending...' : 'Send to Drapeon'}
               </button>
             </div>
-          </DisclosurePanel>
+            </DisclosurePanel>
+          </div>
         ) : null}
 
         {canConfirmReceipt ? (
@@ -6564,17 +7690,33 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
             <div className="grid gap-3">
               <select
                 value={disputeReason}
-                onChange={(event) => setDisputeReason(event.target.value as typeof disputeReason)}
+                onChange={(event) => setDisputeReason(event.target.value as CustomerConcernReason)}
                 className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
               >
-                {CUSTOMER_DISPUTE_REASON_OPTIONS.map((reason) => (
-                  <option key={reason} value={reason}>{reason}</option>
+                {CUSTOMER_CONCERN_REASONS.map((reason) => (
+                  <option key={reason} value={reason}>{CUSTOMER_CONCERN_REASON_LABELS[reason]}</option>
                 ))}
               </select>
+              <select
+                value={disputeRequestedOutcome}
+                onChange={(event) => setDisputeRequestedOutcome(event.target.value as FinancialCaseRequestedOutcome)}
+                aria-label="Requested outcome"
+                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
+              >
+                {FINANCIAL_CASE_REQUESTED_OUTCOMES.map((outcome) => (
+                  <option key={outcome} value={outcome}>{FINANCIAL_CASE_REQUESTED_OUTCOME_LABELS[outcome]}</option>
+                ))}
+              </select>
+              {evidencePromptsForConcern(disputeReason).length > 0 ? (
+                <p className="rounded-[8px] bg-bone px-3 py-2 text-xs leading-5 text-ink/64">
+                  Helpful evidence: {evidencePromptsForConcern(disputeReason).map((prompt) => prompt.label).join(' · ')}. Add it securely in the order thread after submitting.
+                </p>
+              ) : null}
               <textarea
                 value={disputeDescription}
                 onChange={(event) => setDisputeDescription(event.target.value)}
                 placeholder="Describe what happened."
+                maxLength={2000}
                 className="min-h-24 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm outline-none focus:border-needle"
               />
               <button
@@ -7083,6 +8225,8 @@ type WebCallLifecycleEvent = {
   paymentPaid?: boolean
   actionLoading?: boolean
   onJoinVideo?: () => void
+  joinHref?: Route
+  callType?: 'audio' | 'video'
   onReschedule?: () => void
   rescheduleLabel?: string
   rescheduleHref?: Route
@@ -7171,12 +8315,18 @@ function CallLifecycleEventCard({ event }: { event: WebCallLifecycleEvent }) {
           ) : null}
         </div>
       ) : lifecycle.status === 'active' ? (
-        <Button
-          onClick={event.onJoinVideo}
-          disabled={event.actionLoading || !event.onJoinVideo}
-        >
-          {event.actionLoading ? 'Opening...' : 'Join Video Call Now'}
-        </Button>
+        event.joinHref ? (
+          <Button asChild>
+            <Link href={event.joinHref}>Open {event.callType === 'audio' ? 'Audio' : 'Video'} Call</Link>
+          </Button>
+        ) : (
+          <Button
+            onClick={event.onJoinVideo}
+            disabled={event.actionLoading || !event.onJoinVideo}
+          >
+            {event.actionLoading ? 'Opening...' : `Join ${event.callType === 'audio' ? 'Audio' : 'Video'} Call Now`}
+          </Button>
+        )
       ) : (
         <Button disabled variant="secondary">
           {formatCallCountdown(lifecycle.msUntilOpen)}
@@ -7225,6 +8375,11 @@ function MessageComposer({
   const [callReason, setCallReason] = useState('OTHER')
   const [consultationTime, setConsultationTime] = useState('')
   const [consultationNote, setConsultationNote] = useState('')
+  const [scheduleSuggestion, setScheduleSuggestion] = useState<{ kind: 'call' | 'consultation'; value: string; label: string } | null>(null)
+  const publishedConsultationCallType = firstJoinedRow(order.tailor_profiles)?.consultation_call_type ?? 'VIDEO'
+  const [consultationCallType, setConsultationCallType] = useState<'AUDIO' | 'VIDEO'>(
+    publishedConsultationCallType === 'AUDIO' ? 'AUDIO' : 'VIDEO',
+  )
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
@@ -7287,15 +8442,19 @@ function MessageComposer({
     consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS'
   const consultationPaymentPaid = consultationPaymentRequired && !!consultationMeta?.paidAt
   const consultationPaymentBlocked = consultationPaymentRequired && !consultationPaymentPaid
+  const consultationRescheduleRequired = false
   const canRequestConsultation = isCustomOrder && viewerIsCustomer && order.stage === 'PENDING_QUOTE'
-  const canScheduleReadyMadeCall = isReadyMade && ORDER_CALL_STAGES.has(order.stage ?? '')
+  const canScheduleOrderCall = ORDER_CALL_STAGES.has(order.stage ?? '')
   const canShowCallButtons = canStartOrderCall(order)
   const consultationLabel = formatDateTime(consultationMeta?.scheduledStartAt ?? consultationMeta?.proposedStartAt, consultationMeta?.timezone)
   const readyMadeCallLabel = formatDateTime(orderCallMeta?.scheduledStartAt, orderCallMeta?.timezone)
+
   const callLifecycleEvent: WebCallLifecycleEvent | null =
     order.stage === 'CONSULTATION' &&
+    !consultationRescheduleRequired &&
     consultationMeta?.status === 'SCHEDULED' &&
-    consultationMeta.scheduledStartAt
+    consultationMeta.scheduledStartAt &&
+    getCallLifecycleState(consultationMeta.scheduledStartAt).status !== 'expired'
       ? {
           kind: 'consultation',
           scheduledStartAt: consultationMeta.scheduledStartAt,
@@ -7304,9 +8463,10 @@ function MessageComposer({
           paymentRequired: consultationPaymentRequired,
           paymentPaid: consultationPaymentPaid,
           actionLoading: !!callBusy,
-          onJoinVideo: () => { void startCall('video') },
-          rescheduleHref: accountRoute(`/account/orders/${order.id}`),
-          rescheduleLabel: 'View order',
+          callType: consultationMeta.callType === 'AUDIO' ? 'audio' : 'video',
+          onJoinVideo: () => { void startCall(consultationMeta.callType === 'AUDIO' ? 'audio' : 'video') },
+          rescheduleHref: accountRoute(`/account/messages?orderId=${encodeURIComponent(order.id)}`),
+          rescheduleLabel: viewerIsCustomer ? 'Message tailor' : 'Message customer',
           paymentHref: viewerIsCustomer ? accountRoute(`/account/checkout/${order.id}`) : accountRoute(`/account/orders/${order.id}`),
           paymentActionLabel: viewerIsCustomer ? 'Pay now' : 'View order',
         }
@@ -7411,8 +8571,10 @@ function MessageComposer({
     const scheduledStartAt = datetimeLocalToIso(callTime)
     setError(null)
     setSuccess(null)
-    if (!canScheduleReadyMadeCall) {
-      setError('Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.')
+    if (!canScheduleOrderCall) {
+      setError(order.stage === 'PENDING_QUOTE'
+        ? 'Keep using Messages while the tailor reviews the brief. Scheduled calls unlock after the quote is sent.'
+        : 'Scheduled calls are unavailable for this order right now.')
       return
     }
     if (!scheduledStartAt) {
@@ -7420,19 +8582,24 @@ function MessageComposer({
       return
     }
     if (!isCallSchedulingStartValid(scheduledStartAt)) {
-      setError(`Choose a call time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
+      const suggestion = recommendedSchedulingStartDate()
+      const label = formatDateTime(suggestion.toISOString()) ?? suggestion.toLocaleString()
+      setScheduleSuggestion({ kind: 'call', value: dateToDatetimeLocal(suggestion), label })
+      setError(`That call time is too soon. The nearest valid option is ${label}.`)
       return
     }
+    setScheduleSuggestion(null)
     setCallBusy('schedule')
     try {
       await invokeAccountFunction('order-call-action', {
-        action: 'schedule-ready-made-call',
+        action: isReadyMade ? 'schedule-ready-made-call' : 'schedule-order-call',
         orderId: order.id,
         scheduledStartAt,
+        callType: consultationCallType,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         reason: callReason,
       })
-      setSuccess('Ready-made clarification call scheduled. Both sides will see it in Messages.')
+      setSuccess('Order call scheduled. Both people were notified, and the call will open near the selected time.')
       onRefresh()
     } catch (callError) {
       setError(friendlyActionError(callError, 'Call could not be scheduled. Please try again.'))
@@ -7451,10 +8618,14 @@ function MessageComposer({
       setError('Choose a valid consultation time.')
       return
     }
-    if (!isCallSchedulingStartValid(scheduledStartAt)) {
-      setError(`Choose a consultation time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
+    if (new Date(scheduledStartAt).getTime() < Date.now() + 120 * 60_000) {
+      const suggestion = recommendedSchedulingStartDate({ minLookaheadMinutes: 120 })
+      const label = formatDateTime(suggestion.toISOString()) ?? suggestion.toLocaleString()
+      setScheduleSuggestion({ kind: 'consultation', value: dateToDatetimeLocal(suggestion), label })
+      setError(`That consultation time is too soon. The nearest valid option is ${label}.`)
       return
     }
+    setScheduleSuggestion(null)
     if (leak) {
       setError(leak)
       return
@@ -7499,14 +8670,17 @@ function MessageComposer({
     setCallBusy(callType)
     try {
       const functionName = order.stage === 'CONSULTATION' ? 'create-consultation-room' : 'create-order-call-room'
+      const enforcedCallType = order.stage === 'CONSULTATION'
+        ? consultationMeta?.callType === 'AUDIO' ? 'audio' : 'video'
+        : callType
       const result = await invokeAccountFunction<{ url?: string | null; fallback?: string; message?: string }>(functionName, {
         orderId: order.id,
-        callType,
+        callType: enforcedCallType,
       })
       onRefresh()
       if (result.url) {
         window.open(result.url, '_blank', 'noopener,noreferrer')
-        setSuccess(order.stage === 'CONSULTATION' ? `Consultation ${callType} opened in a new tab.` : `Drapeon ${callType} call opened in a new tab.`)
+        setSuccess(order.stage === 'CONSULTATION' ? `Consultation ${enforcedCallType} opened in a new tab.` : `Drapeon ${enforcedCallType} call opened in a new tab.`)
         return
       }
       setError(result.message ?? 'Calling is unavailable right now. Continue in Messages so the order record stays protected.')
@@ -7781,7 +8955,7 @@ function MessageComposer({
             <Mic className="size-4.5" />
           </IconButton>
         )}
-        {canShowCallButtons ? (
+        {canShowCallButtons && order.stage !== 'CONSULTATION' ? (
           <>
             <IconButton
               title="Audio call"
@@ -7885,13 +9059,35 @@ function MessageComposer({
           summary={consultationTime ? 'Consultation time set' : 'Ask the tailor to meet before quoting.'}
         >
           <div className="grid gap-3">
+            {publishedConsultationCallType === 'AUDIO_OR_VIDEO' ? (
+              <fieldset className="grid gap-2">
+                <legend className="text-xs font-semibold text-ink">Call type</legend>
+                <div className="flex gap-2">
+                  {(['AUDIO', 'VIDEO'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={consultationCallType === value}
+                      onClick={() => setConsultationCallType(value)}
+                      className={`rounded-[8px] border px-4 py-2 text-sm font-semibold ${consultationCallType === value ? 'border-needle bg-needle/8 text-needle' : 'border-ink/10 bg-white text-ink'}`}
+                    >
+                      {value === 'AUDIO' ? 'Audio' : 'Video'}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            ) : (
+              <p className="text-sm font-semibold text-ink">{consultationCallType === 'AUDIO' ? 'Audio consultation' : 'Video consultation'}</p>
+            )}
             <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-ink">Preferred date &amp; time</span>
                 <input
                   type="datetime-local"
                   value={consultationTime}
-                  onChange={(event) => setConsultationTime(event.target.value)}
+                  min={dateToDatetimeLocal(recommendedSchedulingStartDate({ minLookaheadMinutes: 120 }))}
+                  onChange={(event) => { setConsultationTime(event.target.value); setScheduleSuggestion(null) }}
                   className="w-full rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
                 />
               </label>
@@ -7904,6 +9100,7 @@ function MessageComposer({
                 {callBusy === 'consultation' ? 'Sending...' : 'Request'}
               </button>
             </div>
+            {scheduleSuggestion?.kind === 'consultation' ? <button type="button" onClick={() => { setConsultationTime(scheduleSuggestion.value); setScheduleSuggestion(null); setError(null) }} className="w-fit rounded-[8px] border border-needle/20 bg-needle/8 px-3 py-2 text-sm font-semibold text-needle">Use {scheduleSuggestion.label}</button> : null}
             <textarea
               value={consultationNote}
               onChange={(event) => setConsultationNote(event.target.value)}
@@ -7913,14 +9110,14 @@ function MessageComposer({
               className="resize-none rounded-[8px] border border-ink/10 bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
             />
             <p className="text-xs leading-5 text-ink/48">
-              Consultation requests are for custom orders before quote. The tailor must approve or reschedule before the call opens.
+              The tailor has 48 hours to approve, reschedule, or decline. Any fee is shown before payment.
             </p>
           </div>
         </DisclosurePanel>
       ) : consultationMeta ? (
         <div className="mt-3 rounded-[8px] border border-needle/12 bg-needle/6 px-3 py-2 text-xs leading-5 text-needle">
           {consultationMeta.status === 'REQUESTED'
-            ? `Consultation requested${consultationLabel ? ` for ${consultationLabel}` : ''}. The tailor needs to approve it before the call opens.`
+            ? `Consultation requested${consultationLabel ? ` for ${consultationLabel}` : ''}.${consultationMeta.requestExpiresAt ? ` Respond by ${formatDateTime(consultationMeta.requestExpiresAt, consultationMeta.timezone)}.` : ' The tailor has 48 hours to respond.'}`
             : consultationMeta.status === 'SCHEDULED'
               ? `Consultation scheduled${consultationLabel ? ` for ${consultationLabel}` : ''}. Use the call buttons near the scheduled time.`
               : `Consultation ${cleanLabel(consultationMeta.status, 'requested').toLowerCase()}${consultationLabel ? ` for ${consultationLabel}` : ''}.`}
@@ -7928,7 +9125,7 @@ function MessageComposer({
       ) : null}
 
       {/* Ready-made call schedule */}
-      {canScheduleReadyMadeCall ? (
+      {canScheduleOrderCall ? (
         <DisclosurePanel
           title="Schedule call"
           summary={readyMadeCallLabel ? `Scheduled ${readyMadeCallLabel}` : callTime ? 'Call time set' : 'Use a call for active-order pickup, delivery, sizing, or item-condition clarity.'}
@@ -7940,7 +9137,8 @@ function MessageComposer({
                 ref={readyMadeCallTimeInputRef}
                 type="datetime-local"
                 value={callTime}
-                onChange={(event) => setCallTime(event.target.value)}
+                min={dateToDatetimeLocal(recommendedSchedulingStartDate())}
+                onChange={(event) => { setCallTime(event.target.value); setScheduleSuggestion(null) }}
                 className="w-full rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm text-ink outline-none focus:border-needle/50"
               />
             </label>
@@ -7965,6 +9163,7 @@ function MessageComposer({
               {callBusy === 'schedule' ? 'Scheduling...' : 'Schedule'}
             </button>
           </div>
+          {scheduleSuggestion?.kind === 'call' ? <button type="button" onClick={() => { setCallTime(scheduleSuggestion.value); setScheduleSuggestion(null); setError(null) }} className="mt-3 w-fit rounded-[8px] border border-needle/20 bg-needle/8 px-3 py-2 text-sm font-semibold text-needle">Use {scheduleSuggestion.label}</button> : null}
         </DisclosurePanel>
       ) : isReadyMade ? (
         <p className="mt-3 rounded-[8px] border border-ink/8 bg-bone/55 px-3 py-2 text-xs leading-5 text-ink/54">
@@ -8726,13 +9925,11 @@ function SellerItemManager({
         </Field>
         <div className="grid gap-3 md:grid-cols-4">
           {!isOnboardingProofMode ? (
-          <Field label="Price">
-            <Input inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} />
-          </Field>
+          <MoneyInput id="ready-made-listing-price" label="Price" value={price} onValueChange={setPrice} currency={normalizeAccountCurrency(currency) ?? 'USD'} required />
           ) : null}
           {!isOnboardingProofMode ? (
           <Field label="Currency">
-            <NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}>
+            <NativeSelect value={currency} onChange={(event) => setCurrency(normalizeAccountCurrency(event.target.value) ?? currency)}>
               {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
             </NativeSelect>
           </Field>
@@ -9042,16 +10239,49 @@ function SellerItemManager({
   )
 }
 
-function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; data: OrderActorData; onRefresh: () => void }) {
-  const supportMeta = parseOrderSupportMeta(order.special_note)
+function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; data: OrderDetailRenderData; onRefresh: () => void }) {
+  const rawSupportMeta = parseOrderSupportMeta(order.special_note)
+  const booking = data.consultationBooking
+  const bookingConsultation: typeof rawSupportMeta.consultation = !rawSupportMeta.consultation && booking?.status === 'CONFIRMED' && booking.scheduled_start_at
+    ? {
+        status: 'SCHEDULED' as const,
+        feeAmount: booking.fee_amount,
+        feeCurrency: booking.fee_currency,
+        paymentTiming: booking.fee_mode === 'PAID' ? 'BEFORE_CALL_STARTS' as const : 'WAIVED_OR_FREE' as const,
+        paidAt: booking.payment_status === 'PAID' ? booking.paid_at : null,
+        scheduledStartAt: booking.scheduled_start_at,
+        scheduledEndAt: booking.scheduled_end_at,
+        callType: booking.call_type === 'AUDIO' ? 'AUDIO' as const : 'VIDEO' as const,
+      }
+    : null
+  const supportMeta = bookingConsultation
+    ? { ...rawSupportMeta, consultation: bookingConsultation }
+    : rawSupportMeta
   const consultationMeta = supportMeta.consultation
   const proposedConsultationStart = consultationMeta?.proposedStartAt ?? consultationMeta?.scheduledStartAt ?? null
-  const [quoteAmount, setQuoteAmount] = useState('')
+  const currentQuote = activeQuoteForOrder(data.quotes, order.id)
+  const quoteTaxNeedsRefresh = taxSnapshotNeedsRefresh({
+    taxRegion: order.tax_region,
+    taxRateBps: order.tax_rate_bps,
+    taxFallback: order.tax_fallback,
+  })
+  const [quoteAmount, setQuoteAmount] = useState(() => minorUnitsInput(order.subtotal_amount))
+  const [quoteTailoringAmount, setQuoteTailoringAmount] = useState(() => minorUnitsInput(supportMeta.quoteBreakdown?.tailoringAmount))
+  const [quoteFabricAllowanceAmount, setQuoteFabricAllowanceAmount] = useState(() => minorUnitsInput(supportMeta.quoteBreakdown?.fabricAllowanceAmount))
+  const [quoteFabricCoverage, setQuoteFabricCoverage] = useState<string[]>(() => supportMeta.quoteBreakdown?.fabricAllowanceCoverage ?? (order.fabric_source === 'TAILOR_SOURCES' ? ['FABRIC'] : []))
+  const [quoteFabricAssumptions, setQuoteFabricAssumptions] = useState(() => supportMeta.quoteBreakdown?.fabricSourcingAssumptions ?? '')
   const [quoteCurrency, setQuoteCurrency] = useState(order.currency ?? data.tailorProfile?.currency ?? 'USD')
-  const [completionDate, setCompletionDate] = useState('')
+  const [completionDate, setCompletionDate] = useState(() => order.quoted_completion_date?.slice(0, 10) ?? '')
   const [quoteNote, setQuoteNote] = useState('')
+  const [quoteOrderReviewed, setQuoteOrderReviewed] = useState(false)
+  const [quoteDraftLoaded, setQuoteDraftLoaded] = useState(false)
+  const [quoteDraftStatus, setQuoteDraftStatus] = useState('')
   const [consultationStart, setConsultationStart] = useState(() => dateTimeLocalInputValue(proposedConsultationStart))
-  const [consultationFee, setConsultationFee] = useState(() => minorUnitsInput(consultationMeta?.feeAmount ?? order.consultation_fee))
+  const [consultationStartSuggestion, setConsultationStartSuggestion] = useState<{ value: string; label: string } | null>(null)
+  const publishedConsultationCallType = data.tailorProfile?.consultation_call_type ?? 'VIDEO'
+  const [consultationCallType, setConsultationCallType] = useState<'AUDIO' | 'VIDEO'>(
+    consultationMeta?.callType === 'AUDIO' || publishedConsultationCallType === 'AUDIO' ? 'AUDIO' : 'VIDEO',
+  )
   const [consultationNote, setConsultationNote] = useState('')
   const [targetStage, setTargetStage] = useState(nextStageOptions(order)[0] ?? '')
   const [stageNote, setStageNote] = useState('')
@@ -9061,6 +10291,9 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   const [stageFulfillmentContactName, setStageFulfillmentContactName] = useState('')
   const [stageFulfillmentContactPhone, setStageFulfillmentContactPhone] = useState('')
   const [stageMediaFiles, setStageMediaFiles] = useState<File[]>([])
+  const [fabricApprovalMode, setFabricApprovalMode] = useState(false)
+  const [showFabricChangeFeedback, setShowFabricChangeFeedback] = useState(false)
+  const [showStyleChangeFeedback, setShowStyleChangeFeedback] = useState(false)
   const [measurementNote, setMeasurementNote] = useState('')
   const [measurementFields, setMeasurementFields] = useState('')
   const [fitReadinessNote, setFitReadinessNote] = useState('')
@@ -9080,19 +10313,72 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   const [pickupCode, setPickupCode] = useState('')
   const [tailorCancellationReason, setTailorCancellationReason] = useState<(typeof TAILOR_CANCELLATION_REASON_OPTIONS)[number]['value']>('TAILOR_CANNOT_FULFIL')
   const [tailorCancellationNote, setTailorCancellationNote] = useState('')
-  const [tailorDeliveryReason, setTailorDeliveryReason] = useState<(typeof TAILOR_DELIVERY_REASON_OPTIONS)[number]['value']>('DISPATCH_DELAY')
+  const [tailorDeliveryReason, setTailorDeliveryReason] = useState<(typeof TAILOR_DELIVERY_REASON_OPTIONS)[number]['value']>('DRAPEON_COLLECTION_MISSED')
   const [tailorDeliveryNote, setTailorDeliveryNote] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!showFabricChangeFeedback && !showStyleChangeFeedback) return
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setShowFabricChangeFeedback(false)
+        setShowStyleChangeFeedback(false)
+      }
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [showFabricChangeFeedback, showStyleChangeFeedback])
+
   const isTailor = isTailorOrder(order, data)
   const stage = order.stage ?? ''
   const currentOrderStage = asOrderStage(order.stage)
   const measurementSnapshot = measurementSnapshotForOrder(order)
-  const stageOptions = nextStageOptions(order)
-  const selectedTargetStage = stageOptions.find((stage) => stage === targetStage) ?? stageOptions[0] ?? ''
+  const tailorFabricNeedsAction =
+    canSubmitTailorFabricApproval({
+      orderKind: order.order_kind,
+      fabricSource: order.fabric_source,
+      stage,
+    })
+    && data.customOrderDetail?.fabric_approval_status !== 'APPROVED'
+  const tailorFabricApproved =
+    order.order_kind === 'CUSTOM'
+    && order.fabric_source === 'TAILOR_SOURCES'
+    && PRE_CUTTING_STAGES.has(stage)
+    && data.customOrderDetail?.fabric_approval_status === 'APPROVED'
+  const latestTailorFabricEvidence = latestFabricApprovalEvidence(
+    productionEvidenceFor(order.id, data.productionEvidence),
+  )
+  const tailorFabricProofUrls = Array.from(new Set(
+    stringList(latestTailorFabricEvidence?.photo_urls),
+  ))
+  const fabricChangeFeedback = sourcedFabricChangeFeedbackFromUpdates(
+    stageUpdatesFor(order.id, data.stageUpdates),
+  )
+  const styleChangeFeedback = styleAlignmentChangeFeedbackFromUpdates(
+    stageUpdatesFor(order.id, data.stageUpdates),
+  )
+  const showTailorStyleDecision = order.order_kind === 'CUSTOM' &&
+    PRE_CUTTING_STAGES.has(stage) &&
+    supportMeta.styleAlignment?.requiredBeforeCutting === true &&
+    (supportMeta.styleAlignment.status === 'PENDING_CUSTOMER_APPROVAL' ||
+      supportMeta.styleAlignment.status === 'CHANGES_REQUESTED')
+  const showTailorStyleApproved = order.order_kind === 'CUSTOM' &&
+    PRE_CUTTING_STAGES.has(stage) &&
+    supportMeta.styleAlignment?.requiredBeforeCutting === true &&
+    supportMeta.styleAlignment.status === 'APPROVED'
+  const baseStageOptions = nextStageOptions(order)
+  const stageOptions = stage === 'SOURCING'
+    ? Array.from(new Set(['SOURCING', ...baseStageOptions]))
+    : baseStageOptions
+  const selectedTargetStage = fabricApprovalMode
+    ? 'SOURCING'
+    : stageOptions.find((stage) => stage === targetStage) ?? stageOptions[0] ?? ''
   const selectedTargetNeedsDispatchMeta = selectedTargetStage === 'READY_FOR_DRAPE_DISPATCH'
   const lockedQuoteCurrency = normalizeAccountCurrency(order.currency ?? order.quoted_currency) ?? quoteCurrency
+  const fundedFabricQuote = order.fabric_funding_policy_version === 'fabric-funding-2026-08-01-v1'
+  const tailorSourcesFabric = order.fabric_source === 'TAILOR_SOURCES'
   const consultationRequestedByCustomer = order.stage === 'CONSULTATION' &&
     consultationMeta?.requestedBy === 'CUSTOMER' &&
     consultationMeta.status === 'REQUESTED'
@@ -9141,10 +10427,103 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   const canCancelScopeChange = scopeChangeOpen && supportMeta.scopeChange?.requestedBy === 'TAILOR'
   const canDeclineOrder = cancellationPolicy?.tailorCanDecline === true
   const canRequestCancellationReview = cancellationPolicy?.tailorCanRequestReview === true && !cancellationReviewOpen
-  const canRequestDeliveryReview = ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED'].includes(stage) && !deliveryReviewOpen && !cancellationReviewOpen
-  const canConfirmCollection = stage === 'READY_FOR_COLLECTION'
+  const initialPaymentLikelyPaid = !['PENDING_QUOTE','CONSULTATION','QUOTE_SENT','PAYMENT_PENDING','PAYMENT_FAILED','DECLINED','EXPIRED'].includes(stage)
+  const canRequestDeliveryReview = initialPaymentLikelyPaid && !deliveryReviewOpen && stage !== 'IN_DISPUTE' && !isCompletedOrderStage(stage)
+  const canConfirmCollection = stage === 'READY_FOR_COLLECTION' && order.delivery_method === 'LOCAL_COLLECTION'
+  const quoteDraftFields: TailorQuoteDraftFields = {
+    amount: quoteAmount,
+    tailoringAmount: quoteTailoringAmount,
+    fabricAllowanceAmount: quoteFabricAllowanceAmount,
+    fabricCoverage: quoteFabricCoverage,
+    fabricAssumptions: quoteFabricAssumptions,
+    completionDate,
+    laborAmount: '',
+    sourcingAmount: '',
+    rushAmount: '',
+    includedText: '',
+    excludedText: '',
+    breakdownSummary: '',
+    note: quoteNote,
+    currency: lockedQuoteCurrency as AccountCurrencyCode,
+  }
+  const quoteSubmitBlockedReason = !quoteOrderReviewed
+    ? 'Confirm that you reviewed the order before sending.'
+    : (!fundedFabricQuote && !quoteAmount) || (fundedFabricQuote && !quoteTailoringAmount)
+      ? 'Add the required quote amount before sending.'
+      : fundedFabricQuote && tailorSourcesFabric && (
+          !quoteFabricAllowanceAmount || quoteFabricCoverage.length === 0 || quoteFabricAssumptions.trim().length < 8
+        )
+        ? 'Complete the fabric allowance details before sending.'
+        : !completionDate
+          ? 'Choose an estimated completion date before sending.'
+          : null
 
-  if (!isTailor || isTerminalOrder(order)) return null
+  async function persistQuoteDraft() {
+    if (!isMeaningfulTailorQuoteDraft(quoteDraftFields)) return true
+    setQuoteDraftStatus('Saving quote...')
+    try {
+      await invokeAccountFunction('tailor-quote-draft-action', {
+        action: 'save',
+        orderId: order.id,
+        version: TAILOR_QUOTE_DRAFT_VERSION,
+        mode: 'send',
+        fields: quoteDraftFields,
+      })
+      setQuoteDraftStatus('Draft saved')
+      return true
+    } catch {
+      setQuoteDraftStatus('Draft not synced')
+      return false
+    }
+  }
+
+  useEffect(() => {
+    if (!isTailor || !['PENDING_QUOTE', 'CONSULTATION'].includes(stage)) return
+    let active = true
+    void invokeAccountFunction<{ draft?: { version?: string; mode?: string; fields?: Partial<TailorQuoteDraftFields> } | null }>('tailor-quote-draft-action', {
+      action: 'load',
+      orderId: order.id,
+    }).then((result) => {
+      if (!active) return
+      const fields = result.draft?.version === TAILOR_QUOTE_DRAFT_VERSION && result.draft.mode === 'send'
+        ? result.draft.fields
+        : null
+      if (fields) {
+        setQuoteAmount(formatMoneyInputValue(fields.amount ?? ''))
+        setQuoteTailoringAmount(formatMoneyInputValue(fields.tailoringAmount ?? ''))
+        setQuoteFabricAllowanceAmount(formatMoneyInputValue(fields.fabricAllowanceAmount ?? ''))
+        setQuoteFabricCoverage(Array.isArray(fields.fabricCoverage) ? fields.fabricCoverage : [])
+        setQuoteFabricAssumptions(fields.fabricAssumptions ?? '')
+        setCompletionDate(fields.completionDate ?? '')
+        setQuoteNote(fields.note ?? '')
+        setQuoteOrderReviewed(false)
+        setQuoteDraftStatus('Draft restored')
+      } else {
+        setQuoteDraftStatus('')
+      }
+      setQuoteDraftLoaded(true)
+    }).catch(() => {
+      if (!active) return
+      setQuoteDraftStatus('Draft sync unavailable')
+      setQuoteDraftLoaded(true)
+    })
+    return () => { active = false }
+  }, [isTailor, order.id, stage])
+
+  useEffect(() => {
+    if (!isTailor || !quoteDraftLoaded || !['PENDING_QUOTE', 'CONSULTATION'].includes(stage) || !isMeaningfulTailorQuoteDraft(quoteDraftFields)) return
+    const timer = window.setTimeout(() => {
+      setQuoteDraftStatus('Unsaved changes')
+      void persistQuoteDraft()
+    }, 900)
+    return () => window.clearTimeout(timer)
+  }, [
+    isTailor, quoteDraftLoaded, stage, quoteAmount, quoteTailoringAmount,
+    quoteFabricAllowanceAmount, quoteFabricCoverage, quoteFabricAssumptions,
+    completionDate, quoteNote, lockedQuoteCurrency,
+  ])
+
+  if (!isTailor) return null
 
   async function addStageMedia(files: FileList | null) {
     if (!files?.length) return
@@ -9164,19 +10543,41 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
     })
   }
 
+  async function replaceStageMedia(index: number, file: File) {
+    try {
+      await prepareOrderEvidenceFile(file)
+      setStageMediaFiles((current) => current.map((item, itemIndex) => itemIndex === index ? file : item))
+      setError(null)
+    } catch (mediaError) {
+      setError(friendlyActionError(mediaError, 'Choose a photo or MP4/MOV video up to 60 seconds.'))
+    }
+  }
+
   async function sendQuote() {
-    const amount = parseMinorUnits(quoteAmount)
+    const tailoringAmount = parseMoneyInputToMinorUnits(quoteTailoringAmount)
+    const fabricAllowanceAmount = tailorSourcesFabric ? parseMoneyInputToMinorUnits(quoteFabricAllowanceAmount) : 0
+    const amount = fundedFabricQuote
+      ? (tailoringAmount ?? 0) + (fabricAllowanceAmount ?? 0)
+      : parseMoneyInputToMinorUnits(quoteAmount)
     const completionDateValue = completionDate ? new Date(`${completionDate}T12:00:00.000Z`) : null
     const dateIso = completionDateValue && !Number.isNaN(completionDateValue.getTime()) ? completionDateValue.toISOString() : null
     const leak = assertNoContactLeak(quoteNote, "Quote notes can't include contact details.")
     setError(null)
     setSuccess(null)
-    if (!amount || !dateIso) {
-      setError('Add a quote amount and completion date.')
+    if (!amount || !dateIso || (fundedFabricQuote && !tailoringAmount)) {
+      setError('Add the tailoring amount and completion date.')
+      return
+    }
+    if (fundedFabricQuote && tailorSourcesFabric && (!fabricAllowanceAmount || quoteFabricCoverage.length === 0 || quoteFabricAssumptions.trim().length < 8)) {
+      setError('Add the fabric allowance, what it covers, and clear sourcing assumptions.')
       return
     }
     if (leak) {
       setError(leak)
+      return
+    }
+    if (!quoteOrderReviewed) {
+      setError('Review the complete order details and confirm that review before sending this quote.')
       return
     }
     const customerDeadline = order.deadline ? new Date(order.deadline) : null
@@ -9187,14 +10588,35 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
     setBusy('quote')
     try {
       await invokeAccountFunction('tailor-order-action', {
-        action: 'send-quote',
+        action: quoteTaxNeedsRefresh ? 'revise-quote' : 'send-quote',
         orderId: order.id,
+        ...(quoteTaxNeedsRefresh && currentQuote ? {
+          quoteId: currentQuote.id,
+          expectedQuoteVersion: currentQuote.version,
+          changeKind: 'TAILOR_CORRECTION',
+        } : {}),
         amount,
         currency: lockedQuoteCurrency,
         completionDate: dateIso,
+        ...(fundedFabricQuote ? {
+          fabricAllocation: {
+            tailoringAmount,
+            fabricAllowanceAmount,
+            coverage: quoteFabricCoverage,
+            sourcingAssumptions: tailorSourcesFabric ? quoteFabricAssumptions.trim() : '',
+          },
+        } : {}),
+        orderReview: {
+          acknowledged: true,
+          version: QUOTE_ORDER_REVIEW_VERSION,
+        },
         note: quoteNote.trim() || undefined,
       })
-      setSuccess('Quote sent to the customer.')
+      setSuccess(quoteTaxNeedsRefresh
+        ? 'Quote refreshed with the current tax breakdown. The customer was notified.'
+        : 'Quote sent. The customer was notified, and scheduled order calls are now available in this chat.')
+      setQuoteOrderReviewed(false)
+      await invokeAccountFunction('tailor-quote-draft-action', { action: 'delete', orderId: order.id }).catch(() => null)
       onRefresh()
     } catch (quoteError) {
       setError(friendlyActionError(quoteError, 'Quote could not be sent. Check the order state and try again.'))
@@ -9206,19 +10628,22 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
   async function saveConsultation(action: 'request-consultation' | 'approve-consultation') {
     const scheduledAt = consultationStart ? new Date(consultationStart) : null
     const leak = assertNoContactLeak(consultationNote, "Consultation notes can't include contact details.")
-    const parsedFee = consultationFee.trim() ? parseMinorUnits(consultationFee) : null
     setError(null)
     setSuccess(null)
     if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) {
       setError('Choose the consultation date and time.')
       return
     }
-    if (leak) {
-      setError(leak)
+    if (scheduledAt.getTime() < Date.now() + 60 * 60_000) {
+      const suggestion = recommendedSchedulingStartDate({ minLookaheadMinutes: 60 })
+      const label = formatDateTime(suggestion.toISOString()) ?? suggestion.toLocaleString()
+      setConsultationStartSuggestion({ value: dateToDatetimeLocal(suggestion), label })
+      setError(`That consultation time is too soon. The nearest valid option is ${label}.`)
       return
     }
-    if (consultationFee.trim() && parsedFee === null) {
-      setError('Enter a valid consultation fee or leave it blank.')
+    setConsultationStartSuggestion(null)
+    if (leak) {
+      setError(leak)
       return
     }
     setBusy(action === 'approve-consultation' ? 'consultation-approve' : 'consultation-schedule')
@@ -9228,8 +10653,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
         orderId: order.id,
         scheduledStartAt: scheduledAt.toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        consultationFee: parsedFee,
-        currency: quoteCurrency,
+        callType: consultationCallType,
         note: consultationNote.trim() || undefined,
       })
       setConsultationNote('')
@@ -9548,12 +10972,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
     const ok = await runTailorLifecycleAction(
       'request-delivery-review',
       { reason: tailorDeliveryReason, note: note || undefined },
-      'Delivery review opened for Drapeon.',
+      'Shipping or delivery help recorded. Drapeon applied the appropriate risk protection and Ops follow-up.',
     )
     if (ok) setTailorDeliveryNote('')
   }
 
   async function advanceStage() {
+    const progressOnlySubmission = !fabricApprovalMode && selectedTargetStage === order.stage
     const leak = assertNoContactLeak(stageNote, "Stage notes can't include contact details.")
     setError(null)
     setSuccess(null)
@@ -9575,13 +11000,13 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
     try {
       const selectedFiles = stageMediaFiles.slice(0, 6)
       const photoUrls = await Promise.all(
-        selectedFiles.map(async (file) => uploadPublicFile('order-photos', `progress/${order.id}`, await prepareOrderEvidenceFile(file))),
+        selectedFiles.map(async (file) => uploadPublicFile('order-photos', `${fabricApprovalMode ? 'fabric-approval' : 'progress'}/${order.id}`, await prepareOrderEvidenceFile(file))),
       )
       const mediaFingerprints = selectedFiles.map(mediaFingerprint)
       await invokeAccountFunction('tailor-order-action', {
-        action: 'advance-stage',
+        action: fabricApprovalMode ? 'submit-sourced-fabric' : progressOnlySubmission ? 'post-stage-progress' : 'advance-stage',
         orderId: order.id,
-        targetStage: selectedTargetStage,
+        ...(fabricApprovalMode ? {} : { targetStage: selectedTargetStage }),
         note: stageNote.trim(),
         photoUrl: photoUrls[0],
         photoUrls,
@@ -9599,7 +11024,12 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
       setStageFulfillmentContactName('')
       setStageFulfillmentContactPhone('')
       setStageMediaFiles([])
-      setSuccess('Stage updated and added to the order timeline.')
+      setFabricApprovalMode(false)
+      setSuccess(fabricApprovalMode
+        ? 'Exact fabric sent to the customer for approval.'
+        : progressOnlySubmission
+          ? 'Sourcing progress added without changing the fabric awaiting approval.'
+          : 'Stage updated and added to the order timeline.')
       onRefresh()
     } catch (stageError) {
       setError(friendlyActionError(stageError, 'Stage could not be updated. Check approval gates and try again.'))
@@ -9614,8 +11044,192 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
       <h2 className="mt-2 text-2xl font-semibold text-ink">Work this order from web</h2>
       <div className="mt-5 grid gap-4">
         <ActionNotice error={error} success={success} />
+        {tailorFabricNeedsAction ? (
+          <div className="grid gap-3 rounded-[8px] border border-needle/18 bg-white p-4 shadow-sm">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Current production blocker</p>
+              <h3 className="mt-1 text-xl font-semibold text-ink">
+                {data.customOrderDetail?.fabric_approval_status === 'CHANGES_REQUESTED'
+                  ? 'Customer requested fabric changes'
+                  : data.customOrderDetail?.fabric_approval_status === 'PENDING_CUSTOMER_APPROVAL' && tailorFabricProofUrls.length > 0
+                    ? 'Fabric awaiting customer approval'
+                    : 'Fabric approval needs action'}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-ink/62">
+                {data.customOrderDetail?.fabric_description
+                  ? safeUserText(data.customOrderDetail.fabric_description, 'Upload a clear fabric proof before cutting.')
+                  : 'Upload a clear photo or video in natural light before cutting.'}
+              </p>
+              {data.customOrderDetail?.fabric_approval_status === 'CHANGES_REQUESTED' && fabricChangeFeedback ? (
+                <button
+                  type="button"
+                  onClick={() => setShowFabricChangeFeedback(true)}
+                  className="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle transition-colors duration-200 hover:bg-needle/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35"
+                  aria-haspopup="dialog"
+                >
+                  View changes
+                  <ChevronRight className="size-3.5" aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
+            {tailorFabricProofUrls.length > 0 ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {tailorFabricProofUrls.map((src, index) => (
+                  <PhotoTile key={src} src={src} label={`Sourced fabric proof ${index + 1}`} />
+                ))}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setFabricApprovalMode(true)
+                setTargetStage('SOURCING')
+                setStageNote('')
+                setStageMediaFiles([])
+                window.requestAnimationFrame(() => document.getElementById('tailor-stage-update')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+              }}
+              className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white"
+            >
+              {data.customOrderDetail?.fabric_approval_status === 'PENDING_CUSTOMER_APPROVAL'
+                ? (tailorFabricProofUrls.length > 0 ? 'Replace fabric proof' : 'Upload fabric proof')
+                : data.customOrderDetail?.fabric_approval_status === 'CHANGES_REQUESTED'
+                  ? 'Upload replacement fabric'
+                  : 'Upload sourced fabric'}
+            </button>
+            {stage === 'SOURCING' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setFabricApprovalMode(false)
+                  setTargetStage('SOURCING')
+                  setStageNote('')
+                  setStageMediaFiles([])
+                  window.requestAnimationFrame(() => document.getElementById('tailor-stage-update')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+                }}
+                className="inline-flex justify-center rounded-[8px] border border-ui-border bg-white px-4 py-2.5 text-sm font-semibold text-ink"
+              >
+                Add sourcing update
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {tailorFabricApproved ? (
+          <div className="flex items-start gap-3 rounded-[8px] border border-needle/20 bg-needle/8 p-4" role="status">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle text-white">
+              <CheckCheck className="size-4" aria-hidden="true" />
+            </span>
+            <div>
+              <h3 className="text-base font-semibold text-needle">Fabric approved</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/68">
+                The customer approved the selected fabric. Continue once the remaining pre-cutting checks are clear.
+              </p>
+            </div>
+          </div>
+        ) : null}
+        {showTailorStyleDecision ? (
+          <div className="grid gap-3 rounded-[8px] border border-rust/18 bg-rust/6 p-4">
+            <div>
+              <h3 className="text-lg font-semibold text-ink">
+                {supportMeta.styleAlignment?.status === 'CHANGES_REQUESTED'
+                  ? 'Customer requested style clarification'
+                  : 'Style plan awaiting customer approval'}
+              </h3>
+              <p className="mt-1 line-clamp-3 text-sm leading-6 text-ink/62">
+                {safeUserText(
+                  supportMeta.styleAlignment?.tailorInterpretation,
+                  'Explain the planned interpretation before cutting.',
+                )}
+              </p>
+            </div>
+            {supportMeta.styleAlignment?.status === 'CHANGES_REQUESTED' && styleChangeFeedback ? (
+              <button
+                type="button"
+                onClick={() => setShowStyleChangeFeedback(true)}
+                className="inline-flex w-fit cursor-pointer items-center gap-1 rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35"
+                aria-haspopup="dialog"
+              >
+                View changes
+                <ChevronRight className="size-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => window.requestAnimationFrame(() => document.getElementById('tailor-style-alignment')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))}
+              className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white"
+            >
+              {supportMeta.styleAlignment?.status === 'CHANGES_REQUESTED' ? 'Send updated style plan' : 'Update style plan'}
+            </button>
+          </div>
+        ) : null}
+        {showTailorStyleApproved ? (
+          <div className="flex items-start gap-3 rounded-[8px] border border-needle/20 bg-needle/8 p-4" role="status">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-needle text-white">
+              <CheckCheck className="size-4" aria-hidden="true" />
+            </span>
+            <div>
+              <h3 className="text-base font-semibold text-needle">Style plan approved</h3>
+              <p className="mt-1 text-sm leading-6 text-ink/68">The customer approved your interpretation. Continue once the remaining pre-cutting checks are clear.</p>
+            </div>
+          </div>
+        ) : null}
+        {showFabricChangeFeedback && fabricChangeFeedback ? (
+          <div
+            className="fixed inset-0 z-[100] grid place-items-end bg-ink/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fabric-change-feedback-title"
+            onMouseDown={() => setShowFabricChangeFeedback(false)}
+          >
+            <div
+              className="max-h-[75vh] w-full max-w-lg overflow-y-auto rounded-[16px] bg-white p-5 shadow-2xl sm:p-6"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Customer feedback</p>
+                  <h3 id="fabric-change-feedback-title" className="mt-1 text-xl font-semibold text-ink">Requested fabric changes</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFabricChangeFeedback(false)}
+                  className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border border-ink/10 text-ink transition-colors duration-200 hover:bg-bone focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35"
+                  aria-label="Close requested fabric changes"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <p className="mt-5 whitespace-pre-wrap break-words text-sm leading-6 text-ink/78">
+                {safeUserText(fabricChangeFeedback.feedback, 'No feedback was provided.')}
+              </p>
+            </div>
+          </div>
+        ) : null}
+        {showStyleChangeFeedback && styleChangeFeedback ? (
+          <div
+            className="fixed inset-0 z-[100] grid place-items-end bg-ink/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tailor-style-change-feedback-title"
+            onMouseDown={() => setShowStyleChangeFeedback(false)}
+          >
+            <div className="max-h-[75vh] w-full max-w-lg overflow-y-auto rounded-[16px] bg-white p-5 shadow-2xl sm:p-6" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Customer feedback</p>
+                  <h3 id="tailor-style-change-feedback-title" className="mt-1 text-xl font-semibold text-ink">Requested style clarification</h3>
+                </div>
+                <button type="button" onClick={() => setShowStyleChangeFeedback(false)} className="grid size-10 shrink-0 place-items-center rounded-full border border-ink/10 text-ink" aria-label="Close requested style clarification">
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <p className="mt-5 whitespace-pre-wrap break-words text-sm leading-6 text-ink/78">
+                {safeUserText(styleChangeFeedback.feedback, 'No feedback was provided.')}
+              </p>
+            </div>
+          </div>
+        ) : null}
         {tailorCanScheduleConsultation ? (
-          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
+          <div id={`order-consultation-${order.id}`} className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4" tabIndex={-1}>
             <div>
               <h3 className="text-xl font-semibold text-ink">
                 {consultationRequestedByCustomer ? 'Approve consultation request' : 'Schedule consultation'}
@@ -9631,24 +11245,30 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 </p>
               )}
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_0.7fr_0.45fr]">
+            <div className="grid gap-3 md:grid-cols-2">
               <input
                 type="datetime-local"
                 value={consultationStart}
-                onChange={(event) => setConsultationStart(event.target.value)}
+                min={dateToDatetimeLocal(recommendedSchedulingStartDate({ minLookaheadMinutes: 60 }))}
+                onChange={(event) => { setConsultationStart(event.target.value); setConsultationStartSuggestion(null) }}
                 className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
               />
-              <input
-                inputMode="decimal"
-                value={consultationFee}
-                onChange={(event) => setConsultationFee(event.target.value)}
-                placeholder="Optional fee"
-                className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
-              />
-              <select value={quoteCurrency} onChange={(event) => setQuoteCurrency(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-                {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
-              </select>
+              {publishedConsultationCallType === 'AUDIO_OR_VIDEO' && !consultationMeta?.callType ? (
+                <select value={consultationCallType} onChange={(event) => setConsultationCallType(event.target.value as 'AUDIO' | 'VIDEO')} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50" aria-label="Consultation call type">
+                  <option value="AUDIO">Audio call</option>
+                  <option value="VIDEO">Video call</option>
+                </select>
+              ) : (
+                <div className="rounded-[8px] border border-needle/12 bg-needle/5 px-3 py-2 text-sm text-ink">
+                  {consultationCallType === 'AUDIO' ? 'Audio' : 'Video'} · {data.tailorProfile?.consultation_duration_minutes ?? 30} minutes
+                  {data.tailorProfile?.consultation_mode === 'PAID' && data.tailorProfile.consultation_fee_amount
+                    ? ` · ${formatMoney(data.tailorProfile.consultation_fee_amount, data.tailorProfile.consultation_currency ?? quoteCurrency)}`
+                    : ' · Free'}
+                </div>
+              )}
             </div>
+            {consultationStartSuggestion ? <button type="button" onClick={() => { setConsultationStart(consultationStartSuggestion.value); setConsultationStartSuggestion(null); setError(null) }} className="w-fit rounded-[8px] border border-needle/20 bg-needle/8 px-3 py-2 text-sm font-semibold text-needle">Use {consultationStartSuggestion.label}</button> : null}
+            <p className="text-xs leading-5 text-ink/54">Your published terms apply. Drapeon sends reminders; unanswered customer requests expire after 48 hours.</p>
             <textarea
               value={consultationNote}
               onChange={(event) => setConsultationNote(event.target.value)}
@@ -9682,18 +11302,41 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
             </div>
           </div>
         ) : null}
-        {['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage ?? '') ? (
+        {(['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage ?? '') || quoteTaxNeedsRefresh) ? (
           <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
-            <h3 className="text-xl font-semibold text-ink">Send quote</h3>
+            <h3 className="text-xl font-semibold text-ink">{quoteTaxNeedsRefresh ? 'Refresh quote tax' : 'Send quote'}</h3>
+            <p className="text-sm leading-6 text-ink/62">{quoteTaxNeedsRefresh ? 'Your tailoring and fabric amounts are preserved. Review them, then resend to apply the current Ghana VAT, NHIL, and GETFund rates.' : fundedFabricQuote ? 'Separate tailoring from fabric so the customer sees exactly what each protected amount covers.' : 'Add the seller amount and delivery date.'}</p>
+            {quoteDraftStatus ? <p className="text-xs font-semibold text-needle" aria-live="polite">{quoteDraftStatus}</p> : null}
             <div className="grid gap-3 md:grid-cols-3">
-              <input inputMode="decimal" value={quoteAmount} onChange={(event) => setQuoteAmount(event.target.value)} placeholder="Amount" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+              {fundedFabricQuote ? (
+                <>
+                  <MoneyInput id={`quote-tailoring-${order.id}`} label="Tailoring and construction" value={quoteTailoringAmount} onValueChange={setQuoteTailoringAmount} currency={lockedQuoteCurrency as AccountCurrencyCode} required />
+                  {tailorSourcesFabric ? <MoneyInput id={`quote-fabric-${order.id}`} label="Fabric allowance" value={quoteFabricAllowanceAmount} onValueChange={setQuoteFabricAllowanceAmount} currency={lockedQuoteCurrency as AccountCurrencyCode} required hint="Held for approved, evidenced fabric costs. Any unused amount returns to the customer." /> : <div className="rounded-[8px] border border-needle/12 bg-needle/5 px-3 py-2 text-sm text-ink/62">Customer supplies fabric · allowance fixed at zero</div>}
+                </>
+              ) : <MoneyInput id={`quote-amount-${order.id}`} label="Quote amount" value={quoteAmount} onValueChange={setQuoteAmount} currency={lockedQuoteCurrency as AccountCurrencyCode} required />}
               <input value={lockedQuoteCurrency} disabled aria-label="Quote currency locked to order currency" className="rounded-full border border-ink/10 bg-bone/50 px-4 py-3 text-sm font-semibold text-ink/62 outline-none" />
               <input type="date" value={completionDate} onChange={(event) => setCompletionDate(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
             </div>
+            {fundedFabricQuote && tailorSourcesFabric ? (
+              <div className="grid gap-3 rounded-[8px] border border-needle/12 bg-bone/45 p-4">
+                <fieldset className="grid gap-2"><legend className="text-sm font-semibold text-ink">Allowance covers</legend><div className="flex flex-wrap gap-2">{([['FABRIC','Fabric'],['LINING','Lining'],['EMBROIDERY','Embroidery'],['TRIMS','Trims'],['NOTIONS','Notions'],['OTHER_AGREED_MATERIAL','Other agreed material']] as const).map(([code,label]) => { const selected=quoteFabricCoverage.includes(code); return <button key={code} type="button" role="checkbox" aria-checked={selected} onClick={() => setQuoteFabricCoverage((current) => selected ? current.filter((item) => item !== code) : [...current, code])} className={`rounded-full border px-3 py-2 text-sm font-semibold ${selected ? 'border-needle/30 bg-needle/10 text-needle' : 'border-ink/10 bg-white text-ink/62'}`}>{label}</button> })}</div></fieldset>
+                <label className="grid gap-1.5 text-sm font-semibold text-ink">Sourcing assumptions<textarea value={quoteFabricAssumptions} onChange={(event) => setQuoteFabricAssumptions(event.target.value)} rows={3} placeholder="Quantity, quality, supplier estimate, lining or trim assumptions..." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 font-normal text-ink outline-none focus:border-needle/50" /></label>
+                <div className="flex items-center justify-between border-t border-ink/8 pt-3"><span className="text-sm font-semibold text-ink">Seller subtotal</span><strong>{formatMoney((parseMoneyInputToMinorUnits(quoteTailoringAmount) ?? 0) + (parseMoneyInputToMinorUnits(quoteFabricAllowanceAmount) ?? 0), lockedQuoteCurrency)}</strong></div>
+                <p className="text-xs leading-5 text-ink/55">The allowance is protected for approved material costs and is not immediate earnings. Any unused allowance is returned to the customer.</p>
+              </div>
+            ) : null}
             <textarea value={quoteNote} onChange={(event) => setQuoteNote(event.target.value)} rows={2} placeholder="Optional quote note" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
-            <button type="button" onClick={sendQuote} disabled={busy === 'quote'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-              {busy === 'quote' ? 'Sending...' : 'Send quote'}
-            </button>
+            <label className={`flex cursor-pointer items-start gap-3 rounded-[8px] border p-4 text-sm leading-6 ${quoteOrderReviewed ? 'border-needle/25 bg-needle/8 text-ink' : 'border-ink/10 bg-bone/45 text-ink/68'}`}>
+              <input type="checkbox" checked={quoteOrderReviewed} onChange={(event) => setQuoteOrderReviewed(event.target.checked)} className="mt-1 size-4 accent-needle" />
+              <span>{QUOTE_ORDER_REVIEW_COPY}</span>
+            </label>
+            {quoteSubmitBlockedReason ? <p className="text-center text-xs leading-5 text-ink/58" aria-live="polite">{quoteSubmitBlockedReason}</p> : null}
+            <div className="sticky bottom-4 z-20 rounded-full border border-ink/8 bg-white/92 p-1.5 shadow-[0_18px_45px_rgba(22,28,24,0.16)] backdrop-blur">
+              <button type="button" onClick={sendQuote} disabled={busy === 'quote' || !!quoteSubmitBlockedReason} className="inline-flex min-h-12 w-full items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45">
+                {busy === 'quote' ? 'Sending...' : quoteTaxNeedsRefresh ? 'Refresh quote' : 'Send quote'}
+              </button>
+            </div>
+            <p className="text-xs leading-5 text-ink/52">Your quote saves automatically and follows this order across Drapeon.</p>
           </div>
         ) : null}
         {canRequestMeasurementConfirmation || canConfirmFitReadiness || canRequestStyleAlignment || canConfirmFabricReceived || canOpenMaterialIssue ? (
@@ -9748,7 +11391,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               ) : null}
 
               {canRequestStyleAlignment ? (
-                <div className="grid gap-3 border-t border-ink/6 pt-4">
+                <div id="tailor-style-alignment" className="grid scroll-mt-28 gap-3 border-t border-ink/6 pt-4">
                   <h3 className="font-semibold text-ink">Style alignment</h3>
                   <textarea
                     value={styleAlignmentNote}
@@ -9947,13 +11590,23 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
           </DisclosurePanel>
         ) : null}
 
-        {stageOptions.length > 0 ? (
-          <div className="grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
-            <h3 className="text-xl font-semibold text-ink">Update production stage</h3>
+        {stageOptions.length > 0 || fabricApprovalMode ? (
+          <div id="tailor-stage-update" className="scroll-mt-28 grid gap-3 rounded-[8px] border border-ink/8 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-semibold text-ink">{fabricApprovalMode ? 'Submit exact fabric for approval' : selectedTargetStage === order.stage ? 'Add sourcing progress' : 'Update production stage'}</h3>
+                {fabricApprovalMode ? <p className="mt-1 text-sm leading-6 text-ink/58">This is separate from sourcing progress. Upload only the exact fabric the customer is being asked to approve.</p> : null}
+              </div>
+              {fabricApprovalMode ? <button type="button" onClick={() => { setFabricApprovalMode(false); setStageNote(''); setStageMediaFiles([]) }} className="text-sm font-semibold text-needle">Cancel</button> : null}
+            </div>
             <div className="grid gap-3 md:grid-cols-[0.8fr_1.2fr]">
-              <select value={selectedTargetStage} onChange={(event) => setTargetStage(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-                {stageOptions.map((stage) => <option key={stage} value={stage}>{cleanLabel(stage)}</option>)}
-              </select>
+              {fabricApprovalMode ? (
+                <div className="rounded-[8px] border border-needle/14 bg-needle/6 px-4 py-3"><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle/75">Customer decision</p><p className="mt-1 font-semibold text-ink">Fabric approval</p></div>
+              ) : (
+                <select value={selectedTargetStage} onChange={(event) => { setFabricApprovalMode(false); setTargetStage(event.target.value) }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+                  {stageOptions.map((stageOption) => <option key={stageOption} value={stageOption}>{stageOption === order.stage ? `${cleanLabel(stageOption)} · add update` : cleanLabel(stageOption)}</option>)}
+                </select>
+              )}
               <div className="grid gap-2">
                 <div className="grid gap-2 sm:grid-cols-2">
                   <label className="inline-flex cursor-pointer justify-center rounded-full border border-needle/16 bg-needle/8 px-4 py-3 text-sm font-semibold text-needle">
@@ -9978,16 +11631,31 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                   </label>
                 </div>
                 <p className="text-xs leading-5 text-ink/52">
-                  Use fresh clothing proof. Photos and MP4/MOV videos up to 60 seconds are supported.
+                  {fabricApprovalMode
+                    ? 'Show the exact fabric in natural light, including its color and weave. Do not use a market visit, supplier search, or general sourcing update here.'
+                    : 'Use fresh progress proof. Sourcing updates can show a market visit, supplier options, or the search in progress. Tap a preview to inspect, replace, or remove it before submitting.'}
                 </p>
                 {stageMediaFiles.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-bone px-3 py-1 text-xs font-semibold text-ink/62">
-                      {stageMediaFiles.length} proof item{stageMediaFiles.length === 1 ? '' : 's'} selected
-                    </span>
-                    <button type="button" onClick={() => setStageMediaFiles([])} className="text-xs font-semibold text-needle">
-                      Clear
-                    </button>
+                  <div className="grid gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="rounded-full bg-bone px-3 py-1 text-xs font-semibold text-ink/62">
+                        {stageMediaFiles.length} proof item{stageMediaFiles.length === 1 ? '' : 's'} selected
+                      </span>
+                      <button type="button" onClick={() => setStageMediaFiles([])} className="text-xs font-semibold text-needle">
+                        Remove all
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {stageMediaFiles.map((file, index) => (
+                        <LocalEvidencePreview
+                          key={`${file.name}:${file.size}:${file.lastModified}:${index}`}
+                          file={file}
+                          index={index}
+                          onRemove={() => setStageMediaFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          onReplace={(replacement) => { void replaceStageMedia(index, replacement) }}
+                        />
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -10026,9 +11694,9 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                 />
               </div>
             ) : null}
-            <textarea value={stageNote} onChange={(event) => setStageNote(event.target.value)} rows={2} placeholder="Tell the customer what changed" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <textarea value={stageNote} onChange={(event) => setStageNote(event.target.value)} rows={2} placeholder={fabricApprovalMode ? 'Describe the exact fabric selection the customer is reviewing' : 'Tell the customer what changed'} className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
             <button type="button" onClick={advanceStage} disabled={busy === 'stage'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-              {busy === 'stage' ? 'Updating...' : 'Update stage'}
+              {busy === 'stage' ? 'Saving...' : fabricApprovalMode ? 'Send for customer approval' : selectedTargetStage === order.stage ? 'Post sourcing update' : 'Update stage'}
             </button>
           </div>
         ) : null}
@@ -10056,10 +11724,10 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
         ) : null}
 
         {canDeclineOrder || canRequestCancellationReview || canRequestDeliveryReview ? (
-          <DisclosurePanel title="Reviews and exceptions" summary={cancellationPolicy?.tailorMessage ?? 'Use formal review for exceptions that should pause handoff.'}>
+          <DisclosurePanel title="Help & order options" summary="Shipping support, decline, and reviewed cancellation options stay secondary to the current production action.">
             <div className="grid gap-4">
               {canDeclineOrder ? (
-                <div className="grid gap-3">
+                <div className="order-[30] grid gap-3 border-t border-ink/6 pt-4">
                   <h3 className="font-semibold text-ink">Decline order</h3>
                   <textarea
                     value={declineNote}
@@ -10080,7 +11748,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               ) : null}
 
               {canRequestCancellationReview ? (
-                <div className="grid gap-3 border-t border-ink/6 pt-4">
+                <div className="order-[40] grid gap-3 border-t border-ink/6 pt-4">
                   <h3 className="font-semibold text-ink">Cancellation review</h3>
                   <select
                     value={tailorCancellationReason}
@@ -10110,8 +11778,8 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
               ) : null}
 
               {canRequestDeliveryReview ? (
-                <div className="grid gap-3 border-t border-ink/6 pt-4">
-                  <h3 className="font-semibold text-ink">Delivery review</h3>
+                <div className="order-[20] grid gap-3">
+                  <h3 className="font-semibold text-ink">Shipping &amp; delivery help</h3>
                   <select
                     value={tailorDeliveryReason}
                     onChange={(event) => setTailorDeliveryReason(event.target.value as typeof tailorDeliveryReason)}
@@ -10134,7 +11802,7 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
                     disabled={busy === 'request-delivery-review'}
                     className="inline-flex justify-center rounded-[8px] border border-rust/18 bg-white px-4 py-2.5 text-sm font-semibold text-rust disabled:cursor-not-allowed disabled:text-ink/30"
                   >
-                    {busy === 'request-delivery-review' ? 'Opening...' : 'Open delivery review'}
+                    {busy === 'request-delivery-review' ? 'Sending...' : 'Send to Drapeon'}
                   </button>
                 </div>
               ) : null}
@@ -10143,6 +11811,408 @@ function TailorOrderActions({ order, data, onRefresh }: { order: AccountOrder; d
         ) : null}
       </div>
     </section>
+  )
+}
+
+const RESOLUTION_REMEDY_LABELS: Record<ResolutionRemedy, string> = { EXPLANATION:'Explanation', ALTERATION:'Alteration', REMAKE:'Remake', PARTIAL_REFUND:'Partial refund', FULL_REFUND:'Full refund', RETURN_AND_REFUND:'Return and refund', REJECTED:'Reject request' }
+
+type WebBenefitReservation = Pick<AccountBenefitReservation, 'id' | 'total_benefit_amount' | 'customer_due_amount' | 'currency' | 'expires_at'>
+type WebBenefitGrant = { id: string; reason: string; remaining_amount: number | null; currency: string | null }
+
+function CommercialBenefitControl({
+  orderId,
+  compact = false,
+  initialCode = '',
+  onChanged,
+  onMutation,
+}: {
+  orderId: string
+  compact?: boolean
+  initialCode?: string
+  onChanged?: (reservation: WebBenefitReservation | null) => void
+  onMutation?: () => void
+}) {
+  const supabase = useMemo(() => createClient(), [])
+  const onChangedRef = useRef(onChanged)
+  const [code, setCode] = useState(() => initialCode.trim().toUpperCase())
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [active, setActive] = useState<WebBenefitReservation | null>(null)
+  const [grants, setGrants] = useState<WebBenefitGrant[]>([])
+  const mutationInFlightRef = useRef(false)
+
+  useEffect(() => {
+    onChangedRef.current = onChanged
+  }, [onChanged])
+
+  const refresh = useCallback(async () => {
+    const { data: row } = await supabase
+      .from('commercial_benefit_reservations')
+      .select('id,total_benefit_amount,customer_due_amount,currency,expires_at')
+      .eq('order_id', orderId)
+      .eq('status', 'RESERVED')
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const next = (row ?? null) as WebBenefitReservation | null
+    setActive(next)
+    onChangedRef.current?.(next)
+    return next
+  }, [orderId, supabase])
+
+  useEffect(() => {
+    const initialRefresh = window.setTimeout(() => {
+      void refresh()
+      void invokeAccountFunction<{ grants?: WebBenefitGrant[] }>('commercial-benefit-action', { action: 'list' })
+        .then((result) => setGrants(result.grants ?? []))
+        .catch(() => setGrants([]))
+    }, 0)
+    const interval = window.setInterval(() => { void refresh() }, 15_000)
+    return () => {
+      window.clearTimeout(initialRefresh)
+      window.clearInterval(interval)
+    }
+  }, [refresh])
+
+  async function reserve(source: { code?: string; grantId?: string }) {
+    if (mutationInFlightRef.current) return
+    mutationInFlightRef.current = true
+    setBusy(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      await invokeAccountFunction('commercial-benefit-action', {
+        action: 'reserve',
+        orderId,
+        ...source,
+        idempotencyKey: `web:benefit:${orderId}:${source.code ?? source.grantId}:${Date.now()}`,
+      })
+      setCode('')
+      await refresh()
+      setSuccess('Applied. Your payment total has been updated.')
+      onMutation?.()
+    } catch (cause) {
+      setError(friendlyActionError(cause, 'This promotion could not be applied.'))
+    } finally {
+      mutationInFlightRef.current = false
+      setBusy(false)
+    }
+  }
+
+  async function release() {
+    if (!active || mutationInFlightRef.current) return
+    mutationInFlightRef.current = true
+    setBusy(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      await invokeAccountFunction('commercial-benefit-action', { action: 'release', reservationId: active.id })
+      await refresh()
+      setSuccess('Promotion removed. Your payment total has been restored.')
+      onMutation?.()
+    } catch (cause) {
+      setError(friendlyActionError(cause, 'This promotion could not be removed.'))
+    } finally {
+      mutationInFlightRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`grid gap-3 ${compact ? 'rounded-[8px] border border-ink/8 bg-bone/55 p-4' : ''}`}>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.15em] text-needle">Promotion or Drapeon credit</p>
+        <p className="mt-1 text-sm text-ink/58">Add it before payment.</p>
+      </div>
+      <ActionNotice error={error} success={success} />
+      {active ? (
+        <div className="grid gap-3 rounded-[8px] border border-needle/14 bg-needle/7 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <strong className="text-lg text-ink">{formatMoney(active.total_benefit_amount, active.currency)} covered</strong>
+              <p className="mt-1 text-sm text-ink/62">
+                {active.customer_due_amount === 0 ? 'No payment is due.' : `${formatMoney(active.customer_due_amount, active.currency)} remains to pay.`}
+              </p>
+            </div>
+            <button type="button" disabled={busy} onClick={() => { void release() }} className="rounded-full border border-ink/12 bg-white px-4 py-2 text-sm font-semibold">
+              {busy ? 'Updating…' : 'Remove'}
+            </button>
+          </div>
+          <p className="text-xs leading-5 text-ink/48">The tailor still receives the full protected seller amount.</p>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input aria-label="Promotion code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="Promotion code" />
+            <Button disabled={busy || code.trim().length < 3} onClick={() => { void reserve({ code: code.trim() }) }}>
+              {busy ? 'Applying…' : 'Apply'}
+            </Button>
+          </div>
+          {grants.map((grant) => (
+            <button type="button" key={grant.id} disabled={busy} onClick={() => { void reserve({ grantId: grant.id }) }} className="flex items-center justify-between rounded-[8px] border border-ink/10 bg-white p-4 text-left">
+              <span><strong className="block text-ink">{grant.reason}</strong><span className="mt-1 block text-sm text-ink/58">Available to this account</span></span>
+              <span className="font-semibold text-needle">{grant.remaining_amount != null && grant.currency != null ? formatMoney(grant.remaining_amount, grant.currency) : 'Apply'}</span>
+            </button>
+          ))}
+        </>
+      )}
+    </div>
+  )
+}
+
+function CommercialBenefitsPanel({ order, data, onRefresh }: { order: AccountOrder; data: Pick<OrderDetailRenderData, 'benefitReservations' | 'userId'>; onRefresh: () => void }) {
+  const customer = order.customer_id === data.userId
+  if (!customer || !['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(order.stage ?? '')) return null
+  return (
+    <Surface className="overflow-hidden">
+      <div className="p-5">
+        <CommercialBenefitControl orderId={order.id} onMutation={onRefresh} />
+      </div>
+    </Surface>
+  )
+}
+
+function OrderTipPanel({order,data,onRefresh}:{order:AccountOrder;data:Pick<OrderDetailRenderData,'tips'|'userId'>;onRefresh:()=>void}){
+  const tip=data.tips[0]??null, actor=order.customer_id===data.userId?'CUSTOMER':order.tailor_id===data.userId?'TAILOR':null
+  const currency=normalizeAccountCurrency(order.currency??order.quoted_currency)??'USD';const suggestions=currency==='NGN'?['1000','2500','5000']:['5','10','20'];const [amount,setAmount]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[success,setSuccess]=useState<string|null>(null),[stripe,setStripe]=useState<{tipId:string;clientSecret:string;providerReference:string}|null>(null)
+  if(!actor||!['DELIVERED','COLLECTED','COMPLETE'].includes(order.stage??''))return null
+  async function prepare(){const parsed=tip?.status==='FAILED'&&amount.trim()===''?tip.amount:parseMinorUnits(amount);if(!parsed)return setError('Enter a valid tip amount.');setBusy(true);setError(null);try{const result=await invokeAccountFunction<{confirmed?:boolean;tipId:string;provider:string;providerReference:string;authorizationUrl?:string|null;clientSecret?:string|null}>('order-tip-action',{action:'prepare',orderId:order.id,amount:parsed,currency,idempotencyKey:`web:tip:${order.id}:${parsed}`});if(result.confirmed){setSuccess('Tip already confirmed.');onRefresh();return}if(result.authorizationUrl){window.location.assign(result.authorizationUrl);return}if(result.provider==='STRIPE'&&result.clientSecret)setStripe({tipId:result.tipId,clientSecret:result.clientSecret,providerReference:result.providerReference})}catch(cause){setError(friendlyActionError(cause,'The tip could not start.'))}finally{setBusy(false)}}
+  if(tip)return <Surface className="p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.16em] text-needle">{actor==='CUSTOMER'?'Your tip':'Customer tip'}</p><h3 className="mt-1 text-xl font-semibold text-ink">{formatMoney(tip.amount,tip.currency)}</h3><p className="mt-2 text-sm text-ink/60">The full displayed amount is owed to the tailor and stays separate from the order.</p></div><div className="grid gap-2"><StatusChip status={tip.status} fallback="Tip"/>{actor==='CUSTOMER'&&tip.status==='FAILED'?<Button disabled={busy} onClick={()=>{void prepare()}}>Retry tip</Button>:null}</div></div></Surface>
+  if(actor==='TAILOR')return null
+  return <Surface className="overflow-hidden"><SurfaceHeader eyebrow="Optional thank-you" title="Tip your tailor" description="Drapeon takes no commission from the displayed tip. It does not affect reviews, ranking, or order totals."/><div className="grid gap-3 p-5"><ActionNotice error={error} success={success}/><div className="flex flex-wrap gap-2">{suggestions.map(value=>{const formatted=formatMoneyInputValue(value);return <button type="button" key={value} onClick={()=>setAmount(formatted)} className={`rounded-full border px-4 py-2 text-sm font-semibold ${amount===formatted?'border-needle bg-needle/10 text-needle':'border-ink/10 bg-bone text-ink'}`}>{currency} {formatted}</button>})}</div><MoneyInput id={`order-tip-${order.id}`} label="Custom tip" value={amount} onValueChange={setAmount} currency={currency}/><Button disabled={busy} onClick={()=>{void prepare()}}>{busy?'Preparing…':'Send tip'}</Button>{stripe?<StripeCardAuthorization clientSecret={stripe.clientSecret} label={`Tip in ${currency}`} submitLabel="Authorize tip" onConfirm={async()=>{await invokeAccountFunction('order-tip-action',{action:'confirm',tipId:stripe.tipId,providerReference:stripe.providerReference})}} onDone={()=>{setStripe(null);onRefresh()}}/>:null}</div></Surface>
+}
+
+type AccountOpsRefundResolution = {
+  id: string
+  amount: number
+  currency: string
+  status: string
+  order_outcome: OpsPartialRefundOrderOutcome
+  resume_stage: string | null
+  failure_summary: string | null
+}
+
+function OpsRefundStatusPanel({ order, data }: { order: AccountOrder; data: Pick<OrderDetailRenderData, 'userId' | 'payments'> }) {
+  const [resolution, setResolution] = useState<AccountOpsRefundResolution | null>(null)
+  const supabase = useMemo(() => createClient(), [])
+  const refresh = useCallback(async () => {
+    const { data: row } = await supabase.from('order_refund_resolutions')
+      .select('id,amount,currency,status,order_outcome,resume_stage,failure_summary')
+      .eq('order_id', order.id).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setResolution(row as AccountOpsRefundResolution | null)
+  }, [order.id, supabase])
+  useEffect(() => {
+    const initialRefresh = window.setTimeout(() => { void refresh() }, 0)
+    const channel = supabase.channel(`web-refund-status:${order.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_refund_resolutions', filter: `order_id=eq.${order.id}` }, () => { void refresh() })
+      .subscribe()
+    return () => { window.clearTimeout(initialRefresh); void supabase.removeChannel(channel) }
+  }, [order.id, refresh, supabase])
+  if (!resolution) return null
+  const actorRole = order.customer_id === data.userId ? 'CUSTOMER' : 'TAILOR'
+  const payment = data.payments.find((row) => row.order_id === order.id && row.phase === 'INITIAL_ORDER')
+  const timing = refundProviderTimingCopy({ provider: payment?.provider, audience: actorRole })
+  const outcome = OPS_PARTIAL_REFUND_ORDER_OUTCOME_COPY[resolution.order_outcome]
+  const statusLabel = resolution.status === 'SUCCEEDED'
+    ? 'Refund sent'
+    : ['FAILED', 'BLOCKED'].includes(resolution.status)
+      ? 'Refund needs review'
+      : resolution.status === 'PROCESSING' ? 'Refund processing' : 'Refund awaiting approval'
+  return (
+    <section className="rounded-[8px] border border-needle/18 bg-mint/35 p-5 shadow-sm" aria-live="polite">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">{statusLabel}</p>
+          <h2 className="mt-2 text-xl font-semibold text-ink">{formatMoney(resolution.amount, resolution.currency)}</h2>
+        </div>
+        <span className="rounded-full border border-needle/18 bg-white px-3 py-1 text-xs font-semibold text-needle">{timing.label}</span>
+      </div>
+      <p className="mt-4 text-sm leading-7 text-ink/68">{timing.detail}</p>
+      <div className="mt-4 border-t border-needle/12 pt-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/48">What happens to this order</p>
+        <p className="mt-2 text-sm font-semibold text-ink">{outcome.label}{resolution.order_outcome === 'CONTINUE_ORDER' && resolution.resume_stage ? ` · ${formatDatabaseEnumLabel(resolution.resume_stage)}` : ''}</p>
+      </div>
+      {actorRole === 'TAILOR' ? <p className="mt-3 text-xs leading-5 text-ink/52">The customer refund follows the customer’s payment provider. Your payout provider is handled separately.</p> : null}
+      {resolution.failure_summary ? <p className="mt-3 text-sm text-rust">{resolution.failure_summary}</p> : null}
+    </section>
+  )
+}
+
+function ReturnResolutionPanel({ order, data, onRefresh }: { order: AccountOrder; data: Pick<OrderDetailRenderData,'returnRequests'|'resolutionProposals'|'userId'>; onRefresh:()=>void }) {
+  const actorRole = order.customer_id === data.userId ? 'CUSTOMER' : order.tailor_id === data.userId ? 'TAILOR' : null
+  const active = data.returnRequests.find((item) => !['RESOLVED','CANCELLED'].includes(item.status)) ?? null
+  const latestProposal = active ? data.resolutionProposals.filter((item) => item.return_request_id === active.id).sort((a,b)=>b.version-a.version)[0] ?? null : null
+  const [expanded,setExpanded]=useState(false), [reason,setReason]=useState<ReturnReason>('QUALITY_WORKMANSHIP'), [remedy,setRemedy]=useState<ResolutionRemedy>('ALTERATION'), [summary,setSummary]=useState(''), [amount,setAmount]=useState(''), [note,setNote]=useState(''), [evidence,setEvidence]=useState<File|null>(null), [busy,setBusy]=useState(false), [error,setError]=useState<string|null>(null), [success,setSuccess]=useState<string|null>(null)
+  const actionNonce = useRef(0)
+  if (!actorRole) return null
+  const canOpen = actorRole === 'CUSTOMER' && ['DELIVERED','COLLECTED','COMPLETE'].includes(order.stage ?? '')
+  if (!active && !canOpen) return null
+  const currency=normalizeAccountCurrency(order.currency??order.quoted_currency)??'USD'
+  const availableOpenRemedies:ResolutionRemedy[]=RESOLUTION_REMEDIES.filter((value)=>value!=='REJECTED')
+  const moneyRemedy=['PARTIAL_REFUND','FULL_REFUND','RETURN_AND_REFUND'].includes(remedy)
+  function nextActionKey(scope:string){actionNonce.current+=1;return `${scope}:${actionNonce.current}`}
+  async function open(){ setError(null);setSuccess(null);const parsed=moneyRemedy?parseMinorUnits(amount):null;if(summary.trim().length<10||(moneyRemedy&&!parsed))return setError('Add a clear summary and the exact requested amount when asking for a refund.');setBusy(true);try{const evidenceRows=[] as Array<Record<string,unknown>>;if(evidence){const path=await uploadPrivateFile('commercial-evidence',`${order.id}/returns`,await prepareOrderEvidenceFile(evidence));evidenceRows.push({storageBucket:'commercial-evidence',storageObjectPath:path,evidenceType:'RETURN_EVIDENCE',mimeType:evidence.type||undefined})}await invokeAccountFunction('return-resolution-action',{action:'open',orderId:order.id,reason,requestedRemedy:remedy,summary:summary.trim(),requestedAmount:parsed,currency:parsed?currency:null,evidence:evidenceRows,idempotencyKey:nextActionKey(`web:return:${order.id}`)});setSummary('');setAmount('');setEvidence(null);setExpanded(false);setSuccess('Protected resolution opened and sent to the other party.');onRefresh()}catch(cause){setError(friendlyActionError(cause,'The resolution could not be opened.'))}finally{setBusy(false)}}
+  async function propose(){if(!active||note.trim().length<3)return setError('Briefly explain the proposal.');const parsed=moneyRemedy?parseMinorUnits(amount):null;if(moneyRemedy&&!parsed)return setError('Enter the exact proposed refund amount.');setBusy(true);setError(null);try{await invokeAccountFunction('return-resolution-action',{action:'propose',returnRequestId:active.id,remedy,amount:parsed,currency:parsed?currency:null,returnRequired:remedy==='RETURN_AND_REFUND'||(remedy==='FULL_REFUND'&&active.reason_code!=='NOT_RECEIVED'),shippingResponsibility:remedy==='RETURN_AND_REFUND'?'UNRESOLVED':null,note:note.trim(),idempotencyKey:nextActionKey(`web:proposal:${active.id}`)});setNote('');setAmount('');setSuccess('Proposal sent for an authenticated decision.');onRefresh()}catch(cause){setError(friendlyActionError(cause,'The proposal could not be sent.'))}finally{setBusy(false)}}
+  async function decide(decision:'ACCEPTED'|'DECLINED'){if(!latestProposal)return;setBusy(true);setError(null);try{await invokeAccountFunction('return-resolution-action',{action:'decide',proposalId:latestProposal.id,decision,note:'',idempotencyKey:nextActionKey(`web:decision:${latestProposal.id}:${decision}`)});setSuccess(`Proposal ${decision.toLowerCase()}.`);onRefresh()}catch(cause){setError(friendlyActionError(cause,'The proposal could not be updated.'))}finally{setBusy(false)}}
+  const needsDecision=latestProposal?.status==='OPEN'&&latestProposal.proposed_by_role!==actorRole
+  return <Surface className="overflow-hidden"><SurfaceHeader eyebrow="Protected resolution" title="Returns and remedies" description="Agree on the remedy here. Email mirrors the case, while refunds still require evidence and Money Desk approval."/><div className="grid gap-4 p-5"><ActionNotice error={error} success={success}/>{active?<article className="grid gap-3 rounded-[8px] border border-ink/10 bg-bone/45 p-4"><div className="flex flex-col gap-2 sm:flex-row sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.16em] text-needle">{active.reference}</p><h3 className="mt-1 text-lg font-semibold text-ink">{RETURN_REASON_LABELS[active.reason_code]}</h3></div><StatusChip status={active.status} fallback="Resolution"/></div><p className="text-sm leading-6 text-ink/68">{active.summary}</p><div className="rounded-[8px] bg-white p-3"><p className="text-xs font-semibold uppercase tracking-[.14em] text-needle">{formatDatabaseEnumLabel(active.eligibility_status)}</p><p className="mt-1 text-sm leading-6 text-ink/60">{active.eligibility_reason}</p></div>{latestProposal?<div className="rounded-[8px] border border-ink/8 bg-white p-4"><div className="flex justify-between gap-3"><strong>{RESOLUTION_REMEDY_LABELS[latestProposal.remedy]}</strong><StatusChip status={latestProposal.status} fallback="Proposal"/></div>{latestProposal.amount&&latestProposal.currency?<p className="mt-2 font-semibold text-ink">{formatMoney(latestProposal.amount,latestProposal.currency)}</p>:null}<p className="mt-2 text-sm leading-6 text-ink/62">{latestProposal.note}</p>{latestProposal.return_required?<p className="mt-2 text-xs font-semibold text-rust">A physical return is part of this proposal.</p>:null}</div>:null}{needsDecision?<div className="flex flex-col gap-2 sm:flex-row"><Button disabled={busy} onClick={()=>{void decide('ACCEPTED')}}>Accept proposal</Button><button type="button" disabled={busy} onClick={()=>{void decide('DECLINED')}} className="rounded-full border border-ink/12 bg-white px-4 py-2.5 text-sm font-semibold">Decline</button></div>:null}{!latestProposal||['DECLINED','SUPERSEDED'].includes(latestProposal.status)?<div className="grid gap-3 border-t border-ink/8 pt-4"><h4 className="font-semibold text-ink">Offer a clear next step</h4><NativeSelect value={remedy} onChange={(event)=>setRemedy(event.target.value as ResolutionRemedy)}>{RESOLUTION_REMEDIES.map((value)=><option key={value} value={value}>{RESOLUTION_REMEDY_LABELS[value]}</option>)}</NativeSelect>{moneyRemedy?<MoneyInput id={`resolution-proposal-${order.id}`} label="Resolution amount" value={amount} onValueChange={setAmount} currency={currency}/>:null}<Textarea value={note} onChange={(event)=>setNote(event.target.value)} rows={3} maxLength={1000} placeholder="What are you offering and what happens next?"/><Button disabled={busy} onClick={()=>{void propose()}}>{busy?'Sending…':'Send proposal'}</Button></div>:null}<p className="text-xs leading-5 text-ink/48">Accepting records the agreement; it does not move money. Any required return and refund remain protected.</p></article>:expanded?<div className="grid gap-3 rounded-[8px] border border-needle/14 bg-needle/7 p-4"><NativeSelect value={reason} onChange={(event)=>setReason(event.target.value as ReturnReason)}>{RETURN_REASONS.map((value)=><option key={value} value={value}>{RETURN_REASON_LABELS[value]}</option>)}</NativeSelect><NativeSelect value={remedy} onChange={(event)=>setRemedy(event.target.value as ResolutionRemedy)}>{availableOpenRemedies.map((value)=><option key={value} value={value}>{RESOLUTION_REMEDY_LABELS[value]}</option>)}</NativeSelect>{moneyRemedy?<MoneyInput id={`resolution-request-${order.id}`} label="Requested refund amount" value={amount} onValueChange={setAmount} currency={currency}/>:null}<Textarea value={summary} onChange={(event)=>setSummary(event.target.value)} rows={4} maxLength={2000} placeholder="Describe what happened, what you expected, and the evidence you have."/><label className="text-sm font-semibold text-ink">Evidence (optional)<input type="file" accept="image/*,video/*,application/pdf" onChange={(event)=>setEvidence(event.target.files?.[0]??null)} className="mt-2 block w-full text-sm font-normal"/></label><div className="flex gap-2"><Button disabled={busy} onClick={()=>{void open()}}>{busy?'Opening…':'Open protected case'}</Button><button type="button" onClick={()=>setExpanded(false)} className="rounded-full border border-ink/12 bg-white px-4 py-2.5 text-sm font-semibold">Cancel</button></div></div>:<button type="button" onClick={()=>setExpanded(true)} className="flex items-center justify-between rounded-[8px] border border-ink/10 bg-bone/50 p-4 text-left"><span><strong className="block text-ink">Request a resolution</strong><span className="mt-1 block text-sm text-ink/58">Ask Drapeon to review an issue with an order you received.</span></span><ChevronRight className="size-5 text-needle"/></button>}</div></Surface>
+}
+
+function CommercialAdjustmentPanel({ order, data, onRefresh }: {
+  order: AccountOrder
+  data: Pick<OrderDetailRenderData, 'commercialAdjustments' | 'userId'>
+  onRefresh: () => void
+}) {
+  const adjustments = data.commercialAdjustments.filter((item) => item.order_id === order.id)
+  const actorRole = order.customer_id === data.userId ? 'CUSTOMER' : order.tailor_id === data.userId ? 'TAILOR' : null
+  const [type, setType] = useState<CommercialAdjustmentType>('SCOPE')
+  const [summary, setSummary] = useState('')
+  const [reason, setReason] = useState('')
+  const [responsibility, setResponsibility] = useState('UNRESOLVED')
+  const [amount, setAmount] = useState('')
+  const [deadline, setDeadline] = useState('')
+  const [extensionReason, setExtensionReason] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [fabricLinks, setFabricLinks] = useState<Record<string, { requested_release_amount:number; remaining_allowance_snapshot:number; shortfall_amount:number; material_advance_id:string|null }>>({})
+  const [stripePayment, setStripePayment] = useState<{ adjustmentId: string; clientSecret: string; amount: number; currency: string } | null>(null)
+  const hasOpen = adjustments.some((item) => ['PROPOSED', 'PAYMENT_PENDING', 'PAID', 'OPS_REVIEW'].includes(item.status))
+  const hasOpenExtension = adjustments.some((item) => item.adjustment_type === 'DEADLINE_EXTENSION' && ['PROPOSED', 'ACCEPTED', 'PAYMENT_PENDING', 'PAID', 'OPS_REVIEW'].includes(item.status))
+  const extensionAvailable = actorRole === 'TAILOR'
+    && !hasOpenExtension
+    && !['PENDING_QUOTE','CONSULTATION','QUOTE_SENT','PAYMENT_PENDING','PAYMENT_FAILED','DELIVERED','COLLECTED','COMPLETE','CANCELLED','DECLINED','EXPIRED'].includes(order.stage ?? '')
+
+  useEffect(() => {
+    const ids = adjustments.map((item) => item.id)
+    if (ids.length === 0) return
+    void createClient().from('fabric_release_adjustment_links')
+      .select('adjustment_id,requested_release_amount,remaining_allowance_snapshot,shortfall_amount,material_advance_id')
+      .in('adjustment_id', ids)
+      .then(({ data: rows }) => setFabricLinks(Object.fromEntries((rows ?? []).map((row) => [row.adjustment_id, row]))))
+  }, [data.commercialAdjustments, order.id])
+
+  async function proposeExtension() {
+    setError(null); setSuccess(null)
+    if (!deadline || extensionReason.trim().length < 10) return setError('Choose the exact new deadline and clearly explain why more time is needed.')
+    const proposed = new Date(deadline)
+    if (!Number.isFinite(proposed.getTime()) || proposed.getTime() <= Date.now()) return setError('Choose a valid future deadline.')
+    setBusy('extension')
+    try {
+      await invokeAccountFunction('commercial-adjustment-action', {
+        action: 'propose', orderId: order.id, type: 'DEADLINE_EXTENSION',
+        summary: `Request more time until ${new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(proposed)}`,
+        reason: extensionReason.trim(), responsibility: 'TAILOR', amountDelta: 0,
+        currency: order.currency ?? order.quoted_currency ?? 'USD', proposedDeadline: proposed.toISOString(),
+        evidenceIds: [], idempotencyKey: `web:extension:${order.id}:${proposed.toISOString()}`,
+      })
+      setDeadline(''); setExtensionReason(''); setSuccess('Extension request sent for the customer to accept or decline.'); onRefresh()
+    } catch (cause) { setError(friendlyActionError(cause, 'The extension request could not be sent.')) }
+    finally { setBusy(null) }
+  }
+
+  async function propose() {
+    setError(null); setSuccess(null)
+    const parsedAmount = amount.trim() && Number.parseFloat(amount.replace(/,/g, '')) !== 0 ? parseMinorUnits(amount) : 0
+    const leak = assertNoContactLeak([summary, reason].join('\n'), "Order changes can't include contact details.")
+    if (leak) return setError(leak)
+    if (summary.trim().length < 10 || reason.trim().length < 10 || parsedAmount == null) return setError('Add a clear summary, reason, and valid price impact.')
+    if (type === 'DEADLINE_EXTENSION' && !deadline) return setError('Choose the exact proposed deadline, including local time.')
+    setBusy('propose')
+    try {
+      await invokeAccountFunction('commercial-adjustment-action', {
+        action: 'propose', orderId: order.id, type, summary: summary.trim(), reason: reason.trim(),
+        responsibility, amountDelta: parsedAmount ?? 0, currency: order.currency ?? order.quoted_currency ?? 'USD',
+        proposedDeadline: deadline ? new Date(deadline).toISOString() : null,
+        evidenceIds: [], idempotencyKey: `web:${order.id}:${type}:${Date.now()}`,
+      })
+      setSummary(''); setReason(''); setAmount(''); setDeadline('')
+      setSuccess('The change was sent for a recorded counterpart decision.')
+      onRefresh()
+    } catch (cause) { setError(friendlyActionError(cause, 'The order change could not be proposed.')) }
+    finally { setBusy(null) }
+  }
+
+  async function update(item: AccountCommercialAdjustment, action: 'respond' | 'complete', decision?: 'ACCEPTED' | 'DECLINED' | 'CANCELLED') {
+    setError(null); setSuccess(null); setBusy(`${action}:${decision ?? ''}:${item.id}`)
+    try {
+      await invokeAccountFunction('commercial-adjustment-action', { action, adjustmentId: item.id, ...(decision ? { decision } : {}) })
+      setSuccess(action === 'complete' ? 'Added work marked complete.' : `Change ${decision?.toLowerCase()}.`)
+      onRefresh()
+    } catch (cause) { setError(friendlyActionError(cause, 'The order change could not be updated.')) }
+    finally { setBusy(null) }
+  }
+
+  async function pay(item: AccountCommercialAdjustment) {
+    setError(null); setSuccess(null); setBusy(`pay:${item.id}`); setStripePayment(null)
+    try {
+      const result = await invokeAccountFunction<{ authorizationUrl?: string | null; clientSecret?: string | null; amount: number; currency: string }>('commercial-adjustment-action', { action: 'prepare-payment', adjustmentId: item.id })
+      if (result.authorizationUrl) { window.location.assign(result.authorizationUrl); return }
+      if (result.clientSecret) setStripePayment({ adjustmentId: item.id, clientSecret: result.clientSecret, amount: result.amount, currency: result.currency })
+      else setSuccess('Payment is processing. Do not start a duplicate payment.')
+    } catch (cause) { setError(friendlyActionError(cause, 'The additional payment could not start.')) }
+    finally { setBusy(null) }
+  }
+
+  if (!actorRole) return null
+  return (
+    <Surface className="overflow-hidden">
+      <SurfaceHeader eyebrow="Recorded amendments" title="Order changes" description="Price, scope, responsibility, and deadline changes stay separate from the accepted order until both parties decide." />
+      <div className="grid gap-4 p-5">
+        <ActionNotice error={error} success={success} />
+        {extensionAvailable ? (
+          <div className="grid gap-3 rounded-[8px] border border-needle/14 bg-needle/8 p-4">
+            <div><p className="text-xs font-semibold uppercase tracking-[.16em] text-needle">Timeline protection</p><h3 className="mt-1 text-lg font-semibold text-ink">Request more time</h3><p className="mt-1 text-sm leading-6 text-ink/60">Propose an exact new deadline. The current date remains authoritative until the customer accepts.</p></div>
+            <label className="grid gap-1 text-sm font-semibold text-ink">Exact proposed deadline<input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-normal" /></label>
+            <Textarea value={extensionReason} onChange={(event) => setExtensionReason(event.target.value)} rows={3} maxLength={1000} placeholder="What changed, what remains, and how will you meet the new date?" />
+            <Button onClick={() => { void proposeExtension() }} disabled={busy === 'extension'}>{busy === 'extension' ? 'Sending…' : 'Send for customer decision'}</Button>
+          </div>
+        ) : null}
+        {adjustments.map((item) => {
+          const isCounterpart = item.status === 'PROPOSED' && item.proposed_by_role !== actorRole
+          const isProposer = item.status === 'PROPOSED' && item.proposed_by_role === actorRole
+          const fabricLink = fabricLinks[item.id]
+          return (
+            <article key={item.id} className="grid gap-3 rounded-[8px] border border-ink/10 bg-bone/45 p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">{item.reference}</p><h3 className="mt-1 text-lg font-semibold text-ink">{COMMERCIAL_ADJUSTMENT_LABELS[item.adjustment_type]}</h3></div>
+                <StatusChip status={item.status} fallback="Order change" />
+              </div>
+              <div><p className="font-semibold text-ink">{item.summary}</p><p className="mt-1 text-sm leading-6 text-ink/62">{item.reason}</p></div>
+              <div className="grid gap-2 rounded-[8px] bg-white p-3 text-sm sm:grid-cols-3">
+                {fabricLink ? <SummaryLine label="Supplier cost" value={formatMoney(fabricLink.requested_release_amount, item.currency)} /> : null}
+                {fabricLink ? <SummaryLine label="Allowance protected" value={formatMoney(fabricLink.remaining_allowance_snapshot, item.currency)} /> : null}
+                {fabricLink ? <SummaryLine label="Fabric shortfall before tax" value={formatMoney(fabricLink.shortfall_amount, item.currency)} /> : null}
+                <SummaryLine label="Price impact" value={item.amount_delta ? `+${formatMoney(item.amount_delta, item.currency)}` : 'No change'} />
+                <SummaryLine label="Responsibility" value={cleanLabel(item.responsibility)} />
+                <SummaryLine label="Deadline" value={item.proposed_deadline ? new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(item.proposed_deadline)) : 'No change'} />
+              </div>
+              {fabricLink ? <p className="rounded-[8px] border border-needle/14 bg-needle/8 p-3 text-sm leading-6 text-ink/68">{fabricLink.material_advance_id ? 'Payment confirmed. The exact fabric release is now waiting in the protected approval lane.' : 'Accepting does not release funds. The fabric claim opens only after the additional payment is provider-confirmed.'}</p> : null}
+              {isCounterpart ? <div className="flex flex-col gap-2 sm:flex-row"><Button onClick={() => { void update(item, 'respond', 'ACCEPTED') }} disabled={!!busy}>{item.requires_payment ? 'Accept and continue to payment' : 'Accept change'}</Button><button type="button" onClick={() => { void update(item, 'respond', 'DECLINED') }} disabled={!!busy} className="rounded-full border border-ink/12 bg-white px-4 py-2.5 text-sm font-semibold text-ink">Decline</button></div> : null}
+              {isProposer ? <button type="button" onClick={() => { void update(item, 'respond', 'CANCELLED') }} disabled={!!busy} className="justify-self-start text-sm font-semibold text-rust">Cancel proposal</button> : null}
+              {actorRole === 'CUSTOMER' && item.status === 'PAYMENT_PENDING' ? <Button onClick={() => { void pay(item) }} disabled={!!busy}>Pay {formatMoney(item.amount_delta, item.currency)}</Button> : null}
+              {stripePayment?.adjustmentId === item.id ? <StripeCardAuthorization clientSecret={stripePayment.clientSecret} label={formatMoney(stripePayment.amount, stripePayment.currency)} submitLabel="Authorize order change" onConfirm={async (paymentIntentId) => { await invokeAccountFunction('commercial-adjustment-action', { action: 'confirm-payment', adjustmentId: item.id, paymentIntentId }) }} onDone={() => { setStripePayment(null); onRefresh() }} /> : null}
+              {actorRole === 'TAILOR' && ['ACCEPTED', 'PAID'].includes(item.status) && ['SCOPE', 'MATERIAL', 'RUSH_WORK', 'FIT_REVISION', 'CORRECTION', 'OTHER_REVIEWED'].includes(item.adjustment_type) ? <Button onClick={() => { void update(item, 'complete') }} disabled={!!busy}>Mark added work complete</Button> : null}
+            </article>
+          )
+        })}
+        {!hasOpen ? (
+          <div className="grid gap-3 rounded-[8px] border border-needle/12 bg-needle/8 p-4">
+            <h3 className="text-lg font-semibold text-ink">Propose a formal change</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <NativeSelect value={type} onChange={(event) => setType(event.target.value as CommercialAdjustmentType)}>{COMMERCIAL_ADJUSTMENT_TYPES.filter((value) => value !== 'DEADLINE_EXTENSION').map((value) => <option key={value} value={value}>{COMMERCIAL_ADJUSTMENT_LABELS[value]}</option>)}</NativeSelect>
+              <NativeSelect value={responsibility} onChange={(event) => setResponsibility(event.target.value)}>{COMMERCIAL_ADJUSTMENT_RESPONSIBILITIES.map((value) => <option key={value} value={value}>{cleanLabel(value)}</option>)}</NativeSelect>
+            </div>
+            <Input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What is changing?" maxLength={500} />
+            <Textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} placeholder="Why is this needed, and what happens if it is declined?" maxLength={1000} />
+            <div className="grid gap-3 md:grid-cols-2"><MoneyInput id={`adjustment-amount-${order.id}`} label="Additional amount" value={amount} onValueChange={setAmount} currency={normalizeAccountCurrency(order.currency ?? order.quoted_currency) ?? 'USD'} allowZero hint="Enter zero when the change has no price impact." /><label className="grid gap-1 text-sm font-semibold text-ink">Exact proposed deadline<input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-normal" /></label></div>
+            <Button onClick={() => { void propose() }} disabled={busy === 'propose'}>{busy === 'propose' ? 'Sending…' : 'Send for decision'}</Button>
+          </div>
+        ) : null}
+      </div>
+    </Surface>
   )
 }
 
@@ -10155,17 +12225,25 @@ function MaterialAdvancePanel({
   data: Pick<OrderDetailRenderData, 'materialAdvances' | 'userId'>
   onRefresh: () => void
 }) {
+  const searchParams = useSearchParams()
   const advances = data.materialAdvances.filter((advance) => advance.order_id === order.id)
+  const focusedAdvanceId = searchParams.get('advanceId')?.trim() || null
+  const focusedAdvanceRef = useRef<string | null>(null)
   const isTailor = order.tailor_id === data.userId
   const isCustomer = order.customer_id === data.userId
-  const hasActiveAdvance = advances.some((advance) => ['REQUESTED', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'PAID', 'OPS_REVIEW', 'BLOCKED'].includes(advance.status ?? ''))
+  const hasActiveAdvance = advances.some((advance) => ['REQUESTED', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'PAID', 'OPS_REVIEW', 'BLOCKED'].includes(advance.status ?? '') || (advance.status === 'RELEASED' && !advance.reconciled_at) || advance.reconciliation_status === 'OPS_REVIEW')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [amount, setAmount] = useState('')
-  const [currency, setCurrency] = useState(order.currency ?? order.quoted_currency ?? 'USD')
+  const [estimateFile, setEstimateFile] = useState<File | null>(null)
+  const [currency, setCurrency] = useState<AccountCurrencyCode>(normalizeAccountCurrency(order.currency ?? order.quoted_currency) ?? 'USD')
   const [responseNote, setResponseNote] = useState('')
+  const [decliningAdvanceId, setDecliningAdvanceId] = useState<string | null>(null)
+  const [declineReason, setDeclineReason] = useState<MaterialAdvanceDeclineReason>('FIND_CHEAPER_OPTION')
   const [receiptNote, setReceiptNote] = useState('')
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
+  const [acquiredFile, setAcquiredFile] = useState<File | null>(null)
+  const [actualSpent, setActualSpent] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -10175,6 +12253,31 @@ function MaterialAdvancePanel({
     amount?: number | null
     currency?: string | null
   } | null>(null)
+  const [evidencePreview, setEvidencePreview] = useState<{ url: string; label: string; video: boolean } | null>(null)
+  const [fabricAllowanceRemaining, setFabricAllowanceRemaining] = useState<number | null>(null)
+  const fundedFabric = order.fabric_funding_policy_version === 'fabric-funding-2026-08-01-v1'
+
+  useEffect(() => {
+    if (!fundedFabric) return
+    void createClient().from('order_fabric_funding_allocations')
+      .select('funded_amount,released_amount,refunded_amount')
+      .eq('order_id', order.id).maybeSingle()
+      .then(({ data: allocation }) => {
+        setFabricAllowanceRemaining(allocation
+          ? Math.max((allocation.funded_amount ?? 0) - (allocation.released_amount ?? 0) - (allocation.refunded_amount ?? 0), 0)
+          : null)
+      })
+  }, [fundedFabric, order.id])
+
+  useEffect(() => {
+    if (!focusedAdvanceId || focusedAdvanceRef.current === focusedAdvanceId || !advances.some((advance) => advance.id === focusedAdvanceId)) return
+    focusedAdvanceRef.current = focusedAdvanceId
+    requestAnimationFrame(() => {
+      const target = document.getElementById(`material-advance-${focusedAdvanceId}`)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target?.focus({ preventScroll: true })
+    })
+  }, [advances, focusedAdvanceId])
 
   async function requestAdvance() {
     setError(null)
@@ -10185,24 +12288,34 @@ function MaterialAdvancePanel({
       setError(leak)
       return
     }
-    if (!title.trim() || description.trim().length < 10 || !parsedAmount) {
-      setError('Add a title, clear reason, and valid amount.')
+    if (!title.trim() || description.trim().length < 10 || !parsedAmount || !estimateFile) {
+      setError('Add a title, clear reason, valid amount, and supplier estimate or photo.')
       return
     }
     setBusy('request')
     try {
-      await invokeAccountFunction('material-advance-action', {
-        action: 'request-advance',
+      const estimatePath = await uploadPrivateFile('commercial-evidence', `${order.id}/materials`, await prepareOrderEvidenceFile(estimateFile))
+      const needsAdjustment = fundedFabric && fabricAllowanceRemaining != null && parsedAmount > fabricAllowanceRemaining
+      await invokeAccountFunction(needsAdjustment ? 'commercial-adjustment-action' : 'material-advance-action', {
+        action: needsAdjustment ? 'propose-fabric-funding-change' : 'request-advance',
         orderId: order.id,
         title: title.trim(),
         description: description.trim(),
-        amount: parsedAmount,
+        ...(needsAdjustment ? { requestedReleaseAmount: parsedAmount } : { amount: parsedAmount }),
         currency,
+        estimateStorageBucket: 'commercial-evidence',
+        estimateStoragePath: estimatePath,
+        ...(needsAdjustment ? { idempotencyKey: `web:fabric-adjustment:${order.id}:${estimatePath}:${parsedAmount}` } : {}),
       })
       setTitle('')
       setDescription('')
       setAmount('')
-      setSuccess('Material advance sent to the customer for approval.')
+      setEstimateFile(null)
+      setSuccess(needsAdjustment
+        ? 'The fabric shortfall was sent as a recorded order change. No release exists until the customer accepts and the additional payment is confirmed.'
+        : fundedFabric
+          ? 'Fabric release sent to the customer for approval. This does not charge them again.'
+          : 'Material advance sent to the customer for approval.')
       onRefresh()
     } catch (advanceError) {
       setError(friendlyActionError(advanceError, 'Material advance could not be requested. Check payment state and amount limits.'))
@@ -10219,16 +12332,27 @@ function MaterialAdvancePanel({
       setError(leak)
       return
     }
+    if (decision === 'DECLINE' && declineReason === 'OTHER' && responseNote.trim().length < 5) {
+      setError('Add a short explanation when choosing Something else.')
+      return
+    }
     setBusy(`${decision}:${advance.id}`)
     try {
       await invokeAccountFunction('material-advance-action', {
         action: 'respond-advance',
         advanceId: advance.id,
         decision,
+        declineReason: decision === 'DECLINE' ? declineReason : undefined,
         note: responseNote.trim() || undefined,
       })
       setResponseNote('')
-      setSuccess(decision === 'APPROVE' ? 'Material advance approved. Payment is now available.' : 'Material advance declined.')
+      setDecliningAdvanceId(null)
+      setDeclineReason('FIND_CHEAPER_OPTION')
+      setSuccess(decision === 'APPROVE'
+        ? advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE'
+          ? 'Fabric release approved from the allowance already paid at checkout. Money Desk review is next; there is no second charge.'
+          : 'Material advance approved. Payment is now available.'
+        : 'Material advance declined.')
       onRefresh()
     } catch (responseError) {
       setError(friendlyActionError(responseError, 'Material advance response could not save. Refresh and try again.'))
@@ -10289,18 +12413,33 @@ function MaterialAdvancePanel({
       setError('Choose receipt or supplier proof first.')
       return
     }
+    if (advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE' && !acquiredFile) {
+      setError('Add a separate photo of the exact approved fabric now in hand.')
+      return
+    }
+    const parsedActualSpent = parseMinorUnits(actualSpent)
+    if (!parsedActualSpent) {
+      setError('Enter the exact amount shown on the final receipt.')
+      return
+    }
     setBusy(`receipt:${advance.id}`)
     try {
-      const receiptUrl = await uploadPublicFile('order-photos', `progress/${order.id}`, await prepareOrderEvidenceFile(receiptFile))
+      const receiptPath = await uploadPrivateFile('commercial-evidence', `${order.id}/materials`, await prepareOrderEvidenceFile(receiptFile))
+      const acquiredPath = acquiredFile ? await uploadPrivateFile('commercial-evidence', `${order.id}/materials-acquired`, await prepareOrderEvidenceFile(acquiredFile)) : null
       await invokeAccountFunction('material-advance-action', {
         action: 'upload-receipt',
         advanceId: advance.id,
-        receiptUrl,
+        receiptStorageBucket: 'commercial-evidence',
+        receiptStoragePath: receiptPath,
+        ...(acquiredPath ? { acquiredStorageBucket: 'commercial-evidence', acquiredStoragePath: acquiredPath } : {}),
+        actualSpentAmount: parsedActualSpent,
         note: receiptNote.trim() || undefined,
       })
       setReceiptFile(null)
+      setAcquiredFile(null)
       setReceiptNote('')
-      setSuccess('Receipt proof saved for this material advance.')
+      setActualSpent('')
+      setSuccess(parsedActualSpent === advance.amount ? 'Receipt reconciled. The final cost matches the approved advance.' : 'Receipt saved. Drapeon Ops will review the unused balance or overage.')
       onRefresh()
     } catch (receiptError) {
       setError(friendlyActionError(receiptError, 'Receipt proof could not upload. Try again with a clear photo or MP4/MOV video up to 60 seconds.'))
@@ -10309,24 +12448,46 @@ function MaterialAdvancePanel({
     }
   }
 
+  async function openEvidence(advance: MaterialAdvance, kind: 'estimate' | 'receipt' | 'acquired') {
+    setError(null)
+    const bucket = kind === 'estimate' ? advance.estimate_storage_bucket : kind === 'receipt' ? advance.receipt_storage_bucket : advance.acquired_storage_bucket
+    const path = kind === 'estimate' ? advance.estimate_storage_path : kind === 'receipt' ? advance.receipt_storage_path : advance.acquired_storage_path
+    if (!bucket || !path) return setError('This protected evidence is not available yet.')
+    const { data: signed, error: signedError } = await createClient().storage.from(bucket).createSignedUrl(path, 10 * 60)
+    if (signedError || !signed?.signedUrl) return setError('Protected evidence could not open. Refresh and try again.')
+    setEvidencePreview({
+      url: signed.signedUrl,
+      label: kind === 'estimate' ? 'Supplier proof' : kind === 'receipt' ? 'Final receipt' : 'Acquired fabric',
+      video: isVideoMediaUrl(path),
+    })
+  }
+
   if (!isTailor && !isCustomer && advances.length === 0) return null
 
   return (
     <Surface className="overflow-hidden">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Material advance</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Fabric and material funding</p>
           <h2 className="mt-2 text-2xl font-semibold text-ink">Protected material costs</h2>
         </div>
-        <p className="max-w-md text-sm leading-6 text-ink/62">Main escrow never releases early. The customer approves and pays the material amount separately before ops reviews release.</p>
+        <p className="max-w-md text-sm leading-6 text-ink/62">Funded-fabric claims use the allowance already paid at checkout; legacy add-ons remain separate. Every release still requires exact customer approval and Money Desk review.</p>
       </div>
       <div className="mt-5 grid gap-4">
         <ActionNotice error={error} success={success} />
         {advances.length === 0 ? (
           <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">No material advance is open on this order.</p>
         ) : (
-          advances.map((advance) => (
-            <article key={advance.id} className="rounded-[8px] border border-ink/8 bg-bone/60 p-4">
+          advances.map((advance) => {
+            const reconciliationCopy = materialReconciliationCopy({
+              outcome: advance.reconciliation_outcome,
+              resolution: advance.reconciliation_resolution,
+              customerRefundAmount: advance.customer_refund_amount,
+              unapprovedOverageAmount: advance.unapproved_overage_amount,
+              actorRole: isTailor ? 'TAILOR' : 'CUSTOMER',
+            })
+            return (
+            <article id={`material-advance-${advance.id}`} tabIndex={-1} key={advance.id} className={`scroll-mt-24 rounded-[8px] border bg-bone/60 p-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-needle/35 ${focusedAdvanceId === advance.id ? 'border-needle/35 bg-needle/6' : 'border-ink/8'}`}>
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                   <h3 className="text-xl font-semibold text-ink">{safeUserText(advance.title, 'Material advance')}</h3>
@@ -10336,22 +12497,58 @@ function MaterialAdvancePanel({
                     <StatusChip status={advance.status} fallback="Requested" />
                     <StatusChip status={advance.release_status} fallback="Release pending" />
                   </div>
+                  {advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE' ? <p className="mt-3 rounded-[8px] border border-needle/12 bg-needle/8 p-3 text-sm leading-6 text-ink/68">Claim against the protected fabric allowance · no second customer charge.</p> : null}
                 </div>
-                {advance.receipt_url ? (
-                  <a href={advance.receipt_url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-needle">View receipt</a>
-                ) : null}
+                <div className="flex flex-wrap gap-3">
+                  {advance.estimate_storage_bucket && advance.estimate_storage_path ? <button type="button" onClick={() => { void openEvidence(advance, 'estimate') }} className="text-sm font-semibold text-needle">View proof</button> : null}
+                  {advance.receipt_storage_path ? <button type="button" onClick={() => { void openEvidence(advance, 'receipt') }} className="text-sm font-semibold text-needle">View final receipt</button> : null}
+                  {advance.acquired_storage_path ? <button type="button" onClick={() => { void openEvidence(advance, 'acquired') }} className="text-sm font-semibold text-needle">View acquired fabric</button> : null}
+                </div>
               </div>
+              {!advance.estimate_storage_bucket || !advance.estimate_storage_path ? (
+                <div className="mt-4 rounded-[8px] border border-rust/20 bg-rust/6 p-3">
+                  <p className="text-sm font-semibold text-rust-700">Supplier proof unavailable</p>
+                  <p className="mt-1 text-sm leading-6 text-ink/62">This request cannot be approved. Ask the tailor to resubmit it with an estimate or supplier photo.</p>
+                </div>
+              ) : null}
+              {advance.customer_response_reason ? (
+                <p className="mt-3 text-sm text-ink/62">Decision reason: {materialAdvanceDeclineReasonLabel(advance.customer_response_reason) ?? 'Not specified'}</p>
+              ) : null}
+              {reconciliationCopy ? (
+                <div role="status" className={`mt-4 rounded-[8px] border p-3 ${reconciliationCopy.tone === 'success' ? 'border-needle/18 bg-needle/8' : 'border-rust/18 bg-rust/6'}`}>
+                  <p className="text-sm font-semibold text-ink">{reconciliationCopy.title}</p>
+                  <p className="mt-1 text-sm leading-6 text-ink/64">{reconciliationCopy.body}</p>
+                  {Number(advance.customer_refund_amount ?? 0) > 0 ? <p className="mt-2 text-sm font-semibold text-ink">Customer refund · {formatMoney(advance.customer_refund_amount, advance.currency)}</p> : null}
+                  {Number(advance.unapproved_overage_amount ?? 0) > 0 ? <p className="mt-2 text-sm font-semibold text-ink">Unapproved overage · {formatMoney(advance.unapproved_overage_amount, advance.currency)}</p> : null}
+                </div>
+              ) : null}
               {isCustomer && advance.status === 'REQUESTED' ? (
                 <div className="mt-4 grid gap-3 border-t border-ink/6 pt-4">
-                  <textarea value={responseNote} onChange={(event) => setResponseNote(event.target.value)} rows={2} placeholder="Optional note for the tailor" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <button type="button" onClick={() => respondAdvance(advance, 'APPROVE')} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                    <button type="button" onClick={() => respondAdvance(advance, 'APPROVE')} disabled={!!busy || !advance.estimate_storage_bucket || !advance.estimate_storage_path} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
                       {busy === `APPROVE:${advance.id}` ? 'Approving...' : 'Approve'}
                     </button>
-                    <button type="button" onClick={() => respondAdvance(advance, 'DECLINE')} disabled={!!busy} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/38">
-                      {busy === `DECLINE:${advance.id}` ? 'Declining...' : 'Decline'}
+                    <button type="button" onClick={() => { setDecliningAdvanceId(decliningAdvanceId === advance.id ? null : advance.id); setResponseNote(''); setDeclineReason('FIND_CHEAPER_OPTION') }} disabled={!!busy} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:text-ink/38">
+                      Decline
                     </button>
                   </div>
+                  {decliningAdvanceId === advance.id ? (
+                    <div className="grid gap-3 rounded-[8px] border border-rust/16 bg-white p-4">
+                      <label className="grid gap-2 text-sm font-semibold text-ink">
+                        Why are you declining?
+                        <NativeSelect value={declineReason} onChange={(event) => setDeclineReason(event.target.value as MaterialAdvanceDeclineReason)}>
+                          {MATERIAL_ADVANCE_DECLINE_REASONS.map((reason) => <option key={reason} value={reason}>{MATERIAL_ADVANCE_DECLINE_REASON_LABELS[reason]}</option>)}
+                        </NativeSelect>
+                      </label>
+                      <textarea value={responseNote} onChange={(event) => setResponseNote(event.target.value)} rows={3} maxLength={300} placeholder={declineReason === 'OTHER' ? 'Explain why you are declining.' : 'Optional note for the tailor'} className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <button type="button" onClick={() => respondAdvance(advance, 'DECLINE')} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-rust px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                          {busy === `DECLINE:${advance.id}` ? 'Declining...' : 'Confirm decline'}
+                        </button>
+                        <button type="button" onClick={() => setDecliningAdvanceId(null)} disabled={!!busy} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">Cancel</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {isCustomer && ['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(advance.status ?? '') ? (
@@ -10379,9 +12576,11 @@ function MaterialAdvancePanel({
                   ) : null}
                 </div>
               ) : null}
-              {isTailor && ['PAID', 'OPS_REVIEW', 'RELEASED', 'BLOCKED'].includes(advance.status ?? '') && !advance.receipt_url ? (
+              {isTailor && advance.status === 'RELEASED' && !advance.reconciled_at ? (
                 <div className="mt-4 grid gap-3 border-t border-ink/6 pt-4">
-                  <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" capture="environment" onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink" />
+                  <label className="grid gap-2 text-sm font-semibold text-ink">Final supplier receipt<input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" capture="environment" onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-normal text-ink" /></label>
+                  {advance.funding_source === 'FUNDED_FABRIC_ALLOWANCE' ? <label className="grid gap-2 text-sm font-semibold text-ink">Acquired fabric proof<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => setAcquiredFile(event.target.files?.[0] ?? null)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-normal text-ink" /><span className="text-xs font-normal leading-5 text-ink/55">A separate photo showing the exact approved fabric is now in hand.</span></label> : null}
+                  <MoneyInput id={`material-spent-${advance.id}`} label="Actual spent" value={actualSpent} onValueChange={setActualSpent} currency={normalizeAccountCurrency(advance.currency) ?? currency} required />
                   <textarea value={receiptNote} onChange={(event) => setReceiptNote(event.target.value)} rows={2} placeholder="Optional receipt note" className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
                   <button type="button" onClick={() => uploadReceipt(advance)} disabled={!!busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
                     {busy === `receipt:${advance.id}` ? 'Uploading...' : 'Upload receipt proof'}
@@ -10389,25 +12588,54 @@ function MaterialAdvancePanel({
                 </div>
               ) : null}
             </article>
-          ))
+            )
+          })
         )}
         {isTailor && (order.order_kind ?? 'CUSTOM') === 'CUSTOM' && !hasActiveAdvance ? (
           <div className="grid gap-3 rounded-[8px] border border-needle/12 bg-needle/8 p-4">
-            <h3 className="text-xl font-semibold text-ink">Request a material advance</h3>
+            <h3 className="text-xl font-semibold text-ink">{order.fabric_funding_policy_version === 'fabric-funding-2026-08-01-v1' ? 'Request fabric release' : 'Request a material advance'}</h3>
+            {order.fabric_funding_policy_version === 'fabric-funding-2026-08-01-v1' ? <p className="text-sm leading-6 text-ink/62">Enter the exact supported amount for the fabric the customer approved. It comes from the allowance already paid at checkout and goes to Money Desk after customer approval.</p> : null}
             <div className="grid gap-3 md:grid-cols-[1fr_0.55fr_0.4fr]">
               <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Aso-oke embroidery deposit" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
-              <input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
-              <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <MoneyInput id={`material-request-${order.id}`} label="Requested amount" value={amount} onValueChange={setAmount} currency={currency} required />
+              <select value={currency} onChange={(event) => setCurrency(normalizeAccountCurrency(event.target.value) ?? currency)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
               </select>
             </div>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="Explain the material cost and why it is needed before production continues." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Supplier estimate or item photo
+              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => setEstimateFile(event.target.files?.[0] ?? null)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-normal text-ink" />
+            </label>
+            {fundedFabric && fabricAllowanceRemaining != null && parseMinorUnits(amount) != null && parseMinorUnits(amount)! > fabricAllowanceRemaining ? (
+              <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/6 p-3 text-sm leading-6 text-ink/68">
+                <strong className="block text-ink">Additional approval required</strong>
+                Requested {formatMoney(parseMinorUnits(amount)!, currency)} · allowance left {formatMoney(fabricAllowanceRemaining, currency)} · additional fabric funding {formatMoney(parseMinorUnits(amount)! - fabricAllowanceRemaining, currency)} before tax.
+              </div>
+            ) : fundedFabric && fabricAllowanceRemaining != null ? (
+              <p className="text-sm text-ink/62">Protected allowance remaining: {formatMoney(fabricAllowanceRemaining, currency)}</p>
+            ) : null}
             <button type="button" onClick={requestAdvance} disabled={busy === 'request'} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-              {busy === 'request' ? 'Requesting...' : 'Request advance'}
+              {busy === 'request' ? 'Requesting...' : fundedFabric && fabricAllowanceRemaining != null && parseMinorUnits(amount) != null && parseMinorUnits(amount)! > fabricAllowanceRemaining ? 'Send fabric funding change' : fundedFabric ? 'Request fabric release' : 'Request advance'}
             </button>
           </div>
         ) : null}
       </div>
+      <Dialog open={!!evidencePreview} onOpenChange={(open) => { if (!open) setEvidencePreview(null) }}>
+        <DialogContent className="max-w-3xl overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6">
+            <DialogTitle>{evidencePreview?.label ?? 'Protected evidence'}</DialogTitle>
+            <DialogDescription>Private order evidence. This link expires automatically.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[72vh] overflow-auto bg-bone p-4">
+            {evidencePreview?.video ? (
+              <video src={evidencePreview.url} controls playsInline className="mx-auto max-h-[66vh] w-full rounded-[8px] bg-black object-contain" />
+            ) : evidencePreview ? (
+              <img src={evidencePreview.url} alt={evidencePreview.label} className="mx-auto max-h-[66vh] w-full rounded-[8px] object-contain" />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Surface>
   )
 }
@@ -10584,12 +12812,19 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [recipientName, setRecipientName] = useState('')
   const [recipientPhone, setRecipientPhone] = useState('')
   const [ack, setAck] = useState(false)
+  const [fitAck, setFitAck] = useState(false)
+  const [addressVerificationSource, setAddressVerificationSource] = useState<string | null>(null)
+  const [addressVerificationReference, setAddressVerificationReference] = useState<string | null>(null)
+  const [addressVerifiedAt, setAddressVerifiedAt] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pricingBusy, setPricingBusy] = useState(false)
   const [pricingPreview, setPricingPreview] = useState<ReadyMadeCheckoutPricingPreview | null>(null)
   const [pricingKey, setPricingKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null)
+  const [checkoutBenefit, setCheckoutBenefit] = useState<WebBenefitReservation | null>(null)
+  const [promotionCode, setPromotionCode] = useState('')
   const selectedSizeInventory = readyMadeQuantityForSize(item, size || null)
   const maxCheckoutQuantity = sizes.length > 0 && size ? Math.min(3, selectedSizeInventory) : Math.min(3, readyMadeInventoryCount(item))
   const parsedQty = Number.parseInt(quantity, 10)
@@ -10615,6 +12850,12 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
     countryCode: needsAddress ? countryCode.trim().toUpperCase() : '',
   }), [address, city, countryCode, fulfillment, item.id, needsAddress, postalCode, quantity, region, size])
   const previewIsFresh = Boolean(pricingPreview && pricingKey === previewKey)
+
+  function markAddressManuallyConfirmed() {
+    setAddressVerificationSource('CUSTOMER_CONFIRMED_STRUCTURED')
+    setAddressVerificationReference(null)
+    setAddressVerifiedAt(new Date().toISOString())
+  }
 
   function validateCheckoutInput() {
     setError(null)
@@ -10703,6 +12944,9 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
         region: needsAddress ? region.trim() : undefined,
         postalCode: needsAddress ? postalCode.trim() : undefined,
         countryCode: needsAddress ? countryCode.trim().toUpperCase() : undefined,
+        addressVerificationSource: needsAddress ? addressVerificationSource ?? undefined : undefined,
+        addressVerificationReference: needsAddress ? addressVerificationReference ?? undefined : undefined,
+        addressVerifiedAt: needsAddress ? addressVerifiedAt ?? undefined : undefined,
       })
       setPricingPreview(result.pricing ?? null)
       setPricingKey(previewKey)
@@ -10722,6 +12966,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   async function startCheckout() {
     const parsedQuantity = validateCheckoutInput()
     if (!parsedQuantity) return
+    if (!fitAck) {
+      setError('Review the fit guidance and confirm your selected size before payment.')
+      return
+    }
     if (!previewIsFresh) {
       setError('Review the latest tax and total before creating checkout.')
       return
@@ -10743,14 +12991,46 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
         region: needsAddress ? region.trim() : undefined,
         postalCode: needsAddress ? postalCode.trim() : undefined,
         countryCode: needsAddress ? countryCode.trim().toUpperCase() : undefined,
+        addressVerificationSource: needsAddress ? addressVerificationSource ?? undefined : undefined,
+        addressVerificationReference: needsAddress ? addressVerificationReference ?? undefined : undefined,
+        addressVerifiedAt: needsAddress ? addressVerifiedAt ?? undefined : undefined,
         recipientName: needsAddress ? recipientName.trim() : undefined,
         recipientPhone: needsAddress ? normalizePhoneForStorage(recipientPhone) : undefined,
         cancellationPolicyAcknowledged: true,
+        fitGuidanceAcknowledged: true,
       })
       onRefresh()
       if (result.orderId) {
-        setSuccess('Checkout order created. Opening payment handoff.')
-        window.location.assign(`/account/checkout/${result.orderId}`)
+        setCheckoutOrderId(result.orderId)
+        const normalizedCode = promotionCode.trim().toUpperCase()
+        if (normalizedCode) {
+          try {
+            await invokeAccountFunction('commercial-benefit-action', {
+              action: 'reserve',
+              orderId: result.orderId,
+              code: normalizedCode,
+              idempotencyKey: `web:ready-made:${result.orderId}:promotion:${normalizedCode}`,
+            })
+            const supabase = createClient()
+            const { data: reservation } = await supabase
+              .from('commercial_benefit_reservations')
+              .select('id,total_benefit_amount,customer_due_amount,currency,expires_at')
+              .eq('order_id', result.orderId)
+              .eq('status', 'RESERVED')
+              .gt('expires_at', new Date().toISOString())
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            setCheckoutBenefit((reservation ?? null) as WebBenefitReservation | null)
+            setPromotionCode('')
+            setSuccess('Stock is held and the discount is applied. Review the new total before payment.')
+          } catch (promotionError) {
+            setError(friendlyActionError(promotionError, 'Stock is held, but this discount code could not be applied. Check it below and try again.'))
+            setSuccess('Stock is held. Review the discount and total before payment.')
+          }
+        } else {
+          setSuccess('Stock is held. Add a promotion or continue to secure payment.')
+        }
         return
       }
       setSuccess('Checkout order created. Open Orders to continue payment.')
@@ -10764,6 +13044,59 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
     }
   }
 
+  async function continuePreparedCheckout() {
+    if (!checkoutOrderId) return
+    setBusy(true)
+    setError(null)
+    try {
+      const supabase = createClient()
+      const { data: row } = await supabase
+        .from('commercial_benefit_reservations')
+        .select('id,total_benefit_amount,customer_due_amount,currency,expires_at')
+        .eq('order_id', checkoutOrderId)
+        .eq('status', 'RESERVED')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const current = (row ?? null) as WebBenefitReservation | null
+      if (checkoutBenefit && !current) {
+        setCheckoutBenefit(null)
+        setError('That promotion expired before payment opened. Your total has been restored; review it and continue again.')
+        return
+      }
+      window.location.assign(`/account/checkout/${checkoutOrderId}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (checkoutOrderId && pricingPreview) {
+    const amountDue = checkoutBenefit?.customer_due_amount ?? pricingPreview.totalAmount
+    return (
+      <Surface id="ready-made-checkout" className="scroll-mt-28 overflow-hidden">
+        <SurfaceHeader eyebrow="Payment review" title="Stock held for checkout" description="Apply a promotion before opening secure payment. Inventory stays reserved on this order while payment is pending." />
+        <div className="grid gap-4 p-5">
+          <ActionNotice error={error} success={success} />
+          <div className="grid gap-2 rounded-[8px] border border-ink/8 bg-white p-4 text-sm">
+            <div className="flex items-center justify-between gap-4"><span className="text-ink/58">Item subtotal</span><span className="font-semibold text-ink">{formatMoney(pricingPreview.subtotalAmount, pricingPreview.currency)}</span></div>
+            {pricingPreview.shippingAmount > 0 ? <div className="flex items-center justify-between gap-4"><span className="text-ink/58">Drapeon fulfillment</span><span className="font-semibold text-ink">{formatMoney(pricingPreview.shippingAmount, pricingPreview.currency)}</span></div> : null}
+            <div className="flex items-center justify-between gap-4"><span className="text-ink/58">{pricingPreview.taxLabel || 'Tax'}</span><span className="font-semibold text-ink">{formatMoney(pricingPreview.taxAmount, pricingPreview.currency)}</span></div>
+            {checkoutBenefit ? <div className="flex items-center justify-between gap-4 text-needle"><span>Promotion</span><span className="font-semibold">−{formatMoney(checkoutBenefit.total_benefit_amount, checkoutBenefit.currency)}</span></div> : null}
+            <div className="mt-2 flex items-center justify-between gap-4 border-t border-ink/8 pt-3"><span className="font-semibold text-ink">Pay now</span><span className="text-xl font-semibold text-needle">{formatMoney(amountDue, pricingPreview.currency)}</span></div>
+          </div>
+          <CommercialBenefitControl orderId={checkoutOrderId} compact initialCode={promotionCode} onChanged={setCheckoutBenefit} />
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button variant="secondary" onClick={() => window.location.assign(`/account/orders/${checkoutOrderId}`)}>View saved order</Button>
+            <Button onClick={() => { void continuePreparedCheckout() }} disabled={busy}>
+              {busy ? 'Checking total…' : amountDue === 0 ? 'Complete covered order' : 'Continue securely'}
+            </Button>
+          </div>
+        </div>
+      </Surface>
+    )
+  }
+
   return (
     <Surface id="ready-made-checkout" className="scroll-mt-28 overflow-hidden">
       <SurfaceHeader eyebrow="Checkout" title="Start ready-made checkout" description="Confirm size, fulfillment, recipient details, tax, and total before payment starts." />
@@ -10771,7 +13104,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
         <ActionNotice error={error} success={success} />
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Size" hint={sizes.length > 0 && size ? `${selectedSizeInventory} left in ${size}` : `${readyMadeInventoryCount(item)} ready now`}>
-            <NativeSelect value={size} onChange={(event) => setSize(event.target.value)}>
+            <NativeSelect value={size} onChange={(event) => {
+              setSize(event.target.value)
+              setFitAck(false)
+            }}>
               {sizes.length === 0 ? <option value="">One size</option> : sizes.map((entry) => {
                 const remaining = readyMadeQuantityForSize(item, entry)
                 return <option key={entry} value={entry} disabled={remaining <= 0}>{remaining <= 0 ? `${entry} · sold out` : entry}</option>
@@ -10794,6 +13130,20 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
             </NativeSelect>
           </Field>
         </div>
+        <div className="grid gap-3 rounded-[8px] border border-ui-border bg-white p-4">
+          <div>
+            <p className="text-sm font-semibold text-ink">Confirm the fit</p>
+            <p className="mt-1 text-sm leading-6 text-ink/62">
+              {sizes.length > 0
+                ? sizeGuideSummary(item.size_guide, sizes)
+                : 'Review the listing measurements and fit notes for this one-size item.'}
+            </p>
+          </div>
+          <div className="flex items-start justify-between gap-4 rounded-[8px] bg-bone/70 px-4 py-3 text-sm leading-6 text-ink/72">
+            <span>I reviewed the fit guidance and confirm {size || 'this one-size fit'} is the size I want.</span>
+            <Switch checked={fitAck} onCheckedChange={setFitAck} aria-label="Confirm ready-made fit review" />
+          </div>
+        </div>
         {fulfillment === 'PICKUP' ? (
           <p className="text-sm leading-6 text-ink/58">Exact pickup details are shared only after the seller marks the order ready for collection.</p>
         ) : null}
@@ -10805,11 +13155,21 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
               onValueChange={setRecipientPhone}
               placeholder="Recipient phone for courier only"
             />
-            <Input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Address" className="md:col-span-2" />
-            <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="City" />
-            <Input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Region/state" />
-            <Input value={postalCode} onChange={(event) => setPostalCode(event.target.value)} placeholder="Postal code" />
-            <Input value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} placeholder="Country code" maxLength={2} />
+            <StructuredAddressSearch onSelect={(selected) => {
+              setAddress(selected.line1)
+              setCity(selected.city)
+              setRegion(selected.stateRegion)
+              setPostalCode(selected.postcode)
+              setCountryCode((selected.countryCode || selected.country).toUpperCase())
+              setAddressVerificationSource('NOMINATIM')
+              setAddressVerificationReference(selected.reference)
+              setAddressVerifiedAt(new Date().toISOString())
+            }} />
+            <Input value={address} onChange={(event) => { setAddress(event.target.value); markAddressManuallyConfirmed() }} placeholder="Address" className="md:col-span-2" />
+            <Input value={city} onChange={(event) => { setCity(event.target.value); markAddressManuallyConfirmed() }} placeholder="City" />
+            <Input value={region} onChange={(event) => { setRegion(event.target.value); markAddressManuallyConfirmed() }} placeholder="Region/state" />
+            <Input value={postalCode} onChange={(event) => { setPostalCode(event.target.value); markAddressManuallyConfirmed() }} placeholder="Postal code" />
+            <Input value={countryCode} onChange={(event) => { setCountryCode(event.target.value.toUpperCase()); markAddressManuallyConfirmed() }} placeholder="Country code" maxLength={2} />
           </div>
         ) : null}
         <div className="flex items-start justify-between gap-4 rounded-[8px] border border-ui-border bg-ui-muted/45 px-4 py-3 text-sm leading-6 text-ink/70">
@@ -10838,6 +13198,17 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
                 <span className="font-semibold text-ink">Total</span>
                 <span className="text-lg font-semibold text-needle">{formatMoney(pricingPreview.totalAmount, pricingPreview.currency)}</span>
               </div>
+              <div className="mt-3 grid gap-2 border-t border-ink/8 pt-3">
+                <label htmlFor={`ready-made-promotion-${item.id}`} className="text-sm font-semibold text-ink">Discount code</label>
+                <Input
+                  id={`ready-made-promotion-${item.id}`}
+                  value={promotionCode}
+                  onChange={(event) => setPromotionCode(event.target.value.toUpperCase())}
+                  placeholder="Enter code (optional)"
+                  autoComplete="off"
+                />
+                <p className="text-xs leading-5 text-ink/52">We apply it after stock is held and show the new total before secure payment opens. Available Drapeon credits appear there too.</p>
+              </div>
               {pricingPreview.taxFallback ? (
                 <p className="text-xs leading-5 text-rust">Tax is estimated because live tax lookup was unavailable for this address.</p>
               ) : null}
@@ -10853,8 +13224,8 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
           <Button variant="secondary" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId || !hasFulfillmentOption}>
             {pricingBusy ? 'Calculating...' : 'Preview tax and total'}
           </Button>
-          <Button onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !hasFulfillmentOption || !previewIsFresh}>
-            {busy ? 'Starting checkout...' : 'Create checkout'}
+          <Button onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !hasFulfillmentOption || !previewIsFresh || !fitAck || !ack}>
+            {busy ? 'Holding stock…' : 'Review payment'}
           </Button>
         </div>
       </div>
@@ -11806,13 +14177,94 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   const [deliveryRegion, setDeliveryRegion] = useState('')
   const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US')
+  const [deliveryVerificationSource, setDeliveryVerificationSource] = useState('')
+  const [deliveryVerificationReference, setDeliveryVerificationReference] = useState('')
+  const [deliveryVerifiedAt, setDeliveryVerifiedAt] = useState('')
+  const [fulfillmentEligibility, setFulfillmentEligibility] = useState<FulfillmentEligibilityResult | null>(null)
+  const [checkingFulfillment, setCheckingFulfillment] = useState(false)
   const [acknowledged, setAcknowledged] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null)
+  const [draftStatus, setDraftStatus] = useState<'loading' | 'restored' | 'saving' | 'saved' | 'error' | null>(null)
+  const [draftAttachmentWarning, setDraftAttachmentWarning] = useState(false)
+  const draftLoadStartedRef = useRef(false)
+  const draftHydratedRef = useRef(false)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const fabricMediaInputRef = useRef<HTMLInputElement | null>(null)
+
+  const draftFields = useMemo(() => ({
+    garmentType, garmentTypeOther, genderPresentation, description, occasion, occasionOther,
+    deadline, wearerMode, wearerName, bulkRecipientCount, bulkLabel, bulkMemberNames,
+    bulkNotes, styleLinks, styleNotes, fitNote, measurementChoice, fabricSource,
+    fabricDescription, fabricBudget, fabricBudgetCurrency, fabricReferenceLinksInput,
+    fabricSubstitutionPreference, bulkFabricMode, fabricVendorName, fabricVendorLocation,
+    fabricVendorLink, fabricVendorNotes, fabricSourcingDeadlineDays, deliveryMethod,
+    shippingPreference, deliveryInstructions, recipientName, recipientPhone, deliveryAddress,
+    deliveryCity, deliveryRegion, deliveryPostalCode, deliveryCountryCode,
+    deliveryVerificationSource, deliveryVerifiedAt, acknowledged,
+  }), [
+    garmentType, garmentTypeOther, genderPresentation, description, occasion, occasionOther,
+    deadline, wearerMode, wearerName, bulkRecipientCount, bulkLabel, bulkMemberNames,
+    bulkNotes, styleLinks, styleNotes, fitNote, measurementChoice, fabricSource,
+    fabricDescription, fabricBudget, fabricBudgetCurrency, fabricReferenceLinksInput,
+    fabricSubstitutionPreference, bulkFabricMode, fabricVendorName, fabricVendorLocation,
+    fabricVendorLink, fabricVendorNotes, fabricSourcingDeadlineDays, deliveryMethod,
+    shippingPreference, deliveryInstructions, recipientName, recipientPhone, deliveryAddress,
+    deliveryCity, deliveryRegion, deliveryPostalCode, deliveryCountryCode,
+    deliveryVerificationSource, deliveryVerifiedAt, acknowledged,
+  ])
+
+  useEffect(() => {
+    if (!tailorId || draftLoadStartedRef.current) return
+    draftLoadStartedRef.current = true
+    setDraftStatus('loading')
+    void invokeAccountFunction<{ draft?: { version: string; fields: Record<string, unknown>; has_device_only_attachments: boolean } | null }>('custom-order-draft-action', {
+      action: 'load', tailorProfileId: tailorId,
+    }).then((result) => {
+      const draft = result.draft
+      if (!draft || draft.version !== CUSTOM_ORDER_DRAFT_VERSION) { draftHydratedRef.current = true; setDraftStatus(null); return }
+      const f = draft.fields ?? {}
+      const text = (key: string) => typeof f[key] === 'string' ? f[key] as string : ''
+      setGarmentType(text('garmentType') || 'Agbada'); setGarmentTypeOther(text('garmentTypeOther'))
+      if (f.genderPresentation === 'Menswear' || f.genderPresentation === 'Womenswear' || f.genderPresentation === 'Unisex') setGenderPresentation(f.genderPresentation)
+      setDescription(text('description')); setOccasion(text('occasion') || 'Event'); setOccasionOther(text('occasionOther'))
+      setDeadline(text('deadline') || defaultDeadlineInput());
+      if (f.wearerMode === 'SELF' || f.wearerMode === 'OTHER' || f.wearerMode === 'GROUP') setWearerMode(f.wearerMode)
+      setWearerName(text('wearerName')); setBulkRecipientCount(text('bulkRecipientCount')); setBulkLabel(text('bulkLabel'))
+      setBulkMemberNames(text('bulkMemberNames')); setBulkNotes(text('bulkNotes')); setStyleLinks(text('styleLinks'))
+      setStyleNotes(text('styleNotes')); setFitNote(text('fitNote')); setMeasurementChoice(text('measurementChoice') || firstMeasurementId)
+      if (f.fabricSource === 'TAILOR_SOURCES' || f.fabricSource === 'CUSTOMER_SUPPLIES') setFabricSource(f.fabricSource)
+      setFabricDescription(text('fabricDescription')); setFabricBudget(text('fabricBudget'))
+      if (typeof f.fabricBudgetCurrency === 'string') setFabricBudgetCurrency(normalizeAccountCurrency(f.fabricBudgetCurrency) ?? fabricBudgetCurrency)
+      setFabricReferenceLinksInput(text('fabricReferenceLinksInput')); setFabricSubstitutionPreference(text('fabricSubstitutionPreference'))
+      setBulkFabricMode(text('bulkFabricMode')); setFabricVendorName(text('fabricVendorName')); setFabricVendorLocation(text('fabricVendorLocation'))
+      setFabricVendorLink(text('fabricVendorLink')); setFabricVendorNotes(text('fabricVendorNotes'))
+      if (typeof f.fabricSourcingDeadlineDays === 'number') setFabricSourcingDeadlineDays(f.fabricSourcingDeadlineDays)
+      if (f.deliveryMethod === 'LOCAL_COLLECTION' || f.deliveryMethod === 'LOCAL_DELIVERY' || f.deliveryMethod === 'SHIPPING') setDeliveryMethod(f.deliveryMethod)
+      if (f.shippingPreference === 'STANDARD' || f.shippingPreference === 'EXPRESS') setShippingPreference(f.shippingPreference)
+      setDeliveryInstructions(text('deliveryInstructions')); setRecipientName(text('recipientName')); setRecipientPhone(text('recipientPhone'))
+      setDeliveryAddress(text('deliveryAddress')); setDeliveryCity(text('deliveryCity')); setDeliveryRegion(text('deliveryRegion'))
+      setDeliveryPostalCode(text('deliveryPostalCode')); setDeliveryCountryCode(text('deliveryCountryCode') || 'US')
+      setDeliveryVerificationSource(text('deliveryVerificationSource'))
+      setDeliveryVerifiedAt(text('deliveryVerifiedAt'))
+      setAcknowledged(f.acknowledged === true); setDraftAttachmentWarning(draft.has_device_only_attachments); draftHydratedRef.current = true; setDraftStatus('restored')
+    }).catch(() => { draftHydratedRef.current = true; setDraftStatus('error') })
+  }, [fabricBudgetCurrency, firstMeasurementId, tailorId])
+
+  useEffect(() => {
+    if (!tailorId || !draftHydratedRef.current || busy || !isMeaningfulCustomOrderDraft(draftFields)) return
+    setDraftStatus((current) => current === 'restored' ? current : 'saving')
+    const timer = window.setTimeout(() => {
+      void invokeAccountFunction('custom-order-draft-action', {
+        action: 'save', tailorProfileId: tailorId, version: CUSTOM_ORDER_DRAFT_VERSION,
+        currentStep: 0, fields: draftFields,
+        hasDeviceOnlyAttachments: referencePhotos.length > 0 || fabricReferenceFiles.length > 0,
+      }).then(() => setDraftStatus('saved')).catch(() => setDraftStatus('error'))
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [busy, draftFields, fabricReferenceFiles.length, referencePhotos.length, tailorId])
 
   if (!tailor || !tailorId) {
     return (
@@ -11852,6 +14304,69 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
   const fabricBudgetAmount = parseMinorUnits(fabricBudget)
   const selectedFabricSubstitution = FABRIC_SUBSTITUTION_OPTIONS.find((option) => option.value === fabricSubstitutionPreference)
   const selectedBulkFabricMode = BULK_FABRIC_MODE_OPTIONS.find((option) => option.value === bulkFabricMode)
+
+  function clearWebDeliveryVerification() {
+    setDeliveryVerificationSource('')
+    setDeliveryVerificationReference('')
+    setDeliveryVerifiedAt('')
+    setFulfillmentEligibility(null)
+  }
+
+  async function resolveWebFulfillment(
+    method: typeof deliveryMethod,
+    verifiedAt = deliveryVerifiedAt,
+    verificationSource = deliveryVerificationSource,
+  ) {
+    if (checkingFulfillment) return null
+    setCheckingFulfillment(true)
+    try {
+      const result = await invokeAccountFunction<{ fulfillment?: FulfillmentEligibilityResult }>('custom-order-draft-action', {
+        action: 'resolve-fulfillment',
+        tailorProfileId: selectedTailor.id,
+        method,
+        destination: method === 'LOCAL_COLLECTION' ? null : {
+          addressLine1: deliveryAddress.trim(),
+          city: deliveryCity.trim(),
+          regionCode: deliveryRegion.trim(),
+          postalCode: deliveryPostalCode.trim(),
+          countryCode: deliveryCountryCode.trim().toUpperCase(),
+          verificationSource,
+          verificationReference: deliveryVerificationReference || null,
+          verifiedAt,
+        },
+      })
+      const fulfillment = result.fulfillment ?? null
+      setFulfillmentEligibility(fulfillment)
+      if (fulfillment?.status === 'BLOCKED' && fulfillment.reason === 'LOCAL_DELIVERY_COUNTRY_MISMATCH') {
+        const switchToShipping = window.confirm(
+          `This address is outside ${fulfillment.originCountryCode ?? 'the tailor’s country'}. Switch to international shipping?`,
+        )
+        if (switchToShipping) {
+          setDeliveryMethod('SHIPPING')
+          setCheckingFulfillment(false)
+          return await resolveWebFulfillment('SHIPPING', verifiedAt, verificationSource)
+        }
+      }
+      return fulfillment
+    } catch {
+      setError('Could not check this fulfillment option right now.')
+      return null
+    } finally {
+      setCheckingFulfillment(false)
+    }
+  }
+
+  async function confirmWebDeliveryAddress() {
+    if (!deliveryAddress.trim() || !deliveryCity.trim() || !deliveryRegion.trim() || !/^[A-Za-z]{2}$/u.test(deliveryCountryCode.trim())) {
+      setError('Add the full delivery address and 2-letter country code first.')
+      return
+    }
+    setError(null)
+    const verifiedAt = new Date().toISOString()
+    setDeliveryVerificationSource('CUSTOMER_CONFIRMED_STRUCTURED')
+    setDeliveryVerifiedAt(verifiedAt)
+    await resolveWebFulfillment(deliveryMethod, verifiedAt, 'CUSTOMER_CONFIRMED_STRUCTURED')
+  }
 
   async function submitBrief() {
     setError(null)
@@ -11991,6 +14506,11 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
     }
     if (!acknowledged) {
       setError('Review and acknowledge the cancellation and handoff policy before submitting.')
+      return
+    }
+    const eligibility = await resolveWebFulfillment(deliveryMethod)
+    if (!eligibility || eligibility.status !== 'ELIGIBLE') {
+      if (eligibility) setError(fulfillmentEligibilityCopy(eligibility))
       return
     }
 
@@ -12203,6 +14723,9 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
         deliveryRegion: needsDeliveryDetails ? deliveryRegion.trim() : null,
         deliveryPostalCode: needsDeliveryDetails ? deliveryPostalCode.trim() : null,
         deliveryCountryCode: needsDeliveryDetails ? deliveryCountryCode.trim().toUpperCase() : null,
+        deliveryVerificationSource: needsDeliveryDetails ? deliveryVerificationSource : null,
+        deliveryVerificationReference: needsDeliveryDetails ? deliveryVerificationReference || null : null,
+        deliveryVerifiedAt: needsDeliveryDetails ? deliveryVerifiedAt : null,
         recipientName: needsDeliveryDetails ? recipientName.trim() : null,
         recipientPhone: needsDeliveryDetails ? normalizedRecipientPhone : null,
         cancellationPolicyAcknowledged: acknowledged,
@@ -12223,6 +14746,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
         uploadedFabricReferenceUrls.push(await uploadPublicFile('order-photos', 'brief/' + data.userId + '/fabric', preparedFabricMedia))
       }
       const result = await invokeAccountFunction<{ orderId?: string }>('custom-order-action', buildPayload('create-order', uploadedReferencePhotos, uploadedFabricReferenceUrls))
+      await invokeAccountFunction('custom-order-draft-action', { action: 'delete', tailorProfileId: selectedTailor.id })
       setCreatedOrderId(result.orderId ?? null)
       setSuccess('Custom brief sent. Opening the new order so you can track the quote.')
       setDescription('')
@@ -12294,6 +14818,12 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       <section className="rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm sm:p-5">
         <div className="grid gap-5">
           <ActionNotice error={error} success={success} />
+          {draftStatus ? (
+            <div className={`rounded-[8px] border px-4 py-3 text-sm ${draftStatus === 'error' ? 'border-rust/20 bg-rust/6 text-rust' : 'border-needle/16 bg-needle/6 text-ink/68'}`} role="status">
+              <strong className="text-ink">{draftStatus === 'loading' ? 'Checking for a saved request…' : draftStatus === 'restored' ? 'Request restored' : draftStatus === 'saving' ? 'Saving request…' : draftStatus === 'saved' ? 'Request saved' : 'Draft could not save'}</strong>
+              {(draftStatus === 'restored' || draftAttachmentWarning) ? <p className="mt-1 leading-5">{draftAttachmentWarning ? 'Your written details were restored. Reattach local photo or video files before submitting.' : 'Continue from where you stopped on any signed-in Drapeon device.'}</p> : null}
+            </div>
+          ) : null}
           {createdOrderId ? (
             <Link href={accountRoute(`/account/orders/${createdOrderId}`)} className="inline-flex w-fit rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white">
               Open submitted order
@@ -12507,10 +15037,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
             {fabricSource === 'TAILOR_SOURCES' ? (
               <>
                 <div className="grid gap-4 md:grid-cols-3">
-                  <label className="grid gap-2">
-                    <span className="text-sm font-semibold text-ink">Fabric budget</span>
-                    <input value={fabricBudget} onChange={(event) => setFabricBudget(event.target.value)} inputMode="decimal" placeholder="Required budget" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
-                  </label>
+                  <MoneyInput id="custom-brief-fabric-budget" label="Fabric budget" value={fabricBudget} onValueChange={setFabricBudget} currency={fabricBudgetCurrency} required hint="Set the maximum fabric sourcing budget before the tailor quotes." />
                   <label className="grid gap-2">
                     <span className="text-sm font-semibold text-ink">Budget currency</span>
                     <select value={fabricBudgetCurrency} onChange={(event) => setFabricBudgetCurrency(normalizeAccountCurrency(event.target.value) ?? fabricBudgetCurrency)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
@@ -12569,7 +15096,12 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Fulfillment</span>
-              <select value={deliveryMethod} onChange={(event) => setDeliveryMethod(event.target.value as typeof deliveryMethod)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <select value={deliveryMethod} onChange={(event) => {
+                const method = event.target.value as typeof deliveryMethod
+                setDeliveryMethod(method)
+                setFulfillmentEligibility(null)
+                if (method === 'LOCAL_COLLECTION') void resolveWebFulfillment(method)
+              }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 {deliveryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
@@ -12600,27 +15132,54 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
                 onValueChange={setRecipientPhone}
                 placeholder="Phone number"
               />
+              <StructuredAddressSearch onSelect={(address) => {
+                setDeliveryAddress(address.line1 || address.displayValue)
+                setDeliveryCity(address.city)
+                setDeliveryRegion(address.stateRegion)
+                setDeliveryPostalCode(address.postcode)
+                setDeliveryCountryCode(address.countryCode ?? '')
+                setDeliveryVerificationSource('ADDRESS_SEARCH')
+                setDeliveryVerificationReference(address.reference)
+                setDeliveryVerifiedAt(new Date().toISOString())
+                setFulfillmentEligibility(null)
+              }} />
               <label className="grid gap-1.5 md:col-span-2">
                 <span className="text-xs font-semibold text-ink">Street address</span>
-                <input value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={deliveryAddress} onChange={(event) => { setDeliveryAddress(event.target.value); clearWebDeliveryVerification() }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-ink">City</span>
-                <input value={deliveryCity} onChange={(event) => setDeliveryCity(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={deliveryCity} onChange={(event) => { setDeliveryCity(event.target.value); clearWebDeliveryVerification() }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-ink">State / region</span>
-                <input value={deliveryRegion} onChange={(event) => setDeliveryRegion(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={deliveryRegion} onChange={(event) => { setDeliveryRegion(event.target.value); clearWebDeliveryVerification() }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-ink">Postal code</span>
-                <input value={deliveryPostalCode} onChange={(event) => setDeliveryPostalCode(event.target.value)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={deliveryPostalCode} onChange={(event) => { setDeliveryPostalCode(event.target.value); clearWebDeliveryVerification() }} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
               <label className="grid gap-1.5">
                 <span className="text-xs font-semibold text-ink">Country code <span className="font-normal text-ink/52">(2 letters, e.g. US, GB, NG)</span></span>
-                <input value={deliveryCountryCode} onChange={(event) => setDeliveryCountryCode(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
+                <input value={deliveryCountryCode} onChange={(event) => { setDeliveryCountryCode(event.target.value.toUpperCase().slice(0, 2)); clearWebDeliveryVerification() }} maxLength={2} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
               </label>
+              <div className="grid gap-2 md:col-span-2">
+                <Button type="button" variant="secondary" onClick={() => void confirmWebDeliveryAddress()} disabled={checkingFulfillment}>
+                  {checkingFulfillment ? 'Checking…' : 'Confirm delivery address'}
+                </Button>
+                {fulfillmentEligibility ? (
+                  <p role="status" className={fulfillmentEligibility.status === 'ELIGIBLE' ? 'text-xs text-needle' : 'text-xs text-kante'}>
+                    {fulfillmentEligibilityCopy(fulfillmentEligibility)}
+                  </p>
+                ) : null}
+              </div>
             </div>
+          ) : null}
+
+          {!needsDeliveryDetails && fulfillmentEligibility ? (
+            <p role="status" className={fulfillmentEligibility.status === 'ELIGIBLE' ? 'text-sm text-needle' : 'text-sm text-kante'}>
+              {fulfillmentEligibilityCopy(fulfillmentEligibility)}
+            </p>
           ) : null}
 
           <label className="flex items-start gap-3 rounded-[8px] border border-ink/8 bg-bone/55 p-4 text-sm leading-6 text-ink/66">
@@ -12643,18 +15202,28 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
   const message = latestMessage(order.id, data.messages)
   const action = orderActionCopy(order, data)
   const progress = stageProgress(order)
+  const isConsultation = order.stage === 'CONSULTATION'
+  const attendanceReview = isConsultation
+    ? data.consultationAttendanceReviews.find((review) => review.orderId === order.id) ?? null
+    : null
+  const consultationState = isConsultation
+    ? consultationOrderListState({
+        actorRole: isTailorOrder(order, data) ? 'TAILOR' : 'CUSTOMER',
+        review: attendanceReview,
+      })
+    : null
   return (
     <Link
       href={`/account/orders/${order.id}`}
       className="block overflow-hidden rounded-[8px] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_14px_40px_rgba(22,28,24,0.10)]"
     >
-      <div className="p-5">
+      <div className={isConsultation ? 'p-4' : 'p-5'}>
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-needle/68">{cleanLabel(order.order_kind, 'Order')}</span>
               <StagePill stage={order.stage} />
-              {action ? (
+              {action && !isConsultation ? (
                 <span className="rounded-full bg-rust/10 px-2.5 py-0.5 text-xs font-semibold text-rust">{action}</span>
               ) : null}
             </div>
@@ -12662,6 +15231,15 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
             <p className="mt-1 text-sm text-ink/52">
               {partyName(order, data.userId)} · {cleanLabel(order.delivery_method, 'Fulfillment')}
             </p>
+            {isConsultation ? (
+              <span className={[
+                'mt-2 inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-semibold',
+                consultationState?.needsAction ? 'bg-rust/10 text-rust' : 'bg-needle/8 text-needle',
+              ].join(' ')}>
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                {consultationState?.label ?? 'Consultation scheduled'}
+              </span>
+            ) : null}
           </div>
           <div className="shrink-0 text-right">
             <p className="text-xl font-semibold text-ink">{orderAmount(order)}</p>
@@ -12669,7 +15247,7 @@ function OrderCard({ order, data }: { order: AccountOrder; data: OrdersRenderDat
             <p className="mt-0.5 text-xs text-ink/36">{formatRelative(order.updated_at ?? order.created_at)}</p>
           </div>
         </div>
-        {message ? (
+        {message && !isConsultation ? (
           <p className="mt-3 line-clamp-1 rounded-lg bg-ink/4 px-3 py-2 text-sm text-ink/52">
             {safeUserText(message.body, message.photo_url || message.voice_url ? 'Media attached.' : 'Message recorded.')}
           </p>
@@ -13066,8 +15644,44 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
     return timestampMs(a.created_at) - timestampMs(b.created_at)
   })
   const payments = data.payments.filter((payment) => payment.order_id === order.id)
+  const receipt = data.receipts.find((entry) => entry.order_id === order.id) ?? null
+  const receiptTaxLines = receipt ? taxLinesForReceiptSnapshot({
+    taxJurisdiction: receipt.tax_jurisdiction,
+    taxAmount: Math.max(receipt.tax_amount - receipt.import_tax_amount - receipt.duty_amount, 0),
+  }) : []
+  const settlementSummary = data.settlementTranches.reduce((summary, tranche) => {
+    summary.total += tranche.amount
+    if (tranche.status === 'RELEASED') summary.released += tranche.amount
+    else if (tranche.status === 'ELIGIBLE' || tranche.status === 'RELEASE_REQUESTED') summary.eligible += tranche.amount
+    else summary.protected += tranche.amount
+    return summary
+  }, { total: 0, released: 0, eligible: 0, protected: 0 })
+  const providerDispute = data.providerDisputes.find((item) => item.money_movement_blocked) ?? data.providerDisputes[0] ?? null
+  const providerDisputePresentation = providerDispute ? presentProviderDispute({
+    status: providerDispute.status,
+    amount: providerDispute.amount,
+    currency: providerDispute.currency,
+    evidenceDueAt: providerDispute.evidence_due_at,
+    moneyMovementBlocked: providerDispute.money_movement_blocked,
+  }) : null
   const messages = data.messages.filter((message) => message.order_id === order.id)
-  const supportMeta = parseOrderSupportMeta(order.special_note)
+  const rawSupportMeta = parseOrderSupportMeta(order.special_note)
+  const booking = data.consultationBooking
+  const bookingConsultation: typeof rawSupportMeta.consultation = !rawSupportMeta.consultation && booking?.status === 'CONFIRMED' && booking.scheduled_start_at
+    ? {
+        status: 'SCHEDULED',
+        feeAmount: booking.fee_amount,
+        feeCurrency: booking.fee_currency,
+        paymentTiming: booking.fee_mode === 'PAID' ? 'BEFORE_CALL_STARTS' : 'WAIVED_OR_FREE',
+        paidAt: booking.payment_status === 'PAID' ? booking.paid_at : null,
+        scheduledStartAt: booking.scheduled_start_at,
+        scheduledEndAt: booking.scheduled_end_at,
+        callType: booking.call_type === 'AUDIO' ? 'AUDIO' : 'VIDEO',
+      }
+    : null
+  const supportMeta = bookingConsultation
+    ? { ...rawSupportMeta, consultation: bookingConsultation }
+    : rawSupportMeta
   const proofEvidence = productionEvidenceFor(order.id, data.productionEvidence)
   const proofMediaUrls = Array.from(new Set(
     proofEvidence
@@ -13135,6 +15749,19 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
   const paymentFailed = order.stage === 'PAYMENT_FAILED' || payments.some((payment) => ['FAILED', 'PAYMENT_FAILED'].includes(payment.status ?? ''))
   const autoRelease = autoReleaseLabel(order.auto_release_at)
   const collectionCode = readableCode(order.collection_code)
+  const pickupCredentialActive = order.delivery_method === 'LOCAL_COLLECTION'
+    && order.stage === 'READY_FOR_COLLECTION'
+  const fulfillmentStagePresentation = deriveFulfillmentAwareOrderStagePresentation({
+    orderStage: order.stage,
+    effectiveMethod: order.delivery_method,
+  })
+  const fulfillmentAwareHistoryLabel = (update: StageUpdate, isLatest = false) =>
+    deriveFulfillmentAwareHistoryLabel({
+      eventStage: update.stage,
+      effectiveMethod: order.delivery_method,
+      defaultLabel: cleanLabel(update.stage, 'Stage update'),
+      isLatest,
+    })
   const shouldShowHandoffState = viewerIsCustomer && isHandoffStage(order.stage)
   const tailorCanQuote = viewerIsTailor && ['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage ?? '')
   const tailorCanAdvance = viewerIsTailor && nextStageOptions(order).length > 0
@@ -13188,10 +15815,98 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
             {safeUserText(order.garment_description || order.special_note, 'The app brief carries full order details and proof media.')}
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <SummaryLine label="Status" value={<StagePill stage={order.stage} />} />
+            <SummaryLine
+              label="Status"
+              value={fulfillmentStagePresentation.label ?? <StagePill stage={fulfillmentStagePresentation.stage ?? order.stage} />}
+            />
             <SummaryLine label="Amount" value={orderAmount(order)} />
             <SummaryLine label="Fulfillment" value={cleanLabel(order.delivery_method, 'Fulfillment')} />
             <SummaryLine label="Due date" value={formatDate(order.quoted_completion_date ?? order.deadline) ?? 'Pending'} />
+          </div>
+          <div className="mt-4 flex flex-wrap items-start gap-2">
+          {receipt ? (
+            <details className="group w-fit rounded-full border border-ink/10 bg-bone/45 open:w-full open:rounded-[8px]">
+              <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-needle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35">
+                <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" /><span>Receipt</span>
+              </summary>
+              <div className="grid gap-2 border-t border-ink/8 bg-white p-4">
+                {viewerIsTailor ? (
+                  <>
+                    <SummaryLine label="Customer paid" value={formatMoney(receipt.total_amount, receipt.currency)} />
+                    <SummaryLine label={receipt.fabric_funding_policy_version ? 'Tailoring protected' : 'Protected tailor amount'} value={<strong>{formatMoney(receipt.tailoring_amount ?? receipt.subtotal_amount, receipt.currency)}</strong>} />
+                    {receipt.fabric_funding_policy_version && receipt.fabric_allowance_amount != null ? <SummaryLine label="Fabric allowance held for approved material costs" value={formatMoney(receipt.fabric_allowance_amount, receipt.currency)} /> : null}
+                  </>
+                ) : (
+                  <>
+                    {receipt.fabric_funding_policy_version && receipt.tailoring_amount != null && receipt.fabric_allowance_amount != null ? (
+                      <><SummaryLine label="Tailoring and construction" value={formatMoney(receipt.tailoring_amount + receipt.consultation_credit_amount, receipt.currency)} /><SummaryLine label="Protected fabric allowance" value={formatMoney(receipt.fabric_allowance_amount, receipt.currency)} /></>
+                    ) : <SummaryLine label="Tailor work and included materials" value={formatMoney(receipt.subtotal_amount + receipt.consultation_credit_amount, receipt.currency)} />}
+                    {receipt.consultation_credit_amount > 0 ? <SummaryLine label="Consultation fee credit" value={`−${formatMoney(receipt.consultation_credit_amount, receipt.currency)}`} /> : null}
+                    {receipt.promotion_amount > 0 ? <SummaryLine label="Drapeon-funded benefit" value={`−${formatMoney(receipt.promotion_amount, receipt.currency)}`} /> : null}
+                    {receipt.platform_fee_amount > 0 ? <SummaryLine label="Drapeon service fee" value={formatMoney(receipt.platform_fee_amount, receipt.currency)} /> : null}
+                    <SummaryLine label="Fulfillment" value={receipt.shipping_amount > 0 ? formatMoney(receipt.shipping_amount, receipt.currency) : 'Free'} />
+                    {receiptTaxLines.map((line) => <SummaryLine key={line.key} label={line.rateBps > 0 ? `${line.label} (${formatTaxRate(line.rateBps)})` : line.label} value={formatMoney(line.amount, receipt.currency)} />)}
+                    {receipt.import_tax_amount > 0 ? <SummaryLine label="Import tax" value={formatMoney(receipt.import_tax_amount, receipt.currency)} /> : null}
+                    {receipt.duty_amount > 0 ? <SummaryLine label="Customs duty" value={formatMoney(receipt.duty_amount, receipt.currency)} /> : null}
+                    <SummaryLine label="Total paid" value={<strong>{formatMoney(receipt.total_amount, receipt.currency)}</strong>} />
+                  </>
+                )}
+                <SummaryLine label="Provider reference" value={`${cleanLabel(receipt.provider, 'Provider')} · ${receipt.provider_reference}`} />
+                <p className="mt-2 text-xs leading-5 text-ink/55">This receipt is locked to the captured checkout. Refunds and corrections are recorded separately.</p>
+              </div>
+            </details>
+          ) : null}
+          {data.settlementPlan && data.settlementTranches.length > 0 ? (
+            <details className="group w-fit rounded-full border border-ink/10 bg-bone/45 open:w-full open:rounded-[8px]">
+              <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-needle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/35">
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /><span>{viewerIsTailor ? 'Earnings' : 'Protection'}</span>
+              </summary>
+              <div className="border-t border-ink/8 bg-white p-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-ink">{data.settlementPlan.status === 'FROZEN' ? 'Release paused for review' : `${formatMoney(settlementSummary.released, data.settlementPlan.currency)} released`}</h3>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/62">
+                      {data.settlementPlan.status === 'FROZEN'
+                        ? 'Unreleased money stays protected while Drapeon reviews the open concern.'
+                        : viewerIsTailor
+                          ? `${formatMoney(settlementSummary.eligible, data.settlementPlan.currency)} is ready for Drapeon review. ${formatMoney(settlementSummary.protected, data.settlementPlan.currency)} remains protected.`
+                          : `${formatMoney(settlementSummary.protected, data.settlementPlan.currency)} remains protected until verified handoff milestones are complete.`}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-needle/10 px-3 py-1.5 text-xs font-semibold text-needle">{cleanLabel(data.settlementPlan.status, 'Settlement')}</span>
+                </div>
+                <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-ink/8" aria-label={`${settlementSummary.total > 0 ? Math.round(settlementSummary.released / settlementSummary.total * 100) : 0}% released`}>
+                  <div className="h-full rounded-full bg-needle" style={{ width: `${settlementSummary.total > 0 ? Math.round(settlementSummary.released / settlementSummary.total * 100) : 0}%` }} />
+                </div>
+                {data.settlementPlan.excluded_fabric_allowance_amount > 0 ? (
+                  <div className="mt-4 grid gap-2 rounded-[8px] border border-ink/8 bg-bone/60 p-3 text-sm text-ink/66 sm:grid-cols-2">
+                    <span>Fabric allowance paid through approved material releases</span>
+                    <strong className="text-ink sm:text-right">Excluded from earnings release · {formatMoney(data.settlementPlan.excluded_fabric_allowance_amount, data.settlementPlan.currency)}</strong>
+                    {data.settlementPlan.material_recovery_offset_amount > 0 ? <><span>Unused fabric value recovered for customer refund</span><strong className="text-ink sm:text-right">−{formatMoney(data.settlementPlan.material_recovery_offset_amount, data.settlementPlan.currency)}</strong></> : null}
+                  </div>
+                ) : null}
+                <div className="mt-4 grid gap-2">
+                  {data.settlementTranches.map((tranche) => {
+                    const title = ({ SHIP_CUSTODY_70: 'Accepted for delivery', SHIP_DELIVERY_20: 'Delivery settled', SHIP_PROTECTION_10: 'Protection window complete', LOCAL_HANDOFF_80: 'Handoff confirmed', LOCAL_SETTLED_20: 'Handoff settled' } as Record<string, string>)[tranche.code] ?? 'Settlement stage'
+                    const state = ({ LOCKED: 'Still protected', ELIGIBLE: 'Ready for Drapeon review', RELEASE_REQUESTED: 'Release under review', RELEASED: 'Released', BLOCKED: 'Paused for review', CANCELLED: 'Cancelled' } as Record<string, string>)[tranche.status] ?? cleanLabel(tranche.status, 'Pending')
+                    return (
+                      <div key={tranche.id} className="grid grid-cols-[10px_1fr_auto] items-center gap-3 border-t border-ink/8 pt-3">
+                        <span className={`h-2.5 w-2.5 rounded-full ${tranche.status === 'RELEASED' ? 'bg-needle' : tranche.status === 'BLOCKED' ? 'bg-rust' : 'bg-ink/25'}`} aria-hidden="true" />
+                        <div><p className="text-sm font-semibold text-ink">{title}</p><p className="mt-0.5 text-xs text-ink/52">{state}</p></div>
+                        <strong className="text-sm text-ink">{formatMoney(tranche.amount, tranche.currency)}</strong>
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className="mt-4 text-xs leading-5 text-ink/52">Ready or label-created states do not release money. Drapeon uses verified custody, delivery, or authenticated collection evidence.</p>
+              </div>
+            </details>
+          ) : null}
+          <AccountDrapeonDispatchCard
+            order={order}
+            viewerRole={viewerIsTailor ? 'TAILOR' : 'CUSTOMER'}
+            onRefresh={onRefresh}
+          />
           </div>
           <div className="mt-5">
             <StageTimeline order={order} />
@@ -13210,8 +15925,65 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
         </div>
       </section>
 
-      <OrderReviewPanel order={order} data={data} onRefresh={onRefresh} />
+      {viewerIsCustomer && pickupCredentialActive && collectionCode ? (
+        <section className="rounded-[8px] border border-needle/20 bg-needle/8 p-6 shadow-sm" aria-label={`Collection code ${collectionCode}`}>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-needle">Collection code</p>
+          <h2 className="mt-2 text-2xl font-semibold text-ink">Show this code to the tailor</h2>
+          <p className="mt-2 text-sm leading-6 text-ink/66">This is not the order number. Inspect the order first, then share the code so Drapeon can record the pickup handoff.</p>
+          <p className="mt-5 rounded-[8px] border border-needle/16 bg-white px-5 py-4 text-center text-3xl font-semibold tracking-[0.28em] text-needle">{collectionCode}</p>
+        </section>
+      ) : null}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <OrderReviewPanel order={order} data={data} onRefresh={onRefresh} />
+        <OrderTipPanel order={order} data={data} onRefresh={onRefresh} />
+      </div>
+      {order.stage === 'CONSULTATION' && supportMeta.consultation?.status === 'SCHEDULED' && supportMeta.consultation.scheduledStartAt ? (
+        <>
+          {getCallLifecycleState(supportMeta.consultation.scheduledStartAt).status !== 'expired' ? (
+            <>
+          <CallLifecycleEventCard
+            event={{
+              kind: 'consultation',
+              scheduledStartAt: supportMeta.consultation.scheduledStartAt,
+              timezone: supportMeta.consultation.timezone,
+              status: supportMeta.consultation.status,
+              paymentRequired:
+                !!supportMeta.consultation.feeAmount &&
+                supportMeta.consultation.paymentTiming === 'BEFORE_CALL_STARTS',
+              paymentPaid: !!supportMeta.consultation.paidAt,
+              callType: supportMeta.consultation.callType === 'AUDIO' ? 'audio' : 'video',
+              joinHref: accountRoute(`/account/messages?orderId=${encodeURIComponent(order.id)}`),
+              paymentHref: viewerIsCustomer
+                ? accountRoute(`/account/checkout/${order.id}`)
+                : accountRoute(`/account/orders/${order.id}`),
+              paymentActionLabel: viewerIsCustomer ? 'Pay now' : 'View order',
+            }}
+          />
+              <ConsultationLifecyclePanel orderId={order.id} actorRole={viewerIsTailor ? 'TAILOR' : 'CUSTOMER'} onUpdated={onRefresh} />
+            </>
+          ) : null}
+          <ConsultationReschedulePanel
+            orderId={order.id}
+            actorId={data.userId}
+            actorRole={viewerIsTailor ? 'TAILOR' : 'CUSTOMER'}
+            onUpdated={onRefresh}
+          />
+        </>
+      ) : null}
+      {supportMeta.consultation?.scheduledStartAt ? (
+        <ConsultationAttendancePanel orderId={order.id} actorRole={viewerIsTailor ? 'TAILOR' : 'CUSTOMER'} />
+      ) : null}
+      {providerDisputePresentation ? (
+        <section className={`rounded-[8px] border p-6 shadow-sm ${providerDisputePresentation.tone === 'success' ? 'border-needle/18 bg-needle/8' : 'border-rust/22 bg-rust/8'}`} role="status">
+          <p className={`text-xs font-semibold uppercase tracking-[0.18em] ${providerDisputePresentation.tone === 'success' ? 'text-needle' : 'text-rust'}`}>{providerDisputePresentation.label}</p>
+          <h2 className="mt-2 text-xl font-semibold text-ink">{providerDisputePresentation.title}</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/66">{providerDisputePresentation.body}</p>
+          {providerDisputePresentation.deadline ? <p className="mt-3 text-xs font-semibold text-ink/58">Provider evidence due {formatDate(providerDisputePresentation.deadline)}</p> : null}
+        </section>
+      ) : null}
       <CustomerOrderActions order={order} data={data} onRefresh={onRefresh} />
+      <FabricWorkflowPanel orderId={order.id} policyVersion={order.fabric_funding_policy_version} onRefresh={onRefresh} />
 
       {(paymentFailed || shouldShowHandoffState || autoRelease) ? (
         <section className="grid gap-4 rounded-[8px] border border-rust/14 bg-white/86 p-6 shadow-sm">
@@ -13241,12 +16013,12 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
                       : 'Your pickup code appears here once the tailor marks the order ready for collection.'
                     : 'Track delivery here and raise a concern before auto-release if something is wrong.'}
                 </p>
-                {collectionCode ? (
+                {order.delivery_method === 'LOCAL_COLLECTION' && collectionCode && order.stage !== 'READY_FOR_COLLECTION' ? (
                   <p className="mt-4 rounded-[8px] bg-white px-4 py-3 text-center text-2xl font-semibold tracking-[0.2em] text-needle">
                     {collectionCode}
                   </p>
                 ) : null}
-                {order.collection_code_expiry ? (
+                {order.delivery_method === 'LOCAL_COLLECTION' && order.collection_code_expiry ? (
                   <p className="mt-2 text-xs text-ink/50">Code expires {autoReleaseLabel(order.collection_code_expiry)}.</p>
                 ) : null}
               </div>
@@ -13266,6 +16038,8 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
         </section>
       ) : null}
 
+      <CommercialBenefitsPanel order={order} data={data} onRefresh={onRefresh}/>
+
       {order.customer_id === data.userId && isPayableOrder(order) ? (
         <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
           <h2 className="text-2xl font-semibold text-ink">Checkout</h2>
@@ -13283,6 +16057,9 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
       ) : null}
 
       <TailorOrderActions order={order} data={data} onRefresh={onRefresh} />
+      <OpsRefundStatusPanel order={order} data={data} />
+      <ReturnResolutionPanel order={order} data={data} onRefresh={onRefresh} />
+      <CommercialAdjustmentPanel order={order} data={data} onRefresh={onRefresh} />
       <MaterialAdvancePanel order={order} data={data} onRefresh={onRefresh} />
 
       <Surface className="p-6">
@@ -13313,9 +16090,15 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
         </Surface>
       ) : null}
 
-      <section id="order-media" className="scroll-mt-24 rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold text-ink">Timeline</h2>
-        <div className="mt-5 grid gap-3">
+      <details id="order-media" className="group scroll-mt-24 rounded-[8px] border border-ink/8 bg-white/84 shadow-sm">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[8px] p-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle">
+          <span>
+            <span className="block text-2xl font-semibold text-ink">Order history</span>
+            <span className="mt-1 block text-sm text-ink/58">{orderHistorySummary({ updateCount: updates.length, lastUpdatedLabel: updates.length > 0 ? formatRelative(updates[updates.length - 1]?.created_at) : null, latestEventLabel: updates.length > 0 ? fulfillmentAwareHistoryLabel(updates[updates.length - 1]!, true) : 'No production updates yet' })}</span>
+          </span>
+          <ChevronDown className="size-5 shrink-0 text-needle transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="grid gap-3 border-t border-ink/8 px-6 pb-6 pt-5">
           {updates.length === 0 ? (
             <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
               No production updates yet. Stage photos and videos appear here after the tailor posts them from web or the app.
@@ -13326,7 +16109,9 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
                 <div className="flex items-start gap-3">
                   <span className="mt-1 h-3 w-3 rounded-full bg-needle" />
                   <div>
-                    <StatusChip status={update.stage} fallback="Stage update" />
+                    <span className="inline-flex rounded-full bg-needle/8 px-3 py-1 text-xs font-semibold text-needle">
+                      {fulfillmentAwareHistoryLabel(update)}
+                    </span>
                     <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(update.note, 'Stage updated.')}</p>
                     <p className="mt-2 text-xs text-ink/46">{formatRelative(update.created_at)}</p>
                   </div>
@@ -13349,7 +16134,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
             </div>
           </div>
         ) : null}
-      </section>
+      </details>
 
       <section className="grid gap-5 lg:grid-cols-2">
         <div className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
@@ -15633,9 +18418,30 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
     )
   }
   const payments = data.payments.filter((payment) => payment.order_id === order.id)
+  const receipt = data.receipts.find((entry) => entry.order_id === order.id) ?? null
+  const receiptTaxLines = receipt ? taxLinesForReceiptSnapshot({
+    taxJurisdiction: receipt.tax_jurisdiction,
+    taxAmount: Math.max(receipt.tax_amount - receipt.import_tax_amount - receipt.duty_amount, 0),
+  }) : []
   const confirmed = payments.some((payment) => ['CONFIRMED', 'SUCCEEDED', 'PAID'].includes(payment.status ?? ''))
   const viewerIsCustomer = isCustomerOrder(order, data)
   const checkoutAvailable = viewerIsCustomer && isPayableOrder(order)
+  const activeQuote = activeQuoteForOrder(data.quotes, order.id)
+  const checkoutConsultationCredit = Math.max(parseOrderSupportMeta(order.special_note).quoteBreakdown?.consultationCreditAmount ?? 0, 0)
+  const checkoutCurrency = order.currency ?? order.quoted_currency
+  const checkoutTaxLines = taxLinesForSnapshot({
+    taxRegion: order.tax_region,
+    taxRateBps: order.tax_rate_bps,
+    taxAmount: Math.max((order.tax_amount ?? 0) - (order.import_tax_amount ?? 0) - (order.duty_amount ?? 0), 0),
+  })
+  const checkoutTaxNeedsRefresh = taxSnapshotNeedsRefresh({
+    taxRegion: order.tax_region,
+    taxRateBps: order.tax_rate_bps,
+    taxFallback: order.tax_fallback,
+  })
+  const checkoutTaxPromise = order.tax_collection_mode && order.tax_responsible_party
+    ? taxCollectionPromise({ collectionMode: order.tax_collection_mode, responsibleParty: order.tax_responsible_party })
+    : null
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
@@ -15659,11 +18465,40 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
           <SummaryLine label="Fulfillment" value={cleanLabel(order.delivery_method, 'Fulfillment')} />
           <SummaryLine label="Status" value={<StagePill stage={order.stage} />} />
         </div>
+        <div className="mt-6 rounded-[8px] border border-ink/8 bg-bone/55 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">Locked checkout</p>
+          <div className="mt-3 grid gap-2">
+            {activeQuote?.fabric_funding_policy_version && activeQuote.tailoring_amount != null && activeQuote.fabric_allowance_amount != null ? (
+              <>
+                <SummaryLine label="Tailoring and construction" value={formatMoney(activeQuote.tailoring_amount + checkoutConsultationCredit, activeQuote.currency)} />
+                <SummaryLine label="Protected fabric allowance" value={formatMoney(activeQuote.fabric_allowance_amount, activeQuote.currency)} />
+                {checkoutConsultationCredit > 0 ? <SummaryLine label="Consultation fee credit" value={`−${formatMoney(checkoutConsultationCredit, activeQuote.currency)}`} /> : null}
+              </>
+            ) : <SummaryLine label="Tailor work and included materials" value={formatMoney(order.subtotal_amount, order.currency ?? order.quoted_currency)} />}
+            {typeof order.platform_fee_amount === 'number' && order.platform_fee_amount > 0 ? <SummaryLine label="Drapeon service fee" value={formatMoney(order.platform_fee_amount, checkoutCurrency)} /> : null}
+            <SummaryLine label="Fulfillment" value={(order.shipping_amount ?? 0) > 0 ? formatMoney(order.shipping_amount, checkoutCurrency) : 'Free'} />
+            <SummaryLine label="Subtotal before tax" value={formatMoney((order.subtotal_amount ?? 0) + (order.platform_fee_amount ?? 0) + (order.shipping_amount ?? 0), checkoutCurrency)} />
+            {checkoutTaxLines.map((line) => (
+              <SummaryLine
+                key={line.key}
+                label={`${order.tax_fallback ? 'Estimated ' : ''}${line.label} (${formatTaxRate(line.rateBps)})`}
+                value={formatMoney(line.amount, checkoutCurrency)}
+              />
+            ))}
+            {(order.import_tax_amount ?? 0) > 0 ? <SummaryLine label="Import tax" value={formatMoney(order.import_tax_amount, checkoutCurrency)} /> : null}
+            {(order.duty_amount ?? 0) > 0 ? <SummaryLine label="Customs duty" value={formatMoney(order.duty_amount, checkoutCurrency)} /> : null}
+            <SummaryLine label="Total due" value={<strong>{formatMoney(order.total_amount ?? order.quoted_amount, checkoutCurrency)}</strong>} />
+            {activeQuote?.expires_at ? <SummaryLine label="Quote valid until" value={formatExplicitZonedDateTime(activeQuote.expires_at) ?? activeQuote.expires_at} /> : null}
+          </div>
+          {checkoutTaxPromise ? <div className="mt-3 rounded-[8px] border border-needle/12 bg-white/80 p-3"><p className="text-sm font-semibold text-ink">{checkoutTaxPromise.title}</p><p className="mt-1 text-xs leading-5 text-ink/60">{checkoutTaxPromise.body}</p></div> : null}
+          <p className="mt-3 text-xs leading-5 text-ink/55">{activeQuote?.fabric_funding_policy_version ? 'The fabric allowance stays protected. Drapeon releases only approved, evidenced fabric costs and returns any unused amount to you.' : 'The currency and amounts are locked before the payment provider opens. Extra customs, delivery, or order changes require a separate approval.'}</p>
+          {checkoutTaxNeedsRefresh ? <p className="mt-3 rounded-[8px] border border-rust/20 bg-rust/6 p-3 text-sm font-medium leading-6 text-rust">This quote used an older Ghana tax snapshot. It cannot be paid until the tailor refreshes it with the current VAT and statutory levies.</p> : null}
+        </div>
         <div className="mt-6">
           {viewerIsCustomer ? (
             <CheckoutAction
               order={order}
-              activeQuote={activeQuoteForOrder(data.quotes, order.id)}
+              activeQuote={activeQuote}
               onRefresh={onRefresh}
             />
           ) : (
@@ -15678,21 +18513,45 @@ function RenderCheckout({ data, orderId, onRefresh }: { data: CheckoutRenderData
         </div>
       </Surface>
       <section className="rounded-[8px] border border-ink/8 bg-white/84 p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold text-ink">Payment ledger</h2>
+        <h2 className="text-2xl font-semibold text-ink">{receipt ? 'Receipt' : 'Payment ledger'}</h2>
         <div className="mt-5 grid gap-3">
-          {payments.length === 0 ? (
+          {receipt ? (
+            <>
+              <SummaryLine label="Receipt" value={receipt.receipt_number} />
+              {receipt.fabric_funding_policy_version && receipt.tailoring_amount != null && receipt.fabric_allowance_amount != null ? (
+                <>
+                  <SummaryLine label="Tailoring and construction" value={formatMoney(receipt.tailoring_amount + receipt.consultation_credit_amount, receipt.currency)} />
+                  <SummaryLine label="Protected fabric allowance" value={formatMoney(receipt.fabric_allowance_amount, receipt.currency)} />
+                </>
+              ) : <SummaryLine label="Tailor work and included materials" value={formatMoney(receipt.subtotal_amount + receipt.consultation_credit_amount, receipt.currency)} />}
+              {receipt.consultation_credit_amount > 0 ? <SummaryLine label="Consultation fee credit" value={`−${formatMoney(receipt.consultation_credit_amount, receipt.currency)}`} /> : null}
+              {receipt.promotion_amount > 0 ? <SummaryLine label="Drapeon-funded benefit" value={`−${formatMoney(receipt.promotion_amount, receipt.currency)}`} /> : null}
+              {receipt.platform_fee_amount > 0 ? <SummaryLine label="Drapeon service fee" value={formatMoney(receipt.platform_fee_amount, receipt.currency)} /> : null}
+              <SummaryLine label="Fulfillment" value={receipt.shipping_amount > 0 ? formatMoney(receipt.shipping_amount, receipt.currency) : 'Free'} />
+              {receiptTaxLines.map((line) => (
+                <SummaryLine key={line.key} label={line.rateBps > 0 ? `${line.label} (${formatTaxRate(line.rateBps)})` : line.label} value={formatMoney(line.amount, receipt.currency)} />
+              ))}
+              {receipt.import_tax_amount > 0 ? <SummaryLine label="Import tax" value={formatMoney(receipt.import_tax_amount, receipt.currency)} /> : null}
+              {receipt.duty_amount > 0 ? <SummaryLine label="Customs duty" value={formatMoney(receipt.duty_amount, receipt.currency)} /> : null}
+              {receipt.tax_collection_mode === 'PAYABLE_ON_IMPORT' ? <p className="rounded-[8px] bg-bone/70 p-3 text-xs leading-5 text-ink/60">Import charges were not collected at checkout and may be payable to customs or the carrier by the responsible importer.</p> : null}
+              <SummaryLine label="Total paid" value={<strong>{formatMoney(receipt.total_amount, receipt.currency)}</strong>} />
+              <SummaryLine label="Provider reference" value={`${cleanLabel(receipt.provider, 'Provider')} · ${receipt.provider_reference}`} />
+              <p className="rounded-[8px] bg-needle/5 p-3 text-xs leading-5 text-ink/60">Issued from the locked checkout and captured payment. Later refunds appear as separate adjustments and never rewrite this receipt.</p>
+            </>
+          ) : null}
+          {!receipt && payments.length === 0 ? (
             <p className="rounded-[8px] bg-bone/70 p-4 text-sm leading-6 text-ink/62">
               No provider payment has been recorded yet. If you already paid, do not pay again; open Support or the order thread.
             </p>
-          ) : (
+          ) : !receipt ? (
             payments.map((payment) => (
               <SummaryLine
                 key={payment.id}
-                label={cleanLabel(payment.phase, 'Payment')}
+                label={formatOrderPaymentPhase(payment.phase)}
                 value={<span className="flex flex-wrap items-center gap-2">{formatMoney(payment.amount, payment.currency)} <StatusChip status={payment.status} fallback="Pending" /></span>}
               />
             ))
-          )}
+          ) : null}
         </div>
       </section>
     </div>
@@ -15906,7 +18765,7 @@ function payoutStatusLabel(profile: TailorProfile | null) {
   return profile.is_live ? 'Checkout paused' : 'Payout pending'
 }
 
-type TxStatus = 'PENDING' | 'AVAILABLE' | 'RELEASED' | 'PAID_OUT' | 'BLOCKED' | 'FAILED'
+type TxStatus = 'PENDING' | 'AVAILABLE' | 'RELEASED' | 'IN_TRANSIT' | 'PAID_OUT' | 'BLOCKED' | 'FAILED'
 type TxRecord = {
   orderId: string
   reference: string
@@ -15926,10 +18785,21 @@ const NOT_PAID_ORDER_STAGES = new Set(['DRAFT', 'QUOTED', 'PAYMENT_PENDING', 'PA
 
 function deriveTxStatus(order: AccountOrder, payouts: AccountPayout[]): { status: TxStatus; reason: string | null } {
   const orderPayouts = payouts
-    .filter((p) => p.order_id === order.id)
+    .filter((p) => p.order_id === order.id && p.payout_purpose === 'ORDER_EARNING')
     .sort((a, b) => timestampMs(b.initiated_at) - timestampMs(a.initiated_at))
   const latest = orderPayouts[0]
-  if (latest?.status === 'PAID') return { status: 'PAID_OUT', reason: null }
+  if (latest) {
+    const deliveryState = derivePayoutDeliveryState({
+      provider: latest.provider,
+      status: latest.status,
+      providerTransferStatus: latest.provider_transfer_status,
+      bankSettlementStatus: latest.bank_settlement_status,
+    })
+    if (deliveryState === 'PAID_TO_BANK') return { status: 'PAID_OUT', reason: null }
+    if (deliveryState === 'IN_PROVIDER_BALANCE' || deliveryState === 'BANK_PAYOUT_PENDING') {
+      return { status: 'IN_TRANSIT', reason: payoutDeliveryExplanation(deliveryState, latest.provider) }
+    }
+  }
   if (latest?.status === 'PROCESSING') return { status: 'RELEASED', reason: null }
   if (latest?.status === 'FAILED' || latest?.status === 'REVERSED' || latest?.status === 'CANCELED') {
     return { status: 'FAILED', reason: 'Payout transfer failed and needs ops review.' }
@@ -15950,6 +18820,7 @@ function txPillClass(status: TxStatus): string {
   switch (status) {
     case 'PAID_OUT': return 'border-needle/20 bg-needle/10 text-needle'
     case 'RELEASED': return 'border-needle/16 bg-needle/6 text-needle/80'
+    case 'IN_TRANSIT': return 'border-blue-200 bg-blue-50 text-blue-700'
     case 'AVAILABLE': return 'border-blue-200 bg-blue-50 text-blue-700'
     case 'PENDING': return 'border-amber-200 bg-amber-50 text-amber-700'
     case 'BLOCKED': return 'border-rust/20 bg-rust/8 text-rust'
@@ -15961,6 +18832,7 @@ function txStatusLabel(status: TxStatus): string {
   switch (status) {
     case 'PAID_OUT': return 'Paid out'
     case 'RELEASED': return 'Released'
+    case 'IN_TRANSIT': return 'In transit'
     case 'AVAILABLE': return 'Available'
     case 'PENDING': return 'Pending'
     case 'BLOCKED': return 'Blocked'
@@ -16026,6 +18898,16 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
     return `data:text/csv;charset=utf-8,${encodeURIComponent(buildTxCsv(filtered))}`
   }, [filtered])
 
+  if (data.warning && !data.tailorProfile) {
+    return (
+      <EmptyState
+        title="Earnings are temporarily unavailable."
+        body="Your payout setup has not changed. Refresh to load the latest order income and payout activity."
+        action={<Button onClick={() => window.location.reload()}>Try again</Button>}
+      />
+    )
+  }
+
   if (!data.tailorProfile) {
     return (
       <EmptyState
@@ -16063,32 +18945,38 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
 
   return (
     <div className="grid gap-6">
-      {/* Summary stats */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {([
-          ['Total earnings', formatMoney(totalEarnings, summaryCurrency), 'Net across all settled orders'],
-          ['Available / released', formatMoney(availableAmount, summaryCurrency), 'Ready for payout or in transit'],
-          ['Pending release', formatMoney(pendingAmount, summaryCurrency), 'Awaiting delivery, review, or setup'],
-          ['Paid out', formatMoney(paidOutAmount, summaryCurrency), 'Completed provider transfers'],
-        ] as const).map(([label, value, hint]) => (
-          <MetricCard key={label} label={label} value={value} hint={hint} icon={<Banknote />} />
-        ))}
-      </section>
-
-      {/* Payout account status */}
-      <Surface className="flex items-center gap-4 px-5 py-4">
-        <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${payoutReady ? 'bg-needle' : 'bg-amber-400'}`} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-ink">
-            {data.tailorProfile.payout_bank_name
-              ? `${data.tailorProfile.payout_bank_name}${data.tailorProfile.payout_account_masked ? ' · ' + data.tailorProfile.payout_account_masked : ''}`
-              : 'Payout account'}
-          </p>
-          <p className="mt-0.5 text-xs text-ink/48">{payoutStatusLabel(data.tailorProfile)}</p>
+      <Surface className="overflow-hidden">
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(28rem,1fr)] lg:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Eligible order earnings</p>
+            <p className="mt-2 text-3xl font-semibold tracking-tight text-ink">{formatMoney(availableAmount, summaryCurrency)}</p>
+            <p className="mt-2 text-sm leading-6 text-ink/52">Earnings currently eligible for payout or already moving to your bank.</p>
+          </div>
+          <dl className="grid grid-cols-3 divide-x divide-ink/8 overflow-hidden rounded-xl border border-ui-border bg-bone/55">
+            {([
+              ['Pending', formatMoney(pendingAmount, summaryCurrency)],
+              ['Order earnings paid', formatMoney(paidOutAmount, summaryCurrency)],
+              ['Total seller allocation', formatMoney(totalEarnings, summaryCurrency)],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="min-w-0 px-3 py-3 sm:px-4">
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/42">{label}</dt>
+                <dd className="mt-1 truncate text-sm font-semibold text-ink" title={value}>{value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        {!payoutReady && (
-          <Button asChild size="sm"><Link href="/account/payout">Set up payout</Link></Button>
-        )}
+        <div className="flex flex-wrap items-center gap-3 border-t border-ink/8 px-5 py-3.5">
+          <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${payoutReady ? 'bg-needle' : 'bg-amber-400'}`} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-ink">
+              {data.tailorProfile.payout_bank_name
+                ? `${data.tailorProfile.payout_bank_name}${data.tailorProfile.payout_account_masked ? ' · ' + data.tailorProfile.payout_account_masked : ''}`
+                : 'Payout account'}
+            </p>
+            <p className="mt-0.5 text-xs text-ink/48">{payoutStatusLabel(data.tailorProfile)}</p>
+          </div>
+          {!payoutReady ? <Button asChild size="sm"><Link href="/account/payout">Set up payout</Link></Button> : null}
+        </div>
       </Surface>
 
       {/* Transaction history */}
@@ -16145,18 +19033,35 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
             <div className="overflow-hidden rounded-[8px] border border-ui-border bg-white">
               {data.payouts.map((payout, index) => {
                 const order = payout.order_id ? data.orders.find((entry) => entry.id === payout.order_id) : null
+                const recovery = payoutBlockedRecovery(payout.blocked_reason, payout.order_id)
+                const deliveryState = derivePayoutDeliveryState({
+                  provider: payout.provider,
+                  status: payout.status,
+                  providerTransferStatus: payout.provider_transfer_status,
+                  bankSettlementStatus: payout.bank_settlement_status,
+                })
+                const deliveryLabel = payoutDeliveryLabel(deliveryState)
                 return (
                   <div key={payout.id} className={`flex items-start gap-4 px-5 py-4 ${index > 0 ? 'border-t border-ink/6' : ''}`}>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <StagePill stage={payout.status} label={cleanLabel(payout.status, 'Payout')} />
+                        <StagePill stage={deliveryState} label={deliveryLabel} />
                         <span className="text-xs text-ink/38">{cleanLabel(payout.provider, 'Provider')}</span>
                       </div>
+                      <p className="mt-1.5 text-xs font-semibold text-needle">{formatPayoutPurpose(payout.payout_purpose)}</p>
                       <p className="mt-1.5 text-xs text-ink/52">
                         {order ? `${orderTitle(order)} · #${order.reference ?? order.id.slice(0, 8)}` : payout.order_id ?? 'Standalone payout'}
                       </p>
+                      <p className="mt-1 text-xs leading-5 text-ink/52">{payoutDeliveryExplanation(deliveryState, payout.provider)}</p>
+                      {payout.bank_settlement_expected_at && deliveryState === 'BANK_PAYOUT_PENDING' ? (
+                        <p className="mt-1 text-xs text-ink/46">Estimated bank arrival {formatDate(payout.bank_settlement_expected_at)}</p>
+                      ) : null}
                       {payout.blocked_reason ? (
-                        <p className="mt-2 rounded-lg bg-rust/8 px-3 py-1.5 text-xs text-rust">{payoutBlockedReasonCopy(payout.blocked_reason) ?? cleanLabel(payout.blocked_reason, 'Blocked')}</p>
+                        <div className="mt-2 rounded-lg bg-rust/8 px-3 py-2 text-xs text-rust">
+                          <p>{payoutBlockedReasonCopy(payout.blocked_reason) ?? cleanLabel(payout.blocked_reason, 'Blocked')}</p>
+                          {recovery ? <p className="mt-1 text-ink/62">{recovery.nextStep}</p> : null}
+                          {recovery?.href ? <Link href={recovery.href} className="mt-2 inline-flex font-semibold text-needle underline underline-offset-2">{recovery.ctaLabel}</Link> : null}
+                        </div>
                       ) : null}
                       <p className="mt-1 text-xs text-ink/36">
                         Completed {formatDate(payout.completed_at) ?? 'not yet'} · initiated {formatRelative(payout.initiated_at)}
@@ -16172,12 +19077,62 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
           )}
         </div>
       </Surface>
+
+      {data.bankActivity.length > 0 ? (
+        <Surface>
+          <SurfaceHeader eyebrow="Provider settlement" title="Stripe bank activity" description="Stripe can combine several released earnings into one bank payout. Unmatched bank events stay account-level so Drapeon does not assign them to the wrong order." />
+          <div className="grid gap-2 p-5">
+            {data.bankActivity.map((event) => {
+              const state = derivePayoutDeliveryState({
+                provider: event.provider,
+                status: event.status === 'PAID' ? 'PAID' : event.status === 'FAILED' ? 'FAILED' : 'PROCESSING',
+                providerTransferStatus: 'AVAILABLE_IN_PROVIDER_BALANCE',
+                bankSettlementStatus: event.status,
+              })
+              return (
+                <div key={event.id} className="rounded-[8px] border border-ui-border bg-white px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2"><StagePill stage={state} label={payoutDeliveryLabel(state)} /><span className="text-xs text-ink/38">Stripe</span></div>
+                      <p className="mt-2 text-xs text-ink/52">{event.provider_bank_payout_id ?? 'Provider reference pending'}</p>
+                      <p className="mt-1 text-xs leading-5 text-ink/52">{payoutDeliveryExplanation(state, event.provider)}</p>
+                      {event.arrival_at && ['PENDING', 'IN_TRANSIT'].includes(event.status ?? '') ? <p className="mt-1 text-xs text-ink/46">Estimated arrival {formatDate(event.arrival_at)}</p> : null}
+                      {event.failure_message ? <p className="mt-2 text-xs text-rust">{event.failure_message}</p> : null}
+                    </div>
+                    <p className="text-xl font-semibold text-ink">{event.amount !== null && event.currency ? formatMoney(event.amount, event.currency) : 'Bank payout'}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Surface>
+      ) : null}
     </div>
   )
 }
 
 function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: () => void }) {
   const profile = data.tailorProfile
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const stripeReturnHandledRef = useRef(false)
+  const [pendingPayoutChange, setPendingPayoutChange] = useState<{
+    id: string
+    status: 'PENDING'
+    submittedAt: string | null
+    confirmationStatus: 'PENDING' | 'CONFIRMED'
+    lifecycleState: 'AWAITING_CONFIRMATION' | 'SECURITY_HOLD' | 'OPS_REVIEW'
+    confirmationExpiresAt: string | null
+    holdUntil: string | null
+    requestedDestination: {
+      payoutProvider: string | null
+      payoutCurrency: string | null
+      payoutBankName: string | null
+      payoutAccountName: string | null
+      payoutAccountMasked: string | null
+      payoutAccountVerified: boolean
+    } | null
+  } | null>(null)
   const [payoutCurrency, setPayoutCurrency] = useState(profile?.payout_currency ?? profile?.currency ?? 'USD')
   const [countryCode, setCountryCode] = useState(profile?.payout_country_code ?? 'US')
   const [bankCode, setBankCode] = useState('')
@@ -16203,6 +19158,60 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
       return true
     })
   }, [banks])
+
+  const loadPendingPayoutChange = useCallback(async () => {
+    try {
+      const result = await invokeAccountFunction<{ pendingPayoutChange?: typeof pendingPayoutChange }>('payout-account-action', {
+        action: 'get-status',
+      })
+      setPendingPayoutChange(result.pendingPayoutChange ?? null)
+    } catch {
+      // The main payout profile remains usable if this secondary review status is temporarily unavailable.
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadPendingPayoutChange() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadPendingPayoutChange])
+
+  const refreshStripe = useCallback(async (options?: { fromProviderReturn?: boolean }) => {
+    setBusy('refresh-stripe')
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await invokeAccountFunction<{
+        pendingReview?: boolean
+        confirmationRequired?: boolean
+        account?: { payoutAccountVerified?: boolean } | null
+      }>('payout-account-action', { action: 'refresh-stripe-connect-status' })
+      await loadPendingPayoutChange()
+      onRefresh()
+      if (result.confirmationRequired) {
+        setSuccess('Replacement verified. Confirm the payout change below; your current account stays active until then.')
+      } else if (result.pendingReview) {
+        setSuccess('Stripe still needs more information before this payout destination can be verified.')
+      } else if (result.account?.payoutAccountVerified) {
+        setSuccess('Stripe payout account verified and active.')
+      } else {
+        setSuccess('Stripe status refreshed. Finish any remaining verification steps with Stripe.')
+      }
+    } catch (refreshError) {
+      setError(friendlyActionError(refreshError, 'Stripe payout status could not refresh.'))
+    } finally {
+      setBusy(null)
+      if (options?.fromProviderReturn) {
+        router.replace('/account/payout' as Route, { scroll: false })
+      }
+    }
+  }, [loadPendingPayoutChange, onRefresh, router])
+
+  const stripeReturnState = searchParams.get('setup')
+  useEffect(() => {
+    if (!profile?.id || stripeReturnHandledRef.current || (stripeReturnState !== 'complete' && stripeReturnState !== 'refresh')) return
+    stripeReturnHandledRef.current = true
+    void refreshStripe({ fromProviderReturn: true })
+  }, [profile?.id, refreshStripe, stripeReturnState])
 
   const loadBanks = useCallback(async (options?: { quiet?: boolean }) => {
     if (!paystackCurrency) return
@@ -16282,7 +19291,11 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
     setError(null)
     setSuccess(null)
     try {
-      await invokeAccountFunction('payout-account-action', {
+      const result = await invokeAccountFunction<{
+        pendingReview?: boolean
+        confirmationRequired?: boolean
+        account?: { payoutAccountVerified?: boolean } | null
+      }>('payout-account-action', {
         action: 'confirm-paystack-account',
         payoutCurrency,
         countryCode,
@@ -16291,8 +19304,17 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
         accountNumber,
         accountName: verification.resolvedAccountName,
       })
-      setSuccess('Paystack payout account saved and verified.')
+      await loadPendingPayoutChange()
       onRefresh()
+      if (result.confirmationRequired) {
+        setSuccess('Replacement verified. Confirm the payout change below; your current account stays active until then.')
+      } else if (result.pendingReview) {
+        setSuccess('Replacement submitted. Your current verified payout account stays active while Drapeon reviews the change.')
+      } else if (result.account?.payoutAccountVerified) {
+        setSuccess('Paystack payout account verified and active.')
+      } else {
+        setSuccess('Paystack payout account saved.')
+      }
     } catch (saveError) {
       setError(friendlyActionError(saveError, 'Payout account could not be saved.'))
     } finally {
@@ -16326,16 +19348,22 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
     }
   }
 
-  async function refreshStripe() {
-    setBusy('refresh-stripe')
+  async function decidePendingPayoutChange(action: 'confirm-payout-change' | 'cancel-payout-change') {
+    if (!pendingPayoutChange) return
+    setBusy(action)
     setError(null)
     setSuccess(null)
     try {
-      await invokeAccountFunction('payout-account-action', { action: 'refresh-stripe-connect-status' })
-      setSuccess('Stripe payout status refreshed.')
+      const result = await invokeAccountFunction<{ lifecycleState?: 'ACTIVATED' | 'OPS_REVIEW'; outcome?: 'CANCELLED' }>('payout-account-action', { action, requestId: pendingPayoutChange.id })
+      setSuccess(action === 'cancel-payout-change'
+        ? 'Payout change cancelled. Your current account was not changed.'
+        : result.lifecycleState === 'ACTIVATED'
+          ? 'New payout account active. Eligible earnings can release to it without an extra payout-account delay.'
+          : 'Review started. Your current payout account stays active while Drapeon checks the security differences.')
+      await loadPendingPayoutChange()
       onRefresh()
-    } catch (refreshError) {
-      setError(friendlyActionError(refreshError, 'Stripe payout status could not refresh.'))
+    } catch (decisionError) {
+      setError(friendlyActionError(decisionError, action === 'confirm-payout-change' ? 'Payout change could not be confirmed.' : 'Payout change could not be cancelled.'))
     } finally {
       setBusy(null)
     }
@@ -16348,7 +19376,7 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
           ['Status', payoutStatusLabel(profile)],
           ['Provider', cleanLabel(profile.payout_provider ?? profile.payout_account_type, 'Not set')],
           ['Currency', profile.payout_currency ?? 'Not set'],
-          ['Hold until', formatDate(profile.payout_destination_hold_until) ?? 'No hold'],
+          ['Release status', profile.payout_account_verified && !profile.payout_reverification_required ? 'Ready when earnings are eligible' : 'Verification needed'],
         ].map(([label, value]) => (
           <MetricCard key={String(label)} label={String(label)} value={String(value)} icon={<WalletCards />} />
         ))}
@@ -16372,6 +19400,46 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
           ))}
         </div>
       </Surface>
+
+      {pendingPayoutChange?.requestedDestination ? (
+        <Surface>
+          <SurfaceHeader
+            eyebrow={pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? 'Confirmation required' : pendingPayoutChange.lifecycleState === 'SECURITY_HOLD' ? 'Activating now' : 'Drapeon review'}
+            title={pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? 'Confirm this payout change' : 'Your current payout account stays active'}
+            description={pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION'
+              ? 'Review the replacement and confirm it within 48 hours. Nothing changes until you confirm.'
+              : pendingPayoutChange.lifecycleState === 'SECURITY_HOLD'
+                ? 'This legacy verified replacement is being activated now without an additional payout-account hold.'
+                : 'Drapeon is reviewing a security difference and will notify you of the outcome.'}
+          />
+          <div className="divide-y divide-ui-border px-5 pb-2">
+            {[
+              ['Provider', cleanLabel(pendingPayoutChange.requestedDestination.payoutProvider, 'Not recorded')],
+              ['Currency', pendingPayoutChange.requestedDestination.payoutCurrency ?? 'Not recorded'],
+              ['Bank', pendingPayoutChange.requestedDestination.payoutBankName ?? 'Not recorded'],
+              ['Account name', pendingPayoutChange.requestedDestination.payoutAccountName ?? 'Not recorded'],
+              ['Account', pendingPayoutChange.requestedDestination.payoutAccountMasked ?? 'Not recorded'],
+              ['Provider check', pendingPayoutChange.requestedDestination.payoutAccountVerified ? 'Verified' : 'Incomplete'],
+              ['Submitted', formatDate(pendingPayoutChange.submittedAt) ?? 'Recorded'],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="flex items-center justify-between gap-4 py-3">
+                <span className="text-xs font-semibold text-ink/42">{String(label)}</span>
+                <span className="text-right text-sm font-semibold text-ink">{String(value)}</span>
+              </div>
+            ))}
+          </div>
+          {pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? (
+            <div className="flex flex-wrap gap-3 border-t border-ui-border p-5">
+              <Button disabled={busy !== null} onClick={() => { void decidePendingPayoutChange('confirm-payout-change') }}>
+                {busy === 'confirm-payout-change' ? 'Confirming…' : 'Confirm this change'}
+              </Button>
+              <Button variant="secondary" disabled={busy !== null} onClick={() => { void decidePendingPayoutChange('cancel-payout-change') }}>
+                Cancel request
+              </Button>
+            </div>
+          ) : null}
+        </Surface>
+      ) : null}
 
       <Surface>
         <SurfaceHeader
@@ -16429,7 +19497,7 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
         </div>
 
         {profile.stripe_connect_account_id ? (
-          <Button type="button" onClick={refreshStripe} disabled={!!busy} variant="secondary">
+          <Button type="button" onClick={() => { void refreshStripe() }} disabled={!!busy} variant="secondary">
             {busy === 'refresh-stripe' ? 'Refreshing...' : 'Refresh Stripe status'}
           </Button>
         ) : null}
@@ -16517,7 +19585,17 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
   const [pickupAvailable, setPickupAvailable] = useState(profile?.pickup_available === true)
   const [deliveryAvailable, setDeliveryAvailable] = useState(profile?.delivery_available === true)
   const [shippingAvailable, setShippingAvailable] = useState(profile?.shipping_available === true)
+  const [consultationMode, setConsultationMode] = useState(profile?.consultation_mode ?? 'FREE')
+  const [consultationRequirement, setConsultationRequirement] = useState(profile?.consultation_requirement ?? 'OPTIONAL')
+  const [consultationFee, setConsultationFee] = useState(profile?.consultation_fee_amount ? minorUnitsInput(profile.consultation_fee_amount) : '')
+  const [consultationDuration, setConsultationDuration] = useState(String(profile?.consultation_duration_minutes ?? 30))
+  const [consultationCallType, setConsultationCallType] = useState(profile?.consultation_call_type ?? 'VIDEO')
+  const [consultationFeeCreditable, setConsultationFeeCreditable] = useState(profile?.consultation_fee_creditable === true)
   const [pickupAddress, setPickupAddress] = useState(data.pickupDetails?.pickup_address ?? '')
+  const [pickupCity, setPickupCity] = useState(data.pickupDetails?.pickup_city ?? '')
+  const [pickupRegion, setPickupRegion] = useState(data.pickupDetails?.pickup_region ?? '')
+  const [pickupPostalCode, setPickupPostalCode] = useState(data.pickupDetails?.pickup_postal_code ?? '')
+  const [pickupCountryCode, setPickupCountryCode] = useState(data.pickupDetails?.pickup_country_code ?? '')
   const [pickupInstructions, setPickupInstructions] = useState(data.pickupDetails?.pickup_instructions ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -16591,6 +19669,15 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
       setError(TAILOR_SETUP_VALIDATION.PICKUP_ADDRESS_REQUIRED_MESSAGE)
       return
     }
+    if (pickupAvailable && (!pickupCity.trim() || !/^[A-Za-z]{2}$/u.test(pickupCountryCode.trim()))) {
+      setError('Add the pickup city and 2-letter country code before offering collection.')
+      return
+    }
+    const parsedConsultationFee = consultationMode === 'PAID' ? parseMinorUnits(consultationFee) : null
+    if (consultationMode === 'PAID' && (!parsedConsultationFee || parsedConsultationFee <= 0)) {
+      setError('Enter a valid consultation fee.')
+      return
+    }
 
     setBusy(true)
     try {
@@ -16611,9 +19698,23 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
           shopPaused,
           pickupAvailable,
           pickupAddress: pickupAddress.trim() || null,
+          pickupAddressLine1: pickupAddress.trim() || null,
+          pickupCity: pickupCity.trim() || null,
+          pickupRegion: pickupRegion.trim() || null,
+          pickupPostalCode: pickupPostalCode.trim() || null,
+          pickupCountryCode: pickupCountryCode.trim().toUpperCase() || null,
+          pickupLocationVerificationSource: pickupAvailable ? 'TAILOR_CONFIRMED_STRUCTURED' : null,
+          pickupLocationVerificationReference: null,
+          pickupLocationVerifiedAt: pickupAvailable ? new Date().toISOString() : null,
           pickupInstructions: pickupInstructions.trim() || null,
           deliveryAvailable,
           shippingAvailable,
+          consultationMode,
+          consultationRequirement,
+          consultationFeeAmount: parsedConsultationFee,
+          consultationDurationMinutes: Number(consultationDuration),
+          consultationCallType,
+          consultationFeeCreditable: consultationMode === 'PAID' && consultationFeeCreditable,
         },
       })
       setSuccess('Selling setup saved.')
@@ -16678,6 +19779,26 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
           ))}
         </div>
 
+        {supportsCustomOrders ? (
+          <div className="grid gap-4 rounded-[8px] border border-needle/12 bg-needle/6 p-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <p className="font-semibold text-ink">Consultation policy</p>
+              <p className="mt-1 text-xs leading-5 text-ink/56">Customers see these terms before starting a custom brief.</p>
+            </div>
+            <Field label="Availability">
+              <NativeSelect value={consultationMode} onChange={(event) => setConsultationMode(event.target.value as 'UNAVAILABLE' | 'FREE' | 'PAID')}>
+                <option value="UNAVAILABLE">Not offered</option><option value="FREE">Free</option><option value="PAID">Paid</option>
+              </NativeSelect>
+            </Field>
+            {consultationMode !== 'UNAVAILABLE' ? <Field label="Requirement"><NativeSelect value={consultationRequirement} onChange={(event) => setConsultationRequirement(event.target.value as 'OPTIONAL' | 'REQUIRED')}><option value="OPTIONAL">Optional</option><option value="REQUIRED">Required before quote</option></NativeSelect></Field> : null}
+            {consultationMode !== 'UNAVAILABLE' ? <Field label="Duration"><NativeSelect value={consultationDuration} onChange={(event) => setConsultationDuration(event.target.value)}>{['15', '30', '45', '60'].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</NativeSelect></Field> : null}
+            {consultationMode !== 'UNAVAILABLE' ? <Field label="Call type"><NativeSelect value={consultationCallType} onChange={(event) => setConsultationCallType(event.target.value as 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO')}><option value="AUDIO">Audio</option><option value="VIDEO">Video</option><option value="AUDIO_OR_VIDEO">Audio or video</option></NativeSelect></Field> : null}
+            {consultationMode === 'PAID' ? <MoneyInput id="tailor-profile-consultation-fee" label="Consultation fee" value={consultationFee} onValueChange={setConsultationFee} currency={normalizeAccountCurrency(currency) ?? 'USD'} required /> : null}
+            {consultationMode === 'PAID' ? <label className="flex items-center justify-between gap-3 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm font-semibold text-ink"><span>Credit fee toward accepted order</span><Switch checked={consultationFeeCreditable} onCheckedChange={setConsultationFeeCreditable} aria-label="Credit consultation fee toward accepted order" /></label> : null}
+            {consultationMode !== 'UNAVAILABLE' ? <p className="text-xs leading-5 text-ink/56 md:col-span-2">More than 24 hours: full refund. Inside 24 hours: 50%. Tailor cancellation or verified provider failure: full refund or agreed reschedule.</p> : null}
+          </div>
+        ) : null}
+
         <div className="grid gap-3 md:grid-cols-2">
           {supportsCustomOrders ? (
             <div className="grid gap-2 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm text-ink">
@@ -16716,9 +19837,31 @@ function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData
 
         {pickupAvailable ? (
           <div className="grid gap-3 rounded-[8px] border border-needle/10 bg-needle/6 p-4">
+            <StructuredAddressSearch onSelect={(address) => {
+              setPickupAddress(address.line1 || address.displayValue)
+              setPickupCity(address.city)
+              setPickupRegion(address.stateRegion)
+              setPickupPostalCode(address.postcode)
+              setPickupCountryCode(address.countryCode || '')
+              setError(null)
+            }} />
             <Field label="Private pickup address">
               <Textarea value={pickupAddress} onChange={(event) => setPickupAddress(event.target.value)} rows={3} placeholder="Full address customers unlock after collection is ready" />
             </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Pickup city">
+                <Input value={pickupCity} onChange={(event) => setPickupCity(event.target.value)} placeholder="City" />
+              </Field>
+              <Field label="State / region">
+                <Input value={pickupRegion} onChange={(event) => setPickupRegion(event.target.value)} placeholder="State or region" />
+              </Field>
+              <Field label="Postcode / ZIP (optional)">
+                <Input value={pickupPostalCode} onChange={(event) => setPickupPostalCode(event.target.value)} placeholder="Postcode / ZIP" />
+              </Field>
+              <Field label="2-letter country code">
+                <Input value={pickupCountryCode} onChange={(event) => setPickupCountryCode(event.target.value.toUpperCase().slice(0, 2))} placeholder="e.g. GH" />
+              </Field>
+            </div>
             <Field label="Pickup instructions">
               <Input value={pickupInstructions} onChange={(event) => setPickupInstructions(event.target.value)} placeholder="e.g. Bring your collection code" />
             </Field>
@@ -17771,7 +20914,7 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
 
   const tailorFaqItems: Array<[string, string]> = [
     ['How do I respond to a custom order brief?', 'Go to Orders and open the brief. Tap "Send quote" to enter your price, estimated completion date, and a note. You can also request a consultation before quoting. Respond within 48 hours — customers see a response timer on their end.'],
-    ['How does payout work?', 'Earnings are released after the customer confirms delivery or 7 days after dispatch if they do not respond. Funds route to your Stripe or Paystack account automatically. Manual bank routes require an ops handoff — email payouts@drapeon.co to initiate.'],
+    ['How does payout work?', 'New orders release the protected tailor amount in verified stages: carrier or Drapeon custody, settled delivery, and the final protection window. Local collection uses authenticated handoff stages. Open concerns pause unreleased money, and each eligible amount passes Drapeon review before it reaches your verified Stripe or Paystack account. Your order shows the exact progress.'],
     ['Why is my payout showing "blocked"?', 'Blocked payouts are held pending dispute resolution, identity checks, or a missing reverification step. Go to Payout to check the status. If the block is unclear, email payouts@drapeon.co with your order reference.'],
     ['How do I change my availability?', 'Go to Profile, open Selling setup, and use "Edit setup on web." Availability can be set to Open, Limited, or Fully booked, and changes affect how you appear in customer search.'],
     ['How do I mark an order as dispatched?', 'Open the order in Orders, scroll to the Actions section, and select the dispatch stage. You will need to enter a fulfillment method and optionally a tracking number. Collection and self-delivery orders use different stage flows.'],
@@ -17981,6 +21124,13 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
             <span className="rounded-full border border-ink/10 bg-bone/60 px-3 py-1.5 text-xs font-semibold text-ink/62">{fulfillmentSummary(tailor)}</span>
             {tailor.supports_custom_orders ? (
               <span className="rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle">Custom orders</span>
+            ) : null}
+            {tailor.supports_custom_orders ? (
+              <span className="rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle">
+                {tailor.consultation_mode === 'UNAVAILABLE'
+                  ? 'No consultation'
+                  : `${tailor.consultation_requirement === 'REQUIRED' ? 'Required' : 'Optional'} ${tailor.consultation_mode === 'PAID' ? formatMoney(tailor.consultation_fee_amount, tailor.consultation_currency ?? tailor.currency) : 'free'} consultation`}
+              </span>
             ) : null}
             {tailor.supports_ready_made ? (
               <span className="rounded-full border border-needle/20 bg-needle/8 px-3 py-1.5 text-xs font-semibold text-needle">Ready-made</span>
@@ -18661,7 +21811,9 @@ export function AccountAppSurface({
         ? ORDER_REALTIME_CHILD_TABLES
         : surface === 'checkout'
           ? (['order_payments'] as const)
-          : []
+          : surface === 'orders'
+            ? (['consultation_attendance_reviews'] as const)
+            : []
       for (const table of childTables) {
         watchTableFilter(table, `order_id=eq.${id}`)
       }
@@ -18886,6 +22038,9 @@ export function AccountAppSurface({
           warning: 'Account data could not load. Refresh to retry.',
         }
         setShellData(fallbackShellData)
+        if (surface === 'earnings') {
+          setEarningsData({ ...emptyEarningsSurfaceData, warning: 'Earnings data could not load.' })
+        }
         setData(accountDataFromShell(fallbackShellData))
       })
       .finally(() => {

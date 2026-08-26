@@ -47,6 +47,7 @@ import {
 } from '../_shared/order-support.ts'
 import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellation-policy.ts'
 import { notificationDestinationData } from '../../../packages/shared/src/notification-policy.ts'
+import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
 import { validateRecipientPhone } from '../_shared/phone.ts'
@@ -55,6 +56,17 @@ import { z, parseBody, uuid, optionalNote, isoDate } from '../_shared/validate.t
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { assertConsultationSlotAvailable } from '../_shared/consultation-bookings.ts'
+import { Sentry } from '../_shared/sentry.ts'
+import {
+  financialCaseTypeForConcern,
+  validateFinancialCaseDraft,
+} from '../../../packages/shared/src/financial-cases.ts'
+import { isFabricApprovalEvidence } from '../../../packages/shared/src/custom-order-flow.ts'
+import {
+  consultationRequestExpiresAt,
+  resolveConsultationCallType,
+} from '../../../packages/shared/src/consultations.ts'
+import { taxSnapshotNeedsRefresh } from '../../../packages/shared/src/tax.ts'
 
 const BodySchema = z.object({
   orderId:     uuid,
@@ -85,6 +97,14 @@ const BodySchema = z.object({
   ]),
   reason:      z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(10).max(1000).optional(),
+  requestedOutcome: z.enum([
+    'EXPLANATION_OR_UPDATE',
+    'ALTERATION_OR_FIX',
+    'REMAKE',
+    'PARTIAL_REFUND',
+    'FULL_REFUND',
+    'OPS_HELP',
+  ]).optional(),
   note:        optionalNote,
   receiptPhotoUrl: z.string().trim().url().optional(),
   fabricTracking: z.string().trim().min(1).max(120).optional(),
@@ -95,11 +115,15 @@ const BodySchema = z.object({
     'OTHER',
   ]).optional(),
   deliveryReason: z.enum([
-    'DISPATCH_DELAY',
-    'DELIVERY_FAILED',
-    'RETURN_TO_SENDER',
-    'MARKED_DELIVERED_NOT_RECEIVED',
-    'WRONG_ITEM_RECEIVED',
+    'TRACKING_STALLED',
+    'SIGNIFICANT_DELAY',
+    'NOT_RECEIVED',
+    'WRONG_ADDRESS_OR_RECIPIENT',
+    'DAMAGED_IN_TRANSIT',
+    'MISSING_CONTENTS',
+    'RETURNED_TO_DRAPEON',
+    'CUSTOMS_OR_CARRIER_CHARGE',
+    'RECIPIENT_CONTACT_PROBLEM',
     'OTHER',
   ]).optional(),
   aftercareType: z.enum([
@@ -131,6 +155,7 @@ const BodySchema = z.object({
   scopeChangeDecision: z.enum(['ACCEPTED', 'DECLINED', 'CANCELLED']).optional(),
   scopeChangeResponseNote: z.string().trim().max(300).optional(),
   scheduledStartAt: isoDate.optional(),
+  callType: z.enum(['AUDIO', 'VIDEO']).optional(),
   timezone: z.string().trim().max(80).refine(isSupportedTimeZone, 'Choose a valid timezone.').optional(),
   quoteId: uuid.optional(),
   expectedQuoteVersion: z.number().int().positive().optional(),
@@ -195,6 +220,9 @@ type OrderRow = {
   quoted_currency?: string | null
   currency?: string | null
   consultation_fee?: number | null
+  tax_rate_bps?: number | null
+  tax_region?: string | null
+  tax_fallback?: boolean | null
   quote_expires_at?: string | null
   delivery_method?: string | null
   delivery_address?: string | null
@@ -250,7 +278,7 @@ const VALID_FROM: Record<Action, string[]> = {
   'respond-material-issue': PRE_CUTTING_STAGES,
   'cancel-order': ['PENDING_QUOTE', 'CONSULTATION', 'PAYMENT_PENDING', 'PAYMENT_FAILED'],
   'request-cancellation-review': ['CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING'],
-  'request-delivery-review': ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'],
+  'request-delivery-review': ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'COMPLETE', 'CANCELLED', 'IN_DISPUTE'],
   'request-aftercare-support': ['DELIVERED', 'COLLECTED', 'COMPLETE'],
   'request-emergency-support': [...SCOPE_CHANGE_STAGES, 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED'],
   'request-consultation': ['PENDING_QUOTE'],
@@ -287,7 +315,7 @@ const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string 
   'request-delivery-review': { title: 'Delivery review requested', body: 'The customer asked Drapeon to review a dispatch or delivery issue.' },
   'request-aftercare-support': { title: 'Aftercare support requested', body: 'The customer asked Drapeon to review a post-delivery fit or finish issue.' },
   'request-emergency-support': { title: 'Emergency support requested', body: 'The customer flagged an event-sensitive order issue. Keep every update inside Drapeon.' },
-  'request-consultation': { title: 'Consultation requested', body: 'A customer asked for a consultation. Approve, price, reschedule, or decline from the order.' },
+  'request-consultation': { title: 'Consultation requested', body: 'A customer asked for a consultation. Respond within 48 hours.' },
   'request-quote-revision': { title: 'Quote changes requested', body: 'The customer requested formal changes to your quote.' },
   'edit-quote-revision': { title: 'Quote request updated', body: 'The customer updated their formal quote change request.' },
   'withdraw-quote-revision': { title: 'Quote request withdrawn', body: 'The customer withdrew their quote change request.' },
@@ -477,7 +505,7 @@ Deno.serve(async (req) => {
     )
 
     // Rate limit: 20 actions per hour per customer
-    const allowed = await checkRateLimit(supabase, `customer-order-action:${caller.id}`, 3600, 20)
+    const allowed = await checkRateLimit(supabase, `customer-order-action:${action}:${caller.id}`, 3600, 20)
     if (!allowed) {
       log('warn', FN, 'rate_limit.exceeded', { actor_id: caller.id })
       await audit(supabase, {
@@ -491,7 +519,7 @@ Deno.serve(async (req) => {
     }
 
     const orderSelect =
-      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
+      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, tax_rate_bps, tax_region, tax_fallback, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -527,7 +555,11 @@ Deno.serve(async (req) => {
       },
       {
         name: 'action_allowed_from_stage',
-        condition: !!order?.stage && VALID_FROM[action].includes(order.stage),
+        condition: !!order?.stage && (
+          VALID_FROM[action].includes(order.stage)
+          || (action === 'complete-order' && order.stage === 'COMPLETE')
+          || (action === 'open-dispute' && order.stage === 'IN_DISPUTE')
+        ),
         errorCode: 'INVALID_ORDER_STAGE',
         message: 'This order changed while you were away. Refresh the order before continuing.',
         field: 'stage',
@@ -553,6 +585,13 @@ Deno.serve(async (req) => {
       )
     }
     if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order could not be found anymore.')
+
+    // Completion is an idempotent archive transition. A delivery provider, review
+    // submission, or a prior retry may already have completed the order while a
+    // client still holds the delivered snapshot.
+    if (action === 'complete-order' && order.stage === 'COMPLETE') {
+      return jsonResponse({ ok: true, duplicate: true, stage: 'COMPLETE' }, 200, cors)
+    }
 
     const supportMeta = parseOrderSupportMeta(order.special_note)
     const consultationMeta = supportMeta.consultation ?? null
@@ -745,6 +784,19 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({ error: 'This quote has expired. Ask the tailor to send a fresh quote.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (taxSnapshotNeedsRefresh({
+        taxRegion: order.tax_region,
+        taxRateBps: order.tax_rate_bps,
+        taxFallback: order.tax_fallback,
+      })) {
+        return jsonError(
+          cors,
+          409,
+          'QUOTE_TAX_REFRESH_REQUIRED',
+          'This quote uses an older Ghana tax snapshot. Ask the tailor to refresh it before payment.',
         )
       }
 
@@ -1140,7 +1192,6 @@ Deno.serve(async (req) => {
           `The customer requested a ${typeLabel.toLowerCase()}. Review the order before continuing work so any price, deadline, fit, or fabric impact stays on record.`,
         )
       }
-
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -1254,6 +1305,29 @@ Deno.serve(async (req) => {
         return jsonError(cors, 400, 'CONSULTATION_TIME_REQUIRED', scheduledError)
       }
 
+      const { data: publishedConsultationPolicy, error: policyError } = await supabase
+        .from('tailor_profiles')
+        .select('consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable, consultation_policy_version')
+        .eq('user_id', order.tailor_id)
+        .maybeSingle()
+      if (policyError) return jsonError(cors, 500, 'CONSULTATION_POLICY_FAILED', 'Could not load the tailor consultation policy.')
+      if (publishedConsultationPolicy?.consultation_mode === 'UNAVAILABLE') {
+        return jsonError(cors, 409, 'CONSULTATION_NOT_OFFERED', 'This tailor does not offer pre-quote consultations.')
+      }
+      const publishedFeeAmount = publishedConsultationPolicy?.consultation_mode === 'PAID'
+        ? publishedConsultationPolicy.consultation_fee_amount
+        : null
+      const publishedFeeCurrency = publishedFeeAmount
+        ? normalizeAccountCurrency(publishedConsultationPolicy?.consultation_currency) ?? normalizeAccountCurrency(order.currency) ?? 'USD'
+        : null
+      const publishedCallType = resolveConsultationCallType(
+        publishedConsultationPolicy?.consultation_call_type ?? 'VIDEO',
+        parsed.data.callType,
+      )
+      if (!publishedCallType) {
+        return jsonError(cors, 400, 'CONSULTATION_CALL_TYPE_REQUIRED', 'Choose audio or video for this consultation.')
+      }
+
       const now = new Date().toISOString()
       const slotAvailability = await assertConsultationSlotAvailable(supabase, {
         orderId,
@@ -1269,10 +1343,10 @@ Deno.serve(async (req) => {
         consultation: {
           status: 'REQUESTED' as const,
           requestedBy: 'CUSTOMER' as const,
-          feeMode: null,
-          feeAmount: null,
-          feeCurrency: null,
-          feeCreditable: null,
+          feeMode: publishedFeeAmount ? 'PAID' as const : 'FREE' as const,
+          feeAmount: publishedFeeAmount,
+          feeCurrency: publishedFeeCurrency,
+          feeCreditable: publishedFeeAmount ? publishedConsultationPolicy?.consultation_fee_creditable === true : false,
           feeCreditedTowardQuote: false,
           paymentProvider: null,
           paymentIntentId: null,
@@ -1285,6 +1359,7 @@ Deno.serve(async (req) => {
           reminderEnabled: true,
           requestNote: parsed.data.note?.trim() || null,
           requestedAt: now,
+          requestExpiresAt: consultationRequestExpiresAt(now),
           proposedStartAt: parsed.data.scheduledStartAt!,
           scheduledStartAt: null,
           scheduledEndAt: null,
@@ -1298,6 +1373,10 @@ Deno.serve(async (req) => {
           reminder10SentAt: null,
           reminder5SentAt: null,
           reminderStartSentAt: null,
+          policyVersion: publishedConsultationPolicy?.consultation_policy_version ?? 'consultation-2026-07-31-v1',
+          durationMinutes: publishedConsultationPolicy?.consultation_duration_minutes ?? 30,
+          callType: publishedCallType,
+          requirement: publishedConsultationPolicy?.consultation_requirement ?? 'OPTIONAL',
         },
       }
 
@@ -1358,7 +1437,7 @@ Deno.serve(async (req) => {
           supabase,
           order,
           'Consultation requested',
-          'A customer requested a consultation before quote. Approve, price, reschedule, or decline from the order so they are not left waiting.',
+          'A customer requested a consultation before quote. Respond within 48 hours from the order.',
         )
       }
 
@@ -1415,11 +1494,17 @@ Deno.serve(async (req) => {
       })
 
       if (order.tailor_id) {
+        const notification = TAILOR_NOTIFICATION[action]!
+        const decisionId = current.approvalRequestedAt ?? nowIso
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.tailor_id.toString(), {
-            ...TAILOR_NOTIFICATION[action]!,
-            preferenceKey: 'newOrders',
-            data: { orderId, type: 'style_alignment' },
+            ...notification,
+            preferenceKey: 'orderUpdates',
+            data: {
+              orderId,
+              type: 'style_alignment_decision',
+              event: `${action}:${decisionId}`,
+            },
           }),
         )
         queueTailorOrderEmail(
@@ -1429,6 +1514,7 @@ Deno.serve(async (req) => {
           action === 'approve-style-alignment'
             ? 'The customer approved your style interpretation. Continue the pre-cutting checklist before cutting.'
             : 'The customer asked for style clarification. Update the interpretation before cutting so the record is clear.',
+          `${action}:${decisionId}`,
         )
       }
 
@@ -1457,6 +1543,28 @@ Deno.serve(async (req) => {
 
       if (!customDetail?.fabric_approval_required || customDetail.fabric_approval_status !== 'PENDING_CUSTOMER_APPROVAL') {
         return jsonError(cors, 409, 'FABRIC_APPROVAL_NOT_PENDING', 'There is no sourced fabric waiting for approval right now.')
+      }
+
+      const { data: approvalEvidenceRows, error: approvalEvidenceError } = await supabase
+        .from('order_production_evidence')
+        .select('id, stage_key, photo_urls, metadata, created_at')
+        .eq('order_id', orderId)
+        .eq('stage_key', 'FABRIC')
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      if (approvalEvidenceError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: approvalEvidenceError.message, surface: 'order_production_evidence' })
+        return jsonError(cors, 500, 'FABRIC_APPROVAL_EVIDENCE_READ_FAILED', 'Could not verify the selected fabric right now.')
+      }
+
+      const approvalEvidence = (approvalEvidenceRows ?? []).find((row) => (
+        isFabricApprovalEvidence({ stageKey: row.stage_key, metadata: row.metadata })
+        && Array.isArray(row.photo_urls)
+        && row.photo_urls.some((url: unknown) => typeof url === 'string' && url.trim().length > 0)
+      ))
+      if (!approvalEvidence) {
+        return jsonError(cors, 409, 'FABRIC_APPROVAL_EVIDENCE_REQUIRED', 'The tailor must submit the exact fabric selection before you can approve it or request changes.')
       }
 
       const nowIso = new Date().toISOString()
@@ -1491,17 +1599,31 @@ Deno.serve(async (req) => {
         payload: {
           stage: order.stage,
           status: approvalStatus,
+          evidence_id: approvalEvidence.id,
           note_length: parsed.data.note?.trim().length ?? 0,
         },
       })
 
       if (order.tailor_id) {
+        const notification = TAILOR_NOTIFICATION[action]!
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.tailor_id.toString(), {
-            ...TAILOR_NOTIFICATION[action]!,
-            preferenceKey: 'newOrders',
-            data: { orderId },
+            ...notification,
+            preferenceKey: 'orderUpdates',
+            data: {
+              orderId,
+              type: 'fabric_approval_decision',
+              event: `${action}:${approvalEvidence.id}`,
+              evidenceId: approvalEvidence.id,
+            },
           })
+        )
+        queueTailorOrderEmail(
+          supabase,
+          order,
+          notification.title,
+          notification.body,
+          `${action}:${approvalEvidence.id}`,
         )
       }
 
@@ -1792,7 +1914,26 @@ Deno.serve(async (req) => {
         return jsonError(cors, 409, 'DELIVERY_REVIEW_ALREADY_OPEN', 'A delivery review is already open on this order.')
       }
 
+      const { data: paidOrder } = await supabase
+        .from('order_payments')
+        .select('id')
+        .eq('order_id', orderId)
+        .eq('phase', 'INITIAL_ORDER')
+        .in('status', ['SUCCEEDED', 'PARTIAL_REFUND', 'REFUNDED'])
+        .limit(1)
+        .maybeSingle()
+      if (!paidOrder) {
+        return jsonError(cors, 409, 'INITIAL_PAYMENT_REQUIRED', 'Shipping and delivery help becomes available after the initial order payment is confirmed.')
+      }
+
       const reasonLabel = DELIVERY_REVIEW_REASON_LABELS[deliveryReason]
+      const freezesOrder = new Set([
+        'NOT_RECEIVED',
+        'WRONG_ADDRESS_OR_RECIPIENT',
+        'DAMAGED_IN_TRANSIT',
+        'MISSING_CONTENTS',
+        'RETURNED_TO_DRAPEON',
+      ]).has(deliveryReason)
       const nextMeta = {
         ...meta,
         deliveryReview: {
@@ -1803,14 +1944,16 @@ Deno.serve(async (req) => {
           note: parsed.data.note?.trim() || null,
           requestedAt: new Date().toISOString(),
           requestedFromStage: order.stage,
+          riskAction: freezesOrder
+            ? ('ORDER_AND_UNRELEASED_SETTLEMENT_PAUSED' as const)
+            : ('OPS_FOLLOW_UP' as const),
         },
       }
 
       const { error } = await supabase
         .from('orders')
         .update({
-          stage: 'IN_DISPUTE',
-          stage_updated_at: new Date().toISOString(),
+          ...(freezesOrder ? { stage: 'IN_DISPUTE', stage_updated_at: new Date().toISOString() } : {}),
           special_note: serializeOrderSupportMeta(nextMeta),
         })
         .eq('id', orderId)
@@ -1819,10 +1962,49 @@ Deno.serve(async (req) => {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
         return jsonError(cors, 500, 'DELIVERY_REVIEW_FAILED', 'Could not open delivery review right now.')
       }
+      if (freezesOrder) {
+        // The shipping-help review itself is the freeze signal. It may not have
+        // a financial_case row, so do not rely on refresh_order_settlement to
+        // infer the pause. Refresh first to initialize a new-policy plan, then
+        // explicitly block every unreleased tranche.
+        await supabase.rpc('refresh_order_settlement', { p_order_id: orderId })
+        const freezeAt = new Date().toISOString()
+        const { data: settlementPlan, error: settlementFreezeError } = await supabase
+          .from('order_settlement_plans')
+          .update({ status: 'FROZEN', frozen_reason: 'OPEN_REVIEW', updated_at: freezeAt })
+          .eq('order_id', orderId)
+          .in('status', ['ACTIVE', 'FROZEN'])
+          .select('id')
+          .maybeSingle()
+        if (settlementPlan?.id) {
+          const { error: trancheFreezeError } = await supabase
+            .from('order_settlement_tranches')
+            .update({ status: 'BLOCKED', blocked_reason: 'OPEN_REVIEW', updated_at: freezeAt })
+            .eq('plan_id', settlementPlan.id)
+            .in('status', ['LOCKED', 'ELIGIBLE', 'RELEASE_REQUESTED'])
+          if (trancheFreezeError) {
+            log('error', FN, 'settlement.tranches_freeze_failed', {
+              actor_id: caller.id,
+              order_id: orderId,
+              plan_id: settlementPlan.id,
+              reason: deliveryReason,
+              error: trancheFreezeError.message,
+            })
+          }
+        }
+        if (settlementFreezeError) {
+          log('error', FN, 'settlement.freeze_failed', {
+            actor_id: caller.id,
+            order_id: orderId,
+            reason: deliveryReason,
+            error: settlementFreezeError.message,
+          })
+        }
+      }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
-        stage: 'IN_DISPUTE',
+        stage: freezesOrder ? 'IN_DISPUTE' : order.stage,
         note: buildDeliveryReviewNote('CUSTOMER', reasonLabel, parsed.data.note ?? null),
       })
 
@@ -1831,13 +2013,13 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'CUSTOMER',
         order_id: orderId,
-        severity: 'warn',
-        payload: { reason: deliveryReason, from_stage: order.stage },
+        severity: freezesOrder ? 'error' : 'warn',
+        payload: { reason: deliveryReason, from_stage: order.stage, freezes_order: freezesOrder },
       })
 
       await createOrRefreshOpsIssue(supabase, {
         issueType: 'DELIVERY_REVIEW',
-        severity: 'HIGH',
+        severity: freezesOrder ? 'HIGH' : 'MEDIUM',
         source: FN,
         actorId: caller.id,
         actorRole: 'CUSTOMER',
@@ -1853,6 +2035,7 @@ Deno.serve(async (req) => {
           requested_by: 'CUSTOMER',
           reason: deliveryReason,
           from_stage: order.stage,
+          freezes_order: freezesOrder,
         },
       })
 
@@ -1864,6 +2047,13 @@ Deno.serve(async (req) => {
           })
         )
       }
+      queueTailorOrderEmail(
+        supabase,
+        order,
+        freezesOrder ? 'Urgent shipping or delivery issue reported' : 'Shipping or delivery help requested',
+        `${reasonLabel}. Open this exact order in Drapeon to review the fulfillment record and next step.`,
+        `delivery-help:${deliveryReason}:${nextMeta.deliveryReview.requestedAt}`,
+      )
 
       return jsonResponse({ ok: true }, 200, cors)
     }
@@ -2021,6 +2211,23 @@ Deno.serve(async (req) => {
     if (action === 'open-dispute') {
       if (!reason?.trim()) return jsonError(cors, 400, 'DISPUTE_REASON_REQUIRED', 'Please choose a reason for this concern.')
       if (!description?.trim()) return jsonError(cors, 400, 'DISPUTE_DESCRIPTION_REQUIRED', 'Please describe what happened before submitting this concern.')
+      if (!parsed.data.requestedOutcome) return jsonError(cors, 400, 'DISPUTE_OUTCOME_REQUIRED', 'Choose what outcome you are seeking.')
+
+      let concernDraft: ReturnType<typeof validateFinancialCaseDraft>
+      try {
+        concernDraft = validateFinancialCaseDraft({
+          reason,
+          requestedOutcome: parsed.data.requestedOutcome,
+          description,
+        })
+      } catch (validationError) {
+        return jsonError(
+          cors,
+          400,
+          'DISPUTE_DETAILS_INVALID',
+          validationError instanceof Error ? validationError.message : 'Check the concern details and try again.',
+        )
+      }
 
       if (hasThreateningLanguage(description.trim())) {
         await audit(supabase, {
@@ -2065,27 +2272,7 @@ Deno.serve(async (req) => {
       })
       if (blockedDispute) return blockedDispute
 
-      const { data: existingDispute, error: existingDisputeError } = await supabase
-        .from('disputes')
-        .select('id, status')
-        .eq('order_id', orderId)
-        .maybeSingle()
-
-      if (existingDisputeError) {
-        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: existingDisputeError.message, surface: 'disputes.existing' })
-        return jsonError(cors, 500, 'DISPUTE_READ_FAILED', 'Could not check existing concerns for this order right now.')
-      }
-
       const disputePreflight = runPreflight([
-        {
-          name: 'no_existing_dispute',
-          condition: !existingDispute?.id,
-          errorCode: 'DISPUTE_ALREADY_EXISTS',
-          message: 'A concern is already open for this order. Drapeon support is reviewing it.',
-          field: 'orderId',
-          severity: 'BLOCKING',
-          actual: { disputeId: existingDispute?.id ?? null, status: existingDispute?.status ?? null },
-        },
         {
           name: 'dispute_has_evidence',
           condition: description.trim().length >= 10,
@@ -2110,49 +2297,72 @@ Deno.serve(async (req) => {
         return preflightFailureResponse(disputePreflight, cors, 409)
       }
 
-      const { error: stageError } = await supabase
-        .from('orders')
-        .update({ stage: 'IN_DISPUTE', stage_updated_at: new Date().toISOString() })
-        .eq('id', orderId)
-
-      if (stageError) {
-        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: stageError.message })
-        return jsonError(cors, 500, 'DISPUTE_STAGE_UPDATE_FAILED', 'Could not pause this order for review right now.')
-      }
-
-      const { error: disputeError } = await supabase.from('disputes').insert({
-        order_id: orderId,
-        customer_id: caller.id,
-        reason: reason.trim(),
-        description: description.trim(),
+      const correlationId = crypto.randomUUID()
+      const { data: caseResult, error: caseError } = await supabase.rpc('create_customer_concern_case', {
+        p_idempotency_key: `customer-concern:${orderId}`,
+        p_order_id: orderId,
+        p_customer_id: caller.id,
+        p_reason_code: concernDraft.reason,
+        p_description: concernDraft.description,
+        p_requested_outcome: concernDraft.requestedOutcome,
+        p_case_type: financialCaseTypeForConcern(concernDraft.reason),
+        p_correlation_id: correlationId,
       })
 
-      if (disputeError) {
-        await supabase
-          .from('orders')
-          .update({ stage: order.stage })
-          .eq('id', orderId)
-
-        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: disputeError.message })
-        return jsonError(cors, 500, 'DISPUTE_OPEN_FAILED', 'Could not submit this concern right now.')
+      if (caseError) {
+        const alreadyExists = caseError.message.includes('already exists')
+        const retryConflict = caseError.message.includes('idempotency key was reused')
+        log('error', FN, 'financial_case.open_failed', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          correlation_id: correlationId,
+          error: caseError.message,
+        })
+        EdgeRuntime.waitUntil(Sentry.captureMessage('Customer financial case creation failed', {
+          level: alreadyExists || retryConflict ? 'warning' : 'error',
+          tags: {
+            function: FN,
+            action,
+            error_code: alreadyExists
+              ? 'DISPUTE_ALREADY_EXISTS'
+              : retryConflict
+                ? 'DISPUTE_RETRY_CONFLICT'
+                : 'DISPUTE_OPEN_FAILED',
+          },
+          extra: {
+            order_id: orderId,
+            actor_id: caller.id,
+            correlation_id: correlationId,
+            database_error: caseError.message,
+          },
+        }))
+        return jsonError(
+          cors,
+          alreadyExists || retryConflict ? 409 : 500,
+          alreadyExists
+            ? 'DISPUTE_ALREADY_EXISTS'
+            : retryConflict
+              ? 'DISPUTE_RETRY_CONFLICT'
+              : 'DISPUTE_OPEN_FAILED',
+          alreadyExists
+            ? 'A concern is already open for this order. Drapeon support is reviewing it.'
+            : retryConflict
+              ? 'This concern was already submitted with different details. Refresh the order before trying again.'
+            : 'Could not submit this concern right now.',
+        )
       }
 
-      await supabase.from('order_stage_updates').insert({
-        order_id: orderId,
-        stage: 'IN_DISPUTE',
-        note: `Customer raised a concern: ${reason.trim()}`,
-      })
-
-      await audit(supabase, {
-        event: 'dispute.opened',
+      const caseRecord = (caseResult ?? {}) as Record<string, unknown>
+      log('info', FN, 'financial_case.opened', {
         actor_id: caller.id,
-        actor_role: 'CUSTOMER',
         order_id: orderId,
-        severity: 'warn',
-        payload: { reason: reason.trim(), from_stage: order.stage },
+        case_id: caseRecord.caseId ?? null,
+        case_reference: caseRecord.caseReference ?? null,
+        correlation_id: caseRecord.correlationId ?? correlationId,
+        reason: concernDraft.reason,
+        requested_outcome: concernDraft.requestedOutcome,
       })
-
-      log('info', FN, 'dispute.opened', { actor_id: caller.id, order_id: orderId, reason: reason.trim() })
 
       if (order.tailor_id) {
         EdgeRuntime.waitUntil(
@@ -2162,6 +2372,22 @@ Deno.serve(async (req) => {
           })
         )
       }
+
+      queueTailorOrderEmail(
+        supabase,
+        order,
+        'A customer raised an order concern',
+        'The order is paused while the concern is reviewed. Open the order to read the concern and add your response or evidence.',
+        `financial-case:${String(caseRecord.caseId ?? correlationId)}`,
+      )
+
+      return jsonResponse({
+        ok: true,
+        caseId: caseRecord.caseId ?? null,
+        caseReference: caseRecord.caseReference ?? null,
+        correlationId: caseRecord.correlationId ?? correlationId,
+        duplicate: caseRecord.duplicate === true,
+      }, 200, cors)
 
     } else {
       const nextStage = NEXT_STAGE[action]!

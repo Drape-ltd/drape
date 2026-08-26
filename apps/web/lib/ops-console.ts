@@ -16,6 +16,7 @@ export type OpsView =
   | 'verification'
   | 'applications'
   | 'deletions'
+  | 'money-desk'
   | 'payouts'
   | 'workflow-issues'
   | 'runbook'
@@ -27,6 +28,7 @@ export type OpsActionKind =
   | 'seller-item-visibility'
   | 'dispute-status'
   | 'dispute-resolution'
+  | 'order-cancellation-refund-request'
   | 'bypass-review'
   | 'application-status'
   | 'verification-decision'
@@ -36,10 +38,14 @@ export type OpsActionKind =
   | 'review-visibility'
   | 'conversation-access'
   | 'dispatch-stage'
+  | 'dispatch-quote'
+  | 'dispatch-event'
   | 'order-review-resolution'
   | 'order-partial-refund'
+  | 'reviewed-partial-refund-outcome'
   | 'payout-release'
   | 'material-advance-release'
+  | 'material-overage-resolution'
   | 'payout-block-resolution'
   | 'ops-issue-status'
   | 'manual-issue-create'
@@ -47,6 +53,15 @@ export type OpsActionKind =
   | 'support-thread-mark-read'
   | 'payout-bulk-release'
   | 'bypass-bulk-review'
+  | 'money-desk-elevation'
+  | 'money-desk-request'
+  | 'money-desk-decision'
+  | 'money-desk-execution'
+  | 'return-refund-prepare'
+  | 'benefit-campaign-create'
+  | 'benefit-campaign-activate'
+  | 'benefit-grant-create'
+  | 'consultation-attendance-resolution'
 
 export type OpsSectionDefinition = {
   key: OpsView
@@ -219,6 +234,19 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     summaryCount: (summary) => summary.pendingDeletionRequests,
   },
   {
+    key: 'money-desk',
+    label: 'Money Desk',
+    shortLabel: 'Money',
+    eyebrow: 'Protected money movement',
+    title: 'Prepare, approve, and execute every manual money move with evidence.',
+    description:
+      'Money Desk separates the preparer from the approver, requires short-lived MFA-backed elevation, and records every request through a terminal outcome.',
+    team: 'FINANCE',
+    status: 'live',
+    anchor: 'money-desk',
+    summaryCount: (summary) => summary.pendingMoneyDeskApprovals,
+  },
+  {
     key: 'payouts',
     label: 'Payouts',
     shortLabel: 'Payouts',
@@ -276,10 +304,10 @@ export const OPS_FUTURE_SURFACES = [] as const
 
 const ROLE_SECTION_ACCESS: Record<OpsRole, OpsView[]> = {
   admin: OPS_LIVE_SECTIONS.map((section) => section.key),
-  ops: ['overview', 'support', 'shop', 'dispatch', 'applications', 'payouts', 'runbook'],
-  customer_success: ['overview', 'support', 'order-reviews', 'disputes', 'workflow-issues', 'runbook'],
+  ops: ['overview', 'support', 'shop', 'dispatch', 'applications', 'money-desk', 'payouts', 'runbook'],
+  customer_success: ['overview', 'support', 'order-reviews', 'disputes', 'money-desk', 'workflow-issues', 'runbook'],
   trust: ['overview', 'support', 'reviews', 'verification', 'deletions', 'bypass', 'workflow-issues', 'runbook'],
-  finance: ['overview', 'payouts', 'runbook'],
+  finance: ['overview', 'money-desk', 'payouts', 'runbook'],
   engineering: ['overview', 'incidents', 'workflow-issues', 'dispatch', 'runbook'],
 }
 
@@ -288,6 +316,7 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'seller-item-visibility',
     'dispute-status',
     'dispute-resolution',
+    'order-cancellation-refund-request',
     'bypass-review',
     'application-status',
     'verification-decision',
@@ -297,10 +326,14 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'review-visibility',
     'conversation-access',
     'dispatch-stage',
+    'dispatch-quote',
+    'dispatch-event',
     'order-review-resolution',
     'order-partial-refund',
+    'reviewed-partial-refund-outcome',
     'payout-release',
     'material-advance-release',
+    'material-overage-resolution',
     'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
@@ -308,11 +341,20 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'support-thread-mark-read',
     'payout-bulk-release',
     'bypass-bulk-review',
+    'money-desk-elevation',
+    'money-desk-request',
+    'money-desk-decision',
+    'money-desk-execution',
+    'return-refund-prepare',
+    'benefit-campaign-create',
+    'benefit-campaign-activate',
+    'benefit-grant-create',
+    'consultation-attendance-resolution',
   ],
-  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
-  customer_success: ['dispute-status', 'dispute-resolution', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
+  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'dispatch-quote', 'dispatch-event', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution'],
+  customer_success: ['dispute-status', 'dispute-resolution', 'order-cancellation-refund-request', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution'],
   trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'profile-change-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
-  finance: ['order-partial-refund', 'payout-release', 'payout-change-decision', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release'],
+  finance: ['order-cancellation-refund-request', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'payout-release', 'payout-change-decision', 'material-advance-release', 'material-overage-resolution', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release', 'money-desk-elevation', 'money-desk-request', 'money-desk-decision', 'money-desk-execution', 'return-refund-prepare', 'benefit-campaign-create', 'benefit-campaign-activate', 'benefit-grant-create', 'consultation-attendance-resolution'],
   engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve'],
 }
 

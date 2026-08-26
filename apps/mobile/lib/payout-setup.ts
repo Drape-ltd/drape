@@ -35,6 +35,49 @@ export type TailorPayoutStatus = {
   payoutDestinationHoldUntil: string | null
 }
 
+export type PayoutDestinationSummary = {
+  payoutCurrency: PayoutSetupCurrency | null
+  payoutProvider: PayoutSetupProvider | null
+  payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  payoutBankName: string | null
+  payoutAccountName: string | null
+  payoutAccountMasked: string | null
+  payoutCountryCode: string | null
+  payoutAccountVerified: boolean
+  payoutReverificationRequired: boolean
+}
+
+export type PendingPayoutChange = {
+  id: string
+  status: 'PENDING'
+  submittedAt: string | null
+  confirmationStatus: 'PENDING' | 'CONFIRMED'
+  lifecycleState: 'AWAITING_CONFIRMATION' | 'SECURITY_HOLD' | 'OPS_REVIEW' | 'ACTIVATED'
+  confirmationExpiresAt: string | null
+  confirmedAt: string | null
+  holdUntil: string | null
+  autoActivationEligible: boolean
+  riskSignals: string[]
+  currentDestination: PayoutDestinationSummary | null
+  requestedDestination: PayoutDestinationSummary | null
+}
+
+export async function confirmPendingPayoutChange(requestId: string) {
+  const { data, error } = await invokeFunction<{ ok?: boolean; lifecycleState?: string; holdUntil?: string | null }>('payout-account-action', {
+    body: { action: 'confirm-payout-change', requestId },
+  })
+  if (error || !data?.ok) return { data: null, error: await edgeError(error, 'We could not confirm this payout change.') }
+  return { data, error: null }
+}
+
+export async function cancelPendingPayoutChange(requestId: string) {
+  const { data, error } = await invokeFunction<{ ok?: boolean; outcome?: string }>('payout-account-action', {
+    body: { action: 'cancel-payout-change', requestId },
+  })
+  if (error || !data?.ok) return { data: null, error: await edgeError(error, 'We could not cancel this payout change.') }
+  return { data, error: null }
+}
+
 export type PaystackBank = {
   code: string
   name: string
@@ -64,6 +107,7 @@ export type PaystackVerification = {
 type StatusResponse = {
   ok?: boolean
   profile?: TailorPayoutStatus
+  pendingPayoutChange?: PendingPayoutChange | null
 }
 
 async function edgeError(error: unknown, fallback: string) {
@@ -84,11 +128,16 @@ export async function loadPayoutAccountStatus() {
   if (error || !data?.profile) {
     return {
       profile: null,
+      pendingPayoutChange: null,
       error: await edgeError(error, 'We could not load your payout setup right now.'),
     }
   }
 
-  return { profile: data.profile, error: null }
+  return {
+    profile: data.profile,
+    pendingPayoutChange: data.pendingPayoutChange ?? null,
+    error: null,
+  }
 }
 
 export async function listPaystackPayoutBanks(input: {
@@ -166,7 +215,7 @@ export async function confirmPaystackPayoutAccount(input: {
   accountNumber: string
   accountName: string
 }) {
-  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean }>('payout-account-action', {
+  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean; confirmationRequired?: boolean }>('payout-account-action', {
     body: {
       action: 'confirm-paystack-account',
       payoutCurrency: input.payoutCurrency,
@@ -178,10 +227,11 @@ export async function confirmPaystackPayoutAccount(input: {
     },
   })
 
-  if (error || (!data?.account && data?.pendingReview !== true)) {
+  if (error || (!data?.account && data?.pendingReview !== true && data?.confirmationRequired !== true)) {
     return {
       account: null,
       pendingReview: false,
+      confirmationRequired: false,
       error: await edgeError(error, 'We could not save this payout account right now.'),
     }
   }
@@ -189,6 +239,7 @@ export async function confirmPaystackPayoutAccount(input: {
   return {
     account: data.account ?? null,
     pendingReview: data.pendingReview === true,
+    confirmationRequired: data.confirmationRequired === true,
     error: null,
   }
 }
@@ -201,7 +252,7 @@ export async function submitManualBankEntry(input: {
   accountNumber: string
   accountName: string
 }) {
-  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean }>('payout-account-action', {
+  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus; pendingReview?: boolean; confirmationRequired?: boolean }>('payout-account-action', {
     body: {
       action: 'submit-manual-bank-entry',
       payoutCurrency: input.payoutCurrency,
@@ -213,10 +264,11 @@ export async function submitManualBankEntry(input: {
     },
   })
 
-  if (error || (!data?.account && data?.pendingReview !== true)) {
+  if (error || (!data?.account && data?.pendingReview !== true && data?.confirmationRequired !== true)) {
     return {
       account: null,
       pendingReview: false,
+      confirmationRequired: false,
       error: await edgeError(error, 'We could not submit these manual bank details right now.'),
     }
   }
@@ -224,6 +276,7 @@ export async function submitManualBankEntry(input: {
   return {
     account: data.account ?? null,
     pendingReview: data.pendingReview === true,
+    confirmationRequired: data.confirmationRequired === true,
     error: null,
   }
 }
@@ -271,6 +324,7 @@ export async function refreshStripeConnectPayoutStatus() {
   const { data, error } = await invokeFunction<{
     ok?: boolean
     pendingReview?: boolean
+    confirmationRequired?: boolean
     account?: {
       provider: 'STRIPE'
       stripeConnectAccountId: string
@@ -286,10 +340,11 @@ export async function refreshStripeConnectPayoutStatus() {
     body: { action: 'refresh-stripe-connect-status' },
   })
 
-  if (error || (!data?.account && data?.pendingReview !== true)) {
+  if (error || (!data?.account && data?.pendingReview !== true && data?.confirmationRequired !== true)) {
     return {
       account: null,
       pendingReview: false,
+      confirmationRequired: false,
       error: await edgeError(error, 'We could not refresh the Stripe payout status right now.'),
     }
   }
@@ -297,6 +352,7 @@ export async function refreshStripeConnectPayoutStatus() {
   return {
     account: data.account ?? null,
     pendingReview: data.pendingReview === true,
+    confirmationRequired: data.confirmationRequired === true,
     error: null,
   }
 }

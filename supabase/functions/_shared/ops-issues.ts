@@ -6,6 +6,7 @@ import {
 } from '../../../packages/shared/src/ops-issues.ts'
 import { sendCriticalOpsIssueNotification } from './ops-notifications.ts'
 import { sendWebPushToOps } from './web-push.ts'
+import { Sentry } from './sentry.ts'
 
 type CreateOpsIssueInput = {
   issueType: OpsIssueType
@@ -52,6 +53,26 @@ function normalizeText(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
+async function captureOpsIssueFailure(
+  event: string,
+  error: string,
+  input: { dedupeKey: string; issueType?: string; source?: string },
+) {
+  await Sentry.captureMessage('Ops issue persistence failed', {
+    level: 'error',
+    tags: {
+      function: 'ops-issues',
+      event,
+      issue_type: input.issueType ?? 'UNKNOWN',
+      source: input.source ?? 'UNKNOWN',
+    },
+    extra: {
+      dedupe_key: input.dedupeKey,
+      error,
+    },
+  })
+}
+
 export async function createOrRefreshOpsIssue(
   supabase: SupabaseClient,
   input: CreateOpsIssueInput,
@@ -70,6 +91,7 @@ export async function createOrRefreshOpsIssue(
       error: existingResponse.error.message,
       dedupe_key: input.dedupeKey,
     }))
+    await captureOpsIssueFailure('issue.lookup_failed', existingResponse.error.message, input)
     return null
   }
 
@@ -124,6 +146,7 @@ export async function createOrRefreshOpsIssue(
         error: updateResponse.error.message,
         dedupe_key: input.dedupeKey,
       }))
+      await captureOpsIssueFailure('issue.update_failed', updateResponse.error.message, input)
       return null
     }
 
@@ -179,6 +202,7 @@ export async function createOrRefreshOpsIssue(
       error: insertResponse.error.message,
       dedupe_key: input.dedupeKey,
     }))
+    await captureOpsIssueFailure('issue.insert_failed', insertResponse.error.message, input)
     return null
   }
 
@@ -239,6 +263,7 @@ export async function resolveOpsIssueByDedupeKey(
       error: lookup.error.message,
       dedupe_key: dedupeKey,
     }))
+    await captureOpsIssueFailure('issue.resolve_lookup_failed', lookup.error.message, { dedupeKey })
     return
   }
 
@@ -274,6 +299,7 @@ export async function resolveOpsIssueByDedupeKey(
       error: update.error.message,
       dedupe_key: dedupeKey,
     }))
+    await captureOpsIssueFailure('issue.resolve_failed', update.error.message, { dedupeKey })
     return
   }
 

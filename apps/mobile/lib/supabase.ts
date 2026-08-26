@@ -388,6 +388,22 @@ export async function invokeFunction<T = any>(
     }
 
     if (error) {
+      const context = (error as { context?: unknown }).context
+      if (context && typeof context === 'object' && 'json' in context) {
+        try {
+          const payload = await (context as { json: () => Promise<unknown> }).json()
+          const serverMessage = payload && typeof payload === 'object'
+            ? ('message' in payload && typeof (payload as { message?: unknown }).message === 'string'
+                ? (payload as { message?: unknown }).message
+                : 'error' in payload ? (payload as { error?: unknown }).error : null)
+            : null
+          if (typeof serverMessage === 'string' && serverMessage.trim()) {
+            return { data: null, error: new Error(serverMessage.trim()) }
+          }
+        } catch {
+          // Keep the SDK error when the response does not contain JSON.
+        }
+      }
       return {
         data: null,
         error: error instanceof Error ? error : new Error(String(error)),

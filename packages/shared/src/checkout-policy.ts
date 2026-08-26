@@ -20,4 +20,4 @@ export const ORDER_CANCELLATION_POLICY_ROWS = [
 ] as const
 
 export const ORDER_CANCELLATION_ACK_COPY =
-  'I understand Drapeon holds payment securely and that cancellation/refund outcomes depend on order progress.'
+  'I understand Drapeon keeps my payment protected and that cancellation or refund outcomes depend on order progress.'

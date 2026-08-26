@@ -1,5 +1,7 @@
 # Drape V1 Decisions: Measurements, Payouts, And Material Risk
 
+> Historical decision record. Its single-release and no-material-advance rules are superseded for newly activated policy versions by `drapeon-commercial-money-tax-and-resolution-architecture.md`. Existing orders retain the policy accepted at checkout.
+
 Date: April 2, 2026
 
 ## Purpose

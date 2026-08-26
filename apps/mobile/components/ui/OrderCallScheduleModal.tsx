@@ -22,6 +22,7 @@ import {
   callSchedulingReasonFor,
   callSchedulingStartsAtMinDate,
   isCallSchedulingStartValid,
+  recommendedSchedulingStartDate,
 } from '@drape/shared/call-scheduling-policy'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { invokeFunction } from '@/lib/supabase'
@@ -109,7 +110,15 @@ export function OrderCallScheduleModal({
   async function scheduleCall() {
     if (saving) return
     if (!isCallSchedulingStartValid(scheduledAt)) {
-      Alert.alert('Pick a later time', `Choose a call time at least ${CALL_SCHEDULING_POLICY.minLookaheadMinutes} minutes from now.`)
+      const suggestion = recommendedSchedulingStartDate()
+      Alert.alert(
+        'Use the next available time?',
+        `${formatStart(scheduledAt)} is too soon. The earliest valid option is ${formatStart(suggestion)}.`,
+        [
+          { text: 'Keep editing', style: 'cancel' },
+          { text: `Use ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(suggestion)}`, onPress: () => setScheduledAt(suggestion) },
+        ],
+      )
       return
     }
 

@@ -34,6 +34,7 @@ import {
 } from '../lib/account-bootstrap'
 import { markWebSessionScope } from '../lib/web-session-scope'
 import { PhoneNumberField } from './ui/phone-number-field'
+import { MoneyInput } from './money-input'
 
 type AuthMode = 'sign-in' | 'sign-up'
 
@@ -277,7 +278,6 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
 
   const passwordInputId = useId()
-  const priceCurrencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
 
   const hasTailorDraft =
     tailorLocation.trim().length > 0 ||
@@ -1143,26 +1143,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 />
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="grid gap-2 text-sm font-semibold text-ink">
-                    Starting price ({priceCurrencyLabel})
-                    <input
-                      value={priceMin}
-                      onChange={(event) => setPriceMin(event.target.value)}
-                      placeholder="50000"
-                      inputMode="decimal"
-                      className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-                    />
-                  </label>
-                  <label className="grid gap-2 text-sm font-semibold text-ink">
-                    High-end price ({priceCurrencyLabel})
-                    <input
-                      value={priceMax}
-                      onChange={(event) => setPriceMax(event.target.value)}
-                      placeholder="250000"
-                      inputMode="decimal"
-                      className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-                    />
-                  </label>
+                  <MoneyInput id="tailor-signup-price-min" label="Starting price" value={priceMin} onValueChange={setPriceMin} currency={defaultCurrency} required />
+                  <MoneyInput id="tailor-signup-price-max" label="High-end price" value={priceMax} onValueChange={setPriceMax} currency={defaultCurrency} required />
                 </div>
 
                 <div className="grid gap-2 text-sm font-semibold text-ink">

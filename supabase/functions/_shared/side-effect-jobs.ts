@@ -46,8 +46,13 @@ type OrderEventEmailJobInput = {
   idempotencyKey: string
   headline?: string
   ctaLabel?: string
+  materialAdvanceId?: string | null
+  action?: string | null
   evidenceImageUrl?: string | null
+  evidenceStorageBucket?: 'order-photos' | 'commercial-evidence' | null
   priority?: number
+  runAt?: string | null
+  onlyIfMessageUnreadId?: string | null
 }
 
 async function captureEnqueueFailure(
@@ -83,6 +88,7 @@ async function safeEnqueue(
     source: string
     priority?: number
     maxAttempts?: number
+    runAt?: string | null
   },
 ) {
   try {
@@ -98,6 +104,7 @@ async function safeEnqueue(
       metadata: { source: input.source },
       priority: input.priority ?? 50,
       maxAttempts: input.maxAttempts ?? 6,
+      runAt: input.runAt ?? null,
     })
     return true
   } catch (error) {
@@ -162,6 +169,7 @@ export async function enqueueOrderEventEmailJob(
     source: input.source,
     priority: input.priority,
     maxAttempts: 8,
+    runAt: input.runAt ?? null,
     payload: {
       order: input.order,
       recipientUserId: input.recipientUserId,
@@ -170,7 +178,29 @@ export async function enqueueOrderEventEmailJob(
       headline: input.headline ?? null,
       body: input.body,
       ctaLabel: input.ctaLabel ?? null,
+      materialAdvanceId: input.materialAdvanceId ?? null,
+      action: input.action ?? null,
       evidenceImageUrl: input.evidenceImageUrl ?? null,
+      evidenceStorageBucket: input.evidenceStorageBucket ?? null,
+      onlyIfMessageUnreadId: input.onlyIfMessageUnreadId ?? null,
     },
+  })
+}
+
+export async function enqueueTipPayoutJob(
+  supabase: SupabaseClient,
+  input: { tipId: string; orderId: string; idempotencyKey: string; priority?: number },
+) {
+  return await safeEnqueue(supabase, {
+    jobType: 'PROCESS_TIP_PAYOUT',
+    eventType: 'tip.payout_requested',
+    aggregateType: 'order_tip',
+    aggregateId: input.tipId,
+    orderId: input.orderId,
+    idempotencyKey: `tip-payout:${input.idempotencyKey}`,
+    source: 'tip-confirmation',
+    priority: input.priority ?? 5,
+    maxAttempts: 5,
+    payload: { tipId: input.tipId },
   })
 }

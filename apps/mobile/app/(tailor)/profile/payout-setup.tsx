@@ -42,10 +42,13 @@ import {
   type ManualBankEntryFieldErrors,
 } from '@drape/shared/payout-setup'
 import {
+  cancelPendingPayoutChange,
+  confirmPendingPayoutChange,
   confirmPaystackPayoutAccount,
   listPaystackPayoutBanks,
   loadPayoutAccountStatus,
   type PaystackBankDirectory,
+  type PendingPayoutChange,
   refreshStripeConnectPayoutStatus,
   startStripeConnectOnboarding,
   submitManualBankEntry,
@@ -236,6 +239,7 @@ export default function TailorPayoutSetupScreen() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [status, setStatus] = useState<TailorPayoutStatus | null>(null)
+  const [pendingPayoutChange, setPendingPayoutChange] = useState<PendingPayoutChange | null>(null)
   const [payoutReviewPending, setPayoutReviewPending] = useState(false)
   const [payoutReviewSummary, setPayoutReviewSummary] = useState<PayoutReviewSummary | null>(null)
   const [activeStep, setActiveStep] = useState<SetupStep>('INTRO')
@@ -294,7 +298,6 @@ export default function TailorPayoutSetupScreen() {
     && !editingVerifiedAccount
     && activeStep !== 'SUCCESS'
   const payoutChangeLocked = isFutureTime(status?.payoutAccountChangeLockedUntil)
-  const payoutDestinationHoldActive = isFutureTime(status?.payoutDestinationHoldUntil)
   const environmentUnavailable = isUnavailableEnvironmentError(loadError)
   const manualBankEntryEnabled = status?.manualBankEntryEnabled === true
   const successIsManualPending =
@@ -321,6 +324,7 @@ export default function TailorPayoutSetupScreen() {
     const nextStatus = result.profile
     const nextOption = optionForCurrency(nextStatus.payoutCurrency)
     setStatus(nextStatus)
+    setPendingPayoutChange(result.pendingPayoutChange)
     setSelectedCurrency(nextStatus.payoutCurrency)
     setCountryCode(nextStatus.payoutCountryCode ?? nextOption.countryCode)
     setLoading(false)
@@ -514,8 +518,15 @@ export default function TailorPayoutSetupScreen() {
     const result = await submitManualBankEntry(validation.value)
     setSubmitting(false)
 
-    if (result.error || (!result.account && !result.pendingReview)) {
+    if (result.error || (!result.account && !result.pendingReview && !result.confirmationRequired)) {
       setFieldError(result.error ?? 'We could not submit these manual bank details right now.')
+      return
+    }
+
+    if (result.confirmationRequired) {
+      setEditingVerifiedAccount(false)
+      await load()
+      Alert.alert('Confirm your payout change', 'Review and confirm the saved replacement. Your current payout account remains active.')
       return
     }
 
@@ -559,8 +570,15 @@ export default function TailorPayoutSetupScreen() {
     })
     setSubmitting(false)
 
-    if (result.error || (!result.account && !result.pendingReview)) {
+    if (result.error || (!result.account && !result.pendingReview && !result.confirmationRequired)) {
       setFieldError(result.error ?? 'We could not save this payout account right now.')
+      return
+    }
+
+    if (result.confirmationRequired) {
+      setEditingVerifiedAccount(false)
+      await load()
+      Alert.alert('Confirm your payout change', 'Review and confirm the saved replacement. Your current payout account remains active.')
       return
     }
 
@@ -612,8 +630,14 @@ export default function TailorPayoutSetupScreen() {
 
     const refresh = await refreshStripeConnectPayoutStatus()
     setSubmitting(false)
-    if (refresh.error || (!refresh.account && !refresh.pendingReview)) {
+    if (refresh.error || (!refresh.account && !refresh.pendingReview && !refresh.confirmationRequired)) {
       setFieldError(refresh.error ?? 'We could not refresh the Stripe payout status yet.')
+      return
+    }
+
+    if (refresh.confirmationRequired) {
+      await load()
+      Alert.alert('Confirm your payout change', 'Review and confirm the replacement within 48 hours. Your current payout account remains active.')
       return
     }
 
@@ -651,6 +675,49 @@ export default function TailorPayoutSetupScreen() {
       'More Stripe details still needed',
       'Stripe still needs more information before payouts can be enabled. You can reopen Stripe to finish the remaining steps.',
     )
+  }
+
+  async function handleConfirmPendingChange() {
+    if (!pendingPayoutChange) return
+    setSubmitting(true)
+    setFieldError('')
+    const result = await confirmPendingPayoutChange(pendingPayoutChange.id)
+    setSubmitting(false)
+    if (result.error) {
+      setFieldError(result.error)
+      return
+    }
+    await load()
+    Alert.alert(
+      result.data?.lifecycleState === 'ACTIVATED' ? 'New payout account active' : 'Review started',
+      result.data?.lifecycleState === 'ACTIVATED'
+        ? 'The verified replacement is active now. Eligible earnings can release to it without an extra payout-account hold.'
+        : 'Drapeon is reviewing the changed account details. Your current payout account stays active.',
+    )
+  }
+
+  function handleCancelPendingChange() {
+    if (!pendingPayoutChange) return
+    Alert.alert('Cancel payout change?', 'Your current payout account will stay active.', [
+      { text: 'Keep request', style: 'cancel' },
+      {
+        text: 'Cancel change',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setSubmitting(true)
+            const result = await cancelPendingPayoutChange(pendingPayoutChange.id)
+            setSubmitting(false)
+            if (result.error) {
+              setFieldError(result.error)
+              return
+            }
+            await load()
+            Alert.alert('Payout change cancelled', 'Your current payout account was not changed.')
+          })()
+        },
+      },
+    ])
   }
 
   function handleFlowBack() {
@@ -807,20 +874,25 @@ export default function TailorPayoutSetupScreen() {
             <SummaryRow label="Provider" value={successIsManualPending ? 'Ops verification' : providerLabel(summaryProvider)} />
             {successIsReviewPending ? <SummaryRow label="Status" value="Pending ops review" /> : null}
             {successIsManualPending ? <SummaryRow label="Status" value="Pending review" /> : null}
-            {!successIsManualPending && payoutDestinationHoldActive ? (
-              <SummaryRow label="Release guard" value={`Payouts resume after ${formatGuardDate(status.payoutDestinationHoldUntil)}`} />
-            ) : null}
           </View>
 
           {!successIsManualPending ? (
             <View style={styles.successChecklist}>
               <View style={styles.successCheckRow}>
                 <Feather name="check-circle" size={17} color={Colors.needleGreen} />
-                <Text style={styles.successCheckText}>Paid orders can release to this account after delivery.</Text>
+                <Text style={styles.successCheckText}>
+                  {successIsReviewPending
+                    ? 'Your current verified payout account remains active during review.'
+                    : 'Paid orders can release to this account after delivery.'}
+                </Text>
               </View>
               <View style={styles.successCheckRow}>
                 <Feather name="check-circle" size={17} color={Colors.needleGreen} />
-                <Text style={styles.successCheckText}>Your dashboard will show this payout path at a glance.</Text>
+                <Text style={styles.successCheckText}>
+                  {successIsReviewPending
+                    ? 'If approved, this replacement activates immediately and can receive eligible earnings.'
+                    : 'Your dashboard will show this payout path at a glance.'}
+                </Text>
               </View>
             </View>
           ) : null}
@@ -835,9 +907,10 @@ export default function TailorPayoutSetupScreen() {
             />
           ) : (
             <DrapeCapsuleButton
-              label="Go back"
-              icon="arrow-left"
+              label="Done"
+              icon="check"
               onPress={goBack}
+              style={styles.actionDockPrimary}
             />
           )}
         </DrapeFloatingActionDock>
@@ -865,22 +938,80 @@ export default function TailorPayoutSetupScreen() {
           <View style={styles.heroCard}>
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>
-                {showManualPendingSummary ? 'Manual bank review' : 'Verified payout account'}
+                {showManualPendingSummary
+                  ? 'Manual bank review'
+                  : pendingPayoutChange
+                    ? pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? 'Confirmation required' : pendingPayoutChange.lifecycleState === 'SECURITY_HOLD' ? 'Activating now' : 'Drapeon review'
+                    : 'Verified payout account'}
               </Text>
             </View>
             <Text style={styles.heroTitle}>
-              {showManualPendingSummary ? 'Your manual bank details are with ops.' : 'Your payout path is ready.'}
+              {showManualPendingSummary
+                ? 'Your manual bank details are with ops.'
+                : pendingPayoutChange
+                  ? pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? 'Confirm your payout change.' : 'Your current payout account stays active.'
+                  : 'Your payout path is ready.'}
             </Text>
             <Text style={styles.heroCopy}>
               {showManualPendingSummary
                 ? MANUAL_BANK_ENTRY_NOTE
-                : 'Drapeon will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.'}
+                : pendingPayoutChange
+                  ? pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION'
+                    ? 'Check the replacement below and confirm it within 48 hours. Nothing changes until you confirm.'
+                    : pendingPayoutChange.lifecycleState === 'SECURITY_HOLD'
+                      ? 'This legacy verified replacement is being activated now without an additional payout-account hold.'
+                      : 'Drapeon is reviewing a security difference. We will notify you when it is resolved.'
+                  : 'Drapeon will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.'}
             </Text>
           </View>
 
+          {pendingPayoutChange?.requestedDestination ? (
+            <View style={styles.pendingReviewCard}>
+              <View style={styles.pendingReviewHeading}>
+                <View style={styles.pendingReviewIcon}>
+                  <Feather name="clock" size={18} color={Colors.kanteRust} />
+                </View>
+                <View style={styles.pendingReviewCopy}>
+                  <Text style={styles.sectionTitle}>Requested replacement</Text>
+                  <Text style={styles.pendingReviewStatus}>
+                    {pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION'
+                      ? 'Waiting for your confirmation'
+                      : pendingPayoutChange.lifecycleState === 'SECURITY_HOLD'
+                        ? 'Activating now'
+                        : 'Drapeon review in progress'}
+                  </Text>
+                </View>
+              </View>
+              <SummaryRow
+                label="Payout method"
+                value={pendingPayoutChange.requestedDestination.payoutBankName
+                  ? `${pendingPayoutChange.requestedDestination.payoutBankName} · ${formatMaskedAccount(pendingPayoutChange.requestedDestination.payoutAccountMasked)}`
+                  : providerLabel(pendingPayoutChange.requestedDestination.payoutAccountType ?? pendingPayoutChange.requestedDestination.payoutProvider)}
+              />
+              {pendingPayoutChange.requestedDestination.payoutAccountName ? (
+                <SummaryRow label="Account name" value={pendingPayoutChange.requestedDestination.payoutAccountName} />
+              ) : null}
+              <SummaryRow label="Currency" value={pendingPayoutChange.requestedDestination.payoutCurrency ?? status.payoutCurrency} />
+              {pendingPayoutChange.submittedAt ? (
+                <SummaryRow label="Submitted" value={formatGuardDate(pendingPayoutChange.submittedAt)} />
+              ) : null}
+              {pendingPayoutChange.lifecycleState === 'AWAITING_CONFIRMATION' ? (
+                <>
+                  <Button label={submitting ? 'Confirming…' : 'Confirm this change'} disabled={submitting} onPress={() => { void handleConfirmPendingChange() }} />
+                  <Button label="Cancel request" variant="secondary" disabled={submitting} onPress={handleCancelPendingChange} />
+                </>
+              ) : null}
+            </View>
+          ) : null}
+          {fieldError ? <Text style={styles.errorText}>{fieldError}</Text> : null}
+
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>
-              {showManualPendingSummary ? 'Pending payout details' : 'Saved payout details'}
+              {showManualPendingSummary
+                ? 'Pending payout details'
+                : pendingPayoutChange
+                  ? 'Current active payout account'
+                  : 'Saved payout details'}
             </Text>
             <SummaryRow label="Provider" value={showManualPendingSummary ? 'Manual ops verification' : providerLabel(status.payoutAccountType)} />
             <SummaryRow label="Payout currency" value={status.payoutCurrency} />
@@ -888,18 +1019,19 @@ export default function TailorPayoutSetupScreen() {
             {status.payoutAccountName ? <SummaryRow label="Account name" value={status.payoutAccountName} /> : null}
             <SummaryRow label="Account" value={formatMaskedAccount(status.payoutAccountMasked)} />
             {showManualPendingSummary ? <SummaryRow label="Status" value="Pending review" /> : null}
-            {payoutDestinationHoldActive ? (
-              <SummaryRow label="Release guard" value={`Payouts resume after ${formatGuardDate(status.payoutDestinationHoldUntil)}`} />
-            ) : null}
             {payoutChangeLocked ? (
               <SummaryRow label="Next change" value={formatGuardDate(status.payoutAccountChangeLockedUntil)} />
             ) : null}
           </View>
 
           <Button
-            label={payoutChangeLocked ? 'Payout change cooling down' : 'Change payout setup'}
+            label={pendingPayoutChange
+              ? 'Replacement under review'
+              : payoutChangeLocked
+                ? 'Payout change cooling down'
+                : 'Change payout setup'}
             variant="secondary"
-            disabled={payoutChangeLocked}
+            disabled={payoutChangeLocked || !!pendingPayoutChange}
             onPress={startSetupFlow}
           />
           {payoutChangeLocked ? (
@@ -1985,6 +2117,40 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.needleGreen + '30',
+  },
+  pendingReviewCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning + '45',
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  pendingReviewHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: Spacing.xs,
+  },
+  pendingReviewIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.accentLight,
+  },
+  pendingReviewCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  pendingReviewStatus: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+  },
+  actionDockPrimary: {
+    flex: 1,
   },
   successCheckRow: {
     flexDirection: 'row',

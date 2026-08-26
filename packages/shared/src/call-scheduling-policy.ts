@@ -54,6 +54,12 @@ export type CallLifecycleState = {
   msUntilExpiry: number
 }
 
+export type SchedulingOptionRepair = {
+  values: Date[]
+  changedIndexes: number[]
+  earliestValidAt: Date
+}
+
 function timestampFrom(value: Date | string | number | null | undefined) {
   if (value == null || value === '') return null
   const timestamp = value instanceof Date ? value.getTime() : new Date(value).getTime()
@@ -69,6 +75,67 @@ export function callSchedulingReasonFor(value: string | null | undefined): CallS
 
 export function callSchedulingStartsAtMinDate(nowMs = Date.now()) {
   return new Date(nowMs + CALL_SCHEDULING_POLICY.minLookaheadMs)
+}
+
+/**
+ * Returns a clean, human-friendly scheduling boundary. Rounding avoids the
+ * hidden-seconds trap where “one hour from now” can still fail validation.
+ */
+export function recommendedSchedulingStartDate({
+  nowMs = Date.now(),
+  minLookaheadMinutes = CALL_SCHEDULING_POLICY.minLookaheadMinutes,
+  intervalMinutes = 15,
+  safetyMinutes = 1,
+}: {
+  nowMs?: number
+  minLookaheadMinutes?: number
+  intervalMinutes?: number
+  safetyMinutes?: number
+} = {}) {
+  const intervalMs = Math.max(1, intervalMinutes) * 60_000
+  const minimumMs = nowMs + (Math.max(0, minLookaheadMinutes) + Math.max(0, safetyMinutes)) * 60_000
+  return new Date(Math.ceil(minimumMs / intervalMs) * intervalMs)
+}
+
+/**
+ * Keeps every valid choice and replaces only choices that are too soon,
+ * invalid, or duplicated. Consumers can offer the result as a one-tap repair.
+ */
+export function repairSchedulingOptions(
+  values: Array<Date | string | number | null | undefined>,
+  {
+    nowMs = Date.now(),
+    minLookaheadMinutes = CALL_SCHEDULING_POLICY.minLookaheadMinutes,
+    intervalMinutes = 15,
+  }: {
+    nowMs?: number
+    minLookaheadMinutes?: number
+    intervalMinutes?: number
+  } = {},
+): SchedulingOptionRepair {
+  const earliestValidAt = recommendedSchedulingStartDate({ nowMs, minLookaheadMinutes, intervalMinutes })
+  const minimumMs = nowMs + Math.max(0, minLookaheadMinutes) * 60_000
+  const intervalMs = Math.max(1, intervalMinutes) * 60_000
+  const used = new Set<number>()
+  const changedIndexes: number[] = []
+  let nextSuggestionMs = earliestValidAt.getTime()
+
+  const repaired = values.map((value, index) => {
+    const timestamp = timestampFrom(value)
+    if (timestamp != null && timestamp >= minimumMs && !used.has(timestamp)) {
+      used.add(timestamp)
+      return new Date(timestamp)
+    }
+
+    while (used.has(nextSuggestionMs)) nextSuggestionMs += intervalMs
+    const suggestion = new Date(nextSuggestionMs)
+    used.add(nextSuggestionMs)
+    nextSuggestionMs += intervalMs
+    changedIndexes.push(index)
+    return suggestion
+  })
+
+  return { values: repaired, changedIndexes, earliestValidAt }
 }
 
 export function callSchedulingDefaultStartDate(nowMs = Date.now()) {

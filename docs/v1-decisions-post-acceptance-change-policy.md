@@ -1,5 +1,7 @@
 # V1 Decisions: Post-Acceptance Change Policy
 
+> Historical decision record. The prohibition on formal post-payment changes is superseded by the typed, authenticated amendment contract in `drapeon-commercial-money-tax-and-resolution-architecture.md`. Minor-clarification and no-silent-repricing principles remain valid.
+
 Date: April 2, 2026
 
 ## Why This Exists

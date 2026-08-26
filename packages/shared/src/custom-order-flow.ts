@@ -161,6 +161,144 @@ export const CUSTOM_PRODUCTION_STAGE_KEYS = [
 
 export type CustomProductionStageKey = (typeof CUSTOM_PRODUCTION_STAGE_KEYS)[number]
 
+export const CUSTOM_PRODUCTION_EVIDENCE_PURPOSES = {
+  SOURCING_PROGRESS: 'SOURCING_PROGRESS',
+  FABRIC_APPROVAL: 'FABRIC_APPROVAL',
+  PRODUCTION_STAGE: 'PRODUCTION_STAGE',
+} as const
+
+export type CustomProductionEvidencePurpose =
+  (typeof CUSTOM_PRODUCTION_EVIDENCE_PURPOSES)[keyof typeof CUSTOM_PRODUCTION_EVIDENCE_PURPOSES]
+
+export const SOURCED_FABRIC_CHANGE_NOTE_PREFIX = 'Customer requested sourced fabric changes:'
+export const SOURCED_FABRIC_APPROVED_NOTE = 'Customer approved the tailor-sourced fabric.'
+export const STYLE_ALIGNMENT_APPROVED_NOTE = 'Customer approved the tailor style interpretation before cutting.'
+export const STYLE_ALIGNMENT_CHANGE_NOTE_PREFIX = 'Customer requested style clarification before cutting:'
+export const STYLE_ALIGNMENT_REQUEST_NOTE_PREFIX = 'Tailor requested style approval before cutting:'
+
+export type SourcedFabricDecision = 'APPROVED' | 'CHANGES_REQUESTED'
+
+export function sourcedFabricDecisionFromNote(note: unknown): SourcedFabricDecision | null {
+  if (typeof note !== 'string') return null
+  const normalized = note.trim()
+  if (normalized === SOURCED_FABRIC_APPROVED_NOTE) return 'APPROVED'
+  if (normalized.startsWith(SOURCED_FABRIC_CHANGE_NOTE_PREFIX)) return 'CHANGES_REQUESTED'
+  return null
+}
+
+export type StyleAlignmentDecision = 'APPROVED' | 'CHANGES_REQUESTED'
+export type StyleAlignmentEvent = 'REQUESTED' | StyleAlignmentDecision
+
+export function styleAlignmentEventFromNote(note: unknown): StyleAlignmentEvent | null {
+  if (typeof note !== 'string') return null
+  const normalized = note.trim()
+  if (normalized.startsWith(STYLE_ALIGNMENT_REQUEST_NOTE_PREFIX)) return 'REQUESTED'
+  if (normalized === STYLE_ALIGNMENT_APPROVED_NOTE) return 'APPROVED'
+  if (normalized.startsWith(STYLE_ALIGNMENT_CHANGE_NOTE_PREFIX)) return 'CHANGES_REQUESTED'
+  return null
+}
+
+export function styleAlignmentDecisionFromNote(note: unknown): StyleAlignmentDecision | null {
+  const event = styleAlignmentEventFromNote(note)
+  return event === 'APPROVED' || event === 'CHANGES_REQUESTED' ? event : null
+}
+
+export function styleAlignmentChangeFeedbackFromUpdates(
+  updates: ReadonlyArray<{
+    note?: unknown
+    createdAt?: unknown
+    created_at?: unknown
+  }>,
+): SourcedFabricChangeFeedback | null {
+  return updates.reduce<SourcedFabricChangeFeedback | null>((latest, update) => {
+    if (typeof update.note !== 'string') return latest
+    const note = update.note.trim()
+    if (!note.startsWith(STYLE_ALIGNMENT_CHANGE_NOTE_PREFIX)) return latest
+    const feedback = note.slice(STYLE_ALIGNMENT_CHANGE_NOTE_PREFIX.length).trim()
+    if (!feedback) return latest
+
+    const rawCreatedAt = update.createdAt ?? update.created_at
+    const createdAt = typeof rawCreatedAt === 'string' && rawCreatedAt.trim() ? rawCreatedAt : null
+    if (!latest) return { feedback, createdAt }
+
+    const latestTime = latest.createdAt ? Date.parse(latest.createdAt) : Number.NEGATIVE_INFINITY
+    const candidateTime = createdAt ? Date.parse(createdAt) : Number.NEGATIVE_INFINITY
+    return Number.isFinite(candidateTime) && candidateTime >= latestTime
+      ? { feedback, createdAt }
+      : latest
+  }, null)
+}
+
+export type SourcedFabricChangeFeedback = {
+  feedback: string
+  createdAt: string | null
+}
+
+export function sourcedFabricChangeFeedbackFromUpdates(
+  updates: ReadonlyArray<{
+    note?: unknown
+    createdAt?: unknown
+    created_at?: unknown
+  }>,
+): SourcedFabricChangeFeedback | null {
+  return updates.reduce<SourcedFabricChangeFeedback | null>((latest, update) => {
+    if (typeof update.note !== 'string') return latest
+    const note = update.note.trim()
+    if (!note.startsWith(SOURCED_FABRIC_CHANGE_NOTE_PREFIX)) return latest
+
+    const feedback = note.slice(SOURCED_FABRIC_CHANGE_NOTE_PREFIX.length).trim()
+    if (!feedback) return latest
+
+    const rawCreatedAt = update.createdAt ?? update.created_at
+    const createdAt = typeof rawCreatedAt === 'string' && rawCreatedAt.trim()
+      ? rawCreatedAt
+      : null
+    if (!latest) return { feedback, createdAt }
+
+    const latestTime = latest.createdAt ? Date.parse(latest.createdAt) : Number.NEGATIVE_INFINITY
+    const candidateTime = createdAt ? Date.parse(createdAt) : Number.NEGATIVE_INFINITY
+    return Number.isFinite(candidateTime) && candidateTime >= latestTime
+      ? { feedback, createdAt }
+      : latest
+  }, null)
+}
+
+export function isFabricApprovalEvidence(input: { stageKey?: unknown; metadata?: unknown }) {
+  const metadata = input.metadata
+  return input.stageKey === 'FABRIC'
+    && !!metadata
+    && typeof metadata === 'object'
+    && !Array.isArray(metadata)
+    && (metadata as Record<string, unknown>).evidence_purpose === CUSTOM_PRODUCTION_EVIDENCE_PURPOSES.FABRIC_APPROVAL
+}
+
+export function latestFabricApprovalEvidence<
+  T extends {
+    stageKey?: unknown
+    stage_key?: unknown
+    metadata?: unknown
+    createdAt?: unknown
+    created_at?: unknown
+  },
+>(evidence: ReadonlyArray<T>): T | null {
+  return evidence.reduce<T | null>((latest, candidate) => {
+    if (!isFabricApprovalEvidence({
+      stageKey: candidate.stageKey ?? candidate.stage_key,
+      metadata: candidate.metadata,
+    })) return latest
+    if (!latest) return candidate
+
+    const candidateCreatedAt = candidate.createdAt ?? candidate.created_at
+    const latestCreatedAt = latest.createdAt ?? latest.created_at
+    const candidateTime = typeof candidateCreatedAt === 'string' ? Date.parse(candidateCreatedAt) : Number.NaN
+    const latestTime = typeof latestCreatedAt === 'string' ? Date.parse(latestCreatedAt) : Number.NaN
+
+    if (!Number.isFinite(candidateTime)) return latest
+    if (!Number.isFinite(latestTime) || candidateTime >= latestTime) return candidate
+    return latest
+  }, null)
+}
+
 export const CUSTOM_PRODUCTION_STAGE_LABELS: Record<CustomProductionStageKey, string> = {
   ORDER_ACCEPTED: 'Order accepted',
   FABRIC: 'Fabric',

@@ -124,8 +124,8 @@ Deno.serve(async (req) => {
     if (!parsed.ok) return jsonError(corsHeaders, 400, 'VALIDATION_FAILED', parsed.error)
 
     const { orderId, notifyCounterpart } = parsed.data
-    const callType = parsed.data.callType ?? 'video'
-    const audioOnly = callType === 'audio'
+    let callType = parsed.data.callType ?? 'video'
+    let audioOnly = callType === 'audio'
 
     const supabase = createClient(
       getSupabaseUrl(),
@@ -160,6 +160,8 @@ Deno.serve(async (req) => {
     }
     const callerName =
       (caller as { user_metadata?: { display_name?: unknown } }).user_metadata?.display_name
+    let consultationBookingId: string | null = null
+    let consultationScheduledStartAt: string | null = null
     const joinPayload = async (url: string, existing: boolean) => {
       const roomCreatedAt = extractRoomCreatedAt(url) ?? Date.now()
       await recordDailyCallRoom({
@@ -168,7 +170,8 @@ Deno.serve(async (req) => {
         roomUrl: url,
         callKind: 'CONSULTATION',
         callType,
-        scheduledStartAt: consultationMeta?.scheduledStartAt ?? null,
+        scheduledStartAt: consultationScheduledStartAt,
+        consultationBookingId,
         expiresAt: Math.floor(roomCreatedAt / 1000) + ROOM_TTL_SECONDS,
         createdBy: caller.id,
       })
@@ -191,7 +194,23 @@ Deno.serve(async (req) => {
 
     const supportMeta = parseOrderSupportMeta((order as { special_note?: string | null }).special_note)
     const consultationMeta = supportMeta.consultation ?? null
-    if (!consultationMeta || consultationMeta.status === 'REQUESTED' || consultationMeta.status === 'DECLINED') {
+
+    const { data: consultationBooking } = await supabase
+      .from('consultation_bookings')
+      .select('id, status, scheduled_start_at, scheduled_end_at, fee_mode, payment_status, paid_at, call_type')
+      .eq('order_id', orderId)
+      .eq('status', 'CONFIRMED')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const metadataIsScheduled = Boolean(
+      consultationMeta
+      && consultationMeta.status !== 'REQUESTED'
+      && consultationMeta.status !== 'DECLINED'
+      && consultationMeta.status !== 'EXPIRED'
+      && consultationMeta.scheduledStartAt,
+    )
+    if (!consultationBooking && !metadataIsScheduled) {
       return jsonError(
         corsHeaders,
         409,
@@ -199,12 +218,35 @@ Deno.serve(async (req) => {
         'This consultation has not been approved and scheduled yet.',
       )
     }
+    consultationBookingId = consultationBooking?.id ?? null
+    consultationScheduledStartAt = consultationBooking?.scheduled_start_at
+      ?? consultationMeta?.scheduledStartAt
+      ?? null
+    const persistedCallType = consultationBooking?.call_type === 'AUDIO' || consultationMeta?.callType === 'AUDIO'
+      ? 'audio'
+      : consultationBooking?.call_type === 'VIDEO' || consultationMeta?.callType === 'VIDEO'
+        ? 'video'
+        : null
+    if (persistedCallType && callType !== persistedCallType) {
+      return jsonError(
+        corsHeaders,
+        409,
+        'CONSULTATION_CALL_TYPE_MISMATCH',
+        `This consultation was scheduled as ${persistedCallType === 'audio' ? 'an audio' : 'a video'} call.`,
+      )
+    }
+    callType = persistedCallType ?? callType
+    audioOnly = callType === 'audio'
 
-    const consultationPaymentRequired =
+    const normalizedConsultationPaymentBlocked =
+      consultationBooking?.fee_mode === 'PAID' && consultationBooking.payment_status !== 'PAID'
+    const legacyConsultationPaymentBlocked =
+      !consultationBooking &&
       typeof (order as { consultation_fee?: number | null }).consultation_fee === 'number'
       && ((order as { consultation_fee?: number | null }).consultation_fee ?? 0) > 0
       && consultationMeta?.paymentTiming === 'BEFORE_CALL_STARTS'
       && !consultationMeta?.paidAt
+    const consultationPaymentRequired = normalizedConsultationPaymentBlocked || legacyConsultationPaymentBlocked
 
     if (consultationPaymentRequired) {
       return jsonError(
@@ -215,7 +257,7 @@ Deno.serve(async (req) => {
       )
     }
 
-    const startGate = consultationStartGate(consultationMeta.scheduledStartAt)
+    const startGate = consultationStartGate(consultationScheduledStartAt)
     if (startGate) {
       return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_OPEN_YET', startGate)
     }

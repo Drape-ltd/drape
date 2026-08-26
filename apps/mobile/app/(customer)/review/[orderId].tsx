@@ -293,7 +293,26 @@ export default function ReviewScreen() {
 
       if (existingReviewError) throw existingReviewError
       if ((existingReviewCount ?? 0) > 0) {
-        setOrderErrorMessage('You already reviewed this order. You can review the same tailor again after a future completed order.')
+        if (currentStage !== 'COMPLETE') {
+          const { error: completionError } = await invokeFunction('customer-order-action', {
+            body: { orderId, action: 'complete-order' },
+          })
+          if (!completionError) {
+            router.replace({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
+            setLoadingOrder(false)
+            return
+          }
+          Sentry.captureException(completionError, {
+            extra: { context: 'recover_completed_order_after_saved_review', orderId, currentStage },
+          })
+          setOrderErrorMessage('Your review is saved. Drapeon is still finishing this order record; retry to sync it now.')
+          setLoadingOrder(false)
+          return
+        }
+        // A saved review is a completed outcome, not an error screen. This
+        // also closes the recovery loop after a previous client saved media
+        // and the terminal transition finished asynchronously.
+        router.replace({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
         setLoadingOrder(false)
         return
       }
@@ -315,7 +334,7 @@ export default function ReviewScreen() {
     } finally {
       setLoadingOrder(false)
     }
-  }, [goBack, orderId, userId])
+  }, [goBack, orderId, router, userId])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -446,7 +465,12 @@ export default function ReviewScreen() {
       return
     }
 
-    const { data, error } = await invokeFunction<{ ok?: boolean; publicationStatus?: 'published' | 'held' }>('review-action', {
+    const { data, error } = await invokeFunction<{
+      ok?: boolean
+      publicationStatus?: 'published' | 'held'
+      orderCompleted?: boolean
+      duplicate?: boolean
+    }>('review-action', {
       body: {
         action: 'submit-tailor-review',
         orderId,
@@ -481,7 +505,7 @@ export default function ReviewScreen() {
 
     // Move order to COMPLETE via Edge Function (stage column is service-role only).
     // avg_rating, total_reviews, total_orders are updated automatically by DB triggers.
-    if (orderSummary.stage !== 'COMPLETE') {
+    if (orderSummary.stage !== 'COMPLETE' && data?.orderCompleted !== true) {
       const { error: completeError } = await invokeFunction('customer-order-action', {
         body: { orderId, action: 'complete-order' },
       })

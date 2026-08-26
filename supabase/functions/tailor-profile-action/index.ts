@@ -165,6 +165,9 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
 const CURRENCY = z.enum(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'])
 const SELLER_TYPE = z.enum(['TAILOR', 'BOUTIQUE', 'TAILOR_SHOP'])
 const AVAILABILITY = z.enum(['OPEN', 'LIMITED', 'FULLY_BOOKED', 'AVAILABLE', 'BOOKED'])
+const CONSULTATION_MODE = z.enum(['UNAVAILABLE', 'FREE', 'PAID'])
+const CONSULTATION_REQUIREMENT = z.enum(['OPTIONAL', 'REQUIRED'])
+const CONSULTATION_CALL_TYPE = z.enum(['AUDIO', 'VIDEO', 'AUDIO_OR_VIDEO'])
 
 function normalizeAvailability(value: z.infer<typeof AVAILABILITY> | undefined) {
   if (!value) return 'OPEN'
@@ -191,11 +194,25 @@ const BaseProfileSchema = z.object({
   shopPaused: z.boolean().default(false),
   pickupAvailable: z.boolean().default(false),
   pickupAddress: z.string().trim().max(240).optional().nullable(),
+  pickupAddressLine1: z.string().trim().max(160).optional().nullable(),
+  pickupCity: z.string().trim().max(100).optional().nullable(),
+  pickupRegion: z.string().trim().max(100).optional().nullable(),
+  pickupPostalCode: z.string().trim().max(32).optional().nullable(),
+  pickupCountryCode: z.string().trim().regex(/^[A-Za-z]{2}$/u).optional().nullable(),
+  pickupLocationVerificationSource: z.string().trim().max(64).optional().nullable(),
+  pickupLocationVerificationReference: z.string().trim().max(160).optional().nullable(),
+  pickupLocationVerifiedAt: z.string().datetime().optional().nullable(),
   pickupInstructions: z.string().trim().max(400).optional().nullable(),
   deliveryAvailable: z.boolean().default(false),
   shippingAvailable: z.boolean().default(false),
   deliveryFee: z.number().int().nonnegative().max(100_000_00).default(0),
   shippingFee: z.number().int().nonnegative().max(100_000_00).default(0),
+  consultationMode: CONSULTATION_MODE.default('FREE'),
+  consultationRequirement: CONSULTATION_REQUIREMENT.default('OPTIONAL'),
+  consultationFeeAmount: z.number().int().positive().max(100_000_00).optional().nullable(),
+  consultationDurationMinutes: z.union([z.literal(15), z.literal(30), z.literal(45), z.literal(60)]).default(30),
+  consultationCallType: CONSULTATION_CALL_TYPE.default('VIDEO'),
+  consultationFeeCreditable: z.boolean().default(false),
 })
 
 const BodySchema = z.discriminatedUnion('action', [
@@ -215,6 +232,14 @@ const BodySchema = z.discriminatedUnion('action', [
     availability: AVAILABILITY.optional(),
     acceptsCustomOrdersNow: z.boolean().optional(),
     shopPaused: z.boolean().optional(),
+  }),
+  z.object({
+    action: z.literal('update-consultation-policy'),
+    consultationMode: CONSULTATION_MODE,
+    consultationFeeAmount: z.number().int().positive().max(100_000_00).optional().nullable(),
+    consultationDurationMinutes: z.union([z.literal(15), z.literal(30), z.literal(45), z.literal(60)]),
+    consultationCallType: CONSULTATION_CALL_TYPE,
+    consultationFeeCreditable: z.boolean(),
   }),
   z.object({
     action: z.literal('update-avatar'),
@@ -264,7 +289,7 @@ Deno.serve(async (req) => {
 
     const { data: existingProfile, error: profileLookupError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, display_name, bio, location, languages, specialty_tags, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live')
+      .select('id, user_id, display_name, bio, location, languages, specialty_tags, currency, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -306,6 +331,70 @@ Deno.serve(async (req) => {
       })
 
       return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (body.action === 'update-consultation-policy') {
+      if (!existingProfile?.id) {
+        return jsonResponse({ error: 'Complete your tailor profile before updating consultation terms.' }, 404, cors)
+      }
+      if (body.consultationMode === 'PAID' && !body.consultationFeeAmount) {
+        return jsonResponse({ error: 'Enter a valid consultation fee.' }, 400, cors)
+      }
+      if (body.consultationMode !== 'PAID' && body.consultationFeeAmount != null) {
+        return jsonResponse({ error: 'Only paid consultations can have a fee.' }, 400, cors)
+      }
+      if (body.consultationMode !== 'PAID' && body.consultationFeeCreditable) {
+        return jsonResponse({ error: 'Only paid consultations can be credited toward an order.' }, 400, cors)
+      }
+
+      const now = new Date().toISOString()
+      const currency = normalizeAccountCurrency(existingProfile.currency ?? 'USD') ?? 'USD'
+      const nextPolicy = {
+        consultation_mode: body.consultationMode,
+        consultation_fee_amount: body.consultationMode === 'PAID' ? body.consultationFeeAmount : null,
+        consultation_currency: body.consultationMode === 'PAID' ? currency : null,
+        consultation_duration_minutes: body.consultationDurationMinutes,
+        consultation_call_type: body.consultationCallType,
+        consultation_fee_creditable: body.consultationMode === 'PAID' && body.consultationFeeCreditable,
+        consultation_policy_version: 'consultation-2026-07-31-v1',
+        consultation_policy_published_at: now,
+        updated_at: now,
+      }
+
+      const { error } = await supabase
+        .from('tailor_profiles')
+        .update(nextPolicy)
+        .eq('user_id', caller.id)
+
+      if (error) {
+        log('error', FN, 'consultation_policy.update_failed', { actor_id: caller.id, error: error.message })
+        return jsonResponse({ error: 'We could not save your consultation terms right now. Please try again.' }, 500, cors)
+      }
+
+      await audit(supabase, {
+        event: 'tailor_profile.consultation_policy_updated',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        payload: {
+          function: FN,
+          tailor_profile_id: existingProfile.id,
+          consultation_mode: body.consultationMode,
+          consultation_duration_minutes: body.consultationDurationMinutes,
+          consultation_call_type: body.consultationCallType,
+        },
+      })
+
+      return jsonResponse({
+        ok: true,
+        policy: {
+          mode: body.consultationMode,
+          feeAmount: body.consultationMode === 'PAID' ? body.consultationFeeAmount : null,
+          currency,
+          durationMinutes: body.consultationDurationMinutes,
+          callType: body.consultationCallType,
+          feeCreditable: body.consultationMode === 'PAID' && body.consultationFeeCreditable,
+        },
+      }, 200, cors)
     }
 
     if (body.action === 'update-avatar') {
@@ -528,8 +617,29 @@ Deno.serve(async (req) => {
     if (!(profile.pickupAvailable || profile.deliveryAvailable || profile.shippingAvailable)) {
       return jsonResponse({ error: 'Choose at least one fulfillment option.' }, 400, cors)
     }
+    if (profile.consultationMode === 'PAID' && !profile.consultationFeeAmount) {
+      return jsonResponse({ error: 'Enter a valid consultation fee.' }, 400, cors)
+    }
+    if (profile.consultationMode !== 'PAID' && profile.consultationFeeAmount != null) {
+      return jsonResponse({ error: 'Only paid consultations can have a fee.' }, 400, cors)
+    }
+    if (profile.consultationMode !== 'PAID' && profile.consultationFeeCreditable) {
+      return jsonResponse({ error: 'Only paid consultations can be credited toward an order.' }, 400, cors)
+    }
     if (profile.pickupAvailable && !profile.pickupAddress?.trim()) {
       return jsonResponse({ error: 'Add your private pickup address before offering pickup.' }, 400, cors)
+    }
+    if (profile.pickupAvailable && (
+      !profile.pickupAddressLine1?.trim()
+      || !profile.pickupCity?.trim()
+      || !profile.pickupCountryCode?.trim()
+      || !profile.pickupLocationVerificationSource?.trim()
+      || !profile.pickupLocationVerifiedAt
+    )) {
+      return jsonResponse({
+        error: 'Confirm the structured pickup address before offering local collection.',
+        code: 'PICKUP_LOCATION_UNVERIFIED',
+      }, 400, cors)
     }
 
     const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
@@ -628,6 +738,15 @@ Deno.serve(async (req) => {
       shipping_available: profile.shippingAvailable,
       delivery_fee: 0,
       shipping_fee: 0,
+      consultation_mode: profile.consultationMode,
+      consultation_requirement: profile.consultationRequirement,
+      consultation_fee_amount: profile.consultationMode === 'PAID' ? profile.consultationFeeAmount : null,
+      consultation_currency: profile.consultationMode === 'PAID' ? profile.currency : null,
+      consultation_duration_minutes: profile.consultationDurationMinutes,
+      consultation_call_type: profile.consultationCallType,
+      consultation_fee_creditable: profile.consultationMode === 'PAID' && profile.consultationFeeCreditable,
+      consultation_policy_version: 'consultation-2026-07-31-v1',
+      consultation_policy_published_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }
 
@@ -658,6 +777,15 @@ Deno.serve(async (req) => {
         shipping_available: profile.shippingAvailable,
         delivery_fee: 0,
         shipping_fee: 0,
+        consultation_mode: profile.consultationMode,
+        consultation_requirement: profile.consultationRequirement,
+        consultation_fee_amount: profile.consultationMode === 'PAID' ? profile.consultationFeeAmount : null,
+        consultation_currency: profile.consultationMode === 'PAID' ? profile.currency : null,
+        consultation_duration_minutes: profile.consultationDurationMinutes,
+        consultation_call_type: profile.consultationCallType,
+        consultation_fee_creditable: profile.consultationMode === 'PAID' && profile.consultationFeeCreditable,
+        consultation_policy_version: 'consultation-2026-07-31-v1',
+        consultation_policy_published_at: now,
         updated_at: now,
       }
 
@@ -683,6 +811,14 @@ Deno.serve(async (req) => {
         .upsert({
           user_id: caller.id,
           pickup_address: pickupAddress,
+          pickup_address_line1: profile.pickupAddressLine1?.trim() || null,
+          pickup_city: profile.pickupCity?.trim() || null,
+          pickup_region: profile.pickupRegion?.trim() || null,
+          pickup_postal_code: profile.pickupPostalCode?.trim() || null,
+          pickup_country_code: profile.pickupCountryCode?.trim().toUpperCase() || null,
+          pickup_location_verification_source: profile.pickupLocationVerificationSource?.trim() || null,
+          pickup_location_verification_reference: profile.pickupLocationVerificationReference?.trim() || null,
+          pickup_location_verified_at: profile.pickupLocationVerifiedAt || null,
           pickup_instructions: pickupInstructions,
           updated_at: now,
         }, { onConflict: 'user_id' })
@@ -833,6 +969,14 @@ Deno.serve(async (req) => {
       .upsert({
         user_id: caller.id,
         pickup_address: pickupAddress,
+        pickup_address_line1: profile.pickupAddressLine1?.trim() || null,
+        pickup_city: profile.pickupCity?.trim() || null,
+        pickup_region: profile.pickupRegion?.trim() || null,
+        pickup_postal_code: profile.pickupPostalCode?.trim() || null,
+        pickup_country_code: profile.pickupCountryCode?.trim().toUpperCase() || null,
+        pickup_location_verification_source: profile.pickupLocationVerificationSource?.trim() || null,
+        pickup_location_verification_reference: profile.pickupLocationVerificationReference?.trim() || null,
+        pickup_location_verified_at: profile.pickupLocationVerifiedAt || null,
         pickup_instructions: pickupInstructions,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' })

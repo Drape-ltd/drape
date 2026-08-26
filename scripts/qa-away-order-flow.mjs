@@ -475,6 +475,7 @@ async function main() {
         customTailorToken,
         {
           action: 'send-quote',
+          orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
           orderId: customOrderId,
           amount: 22000,
           currency: 'USD',

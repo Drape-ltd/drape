@@ -11,7 +11,7 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
-import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 import { sendOrderEventEmail } from '../_shared/order-email.ts'
 
@@ -522,6 +522,40 @@ Deno.serve(async (req) => {
         priority: 20,
         notification,
       }), 'notification.enqueue_failed')
+
+      const recipientAudience = actorRole === 'CUSTOMER' ? 'TAILOR' as const : 'CUSTOMER' as const
+      const unreadReminderAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+      runBackgroundTask(
+        enqueueOrderEventEmailJob(supabase, {
+          order: {
+            id: orderRow.id,
+            reference: orderRow.reference ?? null,
+            order_kind: orderRow.order_kind ?? 'CUSTOM',
+            customer_id: orderRow.customer_id ?? null,
+            tailor_id: orderRow.tailor_id ?? null,
+            garment_type: orderRow.garment_type ?? null,
+            item_title: orderRow.item_title ?? null,
+            item_size: orderRow.item_size ?? null,
+            delivery_method: orderRow.delivery_method ?? null,
+            quoted_amount: orderRow.quoted_amount ?? null,
+            quoted_currency: orderRow.quoted_currency ?? null,
+            currency: orderRow.currency ?? orderRow.quoted_currency ?? null,
+          },
+          recipientUserId: recipientId,
+          audience: recipientAudience,
+          subject: `Unread message about order ${orderRow.reference ?? ''}`.trim(),
+          headline: 'You still have an unread order message',
+          body: `${senderName} sent a message about this order. Open the protected thread to review it and respond.`,
+          ctaLabel: 'Open message',
+          action: 'messages',
+          source: FN,
+          idempotencyKey: `message-unread-reminder:${insertedMessageId}`,
+          runAt: unreadReminderAt,
+          onlyIfMessageUnreadId: insertedMessageId,
+          priority: 60,
+        }),
+        'unread_message_reminder.enqueue_failed',
+      )
 
       const shouldEmailTailorBeforeQuote =
         actorRole === 'CUSTOMER' &&

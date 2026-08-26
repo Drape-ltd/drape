@@ -19,7 +19,8 @@ import {
   getEmptyConversationAccessState,
   type ConversationAccessState,
 } from '@/lib/conversation-access'
-import { invokeFunction } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
+import { getConsultationCallAccess } from '@/lib/consultation-call-access'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { formatExplicitZonedDateTime } from '@drape/shared/date-time'
 import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
@@ -41,8 +42,6 @@ import type { OrderCallMeta } from '@/lib/order-support'
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
 const ORDER_CALL_STAGES: OrderStage[] = [
-  'PENDING_QUOTE',
-  'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
   'PAYMENT_FAILED',
@@ -109,6 +108,8 @@ export default function CustomerMessagesScreen() {
   const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
   const [showConversationDetails, setShowConversationDetails] = useState(false)
   const [counterpartyOnline, setCounterpartyOnline] = useState(false)
+  const [consultationRescheduleRequired, setConsultationRescheduleRequired] = useState(false)
+  const [consultationBookingId, setConsultationBookingId] = useState<string | null>(null)
   const translation = useConversationTranslation(resolvedOrderId)
   const consultationMeta = orderInfo?.supportMeta.consultation ?? null
   const consultationPaymentBlocked =
@@ -116,6 +117,21 @@ export default function CustomerMessagesScreen() {
     !!consultationMeta?.feeAmount &&
     consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS' &&
     !consultationMeta.paidAt
+
+  const refreshConsultationCallAccess = useCallback(async () => {
+    if (!resolvedOrderId || orderInfo?.stage !== 'CONSULTATION') {
+      setConsultationRescheduleRequired(false)
+      setConsultationBookingId(null)
+      return
+    }
+    try {
+      const access = await getConsultationCallAccess(resolvedOrderId)
+      setConsultationRescheduleRequired(access.rescheduleRequired)
+      setConsultationBookingId(access.bookingId)
+    } catch {
+      // The consultation room remains server-gated if this secondary UI check cannot refresh.
+    }
+  }, [orderInfo?.stage, resolvedOrderId])
 
   const refreshConversationAccess = useCallback(async () => {
     if (!resolvedOrderId) return
@@ -135,6 +151,7 @@ export default function CustomerMessagesScreen() {
   useRefreshOnFocus(() => {
     void refetch()
     void refreshConversationAccess()
+    void refreshConsultationCallAccess()
   }, 0)
 
   useFocusEffect(
@@ -150,6 +167,28 @@ export default function CustomerMessagesScreen() {
     }, 0)
     return () => clearTimeout(timer)
   }, [refreshConversationAccess])
+
+  useEffect(() => {
+    void refreshConsultationCallAccess()
+  }, [refreshConsultationCallAccess])
+
+  useEffect(() => {
+    if (!consultationBookingId) return
+    const channel = supabase
+      .channel(`customer-message-consultation-access:${consultationBookingId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'consultation_attendance_reviews',
+          filter: `booking_id=eq.${consultationBookingId}`,
+        },
+        () => { void refreshConsultationCallAccess() },
+      )
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [consultationBookingId, refreshConsultationCallAccess])
 
   function goBack() {
     goBackOrReturnTo(router, navigation, pickSafeReturnTo(historyChain, returnTo), '/(customer)/messages')
@@ -248,6 +287,17 @@ export default function CustomerMessagesScreen() {
 
   function showDrapeCallOptions() {
     if (!orderInfo || startingCall) return
+    if (orderInfo.stage === 'CONSULTATION' && consultationRescheduleRequired) {
+      Alert.alert(
+        'Choose a new consultation time',
+        'The previous consultation window is closed. Open the order to choose a new protected time.',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'View order', onPress: openConsultationPayment },
+        ],
+      )
+      return
+    }
     const consultation =
       orderInfo.stage === 'CONSULTATION' &&
       consultationMeta?.status === 'SCHEDULED' &&
@@ -267,21 +317,16 @@ export default function CustomerMessagesScreen() {
       )
       return
     }
+    const scheduledCallType = consultationMeta?.callType === 'AUDIO' ? 'audio' : 'video'
     const title = 'Consultation call'
-    const body = `Start or join the scheduled consultation with ${orderInfo.tailorName}. This call stays inside Drapeon; any fee must be the consultation fee already shown on the order.`
+    const body = `Start or join the scheduled ${scheduledCallType} call with ${orderInfo.tailorName}. This call stays inside Drapeon.`
 
     Alert.alert(title, body, [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Video',
+        text: scheduledCallType === 'audio' ? 'Open audio call' : 'Open video call',
         onPress: () => {
-          void startConsultationCall('video')
-        },
-      },
-      {
-        text: 'Audio only',
-        onPress: () => {
-          void startConsultationCall('audio')
+          void startConsultationCall(scheduledCallType)
         },
       },
     ])
@@ -500,6 +545,7 @@ export default function CustomerMessagesScreen() {
     consultationMeta?.status === 'SCHEDULED' &&
     consultationMeta.scheduledStartAt
   const consultationCallAvailable = Boolean(scheduledConsultation)
+    && !consultationRescheduleRequired
   const scheduledOrderCall = orderInfo.supportMeta.orderCall?.status === 'SCHEDULED' &&
     orderInfo.supportMeta.orderCall.scheduledStartAt
   const callLifecycleEvent = scheduledConsultation

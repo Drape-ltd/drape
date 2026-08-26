@@ -13,16 +13,21 @@ import {
   DrapeFloatingActionDock,
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
+  MoneyInput,
 } from '@/components/ui'
 import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { useKeyboardState } from '@/lib/useKeyboardState'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
-import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import type { OrderStage } from '@drape/shared/order-machine'
+import {
+  formatMoneyInputValue,
+  parseMoneyInputToMinorUnits,
+  type AccountCurrencyCode,
+} from '@drape/shared'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type OrderDetail = {
@@ -151,7 +156,7 @@ export default function FulfillmentPaymentRequestScreen() {
       } satisfies OrderDetail
 
       setOrder(nextOrder)
-      setAmount(moneyInputFromMinorUnits(nextOrder.fulfillmentFee))
+      setAmount(formatMoneyInputValue(String(nextOrder.fulfillmentFee / 100)))
       setNote('')
       setNoteError('')
     }
@@ -180,7 +185,7 @@ export default function FulfillmentPaymentRequestScreen() {
 
   async function submit() {
     if (!order || saving) return
-    const requestedAmount = minorUnitsFromInput(amount)
+    const requestedAmount = parseMoneyInputToMinorUnits(amount)
     if (requestedAmount == null || requestedAmount <= 0) {
       Alert.alert(
         'Amount required',
@@ -294,7 +299,7 @@ export default function FulfillmentPaymentRequestScreen() {
   }
 
   const paidSoFar = baseAmount(order)
-  const projectedTotal = (paidSoFar ?? 0) + (minorUnitsFromInput(amount) ?? 0)
+  const projectedTotal = (paidSoFar ?? 0) + (parseMoneyInputToMinorUnits(amount) ?? 0)
   const actionLabel = order.fulfillmentPaymentRequestedAt
     ? `Update ${fulfillmentLabel(order.deliveryMethod)} payment request`
     : `Request ${fulfillmentLabel(order.deliveryMethod)} payment`
@@ -333,7 +338,7 @@ export default function FulfillmentPaymentRequestScreen() {
           ) : null}
           <Row
             label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery due next' : 'Shipping due next'}
-            value={amount.trim() ? formatAmount(minorUnitsFromInput(amount) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Enter amount'}
+            value={amount.trim() ? formatAmount(parseMoneyInputToMinorUnits(amount) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Enter amount'}
           />
           <Row
             label="Projected total"
@@ -351,13 +356,12 @@ export default function FulfillmentPaymentRequestScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Exact amount</Text>
-          <TextInput
-            style={styles.input}
+          <MoneyInput
+            label={`Exact ${fulfillmentLabel(order.deliveryMethod)} amount`}
             value={amount}
             onChangeText={setAmount}
-            placeholder={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Enter exact delivery amount' : 'Enter exact shipping amount'}
-            placeholderTextColor={Colors.midGrey}
-            keyboardType="decimal-pad"
+            currency={order.quotedCurrency as AccountCurrencyCode}
+            required
           />
           <Text style={styles.helper}>
             Use the real amount you have agreed on after checking the courier or rider option you trust.

@@ -22,18 +22,17 @@ import {
   readFunctionErrorMessage,
   readFunctionErrorPayload,
 } from '@/lib/function-errors'
-import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
+import { composeStructuredAddress } from '@/lib/address'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import {
   Button,
+  AddressAutocompleteInput,
   ChoiceSheet,
   DisclosureSection,
   DrapeCapsuleButton,
   DrapeFloatingActionDock,
-  DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
-  PaymentTrustCard,
   PhoneNumberInput,
 } from '@/components/ui'
 import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
@@ -49,11 +48,15 @@ import { phoneHintForContext } from '@/lib/phone-context'
 import { READY_MADE_CHECKOUT_REMINDER, READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import { normalizeReadyMadeSizeGuide, recommendReadyMadeSize } from '@/lib/ready-made-fit'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
-import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
+import { useOrderPaymentFlow } from '@/lib/payments'
 import { queryClient } from '@/lib/queryClient'
 import { Sentry } from '@/lib/sentry'
 import type { SellerItemDetail as ItemDetail } from '@/lib/queries'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
+import {
+  CommercialBenefitsCard,
+  type CommercialBenefitReservation,
+} from '@/components/ui/CommercialBenefitsCard'
 
 type FulfillmentOption = 'PICKUP' | 'DELIVERY' | 'SHIPPING'
 type RecipientMode = 'SELF' | 'OTHER'
@@ -86,12 +89,6 @@ type CheckoutPricingPreview = {
   totalAmount: number
   taxLabel: string
 }
-type NominatimSuggestion = {
-  place_id?: string | number
-  display_name?: string
-  address?: Record<string, string | undefined>
-}
-
 const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
@@ -138,6 +135,10 @@ export default function ReadyMadeCheckoutScreen() {
   const { user } = useAuth()
   const [saving, setSaving] = useState(false)
   const [cancellationPolicyAcknowledged, setCancellationPolicyAcknowledged] = useState(false)
+  const [fitGuidanceAcknowledged, setFitGuidanceAcknowledged] = useState(false)
+  const checkoutScrollRef = useRef<ScrollView>(null)
+  const cancellationSectionYRef = useRef(0)
+  const deliverySectionYRef = useRef(0)
   const [checkoutInFlight, setCheckoutInFlight] = useState(false)
   const [checkoutItemSnapshot, setCheckoutItemSnapshot] = useState<ItemDetail | null>(null)
   const [selectedSize, setSelectedSize] = useState('')
@@ -148,14 +149,15 @@ export default function ReadyMadeCheckoutScreen() {
   const [quantity, setQuantity] = useState(1)
   const [fulfillment, setFulfillment] = useState<FulfillmentOption | null>(null)
   const [addressSearch, setAddressSearch] = useState('')
-  const [addressSuggestions, setAddressSuggestions] = useState<NominatimSuggestion[]>([])
-  const [showSuggestions, setShowSuggestions] = useState(false)
   const [addressLine1, setAddressLine1] = useState('')
   const [addressLine2, setAddressLine2] = useState('')
   const [city, setCity] = useState('')
   const [stateRegion, setStateRegion] = useState('')
   const [postcode, setPostcode] = useState('')
   const [country, setCountry] = useState('')
+  const [addressVerificationSource, setAddressVerificationSource] = useState<string | null>(null)
+  const [addressVerificationReference, setAddressVerificationReference] = useState<string | null>(null)
+  const [addressVerifiedAt, setAddressVerifiedAt] = useState<string | null>(null)
   const [recipientMode, setRecipientMode] = useState<RecipientMode>('SELF')
   const [recipientName, setRecipientName] = useState('')
   const [recipientPhone, setRecipientPhone] = useState('')
@@ -164,13 +166,22 @@ export default function ReadyMadeCheckoutScreen() {
   const [checkoutPricing, setCheckoutPricing] = useState<CheckoutPricingPreview | null>(null)
   const [pricingLoading, setPricingLoading] = useState(false)
   const [pricingError, setPricingError] = useState('')
-  const suppressNextAddressLookup = useRef(false)
+  const [preparedOrderId, setPreparedOrderId] = useState<string | null>(null)
+  const [benefitReservation, setBenefitReservation] = useState<CommercialBenefitReservation | null>(null)
+  const [promotionCode, setPromotionCode] = useState('')
+  const [promotionError, setPromotionError] = useState('')
   const { data: item, isLoading, refetch } = useSellerItem(itemId)
   const { data: measurements } = useCustomerMeasurements(user?.id)
   const activeMeasurements = selectedMeasurementProfile?.measurements ?? measurements
   const { startOrderPayment } = useOrderPaymentFlow()
   const { currency: accountCurrency, rates } = useCurrency()
   const activeItem = item ?? (checkoutInFlight ? checkoutItemSnapshot : null)
+
+  const markAddressManuallyConfirmed = useCallback(() => {
+    setAddressVerificationSource('CUSTOMER_CONFIRMED_STRUCTURED')
+    setAddressVerificationReference(null)
+    setAddressVerifiedAt(new Date().toISOString())
+  }, [])
 
   useRefreshOnFocus(() => {
     void refetch()
@@ -249,69 +260,6 @@ export default function ReadyMadeCheckoutScreen() {
     return () => clearTimeout(timer)
   }, [user, recipientMode])
 
-  useEffect(() => {
-    const text = addressSearch.trim()
-    if (suppressNextAddressLookup.current) {
-      suppressNextAddressLookup.current = false
-      return
-    }
-    if (text.length < 5) {
-      const resetTimer = setTimeout(() => {
-        setAddressSuggestions([])
-        setShowSuggestions(false)
-      }, 0)
-      return () => clearTimeout(resetTimer)
-    }
-
-    const hideTimer = setTimeout(() => {
-      setShowSuggestions(false)
-    }, 0)
-    const timeout = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
-        )
-        const data = (await res.json()) as unknown
-        const filtered = Array.isArray(data)
-          ? data.filter(
-              (entry): entry is NominatimSuggestion =>
-                !!entry &&
-                typeof entry === 'object' &&
-                typeof (entry as NominatimSuggestion).display_name === 'string' &&
-                !!(entry as NominatimSuggestion).address
-            )
-          : []
-        setAddressSuggestions(filtered)
-        setShowSuggestions(filtered.length > 0)
-      } catch {
-        setAddressSuggestions([])
-        setShowSuggestions(false)
-      }
-    }, 400)
-
-    return () => {
-      clearTimeout(hideTimer)
-      clearTimeout(timeout)
-    }
-  }, [addressSearch])
-
-  function selectSuggestion(item: NominatimSuggestion) {
-    const parsed = parseNominatimSuggestion(item)
-
-    suppressNextAddressLookup.current = true
-    setAddressSearch(parsed.displayValue)
-    setAddressLine1(parsed.line1)
-    setAddressLine2(parsed.line2)
-    setCity(parsed.city)
-    setStateRegion(parsed.stateRegion)
-    setPostcode(parsed.postcode)
-    setCountry(parsed.country)
-    setAddressError('')
-    setAddressSuggestions([])
-    setShowSuggestions(false)
-  }
-
   const composeAddress = useCallback(() => {
     return composeStructuredAddress({
       line1: addressLine1,
@@ -341,6 +289,10 @@ export default function ReadyMadeCheckoutScreen() {
 
   function validate() {
     if (!activeItem || !fulfillment) return false
+    if (!fitGuidanceAcknowledged) {
+      Alert.alert('Review the fit first', 'Confirm the selected size and size guidance before payment.')
+      return false
+    }
     const selectedSizeInventory = selectedSize
       ? quantityForSize(activeItem.sizeInventory, selectedSize, activeItem.inventoryQuantity)
       : activeItem.inventoryQuantity
@@ -376,12 +328,69 @@ export default function ReadyMadeCheckoutScreen() {
         setAddressError(
           'Add the full delivery address before continuing. Street, city, region, and country are required.'
         )
+        Alert.alert(
+          'Add shipping details',
+          'Add the recipient and full shipping address so Drapeon can confirm delivery eligibility, tax, and the final total.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Add address',
+              onPress: () => {
+                requestAnimationFrame(() => {
+                  checkoutScrollRef.current?.scrollTo({
+                    y: Math.max(0, deliverySectionYRef.current - 24),
+                    animated: true,
+                  })
+                })
+              },
+            },
+          ]
+        )
         return false
       }
       if (!validateRecipientContact()) {
+        Alert.alert(
+          'Check recipient details',
+          'Add a valid recipient name and phone number so the courier can complete delivery.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Review details',
+              onPress: () => {
+                requestAnimationFrame(() => {
+                  checkoutScrollRef.current?.scrollTo({
+                    y: Math.max(0, deliverySectionYRef.current - 24),
+                    animated: true,
+                  })
+                })
+              },
+            },
+          ]
+        )
         return false
       }
       setAddressError('')
+    }
+    if (!cancellationPolicyAcknowledged) {
+      Alert.alert(
+        'Accept the cancellation policy',
+        'Review the cancellation and refund terms, then confirm that you understand them before paying.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Review policy',
+            onPress: () => {
+              requestAnimationFrame(() => {
+                checkoutScrollRef.current?.scrollTo({
+                  y: Math.max(0, cancellationSectionYRef.current - 24),
+                  animated: true,
+                })
+              })
+            },
+          },
+        ]
+      )
+      return false
     }
     return true
   }
@@ -392,6 +401,14 @@ export default function ReadyMadeCheckoutScreen() {
   const sellerUnavailable = activeItem
     ? activeItem.shopPaused || !activeItem.sellerLive
     : false
+  const deliveryDetailsComplete =
+    fulfillment === 'PICKUP' ||
+    (!!recipientName.trim() &&
+      !!recipientPhone.trim() &&
+      !!addressLine1.trim() &&
+      !!city.trim() &&
+      !!stateRegion.trim() &&
+      !!country.trim())
   const maxCheckoutQuantity = activeItem
     ? Math.min(
         MAX_READY_MADE_CHECKOUT_QUANTITY,
@@ -486,6 +503,9 @@ export default function ReadyMadeCheckoutScreen() {
             region: needsAddress ? trimmedRegion : undefined,
             postalCode: needsAddress ? trimmedPostalCode || undefined : undefined,
             countryCode: needsAddress ? trimmedCountry : undefined,
+            addressVerificationSource: needsAddress ? addressVerificationSource ?? undefined : undefined,
+            addressVerificationReference: needsAddress ? addressVerificationReference ?? undefined : undefined,
+            addressVerifiedAt: needsAddress ? addressVerifiedAt ?? undefined : undefined,
           },
         })
 
@@ -535,8 +555,118 @@ export default function ReadyMadeCheckoutScreen() {
     stateRegion,
     postcode,
     country,
+    addressVerificationSource,
+    addressVerificationReference,
+    addressVerifiedAt,
     composeAddress,
   ])
+
+  const openPreparedOrder = useCallback((orderId: string) => {
+    resetTo(router, {
+      pathname: '/(customer)/orders/[id]',
+      params: { id: orderId, tab: 'active' },
+    })
+  }, [router])
+
+  async function reserveEnteredPromotion(orderId: string) {
+    const normalizedCode = promotionCode.trim().toUpperCase()
+    if (!normalizedCode) return
+    setPromotionError('')
+    try {
+      const { error } = await invokeFunction('commercial-benefit-action', {
+        body: {
+          action: 'reserve',
+          orderId,
+          code: normalizedCode,
+          idempotencyKey: `ready-made:${orderId}:promotion:${normalizedCode}`,
+        },
+      })
+      if (error) {
+        setPromotionError(await readFunctionErrorMessage(error, 'This discount code could not be applied.'))
+        return
+      }
+      const { data: reservation, error: reservationError } = await supabase
+        .from('commercial_benefit_reservations')
+        .select('id, total_benefit_amount, customer_due_amount, currency, expires_at')
+        .eq('order_id', orderId)
+        .eq('status', 'RESERVED')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (reservationError) throw reservationError
+      setBenefitReservation((reservation ?? null) as CommercialBenefitReservation | null)
+      setPromotionCode('')
+    } catch (cause) {
+      setPromotionError(cause instanceof Error ? cause.message : 'This discount code could not be applied.')
+    }
+  }
+
+  async function payPreparedOrder() {
+    if (!preparedOrderId || saving) return
+    setSaving(true)
+    try {
+      const { data: liveBenefit } = await supabase
+        .from('commercial_benefit_reservations')
+        .select('id, total_benefit_amount, customer_due_amount, currency, expires_at')
+        .eq('order_id', preparedOrderId)
+        .eq('status', 'RESERVED')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const nextBenefit = (liveBenefit ?? null) as CommercialBenefitReservation | null
+      if (benefitReservation && !nextBenefit) {
+        setBenefitReservation(null)
+        Alert.alert(
+          'Promotion expired',
+          'The reserved promotion expired before payment. Your full locked total is shown again; review it before continuing.'
+        )
+        return
+      }
+      setBenefitReservation(nextBenefit)
+
+      const paymentResult = await startOrderPayment({
+        orderId: preparedOrderId,
+        customerEmail: user?.email,
+      })
+
+      if (!paymentResult.ok) {
+        if (paymentResult.reason === 'cancelled') {
+          Alert.alert(
+            'Payment not finished',
+            'Your checkout, stock hold, and any active promotion are saved for 2 hours. Finish payment from the order screen before the hold expires.'
+          )
+        } else if (paymentResult.stage === 'PAYMENT_FAILED') {
+          Alert.alert(
+            'Checkout failed',
+            `${paymentResult.message}\n\nRetry from the order screen within 2 hours to keep this checkout alive.`
+          )
+        } else {
+          Alert.alert('Payment unavailable', paymentResult.message)
+        }
+        openPreparedOrder(preparedOrderId)
+        return
+      }
+
+      resetTo(router, {
+        pathname: '/(customer)/orders/[id]',
+        params: { id: preparedOrderId, tab: 'active', placed: '1' },
+      })
+    } catch (error) {
+      Sentry.captureException(error, {
+        extra: { context: 'ready_made_checkout_payment', orderId: preparedOrderId },
+      })
+      Alert.alert(
+        'Payment unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your checkout is still saved and no new charge was started.'
+          : 'We could not safely start payment. Your checkout is still saved; try again from the order screen.'
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function createOrder() {
     if (!user?.id || !activeItem || !fulfillment || saving) return
@@ -548,6 +678,17 @@ export default function ReadyMadeCheckoutScreen() {
       return
     }
     if (!validate()) return
+    if (pricingLoading) {
+      Alert.alert('Finalizing total', 'Drapeon is confirming shipping, tax, and your locked total. Try again in a moment.')
+      return
+    }
+    if (pricingError || !checkoutPricing) {
+      Alert.alert(
+        'Total unavailable',
+        pricingError || 'Drapeon could not confirm the shipping and tax total yet. Review the address and try again.'
+      )
+      return
+    }
 
     setCheckoutInFlight(true)
     setCheckoutItemSnapshot(activeItem)
@@ -567,10 +708,16 @@ export default function ReadyMadeCheckoutScreen() {
             region: fulfillment === 'PICKUP' ? undefined : stateRegion.trim(),
             postalCode: fulfillment === 'PICKUP' ? undefined : postcode.trim() || undefined,
             countryCode: fulfillment === 'PICKUP' ? undefined : country.trim(),
+            addressVerificationSource:
+              fulfillment === 'PICKUP' ? undefined : addressVerificationSource ?? undefined,
+            addressVerificationReference:
+              fulfillment === 'PICKUP' ? undefined : addressVerificationReference ?? undefined,
+            addressVerifiedAt: fulfillment === 'PICKUP' ? undefined : addressVerifiedAt ?? undefined,
             recipientName: fulfillment === 'PICKUP' ? undefined : recipientName.trim(),
             recipientPhone:
               fulfillment === 'PICKUP' ? undefined : normalizePhoneForStorage(recipientPhone),
             cancellationPolicyAcknowledged,
+            fitGuidanceAcknowledged,
           },
         }
       )
@@ -587,11 +734,9 @@ export default function ReadyMadeCheckoutScreen() {
         )
 
         if (existingOrderId) {
-          Alert.alert('Checkout already saved', errorMessage)
-          resetTo(router, {
-            pathname: '/(customer)/orders/[id]',
-            params: { id: existingOrderId, tab: 'active' },
-          })
+          setPreparedOrderId(existingOrderId)
+          setCheckoutInFlight(true)
+          Alert.alert('Checkout already saved', `${errorMessage}\n\nReview promotions and continue payment below.`)
           return
         }
 
@@ -604,38 +749,10 @@ export default function ReadyMadeCheckoutScreen() {
         queryClient.invalidateQueries({ queryKey: qk.sellerItem(activeItem.id) }),
         queryClient.invalidateQueries({ queryKey: qk.tailorShop(activeItem.tailorProfileId) }),
       ])
-
-      const paymentResult = await startOrderPayment({
-        orderId: data.orderId,
-        customerEmail: user?.email,
-      })
-
-      if (!paymentResult.ok) {
-        if (paymentResult.reason === 'cancelled') {
-          Alert.alert(
-            'Payment not finished',
-            'Your checkout is still saved. Finish payment from the order screen any time.'
-          )
-        } else if (paymentResult.stage === 'PAYMENT_FAILED') {
-          Alert.alert(
-            'Checkout failed',
-            `${paymentResult.message}\n\nRetry from the order screen within 2 hours to keep this checkout alive.`
-          )
-        } else {
-          Alert.alert('Payment unavailable', paymentResult.message)
-        }
-
-        resetTo(router, {
-          pathname: '/(customer)/orders/[id]',
-          params: { id: data.orderId, tab: 'active' },
-        })
-        return
-      }
-
-      resetTo(router, {
-        pathname: '/(customer)/orders/[id]',
-        params: { id: data.orderId, tab: 'active', placed: '1' },
-      })
+      setPreparedOrderId(data.orderId)
+      setBenefitReservation(null)
+      await reserveEnteredPromotion(data.orderId)
+      checkoutScrollRef.current?.scrollToEnd({ animated: true })
     } catch (error) {
       setCheckoutInFlight(false)
       Sentry.captureException(error, {
@@ -660,6 +777,7 @@ export default function ReadyMadeCheckoutScreen() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <ScrollView
+          ref={checkoutScrollRef}
           style={styles.scroll}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
@@ -806,6 +924,57 @@ export default function ReadyMadeCheckoutScreen() {
                     </View>
                     <Feather name="chevron-right" size={20} color={Colors.midGrey} />
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.policyAckRow,
+                      fitGuidanceAcknowledged && styles.policyAckRowActive,
+                    ]}
+                    onPress={() => setFitGuidanceAcknowledged((value) => !value)}
+                    activeOpacity={0.75}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: fitGuidanceAcknowledged }}
+                    accessibilityLabel={`Confirm fit review for size ${selectedSize || 'not selected'}`}
+                  >
+                    <View
+                      style={[
+                        styles.policyCheck,
+                        fitGuidanceAcknowledged && styles.policyCheckActive,
+                      ]}
+                    >
+                      <Text style={styles.policyCheckText}>
+                        {fitGuidanceAcknowledged ? '✓' : ''}
+                      </Text>
+                    </View>
+                    <Text style={styles.policyAckText}>
+                      I reviewed the size guide and confirm {selectedSize || 'this size'} is the size I want.
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {activeItem.sizes.length === 0 ? (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.sectionTitle}>One-size fit</Text>
+                  <Text style={styles.helperText}>
+                    Review the listing measurements and fit notes before paying.
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.policyAckRow,
+                      fitGuidanceAcknowledged && styles.policyAckRowActive,
+                    ]}
+                    onPress={() => setFitGuidanceAcknowledged((value) => !value)}
+                    activeOpacity={0.75}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: fitGuidanceAcknowledged }}
+                    accessibilityLabel="Confirm one-size fit review"
+                  >
+                    <View style={[styles.policyCheck, fitGuidanceAcknowledged && styles.policyCheckActive]}>
+                      <Text style={styles.policyCheckText}>{fitGuidanceAcknowledged ? '✓' : ''}</Text>
+                    </View>
+                    <Text style={styles.policyAckText}>
+                      I reviewed the listing measurements and confirm this fit works for me.
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               ) : null}
 
@@ -878,7 +1047,12 @@ export default function ReadyMadeCheckoutScreen() {
               </View>
 
               {fulfillment !== 'PICKUP' ? (
-                <View style={styles.sectionCard}>
+                <View
+                  style={styles.sectionCard}
+                  onLayout={(event) => {
+                    deliverySectionYRef.current = event.nativeEvent.layout.y
+                  }}
+                >
                   <Text style={styles.sectionTitle}>Who should receive it?</Text>
                   <View style={styles.choiceGroup}>
                     <ChoiceCard
@@ -919,32 +1093,28 @@ export default function ReadyMadeCheckoutScreen() {
                         : `The courier or rider may call this person directly. ${recipientPhoneHint}`
                     }
                   />
-                  <TextInput
-                    style={styles.input}
+                  <AddressAutocompleteInput
+                    label="Find delivery address"
                     value={addressSearch}
                     onChangeText={(value) => {
                       setAddressSearch(value)
                       if (addressError) setAddressError('')
                     }}
                     placeholder="Search address, area, or landmark"
-                    placeholderTextColor={Colors.midGrey}
+                    onSelectAddress={(selected) => {
+                      setAddressSearch(selected.displayValue)
+                      setAddressLine1(selected.line1)
+                      setAddressLine2(selected.line2)
+                      setCity(selected.city)
+                      setStateRegion(selected.stateRegion)
+                      setPostcode(selected.postcode)
+                      setCountry(selected.countryCode || selected.country)
+                      setAddressVerificationSource('NOMINATIM')
+                      setAddressVerificationReference(selected.reference ?? null)
+                      setAddressVerifiedAt(new Date().toISOString())
+                      setAddressError('')
+                    }}
                   />
-                  {showSuggestions ? (
-                    <View style={styles.suggestionsCard}>
-                      {addressSuggestions.map((suggestion, index) => (
-                        <TouchableOpacity
-                          key={`${suggestion.place_id ?? suggestion.display_name}-${index}`}
-                          style={[
-                            styles.suggestionRow,
-                            index === addressSuggestions.length - 1 && styles.suggestionRowLast,
-                          ]}
-                          onPress={() => selectSuggestion(suggestion)}
-                        >
-                          <Text style={styles.suggestionText}>{suggestion.display_name}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  ) : null}
                   <Text style={styles.helperText}>
                     Search first if you can. If the map suggestion is not quite right, type the
                     address manually using street, area, city, region, and country. Landmarks are
@@ -953,14 +1123,20 @@ export default function ReadyMadeCheckoutScreen() {
                   <TextInput
                     style={styles.input}
                     value={addressLine1}
-                    onChangeText={setAddressLine1}
+                    onChangeText={(value) => {
+                      setAddressLine1(value)
+                      markAddressManuallyConfirmed()
+                    }}
                     placeholder="Address line 1"
                     placeholderTextColor={Colors.midGrey}
                   />
                   <TextInput
                     style={styles.input}
                     value={addressLine2}
-                    onChangeText={setAddressLine2}
+                    onChangeText={(value) => {
+                      setAddressLine2(value)
+                      markAddressManuallyConfirmed()
+                    }}
                     placeholder="Address line 2 (optional)"
                     placeholderTextColor={Colors.midGrey}
                   />
@@ -968,14 +1144,20 @@ export default function ReadyMadeCheckoutScreen() {
                     <TextInput
                       style={[styles.input, styles.inlineInput]}
                       value={city}
-                      onChangeText={setCity}
+                      onChangeText={(value) => {
+                        setCity(value)
+                        markAddressManuallyConfirmed()
+                      }}
                       placeholder="City"
                       placeholderTextColor={Colors.midGrey}
                     />
                     <TextInput
                       style={[styles.input, styles.inlineInput]}
                       value={stateRegion}
-                      onChangeText={setStateRegion}
+                      onChangeText={(value) => {
+                        setStateRegion(value)
+                        markAddressManuallyConfirmed()
+                      }}
                       placeholder="State / region"
                       placeholderTextColor={Colors.midGrey}
                     />
@@ -984,14 +1166,20 @@ export default function ReadyMadeCheckoutScreen() {
                     <TextInput
                       style={[styles.input, styles.inlineInput]}
                       value={postcode}
-                      onChangeText={setPostcode}
+                      onChangeText={(value) => {
+                        setPostcode(value)
+                        markAddressManuallyConfirmed()
+                      }}
                       placeholder="Postcode / ZIP (optional)"
                       placeholderTextColor={Colors.midGrey}
                     />
                     <TextInput
                       style={[styles.input, styles.inlineInput]}
                       value={country}
-                      onChangeText={setCountry}
+                      onChangeText={(value) => {
+                        setCountry(value)
+                        markAddressManuallyConfirmed()
+                      }}
                       placeholder="Country"
                       placeholderTextColor={Colors.midGrey}
                     />
@@ -1054,7 +1242,7 @@ export default function ReadyMadeCheckoutScreen() {
                       }
                     />
                     <SummaryRow
-                      label={checkoutPricing.taxFallback ? 'Estimated tax' : 'Tax'}
+                      label={checkoutPricing.taxFallback ? 'Estimated tax' : checkoutPricing.taxLabel || 'Tax'}
                       value={formatAmount(
                         checkoutPricing.taxAmount,
                         checkoutPricing.currency,
@@ -1078,11 +1266,27 @@ export default function ReadyMadeCheckoutScreen() {
                         Tax was estimated because live tax lookup was unavailable for this address.
                       </Text>
                     ) : null}
-                    {paymentRouteCopyForCurrency(checkoutPricing.currency) ? (
+                    <Text style={styles.helperText}>Choose your secure payment method in the next step.</Text>
+                    <View style={styles.promotionEntry}>
+                      <Text style={styles.promotionEntryTitle}>Discount code</Text>
+                      <TextInput
+                        accessibilityLabel="Discount code"
+                        autoCapitalize="characters"
+                        autoCorrect={false}
+                        value={promotionCode}
+                        onChangeText={(value) => {
+                          setPromotionCode(value.toUpperCase())
+                          if (promotionError) setPromotionError('')
+                        }}
+                        placeholder="Enter code (optional)"
+                        placeholderTextColor={Colors.midGrey}
+                        style={styles.promotionInput}
+                      />
                       <Text style={styles.helperText}>
-                        {paymentRouteCopyForCurrency(checkoutPricing.currency)}
+                        We’ll apply it after stock is held and show the new total before secure payment opens. Available Drapeon credits appear there too.
                       </Text>
-                    ) : null}
+                      {promotionError ? <Text style={styles.errorText}>{promotionError}</Text> : null}
+                    </View>
                   </>
                 ) : (
                   <Text style={styles.helperText}>
@@ -1092,16 +1296,16 @@ export default function ReadyMadeCheckoutScreen() {
                 )}
               </View>
 
-              <PaymentTrustCard
-                body="Drapeon keeps your payment protected until pickup, delivery, or dispatch is confirmed. If something goes wrong, raise it inside Drapeon before closing the order."
-                actionLabel="Learn more"
-                onPressAction={() => {
-                  Alert.alert(
-                    'Payment protected',
-                    'Your payment is processed through the provider for this order currency. Drapeon records the order state, keeps the handoff clear, and gives you a dispute or aftercare path if the item is not right.'
-                  )
-                }}
-              />
+              <DisclosureSection
+                title="Payment protection"
+                summary="Payment stays protected until the handoff is confirmed."
+                tone="success"
+                icon="shield"
+              >
+                <Text style={styles.bestUseText}>
+                  Pay securely in the next step. If the item is wrong, damaged, missing, or materially different, report it in Drapeon before closing the order.
+                </Text>
+              </DisclosureSection>
 
               <DisclosureSection
                 title="Fulfillment note"
@@ -1137,87 +1341,89 @@ export default function ReadyMadeCheckoutScreen() {
                 </View>
               </DisclosureSection>
 
-              <DisclosureSection
-                title="Cancellation policy"
-                summary="Acknowledge before paying."
-                tone={cancellationPolicyAcknowledged ? 'success' : 'warning'}
-                icon="alert-circle"
+              <View
+                onLayout={(event) => {
+                  cancellationSectionYRef.current = event.nativeEvent.layout.y
+                }}
               >
-                <View style={styles.policyList}>
-                  {ORDER_CANCELLATION_POLICY_ROWS.map((row) => (
-                    <View key={row.title} style={styles.policyRow}>
-                      <Text style={styles.policyRowTitle}>{row.title}</Text>
-                      <Text style={styles.policyRowBody}>{row.body}</Text>
-                    </View>
-                  ))}
-                </View>
-                <TouchableOpacity
-                  style={[
-                    styles.policyAckRow,
-                    cancellationPolicyAcknowledged && styles.policyAckRowActive,
-                  ]}
-                  onPress={() => setCancellationPolicyAcknowledged((value) => !value)}
-                  activeOpacity={0.75}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked: cancellationPolicyAcknowledged }}
-                  accessibilityLabel="Acknowledge cancellation policy"
+                <DisclosureSection
+                  title="Cancellation policy"
+                  summary={
+                    cancellationPolicyAcknowledged
+                      ? 'Reviewed and accepted.'
+                      : 'Required before payment.'
+                  }
+                  tone={cancellationPolicyAcknowledged ? 'success' : 'warning'}
+                  icon="alert-circle"
                 >
-                  <View
-                    style={[
-                      styles.policyCheck,
-                      cancellationPolicyAcknowledged && styles.policyCheckActive,
-                    ]}
-                  >
-                    <Text style={styles.policyCheckText}>
-                      {cancellationPolicyAcknowledged ? '✓' : ''}
-                    </Text>
+                  <View style={styles.policyList}>
+                    {ORDER_CANCELLATION_POLICY_ROWS.map((row) => (
+                      <View key={row.title} style={styles.policyRow}>
+                        <Text style={styles.policyRowTitle}>{row.title}</Text>
+                        <Text style={styles.policyRowBody}>{row.body}</Text>
+                      </View>
+                    ))}
                   </View>
-                  <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
-                </TouchableOpacity>
-              </DisclosureSection>
+                  <TouchableOpacity
+                    style={[
+                      styles.policyAckRow,
+                      cancellationPolicyAcknowledged && styles.policyAckRowActive,
+                    ]}
+                    onPress={() => setCancellationPolicyAcknowledged((value) => !value)}
+                    activeOpacity={0.75}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: cancellationPolicyAcknowledged }}
+                    accessibilityLabel="Acknowledge cancellation policy"
+                  >
+                    <View
+                      style={[
+                        styles.policyCheck,
+                        cancellationPolicyAcknowledged && styles.policyCheckActive,
+                      ]}
+                    >
+                      <Text style={styles.policyCheckText}>
+                        {cancellationPolicyAcknowledged ? '✓' : ''}
+                      </Text>
+                    </View>
+                    <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
+                  </TouchableOpacity>
+                </DisclosureSection>
+              </View>
             </>
           )}
         </ScrollView>
 
         {activeItem ? (
           <DrapeFloatingActionDock
-            compactWidth={76}
+            compactWidth={170}
             forceCompact={keyboard.visible}
             testID="ready-made-checkout-action"
           >
-            {(compact) => compact ? (
-              <DrapeIconButton
-                icon="shopping-bag"
-                accessibilityLabel={saving ? 'Preparing payment' : 'Buy now'}
-                tone="primary"
-                onPress={createOrder}
-                disabled={
-                  saving ||
-                  pricingLoading ||
-                  !checkoutPricing ||
-                  !!pricingError ||
-                  !fulfillment ||
-                  sellerUnavailable ||
-                  !cancellationPolicyAcknowledged ||
-                  (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
-                  (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
-                }
-              />
-            ) : (
+            {(compact) => (
               <DrapeCapsuleButton
-                label={saving ? 'Preparing payment…' : 'Buy now'}
+                label={
+                  saving
+                    ? 'Preparing…'
+                    : !fitGuidanceAcknowledged
+                      ? 'Review size to pay'
+                      : !deliveryDetailsComplete
+                        ? fulfillment === 'SHIPPING'
+                          ? 'Add shipping details'
+                          : 'Add delivery details'
+                      : !cancellationPolicyAcknowledged
+                        ? 'Accept policy to pay'
+                        : compact
+                          ? 'Continue'
+                          : 'Review payment'
+                }
                 icon="shopping-bag"
                 loading={saving}
                 style={styles.actionDockPrimary}
                 onPress={createOrder}
                 disabled={
                   saving ||
-                  pricingLoading ||
-                  !checkoutPricing ||
-                  !!pricingError ||
                   !fulfillment ||
                   sellerUnavailable ||
-                  !cancellationPolicyAcknowledged ||
                   (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
                   (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
                 }
@@ -1225,6 +1431,85 @@ export default function ReadyMadeCheckoutScreen() {
             )}
           </DrapeFloatingActionDock>
         ) : null}
+        <Modal
+          visible={Boolean(preparedOrderId)}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => {
+            if (preparedOrderId) openPreparedOrder(preparedOrderId)
+          }}
+        >
+          <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+            <View style={styles.paymentReviewHeader}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Close payment review"
+                onPress={() => {
+                  if (preparedOrderId) openPreparedOrder(preparedOrderId)
+                }}
+                style={styles.paymentReviewClose}
+              >
+                <Feather name="x" size={24} color={Colors.ink} />
+              </TouchableOpacity>
+              <Text style={styles.paymentReviewTitle}>Review payment</Text>
+              <View style={styles.paymentReviewClose} />
+            </View>
+            <ScrollView
+              contentContainerStyle={styles.paymentReviewContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.breakdownCard}>
+                <Text style={styles.sectionTitle}>Locked checkout</Text>
+                <SummaryRow label="Item subtotal" value={checkoutPricing ? formatAmount(checkoutPricing.subtotalAmount, checkoutPricing.currency, checkoutPricing.currency, rates) : '—'} />
+                <SummaryRow label="Fulfillment" value={checkoutPricing ? formatAmount(checkoutPricing.shippingAmount, checkoutPricing.currency, checkoutPricing.currency, rates) : '—'} />
+                <SummaryRow label={checkoutPricing?.taxLabel || 'Tax'} value={checkoutPricing ? formatAmount(checkoutPricing.taxAmount, checkoutPricing.currency, checkoutPricing.currency, rates) : '—'} />
+                {benefitReservation ? (
+                  <SummaryRow
+                    label="Drapeon promotion or credit"
+                    value={`−${formatAmount(benefitReservation.total_benefit_amount, benefitReservation.currency as CurrencyCode, benefitReservation.currency as CurrencyCode, rates)}`}
+                  />
+                ) : null}
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>Pay now</Text>
+                  <Text style={styles.totalValue}>
+                    {checkoutPricing
+                      ? formatAmount(
+                          benefitReservation?.customer_due_amount ?? checkoutPricing.totalAmount,
+                          checkoutPricing.currency,
+                          checkoutPricing.currency,
+                          rates
+                        )
+                      : '—'}
+                  </Text>
+                </View>
+              </View>
+              {preparedOrderId ? (
+                <CommercialBenefitsCard
+                  orderId={preparedOrderId}
+                  currency={checkoutPricing?.currency ?? null}
+                  variant="checkout"
+                  initialCode={promotionCode}
+                  initialError={promotionError}
+                  onChanged={(reservation) => {
+                    setBenefitReservation(reservation)
+                    if (reservation) setPromotionError('')
+                  }}
+                />
+              ) : null}
+              <Text style={styles.helperText}>
+                Promotions are checked again immediately before payment. Your seller's protected earnings do not change.
+              </Text>
+            </ScrollView>
+            <View style={styles.paymentReviewDock}>
+              <Button
+                label={saving ? 'Opening secure payment…' : benefitReservation?.customer_due_amount === 0 ? 'Complete covered order' : 'Continue securely'}
+                onPress={() => { void payPreparedOrder() }}
+                loading={saving}
+                disabled={saving}
+              />
+            </View>
+          </SafeAreaView>
+        </Modal>
         {activeItem ? (
           <SizeChoiceSheet
             visible={sizeSheetOpen}
@@ -1235,6 +1520,7 @@ export default function ReadyMadeCheckoutScreen() {
             onClose={() => setSizeSheetOpen(false)}
             onSelect={(size) => {
               setSelectedSize(size)
+              setFitGuidanceAcknowledged(false)
               setSizeSheetOpen(false)
             }}
           />
@@ -1255,6 +1541,7 @@ export default function ReadyMadeCheckoutScreen() {
           onClose={() => setMeasurementProfileSheetOpen(false)}
           onSelect={(value) => {
             setSelectedMeasurementProfile(measurementProfiles.find((profile) => profile.id === value) ?? null)
+            setFitGuidanceAcknowledged(false)
             setMeasurementProfileSheetOpen(false)
           }}
         />
@@ -1645,23 +1932,6 @@ const styles = StyleSheet.create({
   },
   inlineRow: { flexDirection: 'row', gap: 8 },
   inlineInput: { flex: 1 },
-  suggestionsCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    overflow: 'hidden',
-  },
-  suggestionRow: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.lightGrey,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  suggestionRowLast: { borderBottomWidth: 0 },
-  suggestionText: { fontSize: 13, color: CHARCOAL },
   errorText: { fontSize: 12, color: Colors.error, marginTop: 2 },
   breakdownCard: {
     backgroundColor: Colors.white,
@@ -1673,9 +1943,31 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   pricingStateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  summaryLabel: { fontSize: 13, color: MUTED_GREY },
-  summaryValue: { fontSize: 13, color: CHARCOAL, fontWeight: FontWeight.medium },
+  promotionEntry: {
+    marginTop: 4,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    gap: 8,
+  },
+  promotionEntryTitle: {
+    fontSize: 13,
+    color: CHARCOAL,
+    fontWeight: FontWeight.semibold,
+  },
+  promotionInput: {
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: HOME_BG,
+    paddingHorizontal: 12,
+    color: CHARCOAL,
+    fontSize: 15,
+  },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 },
+  summaryLabel: { flex: 1, fontSize: 13, lineHeight: 18, color: MUTED_GREY },
+  summaryValue: { flexShrink: 0, fontSize: 13, lineHeight: 18, color: CHARCOAL, fontWeight: FontWeight.medium },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1722,5 +2014,44 @@ const styles = StyleSheet.create({
   policyCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
   policyCheckText: { fontSize: 13, color: Colors.textInverse, fontWeight: FontWeight.bold },
   policyAckText: { flex: 1, fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  paymentReviewHeader: {
+    minHeight: 62,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.white,
+  },
+  paymentReviewClose: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paymentReviewTitle: {
+    fontSize: FontSize.lg,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+    fontWeight: FontWeight.semibold,
+  },
+  paymentReviewContent: {
+    padding: Spacing.lg,
+    paddingBottom: 132,
+    gap: Spacing.md,
+    backgroundColor: Colors.bone,
+  },
+  paymentReviewDock: {
+    position: 'absolute',
+    left: Spacing.md,
+    right: Spacing.md,
+    bottom: Spacing.md,
+    padding: Spacing.sm,
+    borderRadius: Radius.xl,
+    backgroundColor: Colors.white,
+    ...Shadow.md,
+  },
   actionDockPrimary: { flex: 1 },
 })

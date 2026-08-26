@@ -29,7 +29,35 @@ const drapeVisionSubpaths = {
   'ellipse-fitter': 'ellipseFitter',
   'measurement-calculator': 'measurementCalculator',
 }
+const webidlConversionsEntry = require.resolve('webidl-conversions', {
+  paths: [projectRoot],
+})
+// Keep React as a true singleton in the native bundle. The workspace also
+// contains the web app's newer React runtime; allowing Metro to resolve from a
+// watched package's real pnpm path can mix that runtime with React Native's
+// renderer and surface as a null hook dispatcher when Daily mounts WebRTC
+// views.
+const mobileReactEntries = {
+  react: require.resolve('react', { paths: [projectRoot] }),
+  'react/jsx-runtime': require.resolve('react/jsx-runtime', { paths: [projectRoot] }),
+  'react/jsx-dev-runtime': require.resolve('react/jsx-dev-runtime', { paths: [projectRoot] }),
+}
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName in mobileReactEntries) {
+    return {
+      filePath: mobileReactEntries[moduleName],
+      type: 'sourceFile',
+    }
+  }
+  // Expo's URL runtime imports this package through a nested pnpm symlink.
+  // Resolve the declared mobile dependency explicitly so Metro does not lose it
+  // while traversing the transitive package's real path.
+  if (moduleName === 'webidl-conversions') {
+    return {
+      filePath: webidlConversionsEntry,
+      type: 'sourceFile',
+    }
+  }
   if (moduleName.startsWith('@drape/shared/')) {
     const subpath = moduleName.replace('@drape/shared/', '')
     return {

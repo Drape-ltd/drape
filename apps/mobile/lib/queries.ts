@@ -38,6 +38,8 @@ import {
 import { parseOrderSupportMeta, type OrderSupportMeta } from '@/lib/order-support'
 import { decodeDisplayText } from '@drape/shared/display-text'
 import { isVideoMediaUrl } from '@drape/shared/media-policy'
+import type { ConsultationAttendanceReviewSnapshot } from '@drape/shared/consultations'
+import { isVerifiedFulfillmentLocation } from '@drape/shared/fulfillment-eligibility'
 
 // ─── Query Key Factory ───────────────────────────────────────────────────────
 
@@ -142,6 +144,8 @@ export type CustomerOrderRow = {
   quotedAmount: number | null
   quotedCurrency: string
   hasReview: boolean
+  consultationReview: ConsultationAttendanceReviewSnapshot | null
+  deliveryMethod: string | null
 }
 
 type ProfileJoinRow = {
@@ -180,6 +184,7 @@ type CustomerOrderQueryRow = {
   quoted_amount: number | null
   currency: string | null
   quoted_currency: string | null
+  delivery_method: string | null
   tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
   reviews: ReviewJoinRow[] | null
 }
@@ -192,6 +197,7 @@ type TailorOrderQueryRow = {
   seller_item_id: string | null
   customer_id: string | null
   stage: OrderStage
+  delivery_method: string | null
   quoted_completion_date: string | null
   quoted_amount: number | null
   currency: string | null
@@ -310,6 +316,13 @@ type TailorPublicProfileQueryRow = {
   pickup_available: boolean | null
   delivery_available: boolean | null
   shipping_available: boolean | null
+  consultation_mode: 'UNAVAILABLE' | 'FREE' | 'PAID' | null
+  consultation_requirement: 'OPTIONAL' | 'REQUIRED' | null
+  consultation_fee_amount: number | null
+  consultation_currency: string | null
+  consultation_duration_minutes: number | null
+  consultation_call_type: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO' | null
+  consultation_fee_creditable: boolean | null
 }
 
 type PublicReviewQueryRow = {
@@ -402,6 +415,10 @@ type TailorDashboardProfileQueryRow = {
   payout_reverification_required: boolean | null
   payout_account_verified: boolean | null
   payout_account_type: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  payout_bank_name: string | null
+  payout_account_masked: string | null
+  paystack_recipient_code: string | null
+  stripe_connect_account_id: string | null
   is_live: boolean | null
   id_verification_status: string | null
   profile_completed: boolean | null
@@ -415,6 +432,7 @@ type TailorDashboardOrderQueryRow = {
   seller_item_id: string | null
   customer_id: string | null
   stage: OrderStage
+  delivery_method: string | null
   quoted_completion_date: string | null
   quoted_amount: number | null
 }
@@ -487,12 +505,14 @@ export type TailorOrderRow = {
   sellerItemId: string | null
   customerId: string | null
   stage: OrderStage
+  deliveryMethod: string | null
   customerName: string
   estimatedDate: string | null
   quotedAmount: number | null
   quotedCurrency: string
   videoCallUrl: string | null
   createdAt: string
+  consultationReview: ConsultationAttendanceReviewSnapshot | null
 }
 
 export type CustomerOrderDetail = {
@@ -642,8 +662,11 @@ export type TailorDashboardData = {
     payoutReverificationRequired: boolean | null
     payoutAccountVerified: boolean | null
     payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+    payoutBankName: string | null
+    payoutAccountMasked: string | null
     paystackRecipientCode: string | null
     stripeConnectAccountId: string | null
+    fulfillmentLocationReady: boolean
   } | null
   orders: Array<{
     id: string
@@ -653,6 +676,7 @@ export type TailorDashboardData = {
     sellerItemId: string | null
     customerId: string | null
     stage: OrderStage
+    deliveryMethod: string | null
     customerName: string
     estimatedDate: string | null
     quotedAmount: number | null
@@ -748,6 +772,13 @@ export type TailorPublicProfile = {
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
+  consultationMode: 'UNAVAILABLE' | 'FREE' | 'PAID'
+  consultationRequirement: 'OPTIONAL' | 'REQUIRED'
+  consultationFeeAmount: number | null
+  consultationCurrency: string | null
+  consultationDurationMinutes: number
+  consultationCallType: 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'
+  consultationFeeCreditable: boolean
 }
 
 export type TailorPublicData = {
@@ -910,6 +941,37 @@ async function fetchReadyMadePurchaseKeysForTailor(
 
 // ─── Fetchers ────────────────────────────────────────────────────────────────
 
+type ConsultationAttendanceListQueryRow = {
+  order_id: string
+  status: string | null
+  reported_by_role: 'CUSTOMER' | 'TAILOR' | null
+  resolution_code: string | null
+  created_at: string
+}
+
+async function fetchLatestConsultationAttendanceReviews(orderIds: string[]) {
+  if (orderIds.length === 0) return new Map<string, ConsultationAttendanceReviewSnapshot>()
+
+  const { data, error } = await supabase
+    .from('consultation_attendance_reviews')
+    .select('order_id, status, reported_by_role, resolution_code, created_at')
+    .in('order_id', orderIds)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+
+  const reviews = new Map<string, ConsultationAttendanceReviewSnapshot>()
+  for (const row of (data ?? []) as ConsultationAttendanceListQueryRow[]) {
+    if (reviews.has(row.order_id)) continue
+    reviews.set(row.order_id, {
+      status: row.status,
+      reportedByRole: row.reported_by_role,
+      resolutionCode: row.resolution_code,
+    })
+  }
+  return reviews
+}
+
 async function fetchCustomerOrders(
   userId: string,
   tab: 'active' | 'completed'
@@ -919,7 +981,7 @@ async function fetchCustomerOrders(
     .from('orders')
     .select(
       `
-      id, reference, garment_type, order_kind, stage, quoted_completion_date, created_at, quoted_amount, currency, quoted_currency,
+      id, reference, garment_type, order_kind, stage, delivery_method, quoted_completion_date, created_at, quoted_amount, currency, quoted_currency,
       tailor_profiles!tailor_profile_id(id, display_name),
       reviews!order_id(id)
     `
@@ -931,10 +993,15 @@ async function fetchCustomerOrders(
 
   if (error) throw error
 
-  return ((data ?? []) as CustomerOrderQueryRow[])
+  const rows = ((data ?? []) as CustomerOrderQueryRow[])
     .filter(
       (o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
     )
+  const consultationReviews = await fetchLatestConsultationAttendanceReviews(
+    rows.filter((order) => order.stage === 'CONSULTATION').map((order) => order.id)
+  )
+
+  return rows
     .map((o) => {
       const tailorProfile = firstJoinedRow(o.tailor_profiles)
       return {
@@ -950,6 +1017,8 @@ async function fetchCustomerOrders(
         quotedAmount: o.quoted_amount,
         quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
         hasReview: (o.reviews ?? []).length > 0,
+        consultationReview: consultationReviews.get(o.id) ?? null,
+        deliveryMethod: o.delivery_method,
       }
     })
 }
@@ -963,7 +1032,7 @@ async function fetchTailorOrders(
     .from('orders')
     .select(
       `
-      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount, currency, quoted_currency, video_call_url, created_at
+      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, delivery_method, quoted_completion_date, quoted_amount, currency, quoted_currency, video_call_url, created_at
     `
     )
     .eq('tailor_id', userId)
@@ -974,6 +1043,9 @@ async function fetchTailorOrders(
   if (error) throw error
 
   const rows = (data ?? []) as TailorOrderQueryRow[]
+  const consultationReviews = await fetchLatestConsultationAttendanceReviews(
+    rows.filter((order) => order.stage === 'CONSULTATION').map((order) => order.id)
+  )
   const customerNames = await fetchCustomerNameMap(rows.map((row) => row.customer_id))
   const inquiryRows = rows.filter((o) => {
     if (o.stage !== 'PENDING_QUOTE') return false
@@ -1007,12 +1079,14 @@ async function fetchTailorOrders(
         sellerItemId: o.seller_item_id ?? null,
         customerId: o.customer_id ?? null,
         stage: o.stage,
+        deliveryMethod: o.delivery_method,
         customerName: customerNames.get(o.customer_id ?? '') ?? 'Customer',
         estimatedDate: o.quoted_completion_date,
         quotedAmount: o.quoted_amount,
         quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
         videoCallUrl: o.video_call_url ?? null,
         createdAt: o.created_at,
+        consultationReview: consultationReviews.get(o.id) ?? null,
       }
     })
 }
@@ -1342,7 +1416,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
     supabase
       .from('tailor_profiles')
       .select(
-        'id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available'
+        'id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable'
       )
       .eq('id', tailorId)
       .eq('is_live', true)
@@ -1443,6 +1517,13 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
           pickupAvailable: profileData.pickup_available ?? false,
           deliveryAvailable: profileData.delivery_available ?? false,
           shippingAvailable: profileData.shipping_available ?? false,
+          consultationMode: profileData.consultation_mode ?? 'FREE',
+          consultationRequirement: profileData.consultation_requirement ?? 'OPTIONAL',
+          consultationFeeAmount: profileData.consultation_fee_amount ?? null,
+          consultationCurrency: profileData.consultation_currency ?? null,
+          consultationDurationMinutes: profileData.consultation_duration_minutes ?? 30,
+          consultationCallType: profileData.consultation_call_type ?? 'VIDEO',
+          consultationFeeCreditable: profileData.consultation_fee_creditable ?? false,
         }
       : null,
     reviews: reviewsData.map((r) => {
@@ -1701,6 +1782,10 @@ async function fetchTailorDashboard(
     supabase
       .from('tailor_profiles')
       .select(
+        // Protected bank and provider destination fields are loaded through
+        // payout-account-action by the dashboard screen. Keeping this query to
+        // owner-readable columns prevents one denied field from blanking the
+        // whole dashboard profile.
         'id, display_name, tier, avg_rating, availability, seller_type, supports_custom_orders, supports_ready_made, accepts_custom_orders_now, shop_paused, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, is_live, id_verification_status, profile_completed'
       )
       .eq('user_id', userId)
@@ -1709,7 +1794,7 @@ async function fetchTailorDashboard(
       .from('orders')
       .select(
         `
-      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount
+      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, delivery_method, quoted_completion_date, quoted_amount
       `
       )
       .eq('tailor_id', userId)
@@ -1864,6 +1949,29 @@ async function fetchTailorDashboard(
     }
   }
 
+  let fulfillmentLocationReady = false
+  if (profile?.id) {
+    const { data: pickup, error: pickupError } = await supabase
+      .from('tailor_pickup_details')
+      .select('pickup_address_line1,pickup_city,pickup_region,pickup_postal_code,pickup_country_code,pickup_location_verification_source,pickup_location_verification_reference,pickup_location_verified_at')
+      // Private fulfillment details are keyed by the auth user, not the
+      // public tailor profile. Querying by profile id made every valid saved
+      // location look unresolved on the dashboard.
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (pickupError) throw pickupError
+    fulfillmentLocationReady = isVerifiedFulfillmentLocation(pickup ? {
+      addressLine1: pickup.pickup_address_line1 ?? '',
+      city: pickup.pickup_city ?? '',
+      regionCode: pickup.pickup_region ?? '',
+      postalCode: pickup.pickup_postal_code ?? '',
+      countryCode: pickup.pickup_country_code ?? '',
+      verificationSource: pickup.pickup_location_verification_source ?? 'LEGACY_UNVERIFIED',
+      verificationReference: pickup.pickup_location_verification_reference ?? null,
+      verifiedAt: pickup.pickup_location_verified_at ?? '',
+    } : null)
+  }
+
   return {
     stats: {
       activeOrders,
@@ -1893,8 +2001,11 @@ async function fetchTailorDashboard(
       payoutReverificationRequired: profile?.payout_reverification_required ?? null,
       payoutAccountVerified: profile?.payout_account_verified ?? null,
       payoutAccountType: profile?.payout_account_type ?? null,
+      payoutBankName: null,
+      payoutAccountMasked: null,
       paystackRecipientCode: null,
       stripeConnectAccountId: null,
+      fulfillmentLocationReady,
     },
     orders: visibleOrderList.map((o) => ({
       id: o.id,
@@ -1904,6 +2015,7 @@ async function fetchTailorDashboard(
       sellerItemId: o.seller_item_id ?? null,
       customerId: o.customer_id ?? null,
       stage: o.stage,
+      deliveryMethod: o.delivery_method,
       customerName: customerNames.get(o.customer_id ?? '') ?? 'Customer',
       estimatedDate: o.quoted_completion_date,
       quotedAmount: o.quoted_amount,

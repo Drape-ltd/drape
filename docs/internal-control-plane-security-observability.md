@@ -89,6 +89,15 @@ Suggested rules:
 - `finance` can review payouts but should not own chat safety tools
 - `admin` can manage cross-functional controls
 
+### Money Desk JIT Boundary
+
+- Money movement cannot use the bootstrap shared-token session.
+- Cloudflare Access JWT `sub`, `email`, `iat`, `exp`, groups, and authentication-method references are verified server-side before an Ops session is trusted.
+- Money Desk accepts recognized MFA methods only, requires the Access authentication assertion itself to be no older than 15 minutes, issues a database-backed action-scoped grant for at most 15 minutes, and rechecks identity, role, scope, revocation, and expiry inside every database transition.
+- Ops and customer-success roles may prepare reviewed actions. Finance or admin must independently approve and execute them. The preparer cannot approve their own request.
+- All manual money actions need one approver; high-risk types, unresolved FX, and USD 500-equivalent or greater require two.
+- Direct legacy money routes fail closed. Execution adapters are allowlisted by action type and every attempt records a terminal outcome.
+
 ## Audit Requirements
 
 Every privileged action should write:
@@ -121,6 +130,9 @@ The control plane should eventually expose:
 - Cloudflare analytics for edge and access events
 - Supabase metrics and database monitoring
 - audit log stream inside Drape for business events
+- Sentry for scrubbed Next.js server/client, React Native, Edge, and job exceptions linked by correlation ID
+
+Money telemetry must exclude action secrets, provider credentials, evidence bodies, messages, addresses, and payment credentials. Safe fields include action type, request/attempt/correlation IDs, actor role, risk level, status, provider name, and normalized failure code.
 
 ## First Alerts To Wire
 

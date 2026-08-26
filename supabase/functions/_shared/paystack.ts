@@ -226,6 +226,32 @@ export async function verifyPaystackTransaction(reference: string): Promise<Pays
   return payload.data as PaystackTransaction
 }
 
+export async function verifyPaystackTransfer(reference: string): Promise<PaystackTransfer> {
+  const response = await fetchPaystack(`${PAYSTACK_API_BASE}/transfer/verify/${encodeURIComponent(reference)}`, {
+    headers: authHeaders(),
+  }, 'transfer verification')
+
+  if (!response.ok) await parsePaystackError(response)
+  const payload = await response.json()
+  if (!payload?.status || !payload?.data) {
+    throw new Error('Paystack did not return a valid transfer verification payload.')
+  }
+  return payload.data as PaystackTransfer
+}
+
+export async function retrievePaystackRefund(refundId: string): Promise<PaystackRefund> {
+  const response = await fetchPaystack(`${PAYSTACK_API_BASE}/refund/${encodeURIComponent(refundId)}`, {
+    headers: authHeaders(),
+  }, 'refund reconciliation')
+
+  if (!response.ok) await parsePaystackError(response)
+  const payload = await response.json()
+  if (!payload?.status || !payload?.data) {
+    throw new Error('Paystack did not return a valid refund reconciliation payload.')
+  }
+  return payload.data as PaystackRefund
+}
+
 export async function refundPaystackTransaction(options: {
   reference: string
   amount?: number
@@ -444,6 +470,54 @@ export async function createPaystackTransfer(options: {
   }
 
   return payload.data as PaystackTransfer
+}
+
+export async function finalizePaystackTransfer(options: {
+  transferCode: string
+  otp: string
+}): Promise<PaystackTransfer> {
+  const response = await fetchPaystack(`${PAYSTACK_API_BASE}/transfer/finalize_transfer`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      transfer_code: options.transferCode.trim(),
+      otp: options.otp.trim(),
+    }),
+  }, 'transfer OTP finalization')
+
+  if (!response.ok) {
+    await parsePaystackError(response)
+  }
+
+  const payload = await response.json()
+  if (!payload?.status || !payload?.data) {
+    throw new Error('Paystack did not confirm the transfer finalization.')
+  }
+
+  return payload.data as PaystackTransfer
+}
+
+export async function resendPaystackTransferOtp(transferCode: string): Promise<void> {
+  const response = await fetchPaystack(`${PAYSTACK_API_BASE}/transfer/resend_otp`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      transfer_code: transferCode.trim(),
+      reason: 'transfer',
+    }),
+  }, 'transfer OTP resend')
+
+  if (!response.ok) await parsePaystackError(response)
+  const payload = await response.json()
+  if (!payload?.status) {
+    throw new Error('Paystack did not confirm the transfer OTP resend.')
+  }
 }
 
 function hex(bytes: ArrayBuffer): string {
