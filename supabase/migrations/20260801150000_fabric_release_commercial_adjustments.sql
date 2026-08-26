@@ -5,7 +5,7 @@
 create table if not exists public.fabric_release_adjustment_links (
   adjustment_id uuid primary key references public.commercial_adjustments(id) on delete restrict,
   allocation_id uuid not null references public.order_fabric_funding_allocations(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   requested_release_amount integer not null check (requested_release_amount > 0),
   remaining_allowance_snapshot integer not null check (remaining_allowance_snapshot >= 0),
   shortfall_amount integer not null check (shortfall_amount > 0),
@@ -25,7 +25,7 @@ create policy "fabric adjustment links: participants can view"
   on public.fabric_release_adjustment_links for select to authenticated
   using (exists (
     select 1 from public.orders o
-    where o.id = fabric_release_adjustment_links.order_id
+    where o.id::text = fabric_release_adjustment_links.order_id::text
       and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text)
   ));
 grant select on public.fabric_release_adjustment_links to authenticated;
@@ -52,7 +52,7 @@ declare
   v_result jsonb;
   v_adjustment_id uuid;
 begin
-  select * into v_order from public.orders where id = p_order_id for update;
+  select * into v_order from public.orders where id::text = p_order_id::text for update;
   if v_order.id is null then raise exception 'ORDER_NOT_FOUND'; end if;
   if v_order.tailor_id::text <> p_tailor_id::text then raise exception 'ORDER_FORBIDDEN'; end if;
   if v_order.fabric_funding_policy_version <> 'fabric-funding-2026-08-01-v1'

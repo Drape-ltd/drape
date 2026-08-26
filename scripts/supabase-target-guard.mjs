@@ -289,7 +289,7 @@ if (command === 'db:push') {
   console.log(
     `\n[Drape Supabase Guard] Running db push against ${target} project ${expectedRef}.\n`
   )
-  runSupabase(['db', 'push'])
+  runSupabase(['db', 'push', ...rest])
 }
 
 if (command === 'functions:deploy') {

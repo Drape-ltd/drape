@@ -4,7 +4,7 @@ create table public.order_return_requests (
   id uuid primary key default gen_random_uuid(),
   reference text not null unique default ('RET-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,10))),
   financial_case_id uuid not null unique references public.financial_cases(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   requester_id uuid not null references auth.users(id) on delete restrict,
   requester_role text not null check(requester_role in ('CUSTOMER','TAILOR')),
   counterparty_id uuid not null references auth.users(id) on delete restrict,
@@ -26,7 +26,7 @@ create table public.order_return_requests (
 
 create table public.order_resolution_proposals (
   id uuid primary key default gen_random_uuid(), return_request_id uuid not null references public.order_return_requests(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict, version integer not null,
+  order_id text not null references public.orders(id_text) on delete restrict, version integer not null,
   idempotency_key text not null unique, request_hash text not null,
   proposed_by uuid references auth.users(id) on delete set null, proposed_by_role text not null check(proposed_by_role in ('CUSTOMER','TAILOR','OPS')),
   remedy text not null check(remedy in ('EXPLANATION','ALTERATION','REMAKE','PARTIAL_REFUND','FULL_REFUND','RETURN_AND_REFUND','REJECTED')),
@@ -44,7 +44,7 @@ create table public.order_resolution_decisions (
 );
 create table public.order_return_shipments (
   id uuid primary key default gen_random_uuid(), return_request_id uuid not null unique references public.order_return_requests(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict, provider text, tracking_number text, label_storage_bucket text, label_storage_path text,
+  order_id text not null references public.orders(id_text) on delete restrict, provider text, tracking_number text, label_storage_bucket text, label_storage_path text,
   status text not null default 'LABEL_PENDING' check(status in ('LABEL_PENDING','AUTHORIZED','CARRIER_ACCEPTED','IN_TRANSIT','DELIVERED','RECEIVED','LOST','CANCELLED')),
   shipping_paid_by text check(shipping_paid_by is null or shipping_paid_by in ('CUSTOMER','TAILOR','DRAPEON')),
   authorized_at timestamptz, carrier_accepted_at timestamptz, delivered_at timestamptz, received_at timestamptz,
@@ -62,7 +62,7 @@ create table public.order_return_shipment_events (
 create table public.order_refund_resolutions (
   id uuid primary key default gen_random_uuid(), reference text not null unique default ('RFD-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,10))),
   return_request_id uuid unique references public.order_return_requests(id) on delete restrict, financial_case_id uuid not null references public.financial_cases(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict, proposal_id uuid references public.order_resolution_proposals(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict, proposal_id uuid references public.order_resolution_proposals(id) on delete restrict,
   amount integer not null check(amount>0), currency currency not null,
   tailor_work_amount integer not null default 0 check(tailor_work_amount>=0), platform_fee_amount integer not null default 0 check(platform_fee_amount>=0), tax_amount integer not null default 0 check(tax_amount>=0), fulfillment_amount integer not null default 0 check(fulfillment_amount>=0), consultation_amount integer not null default 0 check(consultation_amount>=0), promotion_amount integer not null default 0 check(promotion_amount>=0), drapeon_funded_amount integer not null default 0 check(drapeon_funded_amount>=0),
   released_tailor_recovery_amount integer not null default 0 check(released_tailor_recovery_amount>=0),
@@ -101,7 +101,7 @@ create or replace function public.create_order_return_request(p_order_id text,p_
 returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 declare o public.orders%rowtype; r public.order_return_requests%rowtype; fc public.financial_cases%rowtype; actor_role text; counterparty uuid; eligibility text; eligibility_reason text; return_required boolean; delivered_at timestamptz; req_hash text; existing_hash text;
 begin
-  select * into o from public.orders where id=p_order_id for update;
+  select * into o from public.orders where id_text=p_order_id for update;
   if o.id is null then raise exception 'Order not found.'; end if;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER';counterparty:=o.tailor_id::uuid; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR';counterparty:=o.customer_id::uuid; else raise exception 'Order access denied.'; end if;
   if p_reason_code not in ('CHANGE_OF_MIND','NOT_AS_DESCRIBED','DAMAGED_IN_TRANSIT','WRONG_ITEM','QUALITY_WORKMANSHIP','FIT_MEASUREMENT','LATE_DELIVERY','NOT_RECEIVED') then raise exception 'Invalid return reason.'; end if;
@@ -134,7 +134,7 @@ declare rr public.order_return_requests%rowtype; o public.orders%rowtype; p publ
 begin
   select * into rr from public.order_return_requests where id=p_return_request_id for update;
   if rr.id is null then raise exception 'Return request not found.'; end if;
-  select * into o from public.orders where id=rr.order_id;
+  select * into o from public.orders where id_text=rr.order_id;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER'; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR'; else raise exception 'Order access denied.'; end if;
   if rr.status in ('RESOLVED','DECLINED','CANCELLED') then raise exception 'This return request is closed.'; end if;
   if p_remedy not in ('EXPLANATION','ALTERATION','REMAKE','PARTIAL_REFUND','FULL_REFUND','RETURN_AND_REFUND','REJECTED') then raise exception 'Invalid remedy.'; end if;
@@ -162,7 +162,7 @@ begin
   select * into p from public.order_resolution_proposals where id=p_proposal_id for update;
   if p.id is null then raise exception 'Resolution proposal not found.'; end if;
   select * into rr from public.order_return_requests where id=p.return_request_id for update;
-  select * into o from public.orders where id=p.order_id;
+  select * into o from public.orders where id_text=p.order_id;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER'; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR'; else raise exception 'Order access denied.'; end if;
   if p.proposed_by=p_actor_id then raise exception 'The proposer cannot decide their own proposal.'; end if;
   if p.status<>'OPEN' then raise exception 'This proposal is no longer open.'; end if;
@@ -222,12 +222,12 @@ begin
 end $$;
 
 alter table public.order_return_requests enable row level security; alter table public.order_resolution_proposals enable row level security; alter table public.order_resolution_decisions enable row level security; alter table public.order_return_shipments enable row level security; alter table public.order_return_shipment_events enable row level security; alter table public.order_refund_resolutions enable row level security;
-create policy return_parties_read on public.order_return_requests for select to authenticated using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
-create policy proposal_parties_read on public.order_resolution_proposals for select to authenticated using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
-create policy decision_parties_read on public.order_resolution_decisions for select to authenticated using(exists(select 1 from public.order_return_requests r join public.orders o on o.id=r.order_id where r.id=return_request_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
-create policy return_shipment_parties_read on public.order_return_shipments for select to authenticated using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
-create policy return_shipment_event_parties_read on public.order_return_shipment_events for select to authenticated using(exists(select 1 from public.order_return_requests r join public.orders o on o.id=r.order_id where r.id=return_request_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
-create policy refund_resolution_parties_read on public.order_refund_resolutions for select to authenticated using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy return_parties_read on public.order_return_requests for select to authenticated using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy proposal_parties_read on public.order_resolution_proposals for select to authenticated using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy decision_parties_read on public.order_resolution_decisions for select to authenticated using(exists(select 1 from public.order_return_requests r join public.orders o on o.id::text=r.order_id::text where r.id=return_request_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy return_shipment_parties_read on public.order_return_shipments for select to authenticated using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy return_shipment_event_parties_read on public.order_return_shipment_events for select to authenticated using(exists(select 1 from public.order_return_requests r join public.orders o on o.id::text=r.order_id::text where r.id=return_request_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+create policy refund_resolution_parties_read on public.order_refund_resolutions for select to authenticated using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
 revoke all on public.order_return_requests,public.order_resolution_proposals,public.order_resolution_decisions,public.order_return_shipments,public.order_return_shipment_events,public.order_refund_resolutions from anon,authenticated;
 grant select on public.order_return_requests,public.order_resolution_proposals,public.order_resolution_decisions,public.order_return_shipments,public.order_return_shipment_events,public.order_refund_resolutions to authenticated;
 grant all on public.order_return_requests,public.order_resolution_proposals,public.order_resolution_decisions,public.order_return_shipments,public.order_return_shipment_events,public.order_refund_resolutions to service_role;

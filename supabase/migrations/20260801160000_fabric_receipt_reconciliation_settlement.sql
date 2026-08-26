@@ -195,7 +195,7 @@ begin
 
   select * into v_plan from public.order_settlement_plans where order_id=v_advance.order_id for update;
   if v_plan.id is null then
-    perform public.initialize_order_settlement_plan(v_advance.order_id);
+    perform public.initialize_order_settlement_plan(v_advance.order_id::text);
     select * into v_plan from public.order_settlement_plans where order_id=v_advance.order_id for update;
   end if;
   if v_plan.id is null or v_plan.entitlement_amount<=v_advance.settlement_recovery_amount

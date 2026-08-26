@@ -139,7 +139,7 @@ begin
 
     v_transaction_id := public.post_commercial_ledger_transaction(
       'fabric-foundation-ledger:' || gen_random_uuid()::text,
-      'CAPTURE', 'INITIAL_ORDER', v_order.id, null,
+      'CAPTURE', 'INITIAL_ORDER', v_order.id::text, null,
       'commercial-2026-07-31-v1', 1, gen_random_uuid(), 'verification',
       jsonb_build_array(
         jsonb_build_object('accountCode','PROVIDER_CLEARING','accountScope','provider','direction','DEBIT','amount',10000,'currency',v_quote.currency),

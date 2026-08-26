@@ -18,7 +18,7 @@ begin
       and exists (select 1 from auth.users user_record where user_record.id = order_record.tailor_id::uuid)
       and not exists (
         select 1 from public.consultation_bookings booking
-        where booking.order_id = order_record.id and booking.status = 'CONFIRMED'
+        where booking.order_id::text = order_record.id::text and booking.status = 'CONFIRMED'
       )
     order by order_record.created_at
     limit 1;

@@ -27,7 +27,7 @@ begin
   update public.orders set stage = 'SEWING', commercial_policy_version = 'commercial-2026-07-31-v1' where id = v_order.id;
 
   v_created := public.create_commercial_adjustment(
-    'verify-adjustment:' || gen_random_uuid()::text, v_order.id, v_actor, 'TAILOR',
+    'verify-adjustment:' || gen_random_uuid()::text, v_order.id::text, v_actor, 'TAILOR',
     'DEADLINE_EXTENSION', 'Verification deadline amendment',
     'The production timeline needs a recorded counterpart decision.', 'CUSTOMER',
     100, coalesce(v_order.currency, v_order.quoted_currency::currency, 'USD'::currency),
@@ -35,7 +35,7 @@ begin
   );
   select * into v_adjustment from public.commercial_adjustments where id = (v_created ->> 'adjustmentId')::uuid;
   v_duplicate := public.create_commercial_adjustment(
-    v_adjustment.idempotency_key, v_order.id, v_actor, 'TAILOR',
+    v_adjustment.idempotency_key, v_order.id::text, v_actor, 'TAILOR',
     'DEADLINE_EXTENSION', 'Verification deadline amendment',
     'The production timeline needs a recorded counterpart decision.', 'CUSTOMER',
     100, v_adjustment.currency, v_deadline, '{}'::uuid[], v_adjustment.correlation_id

@@ -4,7 +4,7 @@
 
 create table if not exists public.order_fulfillment_runs (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null unique references public.orders(id) on delete restrict,
+  order_id text not null unique references public.orders(id_text) on delete restrict,
   policy_version text not null default 'drapeon-dispatch-2026-08-22-v1',
   method public.delivery_method not null,
   status text not null default 'QUOTE_REQUIRED' check (status in (
@@ -68,7 +68,7 @@ create table if not exists public.order_fulfillment_runs (
 create table if not exists public.order_fulfillment_parcels (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.order_fulfillment_runs(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   parcel_number integer not null default 1 check (parcel_number > 0),
   status text not null default 'PLANNED' check (status in (
     'PLANNED','BOOKED','CARRIER_ACCEPTED','COLLECTED','AT_HUB','IN_TRANSIT',
@@ -96,7 +96,7 @@ create table if not exists public.order_fulfillment_events (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.order_fulfillment_runs(id) on delete restrict,
   parcel_id uuid references public.order_fulfillment_parcels(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   event_type text not null check (event_type in (
     'QUOTE_RECORDED','CHEAPER_OPTION_REQUESTED','DISPATCH_OPTION_DECLINED','SHORTFALL_REQUESTED','SHORTFALL_PAID',
     'PICKUP_SELECTED','BOOKED','CARRIER_ACCEPTED','COLLECTED','AT_HUB','IN_TRANSIT',
@@ -559,11 +559,11 @@ alter table public.order_fulfillment_events enable row level security;
 alter table public.order_fulfillment_internal_notes enable row level security;
 
 create policy fulfillment_runs_parties_read on public.order_fulfillment_runs for select to authenticated
-using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
 create policy fulfillment_parcels_parties_read on public.order_fulfillment_parcels for select to authenticated
-using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
 create policy fulfillment_events_parties_read on public.order_fulfillment_events for select to authenticated
-using(exists(select 1 from public.orders o where o.id=order_id and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
+using(exists(select 1 from public.orders o where o.id::text=order_id::text and (auth.uid()::text=o.customer_id::text or auth.uid()::text=o.tailor_id::text)));
 
 revoke all on public.order_fulfillment_runs,public.order_fulfillment_parcels,public.order_fulfillment_events,public.order_fulfillment_internal_notes from anon,authenticated;
 grant select on public.order_fulfillment_runs,public.order_fulfillment_parcels,public.order_fulfillment_events to authenticated;

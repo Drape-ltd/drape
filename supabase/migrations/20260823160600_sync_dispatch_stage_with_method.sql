@@ -84,7 +84,7 @@ with repaired as (
     collection_code_attempts = 0,
     collection_code_last_attempt_at = null
   from public.order_fulfillment_runs r
-  where r.order_id = o.id
+  where r.order_id::text = o.id::text
     and o.delivery_method in ('LOCAL_DELIVERY', 'SHIPPING')
     and r.method = o.delivery_method
     and r.status not in ('CANCELLED', 'RECONCILED')

@@ -49,7 +49,7 @@ create table public.commercial_grants (
 );
 
 create table public.commercial_benefit_reservations (
-  id uuid primary key default gen_random_uuid(), order_id text not null references public.orders(id) on delete restrict,
+  id uuid primary key default gen_random_uuid(), order_id text not null references public.orders(id_text) on delete restrict,
   customer_id uuid not null references auth.users(id) on delete restrict, benefit_id uuid not null references public.commercial_benefits(id) on delete restrict,
   promotion_code_id uuid references public.commercial_promotion_codes(id) on delete restrict, grant_id uuid references public.commercial_grants(id) on delete restrict,
   currency currency not null, gross_order_amount integer not null check(gross_order_amount>0),
@@ -68,7 +68,7 @@ create unique index commercial_benefit_one_active_order_idx on public.commercial
 
 create table public.commercial_benefit_redemptions (
   id uuid primary key default gen_random_uuid(), reservation_id uuid not null unique references public.commercial_benefit_reservations(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict, customer_id uuid not null references auth.users(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict, customer_id uuid not null references auth.users(id) on delete restrict,
   amount integer not null check(amount>0), currency currency not null, funding_source text not null,
   ledger_transaction_id uuid references public.commercial_ledger_transactions(id) on delete restrict,
   status text not null default 'CONSUMED' check(status in ('CONSUMED','SETTLED','REVERSED','FRAUD_HELD')),
@@ -76,14 +76,14 @@ create table public.commercial_benefit_redemptions (
 );
 
 create table public.order_tips (
-  id uuid primary key default gen_random_uuid(), order_id text not null unique references public.orders(id) on delete restrict,
+  id uuid primary key default gen_random_uuid(), order_id text not null unique references public.orders(id_text) on delete restrict,
   customer_id uuid not null references auth.users(id) on delete restrict, tailor_id uuid not null references auth.users(id) on delete restrict,
   amount integer not null check(amount>0), currency currency not null, platform_fee_amount integer not null default 0 check(platform_fee_amount=0),
   status text not null default 'PENDING' check(status in ('PENDING','PROCESSING','SUCCEEDED','PAYOUT_PENDING','PAID_OUT','FAILED','REFUNDED','DISPUTED','HELD')),
   provider payment_provider, provider_reference text, payment_id uuid references public.order_payments(id) on delete restrict,
   ledger_transaction_id uuid references public.commercial_ledger_transactions(id) on delete restrict,
   idempotency_key text not null unique, request_hash text not null, correlation_id uuid not null default gen_random_uuid(),
-  payout_id text references public.payouts(id) on delete restrict, payout_provider_reference text,
+  payout_id text references public.payouts(id_text) on delete restrict, payout_provider_reference text,
   failure_reason text, paid_at timestamptz, paid_out_at timestamptz, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 

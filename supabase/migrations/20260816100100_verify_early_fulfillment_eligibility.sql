@@ -21,7 +21,7 @@ begin
       customer_id,tailor_profile_id,event_type,method,status
     ) values (
       '00000000-0000-0000-0000-000000000000',
-      'missing-tailor',
+      '00000000-0000-0000-0000-000000000001',
       'RESOLVED','LOCAL_DELIVERY','ELIGIBLE'
     );
   exception when foreign_key_violation then v_failed := true; end;

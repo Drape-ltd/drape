@@ -22,7 +22,7 @@ begin
       raise notice 'Funded checkout proof skipped: no order with two live auth parties and no allocation.';
       return;
     end if;
-    select coalesce(max(version),0)+200 into v_version from public.order_quotes where order_id=v_order.id;
+    select coalesce(max(version),0)+200 into v_version from public.order_quotes where order_id::text=v_order.id::text;
     insert into public.order_quotes (
       order_id,version,status,change_kind,currency,subtotal_amount,tax_amount,
       platform_fee_amount,delivery_fee_amount,total_amount,completion_date,
@@ -45,7 +45,7 @@ begin
       'Six yards of cotton and a matching lining.','fabric-funding-2026-08-01-v1',1
     );
     v_reservation:=public.create_funded_commercial_pricing_reservation(
-      'verify-funded-checkout:'||v_payment_id,v_order.customer_id::uuid,v_order.id,v_quote.id,
+      'verify-funded-checkout:'||v_payment_id,v_order.customer_id::uuid,v_order.id::text,v_quote.id,
       'INITIAL_ORDER','USD',10000,500,800,1200,12500,'Illinois','ZIPTAX',false,
       jsonb_build_object('currency','USD','subtotalAmount',10000,'platformFeeAmount',500,
         'taxAmount',800,'shippingAmount',1200,'totalAmount',12500,'taxJurisdiction','Illinois',
@@ -58,7 +58,7 @@ begin
     );
     v_reservation_id:=(v_reservation->>'id')::uuid;
     v_reservation_token:=(v_reservation->>'reservationToken')::uuid;
-    perform public.consume_commercial_pricing_reservation(v_reservation_token,v_order.customer_id::uuid,v_order.id);
+    perform public.consume_commercial_pricing_reservation(v_reservation_token,v_order.customer_id::uuid,v_order.id::text);
     insert into public.order_payments (
       id,order_id,phase,provider,currency,amount,status,idempotency_key,provider_payment_id,
       policy_version,pricing_version,correlation_id,commercial_breakdown,
@@ -76,7 +76,7 @@ begin
       v_reservation_id,now(),now()
     );
     v_ledger_id:=public.post_commercial_ledger_transaction(
-      'verify-funded-ledger:'||v_payment_id,'CAPTURE','INITIAL_ORDER',v_order.id,v_payment_id,
+      'verify-funded-ledger:'||v_payment_id,'CAPTURE','INITIAL_ORDER',v_order.id::text,v_payment_id,
       'commercial-2026-07-31-v1',1,(v_reservation->>'correlationId')::uuid,
       'pi_verify_funded_'||v_payment_id,
       jsonb_build_array(

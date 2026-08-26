@@ -92,7 +92,7 @@ begin
     raise exception 'Refund evidence must be a JPEG, PNG, or WebP image.';
   end if;
 
-  select * into v_order from public.orders where id = p_order_id for update;
+  select * into v_order from public.orders where id::text = p_order_id::text for update;
   if v_order.id is null then raise exception 'Order was not found.'; end if;
   if v_order.stage::text <> 'IN_DISPUTE' then
     raise exception 'A reviewed partial refund requires the order to remain under dispute review.';

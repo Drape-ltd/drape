@@ -1,38 +1,58 @@
 -- Persist Expo push tickets and reconcile their receipts. Ticket acceptance only
 -- proves Expo accepted the request; it does not prove APNs/FCM accepted it.
 
-create table if not exists public.push_delivery_attempts (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references auth.users(id) on delete set null,
-  -- The live project predates the UUID declaration in the schema-fix migration
-  -- and stores push_tokens.id as text. Keep this reference aligned with the
-  -- deployed contract so receipt reconciliation works across environments.
-  push_token_id text references public.push_tokens(id) on delete set null,
-  provider text not null default 'EXPO' check (provider in ('EXPO')),
-  ticket_id text,
-  status text not null check (
-    status in (
-      'TICKET_ACCEPTED',
-      'TICKET_ERROR',
-      'RECEIPT_PENDING',
-      'PROVIDER_ACCEPTED',
-      'DELIVERY_ERROR',
-      'RECEIPT_EXPIRED'
-    )
-  ),
-  notification_kind text,
-  order_id uuid,
-  message_id uuid,
-  error_code text,
-  error_message text,
-  receipt_check_count integer not null default 0 check (receipt_check_count >= 0),
-  next_check_at timestamptz,
-  ticket_created_at timestamptz not null default now(),
-  receipt_checked_at timestamptz,
-  provider_accepted_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+do $$
+declare
+  push_token_id_type text;
+begin
+  if to_regclass('public.push_delivery_attempts') is null then
+    select format_type(attribute.atttypid, attribute.atttypmod)
+      into push_token_id_type
+    from pg_attribute attribute
+    where attribute.attrelid = 'public.push_tokens'::regclass
+      and attribute.attname = 'id'
+      and attribute.attnum > 0
+      and not attribute.attisdropped;
+
+    if push_token_id_type is null then
+      raise exception 'Could not resolve public.push_tokens.id type';
+    end if;
+
+    -- Older environments used text IDs while newer projects use UUID IDs.
+    -- Derive the live type so the receipt foreign key remains valid in both.
+    execute format($table$
+      create table public.push_delivery_attempts (
+        id uuid primary key default gen_random_uuid(),
+        user_id uuid references auth.users(id) on delete set null,
+        push_token_id %s references public.push_tokens(id) on delete set null,
+        provider text not null default 'EXPO' check (provider in ('EXPO')),
+        ticket_id text,
+        status text not null check (
+          status in (
+            'TICKET_ACCEPTED',
+            'TICKET_ERROR',
+            'RECEIPT_PENDING',
+            'PROVIDER_ACCEPTED',
+            'DELIVERY_ERROR',
+            'RECEIPT_EXPIRED'
+          )
+        ),
+        notification_kind text,
+        order_id uuid,
+        message_id uuid,
+        error_code text,
+        error_message text,
+        receipt_check_count integer not null default 0 check (receipt_check_count >= 0),
+        next_check_at timestamptz,
+        ticket_created_at timestamptz not null default now(),
+        receipt_checked_at timestamptz,
+        provider_accepted_at timestamptz,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      )
+    $table$, push_token_id_type);
+  end if;
+end $$;
 
 create unique index if not exists push_delivery_attempts_ticket_key
   on public.push_delivery_attempts (ticket_id)

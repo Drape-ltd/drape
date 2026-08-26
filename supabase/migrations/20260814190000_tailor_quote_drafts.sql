@@ -1,6 +1,6 @@
 create table if not exists public.tailor_quote_drafts (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null references public.orders(id) on delete cascade,
+  order_id text not null references public.orders(id_text) on delete cascade,
   tailor_id uuid not null references auth.users(id) on delete cascade,
   version text not null,
   mode text not null check (mode in ('send', 'revise')),

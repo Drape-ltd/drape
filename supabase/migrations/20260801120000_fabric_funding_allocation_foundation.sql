@@ -117,7 +117,7 @@ $$;
 
 create table if not exists public.order_fabric_funding_allocations (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null unique references public.orders(id) on delete restrict,
+  order_id text not null unique references public.orders(id_text) on delete restrict,
   quote_id uuid not null unique references public.order_quotes(id) on delete restrict,
   quote_version integer not null check (quote_version > 0),
   customer_id text not null,

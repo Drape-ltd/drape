@@ -13,7 +13,7 @@ begin
   if exists (
     select 1
     from public.orders o
-    join public.order_fulfillment_runs r on r.order_id = o.id
+    join public.order_fulfillment_runs r on r.order_id::text = o.id::text
     where o.delivery_method in ('LOCAL_DELIVERY', 'SHIPPING')
       and r.method = o.delivery_method
       and r.status not in ('CANCELLED', 'RECONCILED')

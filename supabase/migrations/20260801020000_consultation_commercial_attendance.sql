@@ -53,7 +53,7 @@ set fee_mode = case when coalesce(order_record.consultation_fee, 0) > 0 then 'PA
     payment_status = case when coalesce(order_record.consultation_fee, 0) > 0 then 'PENDING' else 'NOT_REQUIRED' end,
     commercial_snapshot_locked_at = coalesce(booking.commercial_snapshot_locked_at, booking.confirmed_at, booking.created_at)
 from public.orders order_record
-where order_record.id = booking.order_id
+where order_record.id_text = booking.order_id
   and booking.commercial_snapshot_locked_at is null;
 
 alter table public.consultation_bookings
@@ -76,7 +76,7 @@ create index if not exists order_call_rooms_consultation_booking_idx
 
 create table public.consultation_attendance_evidence (
   booking_id uuid primary key references public.consultation_bookings(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   provider text not null default 'DAILY' check (provider = 'DAILY'),
   provider_evidence_complete boolean not null default false,
   customer_verified_seconds integer not null default 0 check (customer_verified_seconds >= 0),
@@ -99,7 +99,7 @@ create table public.consultation_attendance_evidence (
 create table public.consultation_attendance_reviews (
   id uuid primary key default gen_random_uuid(),
   booking_id uuid not null unique references public.consultation_bookings(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   financial_case_id uuid not null unique references public.financial_cases(id) on delete restrict,
   reported_by uuid not null references auth.users(id) on delete restrict,
   reported_by_role text not null check (reported_by_role in ('CUSTOMER', 'TAILOR')),
@@ -330,11 +330,11 @@ alter table public.consultation_attendance_reviews enable row level security;
 
 create policy "Order parties read consultation attendance evidence" on public.consultation_attendance_evidence
   for select to authenticated using (
-    exists (select 1 from public.orders o where o.id = order_id and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text))
+    exists (select 1 from public.orders o where o.id_text = order_id and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text))
   );
 create policy "Order parties read consultation attendance reviews" on public.consultation_attendance_reviews
   for select to authenticated using (
-    exists (select 1 from public.orders o where o.id = order_id and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text))
+    exists (select 1 from public.orders o where o.id_text = order_id and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text))
   );
 
 revoke all on public.consultation_attendance_evidence from anon, authenticated;

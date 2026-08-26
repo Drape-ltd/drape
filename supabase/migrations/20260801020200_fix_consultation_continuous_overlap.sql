@@ -110,7 +110,7 @@ begin
     where order_record.customer_id is not null and order_record.tailor_id is not null
       and exists (select 1 from auth.users u where u.id = order_record.customer_id::uuid)
       and exists (select 1 from auth.users u where u.id = order_record.tailor_id::uuid)
-      and not exists (select 1 from public.consultation_bookings b where b.order_id = order_record.id and b.status = 'CONFIRMED')
+      and not exists (select 1 from public.consultation_bookings b where b.order_id::text = order_record.id::text and b.status = 'CONFIRMED')
     order by order_record.created_at limit 1;
     if v_order.id is null then raise exception 'Continuous-overlap verification requires one development order.'; end if;
     insert into public.consultation_bookings(order_id, tailor_id, customer_id, scheduled_start_at, scheduled_end_at, status)

@@ -71,7 +71,7 @@ begin
       and o.collection_code_expiry > now()
     into v_has_active_credential
     from public.orders o
-    where o.id = new.order_id;
+    where o.id::text = new.order_id::text;
 
     new.payload := coalesce(new.payload, '{}'::jsonb) || jsonb_build_object(
       'freshPickupCredentialIssued', coalesce(v_has_active_credential, false)

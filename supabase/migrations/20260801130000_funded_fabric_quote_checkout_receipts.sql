@@ -191,7 +191,7 @@ create or replace function public.create_funded_commercial_pricing_reservation(
 ) returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare v_request_hash text; v_row public.commercial_pricing_reservations%rowtype; v_quote public.order_quotes%rowtype;
 begin
-  select * into v_quote from public.order_quotes where id = p_quote_id and order_id = p_order_id and status = 'ACCEPTED';
+  select * into v_quote from public.order_quotes where id = p_quote_id and order_id::text = p_order_id and status = 'ACCEPTED';
   if v_quote.id is null then raise exception 'ACCEPTED_FUNDED_QUOTE_REQUIRED'; end if;
   if p_fabric_funding_policy_version <> 'fabric-funding-2026-08-01-v1'
     or v_quote.fabric_funding_policy_version <> p_fabric_funding_policy_version
@@ -237,7 +237,7 @@ declare v_payment public.order_payments%rowtype; v_allocation public.order_fabri
 begin
   select * into v_payment from public.order_payments where id = p_payment_id and phase::text = 'INITIAL_ORDER' and status::text in ('SUCCEEDED','PARTIAL_REFUND','REFUNDED');
   if v_payment.id is null or v_payment.ledger_recorded_at is null then raise exception 'PROVIDER_CONFIRMED_LEDGER_PAYMENT_REQUIRED'; end if;
-  select * into v_allocation from public.order_fabric_funding_allocations where order_id = v_payment.order_id for update;
+  select * into v_allocation from public.order_fabric_funding_allocations where order_id = v_payment.order_id::text for update;
   if v_allocation.id is null then raise exception 'FABRIC_FUNDING_ALLOCATION_NOT_FOUND'; end if;
   select coalesce(sum(case when e.direction='CREDIT' then e.amount else -e.amount end),0)::integer into v_liability
   from public.commercial_ledger_entries e join public.commercial_ledger_transactions t on t.id=e.transaction_id
@@ -273,7 +273,7 @@ begin
   if v_payment.pricing_reservation_id is null or v_payment.ledger_recorded_at is null then raise exception 'The captured payment is missing its pricing reservation or ledger outcome.'; end if;
   select * into v_reservation from public.commercial_pricing_reservations where id=v_payment.pricing_reservation_id;
   if v_reservation.id is null or v_reservation.status <> 'CONSUMED' or v_reservation.total_amount <> v_payment.amount or v_reservation.currency <> v_payment.currency then raise exception 'The captured payment does not match its consumed pricing reservation.'; end if;
-  select * into v_order from public.orders where id=v_payment.order_id;
+  select * into v_order from public.orders where id::text=v_payment.order_id::text;
   select * into v_ledger from public.commercial_ledger_transactions where payment_id=v_payment.id and transaction_kind='CAPTURE';
   if v_order.id is null or v_ledger.id is null then raise exception 'Receipt authority records are missing.'; end if;
   v_consultation_credit:=greatest(coalesce((v_reservation.breakdown->>'consultationCreditAmount')::integer,0),0);
@@ -287,7 +287,7 @@ begin
     fabric_funding_policy_version,fabric_source_snapshot,tailoring_amount,fabric_allowance_amount,
     fabric_allowance_coverage,fabric_sourcing_assumptions
   ) values (
-    v_receipt_number,v_order.id,coalesce(nullif(v_order.reference,''),v_order.id),v_payment.id,v_reservation.id,v_ledger.id,
+    v_receipt_number,v_order.id::text,coalesce(nullif(v_order.reference,''),v_order.id::text),v_payment.id,v_reservation.id,v_ledger.id,
     v_reservation.quote_id,v_order.customer_id,v_order.tailor_id,'INITIAL_ORDER',v_payment.provider,v_payment.provider_payment_id,
     v_reservation.currency,v_reservation.subtotal_amount,v_consultation_credit,v_promotion,v_reservation.platform_fee_amount,
     v_reservation.tax_amount,v_reservation.shipping_amount,v_reservation.total_amount,v_reservation.tax_jurisdiction,

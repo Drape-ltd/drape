@@ -1,7 +1,7 @@
 create table if not exists public.custom_order_brief_drafts (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid not null references auth.users(id) on delete cascade,
-  tailor_profile_id text not null references public.tailor_profiles(id) on delete cascade,
+  tailor_profile_id uuid not null references public.tailor_profiles(id) on delete cascade,
   version text not null,
   current_step integer not null default 0 check (current_step between 0 and 8),
   fields jsonb not null default '{}'::jsonb,

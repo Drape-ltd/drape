@@ -37,7 +37,7 @@ create table public.money_desk_requests (
   )),
   target_type text not null,
   target_id text not null,
-  order_id text references public.orders(id) on delete restrict,
+  order_id text references public.orders(id_text) on delete restrict,
   case_id uuid references public.financial_cases(id) on delete restrict,
   amount integer check (amount is null or amount > 0),
   currency currency,

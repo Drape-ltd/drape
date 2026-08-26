@@ -8,7 +8,7 @@ create table if not exists public.commercial_receipts (
   id uuid primary key default gen_random_uuid(),
   receipt_number text not null unique,
   receipt_version integer not null default 1 check (receipt_version = 1),
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   order_reference text not null,
   payment_id uuid not null unique references public.order_payments(id) on delete restrict,
   pricing_reservation_id uuid not null references public.commercial_pricing_reservations(id) on delete restrict,
@@ -109,7 +109,7 @@ begin
     raise exception 'The captured payment does not match its pricing reservation.';
   end if;
 
-  select * into v_order from public.orders where id = v_payment.order_id;
+  select * into v_order from public.orders where id::text = v_payment.order_id::text;
   if v_order.id is null then raise exception 'The receipt order was not found.'; end if;
 
   select * into v_ledger
@@ -129,7 +129,7 @@ begin
     tax_jurisdiction, tax_source, protected_tailor_amount, policy_version,
     pricing_version, correlation_id, paid_at
   ) values (
-    v_receipt_number, v_order.id, coalesce(nullif(v_order.reference, ''), v_order.id),
+    v_receipt_number, v_order.id::text, coalesce(nullif(v_order.reference, ''), v_order.id::text),
     v_payment.id, v_reservation.id, v_ledger.id, v_reservation.quote_id,
     v_order.customer_id, v_order.tailor_id, 'INITIAL_ORDER', v_payment.provider,
     v_payment.provider_payment_id, v_reservation.currency, v_reservation.subtotal_amount,

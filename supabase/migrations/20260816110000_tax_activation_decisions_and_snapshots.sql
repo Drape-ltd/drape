@@ -99,7 +99,7 @@ create table if not exists public.tax_line_classification_controls (
 create table if not exists public.tax_decision_snapshots (
   id uuid primary key default gen_random_uuid(),
   environment text not null check (environment in ('DEVELOPMENT','PRODUCTION')),
-  order_id text references public.orders(id) on delete restrict,
+  order_id text references public.orders(id_text) on delete restrict,
   quote_id uuid references public.order_quotes(id) on delete restrict,
   payment_id uuid references public.order_payments(id) on delete restrict,
   activation_id uuid not null references public.tax_policy_activations(id) on delete restrict,

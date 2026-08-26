@@ -13,7 +13,7 @@ set
   collection_code_last_attempt_at = null,
   updated_at = now()
 from public.order_fulfillment_runs r
-where r.order_id = o.id
+where r.order_id::text = o.id::text
   and r.method in ('LOCAL_DELIVERY', 'SHIPPING')
   and r.status not in ('CANCELLED', 'RECONCILED')
   and (

@@ -77,7 +77,7 @@ end $$;
 
 create table if not exists public.order_fabric_candidates (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   allocation_id uuid not null references public.order_fabric_funding_allocations(id) on delete restrict,
   customer_id text not null,
   tailor_id text not null,
@@ -150,7 +150,7 @@ create unique index if not exists order_payments_fabric_candidate_active_idx on 
 
 create table if not exists public.order_fabric_handoffs (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null unique references public.orders(id) on delete restrict,
+  order_id text not null unique references public.orders(id_text) on delete restrict,
   customer_id text not null,
   tailor_id text not null,
   mode text not null check (mode in ('CUSTOMER_SHIPS_TO_TAILOR','CUSTOMER_DROPS_OFF_LOCALLY','TAILOR_PICKS_UP_LOCALLY','BRINGS_TO_CONSULTATION')),
@@ -177,7 +177,7 @@ create table if not exists public.order_fabric_handoffs (
 
 create table if not exists public.order_fabric_events (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   candidate_id uuid references public.order_fabric_candidates(id) on delete restrict,
   handoff_id uuid references public.order_fabric_handoffs(id) on delete restrict,
   event_type text not null,
@@ -208,7 +208,7 @@ alter table public.order_fabric_handoffs enable row level security;
 alter table public.order_fabric_events enable row level security;
 create policy "fabric candidates participants view" on public.order_fabric_candidates for select to authenticated using (customer_id=auth.uid()::text or tailor_id=auth.uid()::text);
 create policy "fabric handoffs participants view" on public.order_fabric_handoffs for select to authenticated using (customer_id=auth.uid()::text or tailor_id=auth.uid()::text);
-create policy "fabric events participants view" on public.order_fabric_events for select to authenticated using (exists(select 1 from public.orders o where o.id=order_id and (o.customer_id::text=auth.uid()::text or o.tailor_id::text=auth.uid()::text)));
+create policy "fabric events participants view" on public.order_fabric_events for select to authenticated using (exists(select 1 from public.orders o where o.id::text=order_id::text and (o.customer_id::text=auth.uid()::text or o.tailor_id::text=auth.uid()::text)));
 grant select on public.order_fabric_candidates,public.order_fabric_handoffs,public.order_fabric_events to authenticated;
 grant select,insert,update,delete on public.order_fabric_candidates,public.order_fabric_handoffs to service_role;
 grant select,insert on public.order_fabric_events to service_role;

@@ -8,7 +8,7 @@ create table if not exists public.provider_disputes (
   provider_charge_id text,
   provider_payment_id text,
   payment_id uuid references public.order_payments(id) on delete set null,
-  order_id text references public.orders(id) on delete restrict,
+  order_id text references public.orders(id_text) on delete restrict,
   customer_id uuid references auth.users(id) on delete set null,
   tailor_id uuid references auth.users(id) on delete set null,
   amount integer not null check (amount > 0),
@@ -74,7 +74,7 @@ end $$;
 
 create table if not exists public.provider_transfer_reversals (
   id uuid primary key default gen_random_uuid(),
-  payout_id text not null references public.payouts(id) on delete restrict,
+  payout_id text not null references public.payouts(id_text) on delete restrict,
   money_desk_request_id uuid not null unique references public.money_desk_requests(id) on delete restrict,
   provider payment_provider not null,
   provider_transfer_id text not null,

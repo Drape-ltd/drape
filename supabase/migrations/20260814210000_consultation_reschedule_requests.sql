@@ -1,6 +1,6 @@
 create table if not exists public.consultation_reschedule_requests (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null references public.orders(id) on delete cascade,
+  order_id text not null references public.orders(id_text) on delete cascade,
   booking_id uuid not null references public.consultation_bookings(id) on delete cascade,
   requested_by uuid not null references auth.users(id) on delete restrict,
   requested_by_role text not null check (requested_by_role in ('CUSTOMER', 'TAILOR')),

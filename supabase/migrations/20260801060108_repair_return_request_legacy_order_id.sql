@@ -1,8 +1,11 @@
+-- Production originally used UUID order primary keys while newer workflow RPCs
+-- expose text IDs. Resolve through the generated compatibility key so the same
+-- function works for both legacy production and clean text-ID installations.
 create or replace function public.create_order_return_request(p_order_id text,p_actor_id uuid,p_reason_code text,p_requested_remedy text,p_summary text,p_requested_amount integer,p_currency currency,p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,extensions as $$
 declare o public.orders%rowtype; r public.order_return_requests%rowtype; fc public.financial_cases%rowtype; actor_role text; counterparty uuid; eligibility text; eligibility_reason text; return_required boolean; delivered_at timestamptz; req_hash text; existing_hash text;
 begin
-  select * into o from public.orders where id_text=p_order_id for update;
+  select * into o from public.orders where id::text=p_order_id::text for update;
   if o.id is null then raise exception 'Order not found.'; end if;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER';counterparty:=o.tailor_id::uuid; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR';counterparty:=o.customer_id::uuid; else raise exception 'Order access denied.'; end if;
   if p_reason_code not in ('CHANGE_OF_MIND','NOT_AS_DESCRIBED','DAMAGED_IN_TRANSIT','WRONG_ITEM','QUALITY_WORKMANSHIP','FIT_MEASUREMENT','LATE_DELIVERY','NOT_RECEIVED') then raise exception 'Invalid return reason.'; end if;

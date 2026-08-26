@@ -4,13 +4,27 @@
 
 create extension if not exists pgcrypto with schema extensions;
 
+-- Core identifiers are text in current environments but remain UUID in the
+-- oldest production lineage. Cross-platform commercial contracts use text
+-- identifiers, so expose stable generated keys that preserve real foreign-key
+-- enforcement in either lineage.
+alter table public.orders
+  add column if not exists id_text text generated always as (id::text) stored;
+create unique index if not exists orders_id_text_uidx
+  on public.orders (id_text);
+
+alter table public.disputes
+  add column if not exists id_text text generated always as (id::text) stored;
+create unique index if not exists disputes_id_text_uidx
+  on public.disputes (id_text);
+
 create table public.financial_cases (
   id uuid primary key default gen_random_uuid(),
   reference text not null unique default ('FC-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10))),
   idempotency_key text not null unique,
   request_hash text not null,
-  order_id text not null references public.orders(id) on delete restrict,
-  legacy_dispute_id text unique references public.disputes(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
+  legacy_dispute_id text unique references public.disputes(id_text) on delete restrict,
   case_type text not null check (case_type in (
     'CONSULTATION_ATTENDANCE', 'MATERIAL_REQUEST', 'FULFILLMENT_RECONCILIATION',
     'TIMELINE_AMENDMENT', 'QUALITY_CONCERN', 'RETURN', 'REFUND',
@@ -168,7 +182,7 @@ create policy "Order parties read financial cases" on public.financial_cases
   for select to authenticated using (
     exists (
       select 1 from public.orders o
-      where o.id = financial_cases.order_id
+      where o.id_text = financial_cases.order_id
         and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text)
     )
   );
@@ -179,7 +193,7 @@ create policy "Order parties read visible financial case events" on public.finan
     and exists (
       select 1
       from public.financial_cases fc
-      join public.orders o on o.id = fc.order_id
+      join public.orders o on o.id_text = fc.order_id
       where fc.id = financial_case_events.case_id
         and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text)
     )
@@ -191,7 +205,7 @@ create policy "Order parties read visible financial case evidence" on public.fin
     and exists (
       select 1
       from public.financial_cases fc
-      join public.orders o on o.id = fc.order_id
+      join public.orders o on o.id_text = fc.order_id
       where fc.id = financial_case_evidence.case_id
         and (o.customer_id::text = auth.uid()::text or o.tailor_id::text = auth.uid()::text)
     )
@@ -263,16 +277,16 @@ begin
       'correlationId', v_case.correlation_id, 'duplicate', true);
   end if;
 
-  select * into v_order from public.orders where id = p_order_id for update;
+  select * into v_order from public.orders where id_text = p_order_id for update;
   if v_order.id is null then raise exception 'Order was not found.'; end if;
   if v_order.customer_id::text is distinct from p_customer_id::text then raise exception 'Only the order customer can raise this concern.'; end if;
   if v_order.stage::text not in ('CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION') then
     raise exception 'This order cannot open a concern from its current stage.';
   end if;
-  if exists (select 1 from public.disputes where order_id = p_order_id) then raise exception 'A concern already exists for this order.'; end if;
+  if exists (select 1 from public.disputes where order_id::text = p_order_id) then raise exception 'A concern already exists for this order.'; end if;
 
   insert into public.disputes (order_id, customer_id, reason, description, created_at, updated_at)
-  values (p_order_id, p_customer_id, p_reason_code, trim(p_description), now(), now())
+  values (v_order.id, p_customer_id, p_reason_code, trim(p_description), now(), now())
   returning id into v_dispute_id;
 
   insert into public.financial_cases (
@@ -310,10 +324,10 @@ begin
 
   update public.orders
   set stage = 'IN_DISPUTE', stage_updated_at = now(), auto_release_at = null
-  where id = p_order_id;
+  where id_text = p_order_id;
 
   insert into public.order_stage_updates (order_id, stage, note)
-  values (p_order_id, 'IN_DISPUTE', 'Customer raised a concern for Drapeon review.');
+  values (v_order.id, 'IN_DISPUTE', 'Customer raised a concern for Drapeon review.');
 
   insert into public.audit_logs (actor_id, actor_role, order_id, event, severity, payload)
   values (p_customer_id, 'CUSTOMER', p_order_id::uuid, 'financial_case.opened', 'warn',
@@ -468,8 +482,8 @@ insert into public.financial_cases (
 select
   'legacy-dispute:' || d.id::text,
   encode(extensions.digest(d.id::text, 'sha256'), 'hex'),
-  d.order_id,
-  d.id,
+  d.order_id::text,
+  d.id::text,
   case when lower(d.reason) like '%deliver%' or lower(d.reason) like '%receiv%' then 'FULFILLMENT_RECONCILIATION'
        when lower(d.reason) like '%trust%' or lower(d.reason) like '%platform%' then 'SAFETY_FRAUD'
        else 'QUALITY_CONCERN' end,
@@ -494,7 +508,7 @@ select
   d.created_at,
   d.updated_at
 from public.disputes d
-join public.orders o on o.id = d.order_id
+join public.orders o on o.id::text = d.order_id::text
 on conflict (legacy_dispute_id) do nothing;
 
 insert into public.financial_case_events (

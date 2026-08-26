@@ -21,11 +21,11 @@ begin
     order by o.created_at limit 1;
     if v_order.id is null then raise exception 'Implementation 9 verification requires one order with two live parties.'; end if;
     v_customer:=v_order.customer_id::uuid; v_tailor:=v_order.tailor_id::uuid;
-    v_open:=public.create_order_return_request(v_order.id,v_customer,'NOT_RECEIVED','PARTIAL_REFUND','Verification return request with a protected refund discussion.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
-    v_duplicate:=public.create_order_return_request(v_order.id,v_customer,'NOT_RECEIVED','PARTIAL_REFUND','Verification return request with a protected refund discussion.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
+    v_open:=public.create_order_return_request(v_order.id::text,v_customer,'NOT_RECEIVED','PARTIAL_REFUND','Verification return request with a protected refund discussion.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
+    v_duplicate:=public.create_order_return_request(v_order.id::text,v_customer,'NOT_RECEIVED','PARTIAL_REFUND','Verification return request with a protected refund discussion.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
     if not (v_duplicate->>'existing')::boolean or v_duplicate->>'id'<>v_open->>'id' then raise exception 'Return request idempotency failed.'; end if;
     begin
-      perform public.create_order_return_request(v_order.id,v_customer,'WRONG_ITEM','PARTIAL_REFUND','A different claim must not reuse the same idempotency key.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
+      perform public.create_order_return_request(v_order.id::text,v_customer,'WRONG_ITEM','PARTIAL_REFUND','A different claim must not reuse the same idempotency key.',100,coalesce(v_order.currency,v_order.quoted_currency::currency,'USD'::currency),v_key);
       raise exception 'Return request hash mismatch was accepted.';
     exception when others then if sqlerrm not like 'Idempotency key was reused%' then raise; end if; end;
     select * into v_return from public.order_return_requests where id=(v_open->>'id')::uuid;

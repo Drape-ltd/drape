@@ -65,11 +65,8 @@ create table if not exists public.provider_payout_events (
   event_type text not null,
   provider_destination_id text,
   provider_bank_payout_id text,
-  payout_id text references public.payouts(id) on delete set null,
-  -- tailor_profiles.id is a legacy text identifier in the authoritative schema.
-  -- Keep provider observations compatible with that boundary rather than
-  -- coercing it to the UUID used by auth.users/profile ownership.
-  tailor_profile_id text references public.tailor_profiles(id) on delete set null,
+  payout_id text references public.payouts(id_text) on delete set null,
+  tailor_profile_id uuid references public.tailor_profiles(id) on delete set null,
   amount integer,
   currency currency,
   status text,
@@ -102,7 +99,7 @@ using (
     select 1
     from public.tailor_profiles tp
     where tp.id = provider_payout_events.tailor_profile_id
-      and tp.user_id = auth.uid()::text
+      and tp.user_id = auth.uid()
   )
 );
 

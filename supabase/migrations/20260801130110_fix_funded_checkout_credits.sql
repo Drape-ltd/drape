@@ -42,7 +42,7 @@ create or replace function public.create_funded_commercial_pricing_reservation(
 declare v_request_hash text; v_row public.commercial_pricing_reservations%rowtype;
   v_quote public.order_quotes%rowtype; v_promotion integer;
 begin
-  select * into v_quote from public.order_quotes where id=p_quote_id and order_id=p_order_id and status='ACCEPTED';
+  select * into v_quote from public.order_quotes where id=p_quote_id and order_id::text=p_order_id and status='ACCEPTED';
   if v_quote.id is null then raise exception 'ACCEPTED_FUNDED_QUOTE_REQUIRED'; end if;
   if p_fabric_funding_policy_version <> 'fabric-funding-2026-08-01-v1'
     or v_quote.fabric_funding_policy_version <> p_fabric_funding_policy_version

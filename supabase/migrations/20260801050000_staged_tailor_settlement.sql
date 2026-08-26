@@ -4,7 +4,7 @@
 
 create table public.order_settlement_plans (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null unique references public.orders(id) on delete restrict,
+  order_id text not null unique references public.orders(id_text) on delete restrict,
   customer_id uuid not null references auth.users(id) on delete restrict,
   tailor_id uuid not null references auth.users(id) on delete restrict,
   source_payment_id uuid not null references public.order_payments(id) on delete restrict,
@@ -22,7 +22,7 @@ create table public.order_settlement_plans (
 create table public.order_settlement_tranches (
   id uuid primary key default gen_random_uuid(),
   plan_id uuid not null references public.order_settlement_plans(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   code text not null check (code in ('SHIP_CUSTODY_70','SHIP_DELIVERY_20','SHIP_PROTECTION_10','LOCAL_HANDOFF_80','LOCAL_SETTLED_20')),
   sequence integer not null check (sequence between 1 and 3),
   basis_points integer not null check (basis_points > 0 and basis_points <= 10000),
@@ -34,7 +34,7 @@ create table public.order_settlement_tranches (
   blocked_reason text,
   eligibility_ledger_transaction_id uuid references public.commercial_ledger_transactions(id) on delete restrict,
   release_ledger_transaction_id uuid references public.commercial_ledger_transactions(id) on delete restrict,
-  payout_id text references public.payouts(id) on delete restrict,
+  payout_id text references public.payouts(id_text) on delete restrict,
   money_desk_request_id uuid references public.money_desk_requests(id) on delete restrict,
   provider_reference text,
   correlation_id uuid not null,
@@ -48,7 +48,7 @@ create table public.order_settlement_tranches (
 create table public.order_settlement_evidence (
   id uuid primary key default gen_random_uuid(),
   plan_id uuid not null references public.order_settlement_plans(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   evidence_kind text not null check (evidence_kind in ('DRAPEON_CUSTODY','CARRIER_ACCEPTED','VERIFIED_DELIVERY','AUTHENTICATED_LOCAL_HANDOFF')),
   source text not null check (source in ('DRAPEON_OPS','TRUSTED_CARRIER','CUSTOMER_CONFIRMATION','COLLECTION_CODE','SYSTEM_MIGRATION')),
   occurred_at timestamptz not null,

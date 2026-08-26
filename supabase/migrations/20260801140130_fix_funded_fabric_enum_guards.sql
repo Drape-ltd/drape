@@ -38,7 +38,7 @@ begin
   where idempotency_key = nullif(btrim(p_idempotency_key), '');
   if v_existing.id is not null then return v_existing; end if;
 
-  select * into v_order from public.orders where id = p_order_id for update;
+  select * into v_order from public.orders where id::text = p_order_id::text for update;
   if v_order.id is null then raise exception 'ORDER_NOT_FOUND'; end if;
   if v_order.tailor_id::text <> p_tailor_id::text then raise exception 'ORDER_FORBIDDEN'; end if;
   if v_order.fabric_funding_policy_version <> 'fabric-funding-2026-08-01-v1' then raise exception 'LEGACY_MATERIAL_ADVANCE_REQUIRED'; end if;

@@ -6,9 +6,9 @@
 create table public.payout_destination_corrections (
   id uuid primary key default gen_random_uuid(),
   money_desk_request_id uuid not null unique references public.money_desk_requests(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
-  failed_payout_id text not null unique references public.payouts(id) on delete restrict,
-  tailor_profile_id text not null references public.tailor_profiles(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
+  failed_payout_id text not null unique references public.payouts(id_text) on delete restrict,
+  tailor_profile_id uuid not null references public.tailor_profiles(id) on delete restrict,
   provider payment_provider not null,
   previous_destination_fingerprint text not null,
   replacement_destination_fingerprint text not null,

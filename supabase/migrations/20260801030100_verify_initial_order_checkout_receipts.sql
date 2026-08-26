@@ -1,6 +1,7 @@
 -- Rollback-only proof for Implementation 6 receipt issuance.
 do $$
 declare
+  v_order_pk public.orders.id%type;
   v_order_id text;
   v_customer_id uuid;
   v_tailor_id uuid;
@@ -11,8 +12,8 @@ declare
   v_ledger_id uuid;
   v_receipt public.commercial_receipts%rowtype;
 begin
-  select o.id, o.customer_id::uuid, o.tailor_id::uuid
-  into v_order_id, v_customer_id, v_tailor_id
+  select o.id, o.id::text, o.customer_id::uuid, o.tailor_id::uuid
+  into v_order_pk, v_order_id, v_customer_id, v_tailor_id
   from public.orders o
   join auth.users customer_user on customer_user.id::text = o.customer_id::text
   join auth.users tailor_user on tailor_user.id::text = o.tailor_id::text
@@ -37,7 +38,7 @@ begin
     provider_payment_id, policy_version, pricing_version, correlation_id,
     commercial_breakdown, pricing_reservation_id, confirmed_at, ledger_recorded_at
   ) values (
-    v_payment_id, v_order_id, 'INITIAL_ORDER', 'STRIPE', 'USD', 12500, 'SUCCEEDED',
+    v_payment_id, v_order_pk, 'INITIAL_ORDER', 'STRIPE', 'USD', 12500, 'SUCCEEDED',
     'verify-initial-receipt-payment:' || v_payment_id::text, 'pi_verify_' || v_payment_id::text,
     'commercial-2026-07-31-v1', 1, (v_reservation ->> 'correlationId')::uuid,
     jsonb_build_object('currency','USD','subtotalAmount',10000,'platformFeeAmount',500,'taxAmount',800,'shippingAmount',1200,'totalAmount',12500,'taxJurisdiction','Illinois','taxSource','ZIPTAX','taxFallback',false),

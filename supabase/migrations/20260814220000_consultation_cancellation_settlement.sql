@@ -8,7 +8,7 @@ alter table public.consultation_bookings
   add column if not exists settlement_outcome text,
   add column if not exists settlement_eligible_at timestamptz,
   add column if not exists settled_at timestamptz,
-  add column if not exists payout_id text references public.payouts(id) on delete set null,
+  add column if not exists payout_id text references public.payouts(id_text) on delete set null,
   add column if not exists settlement_provider_reference text,
   add column if not exists settlement_failure_reason text,
   add column if not exists commercial_correlation_id uuid not null default gen_random_uuid();
@@ -39,7 +39,7 @@ create index if not exists consultation_bookings_settlement_queue_idx
 create table public.consultation_commercial_events (
   id uuid primary key default gen_random_uuid(),
   booking_id uuid not null references public.consultation_bookings(id) on delete restrict,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   event_type text not null check (event_type in (
     'CANCELLATION_REQUESTED','CANCELLATION_COMPLETED','REFUND_PENDING',
     'ATTENDANCE_EARNED','PAYOUT_STARTED','PAYOUT_RELEASED','SETTLEMENT_FAILED','OPS_REVIEW_OPENED'
@@ -61,8 +61,8 @@ create policy "Order parties read consultation commercial events"
   on public.consultation_commercial_events for select using (
     exists (
       select 1 from public.orders order_record
-      where order_record.id = consultation_commercial_events.order_id
-        and (order_record.customer_id = auth.uid()::text or order_record.tailor_id = auth.uid()::text)
+      where order_record.id::text = consultation_commercial_events.order_id::text
+        and (order_record.customer_id::text = auth.uid()::text or order_record.tailor_id::text = auth.uid()::text)
     )
   );
 

@@ -71,9 +71,9 @@ alter table public.orders
 create table if not exists public.fulfillment_selection_events (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid not null references auth.users(id) on delete cascade,
-  tailor_profile_id text not null references public.tailor_profiles(id) on delete cascade,
+  tailor_profile_id uuid not null references public.tailor_profiles(id) on delete cascade,
   draft_id uuid references public.custom_order_brief_drafts(id) on delete set null,
-  order_id text references public.orders(id) on delete set null,
+  order_id text references public.orders(id_text) on delete set null,
   event_type text not null check (event_type in ('RESOLVED','BLOCKED','METHOD_CHANGED','LOCATION_CHANGED','PRICING_INVALIDATED')),
   method public.delivery_method not null,
   status text not null check (status in ('ELIGIBLE','BLOCKED')),

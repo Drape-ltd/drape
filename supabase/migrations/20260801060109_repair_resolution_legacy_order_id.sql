@@ -1,3 +1,6 @@
+-- Production originally used UUID order primary keys while resolution records
+-- expose text IDs. Reinstall the normalized functions against the generated
+-- compatibility key after the original migrations have already run.
 create or replace function public.propose_order_resolution(
   p_return_request_id uuid,p_actor_id uuid,p_remedy text,p_amount integer,p_currency currency,
   p_return_required boolean,p_shipping_responsibility text,p_note text,p_idempotency_key text
@@ -6,7 +9,7 @@ declare rr public.order_return_requests%rowtype; o public.orders%rowtype; p publ
 begin
   select * into rr from public.order_return_requests where id=p_return_request_id for update;
   if rr.id is null then raise exception 'Return request not found.'; end if;
-  select * into o from public.orders where id_text=rr.order_id;
+  select * into o from public.orders where id::text=rr.order_id::text;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER'; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR'; else raise exception 'Order access denied.'; end if;
   if rr.status in ('RESOLVED','DECLINED','CANCELLED') then raise exception 'This return request is closed.'; end if;
   if p_remedy not in ('EXPLANATION','ALTERATION','REMAKE','PARTIAL_REFUND','FULL_REFUND','RETURN_AND_REFUND','REJECTED') then raise exception 'Invalid remedy.'; end if;
@@ -34,7 +37,7 @@ begin
   select * into p from public.order_resolution_proposals where id=p_proposal_id for update;
   if p.id is null then raise exception 'Resolution proposal not found.'; end if;
   select * into rr from public.order_return_requests where id=p.return_request_id for update;
-  select * into o from public.orders where id_text=p.order_id;
+  select * into o from public.orders where id::text=p.order_id::text;
   if o.customer_id::text=p_actor_id::text then actor_role:='CUSTOMER'; elsif o.tailor_id::text=p_actor_id::text then actor_role:='TAILOR'; else raise exception 'Order access denied.'; end if;
   if p.proposed_by=p_actor_id then raise exception 'The proposer cannot decide their own proposal.'; end if;
   if p.status<>'OPEN' then raise exception 'This proposal is no longer open.'; end if;

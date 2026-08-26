@@ -37,6 +37,9 @@ where profile.payout_account_verified is true
   and not exists (
     select 1
     from public.payout_change_requests as request
-    where request.tailor_profile_id = profile.id
+    -- Production has legacy environments where this compatibility key is
+    -- still text while tailor_profiles.id is uuid. Comparing their canonical
+    -- text forms keeps the repair portable without rewriting either column.
+    where request.tailor_profile_id::text = profile.id::text
       and request.status = 'PENDING'
   );

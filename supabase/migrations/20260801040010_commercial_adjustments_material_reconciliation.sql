@@ -7,7 +7,7 @@ create table if not exists public.commercial_adjustments (
   reference text not null unique default ('ADJ-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10))),
   idempotency_key text not null unique,
   request_hash text not null,
-  order_id text not null references public.orders(id) on delete restrict,
+  order_id text not null references public.orders(id_text) on delete restrict,
   customer_id text not null,
   tailor_id text,
   financial_case_id uuid unique references public.financial_cases(id) on delete restrict,
@@ -186,7 +186,7 @@ begin
     return jsonb_build_object('adjustmentId', v_row.id, 'reference', v_row.reference, 'status', v_row.status, 'correlationId', v_row.correlation_id, 'duplicate', true);
   end if;
 
-  select * into v_order from public.orders where id = p_order_id for update;
+  select * into v_order from public.orders where id::text = p_order_id::text for update;
   if v_order.id is null then raise exception 'Order was not found.'; end if;
   if v_order.commercial_policy_version <> 'commercial-2026-07-31-v1' then raise exception 'This order uses a legacy commercial policy.'; end if;
   if v_order.stage::text not in ('CONFIRMED','DESIGNING','SOURCING','CUTTING','SEWING','FINISHING','READY_FOR_COLLECTION','READY_FOR_DRAPE_DISPATCH','OUT_FOR_DELIVERY','SHIPPED') then raise exception 'This order cannot open an adjustment from its current stage.'; end if;
@@ -272,7 +272,7 @@ begin
   where id = v_row.id returning * into v_row;
 
   if p_decision = 'ACCEPTED' and v_row.proposed_deadline is not null then
-    update public.orders set deadline = v_row.proposed_deadline where id = v_row.order_id;
+    update public.orders set deadline = v_row.proposed_deadline where id::text = v_row.order_id::text;
   end if;
 
   insert into public.commercial_adjustment_events(adjustment_id,event_type,actor_id,actor_role,payload,correlation_id)
