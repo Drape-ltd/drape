@@ -26,6 +26,8 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "exactOptionalPropertyTypes": false,
+    "declaration": false,
+    "declarationMap": false,
     "noEmit": true,
     "isolatedModules": true
   },

@@ -10,9 +10,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "env:verify": "node ./scripts/verify-environment.mjs",
-    "cf:build": "pnpm dlx @opennextjs/cloudflare@latest build",
+    "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "node ./scripts/cf-preview.mjs",
-    "cf:deploy": "node ./scripts/cf-preview.mjs deploy"
+    "cf:deploy": "node ./scripts/cf-preview.mjs deploy",
+    "cf:deploy:built": "opennextjs-cloudflare deploy"
   },
   "dependencies": {
     "@drape/db": "workspace:*",
@@ -42,6 +43,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
     "@eslint/js": "^9.39.4",
+    "@opennextjs/cloudflare": "1.20.3",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -50,6 +52,7 @@
     "eslint-config-next": "^15.1.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "wrangler": "4.126.0"
   }
 }

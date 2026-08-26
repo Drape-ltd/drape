@@ -187,7 +187,7 @@ function runOpenNext(openNextMode) {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, ['dlx', '@opennextjs/cloudflare@latest', openNextMode], {
+    const child = spawn(command, ['exec', 'opennextjs-cloudflare', openNextMode], {
       stdio: 'inherit',
       env: childEnv,
     })
