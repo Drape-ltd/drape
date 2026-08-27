@@ -34,7 +34,7 @@ const REQUIRED_CRON_JOBS = [
   'finalize-account-deletions',
   'process-notification-jobs',
   'process-ops-jobs',
-  'process-payment-webhooks',
+  'process-money-jobs-recovery',
   'process-push-receipts',
   'monitor-tax-controls',
 ] as const
