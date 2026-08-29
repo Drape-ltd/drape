@@ -109,7 +109,7 @@ jobs:
             fi
             payload="$(jq -n \
               --arg channel "$SLACK_CHANNEL_ID" \
-              --arg text "$emoji *$heading*\n$SUMMARY\n<https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID|Open monitor run> · <https://drapeon.co/ops?view=workflow-issues|Open Drapeon Ops>" \
+              --arg text "$emoji *$heading*\n$SUMMARY\n<https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID|Open monitor run> · <https://ops.drapeon.co/ops?view=workflow-issues|Open Drapeon Ops>" \
               '{channel: $channel, text: $text, unfurl_links: false}')"
             response="$(curl --silent --show-error --max-time 15 \
               --header "Authorization: Bearer $SLACK_BOT_TOKEN" \
