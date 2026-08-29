@@ -60,6 +60,32 @@ Do not say a change is fixed merely because it compiles.
 5. Report what was verified, on which platform, and what remains unverified.
 6. Keep required Metro, device-log, or server sessions running until the live pass is finished.
 
+## Production Migration Safety
+
+1. Never promote an unreviewed migration backlog to production. A production batch may contain at most five pending migrations.
+2. Keep schema changes, data backfills, security repairs, and scheduler changes in separate migrations so each can be reviewed and rolled forward independently.
+3. Apply and verify every migration in development first. Before production, run migration linting and inspect the exact dry-run list; after production, verify Advisors, scheduler activity, queue health, and Disk I/O.
+4. Chunk large backfills and prove their query plans and I/O impact before promotion. Do not combine a large backfill with unrelated feature migrations.
+5. Do not upgrade database compute as the first response to I/O pressure. Identify chatty schedulers, full scans, missing indexes, write amplification, and retention/bloat first.
+6. Production promotion must fail closed when more than five migrations are pending or the pending versions cannot be identified reliably.
+7. Development health does not prove production health. Production can differ in data volume, migration history, scheduler state, provider configuration, and accumulated load; verify the actual production project after every promotion.
+8. Applied migrations are immutable. Correct a deployed migration with a new forward migration; never rely on editing an already-applied file to change a live database.
+9. Prefer event-driven processing for communication, payment, and workflow transitions. Use cron only for bounded recovery and reconciliation, with explicit batch limits, retention, idempotency, and a measured cadence.
+10. Treat database migrations, Edge functions, project secrets, provider callbacks, and client builds as separate release units. Confirm the target project identity for each unit and verify their deployed versions together before calling the release complete.
+11. Production changes must be observable and safely recoverable. Record correlation IDs, terminal outcomes, queue depth and dead-letter state, and roll forward with a corrective change when a live release misbehaves.
+
+## Service Health And Alerting
+
+1. A green public vendor status page does not prove Drapeon is healthy. Monitor both the provider's official component status and a Drapeon-owned synthetic check against the exact production project, callback, queue, and critical user path.
+2. Database monitoring must cover project availability, Disk I/O budget and latency, connection pressure, scheduler churn, queue/dead-letter depth, failed webhooks, and Security/Performance Advisor findings. Development health is never a substitute for these production signals.
+3. Monitor every critical external dependency used by a workflow, including Supabase, Daily, Stripe, Paystack, Expo push, email, SMS, Cloudflare, Sentry, and Slack itself. A dependency is not covered merely because its SDK errors are logged.
+4. Persist health incidents and state transitions in the Ops issue ledger. Slack is a delivery and collaboration surface, not the authoritative incident record.
+5. Send deduplicated Slack alerts when a service becomes degraded or unavailable and a matching recovery update when it becomes healthy. Use cooldowns and correlation keys; do not repeatedly post the same unresolved condition.
+6. Healthy operation belongs in a scheduled digest or explicit recovery message, not continuous green-message spam. Critical/high incidents route immediately to the owning channel with severity, affected surface, first failure, current state, exact Ops deep link, and next action.
+7. Provider and synthetic checks must use bounded timeouts, safe retries, and failure isolation so monitoring cannot create an outage or significant database I/O itself.
+8. Never place customer addresses, payment credentials, evidence URLs, access tokens, provider secrets, or other sensitive payloads in Slack. Use safe identifiers and authenticated Ops deep links for investigation.
+9. After every production migration or Edge deployment, verify the exact deployed versions plus database health, advisors, crons, queues, callbacks, and at least one affected synthetic path before declaring the release healthy.
+
 ## Cross-Role Workflow Proof
 
 Every product workflow must be designed and implemented as one cross-platform system. The default scope always includes iOS, Android, customer web, tailor web, Ops, shared domain contracts, authoritative database/Edge transitions, realtime state, and notification/delivery outcomes. A request that begins on one screen does not narrow this scope. If a surface is intentionally not applicable, record why instead of silently omitting it.
@@ -74,6 +100,15 @@ A customer-to-tailor or tailor-to-customer workflow is not complete until all si
 6. The same action is replayed from the counterpart role or an adjacent valid stage to catch asymmetric gates.
 
 Typechecks, HTTP 2xx responses, queued jobs, or a foreground realtime update are not delivery evidence on their own. Preserve the IDs and provider outcomes used to prove the pass.
+
+## Workflow Outcome Discipline
+
+1. Every mutation must define and render its persisted pending and terminal states, idempotent duplicate behavior, next action, recovery path, and exact contextual exit across mobile, web, and Ops where applicable.
+2. Re-entry, reload, cold start, and deep-link entry must read the authoritative state. Never show a submission form or actionable CTA again when the underlying request already exists and cannot be repeated.
+3. A success screen must be a durable receipt, not a disposable local boolean. Show the request/reference ID, human status, submitted time, material blockers, and what happens next.
+4. Success copy must not claim an email, push, SMS, payment, refund, or payout was delivered without a recorded terminal outcome. Queue communications idempotently, preserve their job/provider outcomes, and make every deep link open the exact context.
+5. Contextual exits are part of the workflow contract. Back, X, cancel, swipe, hardware back, and completion must return to the actual source screen rather than a guessed sibling page.
+6. No implementation is complete when only the initiating screen or Ops changed. Verify authoritative persistence, every applicable user surface, duplicate prevention, communications, and at least one failure/recovery outcome.
 
 ## Replacement Workflow Completion
 

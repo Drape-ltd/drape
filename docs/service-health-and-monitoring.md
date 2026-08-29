@@ -76,14 +76,51 @@ Set this in every deployed Supabase environment:
 DRAPE_HEALTHCHECK_SECRET=<long random value>
 ```
 
-The scheduled GitHub probe lives at
-`.github/workflows/beta-service-health.yml`. Add the same
-`DRAPE_HEALTHCHECK_SECRET` as a GitHub repository secret to include protected
-readiness in the external five-minute monitor. See
+The external GitHub observer lives at
+`.github/workflows/beta-service-health.yml`. It runs outside Supabase every five
+minutes so it can still report a Supabase outage. It monitors:
+
+- Drape DEV and PROD public liveness
+- Drape DEV and PROD protected readiness when their secrets are configured
+- Supabase, Daily, Paystack, Stripe, Cloudflare, Sentry, Expo, and Slack through
+  their official public status APIs
+
+The observer fingerprints the active incident set. A new or changed incident
+opens one failed GitHub run and one Slack alert. An unchanged incident is kept
+visible without sending duplicates. Recovery produces one recovery message.
+GitHub remains the fallback when Slack itself is unavailable.
+
+Configure these GitHub repository secrets:
+
+```text
+DRAPE_HEALTHCHECK_SECRET=<DEV dedicated health secret>
+DRAPE_PROD_HEALTHCHECK_SECRET=<PROD dedicated health secret>
+SLACK_BOT_TOKEN=<DrapeTalk bot token with chat:write>
+```
+
+Slack transition alerts go to `#ops-critical` and include links to the exact
+GitHub monitor run and Drapeon Ops. Add the bot to that channel. Never use an
+expiring Slack app-configuration token as `SLACK_BOT_TOKEN`; use the installed
+bot OAuth token.
+
+See
 `docs/beta-observability-runbook.md` for beta log queries and push receipt
 interpretation.
 
 The readiness endpoint accepts only this dedicated health secret. Do not put the Supabase service role key in external uptime tools.
+
+## Security Advisor Boundary
+
+Protected readiness catches reachable runtime, secret, database, scheduled-job,
+push, and payout-watchdog failures. Public Supabase status reports platform
+incidents. Neither is a complete feed of project-specific Supabase Security
+Advisor findings.
+
+Security Advisor findings must continue to be reviewed after migrations and
+before releases. A future automated feed requires a supported Supabase
+Management API or native webhook with a narrowly scoped credential; do not put a
+personal access token into the app or the public monitor. Runtime configuration
+drift that affects readiness will still alert immediately.
 
 ## Scheduled Jobs
 

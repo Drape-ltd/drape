@@ -1,4 +1,4 @@
-name: Beta Service Health
+name: Drapeon Service Health
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: beta-service-health
+  group: drapeon-service-health
   cancel-in-progress: true
 
 jobs:
@@ -18,9 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
-      HEALTH_URL: https://pqptfuqogvrajozfsqzi.supabase.co/functions/v1/service-health
-      HEALTH_SECRET: ${{ secrets.DRAPE_HEALTHCHECK_SECRET }}
+      DRAPE_HEALTHCHECK_SECRET: ${{ secrets.DRAPE_HEALTHCHECK_SECRET }}
+      DRAPE_PROD_HEALTHCHECK_SECRET: ${{ secrets.DRAPE_PROD_HEALTHCHECK_SECRET }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_ID: C0BSXPAGVEX
     steps:
+      - name: Check out monitor
+        uses: actions/checkout@v4
+
       - name: Find previous health state
         id: previous
         env:
@@ -46,87 +51,27 @@ jobs:
           run-id: ${{ steps.previous.outputs.run_id }}
           github-token: ${{ github.token }}
 
-      - name: Check public Edge liveness
-        id: liveness
-        shell: bash
-        run: |
-          set -euo pipefail
-          status="$(curl \
-            --silent \
-            --show-error \
-            --retry 2 \
-            --retry-all-errors \
-            --max-time 20 \
-            --output /tmp/drape-live.json \
-            --write-out "%{http_code}" \
-            "$HEALTH_URL?check=live" || true)"
-          if [[ "$status" == "200" ]] && jq -e '.ok == true and .status == "ok"' /tmp/drape-live.json >/dev/null 2>&1; then
-            echo "healthy=true" >> "$GITHUB_OUTPUT"
-            echo "summary=Edge liveness passed." >> "$GITHUB_OUTPUT"
-          else
-            echo "healthy=false" >> "$GITHUB_OUTPUT"
-            echo "summary=Edge liveness failed with HTTP ${status:-000}." >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check protected beta readiness
-        id: readiness
-        if: ${{ env.HEALTH_SECRET != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          status="$(
-            curl \
-              --silent \
-              --show-error \
-              --retry 2 \
-              --retry-all-errors \
-              --max-time 45 \
-              --output /tmp/drape-ready.json \
-              --write-out "%{http_code}" \
-              --header "Authorization: Bearer $HEALTH_SECRET" \
-              "$HEALTH_URL?check=ready&tier=beta"
-          )" || true
-          if jq -e . /tmp/drape-ready.json >/dev/null 2>&1; then
-            jq . /tmp/drape-ready.json
-            jq -r '.checks | to_entries[] | select(.value.status == "warn") | "::warning title=Readiness warning: \(.key)::\(.value.message)"' /tmp/drape-ready.json
-          fi
-          if [[ "$status" == "200" ]] && jq -e '.ok == true' /tmp/drape-ready.json >/dev/null 2>&1; then
-            echo "healthy=true" >> "$GITHUB_OUTPUT"
-            echo "summary=Protected beta readiness passed." >> "$GITHUB_OUTPUT"
-          else
-            summary="$(jq -r '[.checks | to_entries[] | select(.value.status == "fail") | "\(.key): \(.value.message)"] | if length == 0 then "Protected beta readiness failed." else join("; ") end' /tmp/drape-ready.json 2>/dev/null || echo 'Protected beta readiness failed.')"
-            summary="${summary//$'\n'/ }"
-            echo "healthy=false" >> "$GITHUB_OUTPUT"
-            echo "summary=$summary" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Report missing readiness secret
-        if: ${{ env.HEALTH_SECRET == '' }}
-        run: |
-          echo "::warning::Add the repository secret DRAPE_HEALTHCHECK_SECRET to enable protected readiness checks."
-
-      - name: Record current health state
+      - name: Check Drapeon and provider health
         id: state
-        if: ${{ always() }}
-        env:
-          LIVE_HEALTHY: ${{ steps.liveness.outputs.healthy }}
-          LIVE_SUMMARY: ${{ steps.liveness.outputs.summary }}
-          READY_HEALTHY: ${{ steps.readiness.outputs.healthy }}
-          READY_SUMMARY: ${{ steps.readiness.outputs.summary }}
         shell: bash
         run: |
           set -euo pipefail
-          current="ok"
-          if [[ "$LIVE_HEALTHY" != "true" ]]; then
-            current="fail"
-          elif [[ -n "$HEALTH_SECRET" && "$READY_HEALTHY" != "true" ]]; then
-            current="fail"
-          fi
           mkdir -p /tmp/current-health
-          printf '%s\n' "$current" > /tmp/current-health/state
-          printf '%s %s\n' "$LIVE_SUMMARY" "$READY_SUMMARY" > /tmp/current-health/summary
-          echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "summary=$LIVE_SUMMARY $READY_SUMMARY" >> "$GITHUB_OUTPUT"
+          node scripts/external-service-health.mjs --output /tmp/current-health/report.json
+          jq -r '.state' /tmp/current-health/report.json > /tmp/current-health/state
+          jq -r '.fingerprint' /tmp/current-health/report.json > /tmp/current-health/fingerprint
+          {
+            echo "current=$(jq -r '.state' /tmp/current-health/report.json)"
+            echo "fingerprint=$(jq -r '.fingerprint' /tmp/current-health/report.json)"
+            echo "summary=$(jq -r '.summary | gsub("[\\r\\n]+"; " ")' /tmp/current-health/report.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report missing protected-readiness secrets
+        if: ${{ env.DRAPE_HEALTHCHECK_SECRET == '' || env.DRAPE_PROD_HEALTHCHECK_SECRET == '' }}
+        shell: bash
+        run: |
+          [[ -n "$DRAPE_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_HEALTHCHECK_SECRET is missing; DEV protected readiness is not monitored."
+          [[ -n "$DRAPE_PROD_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_PROD_HEALTHCHECK_SECRET is missing; PROD protected readiness is not monitored."
 
       - name: Persist health state
         if: ${{ always() }}
@@ -141,30 +86,58 @@ jobs:
         if: ${{ always() }}
         env:
           CURRENT: ${{ steps.state.outputs.current }}
+          FINGERPRINT: ${{ steps.state.outputs.fingerprint }}
           SUMMARY: ${{ steps.state.outputs.summary }}
         shell: bash
         run: |
           set -euo pipefail
           previous="unknown"
+          previous_fingerprint="unknown"
           if [[ -f /tmp/previous-health/state ]]; then
             previous="$(tr -d '\r\n' < /tmp/previous-health/state)"
           fi
+          if [[ -f /tmp/previous-health/fingerprint ]]; then
+            previous_fingerprint="$(tr -d '\r\n' < /tmp/previous-health/fingerprint)"
+          fi
 
-          if [[ "$CURRENT" == "fail" && "$previous" == "fail" ]]; then
-            echo "::warning title=Ongoing beta service incident::$SUMMARY"
-            echo "The same incident is still open; a duplicate failure email was suppressed." >> "$GITHUB_STEP_SUMMARY"
+          send_slack() {
+            local heading="$1"
+            local emoji="$2"
+            if [[ -z "$SLACK_BOT_TOKEN" ]]; then
+              echo "::warning::SLACK_BOT_TOKEN is missing; GitHub remains the alert fallback."
+              return 0
+            fi
+            payload="$(jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg text "$emoji *$heading*\n$SUMMARY\n<https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID|Open monitor run> · <https://drapeon.co/ops?view=workflow-issues|Open Drapeon Ops>" \
+              '{channel: $channel, text: $text, unfurl_links: false}')"
+            response="$(curl --silent --show-error --max-time 15 \
+              --header "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              --header "Content-Type: application/json; charset=utf-8" \
+              --data "$payload" \
+              https://slack.com/api/chat.postMessage || true)"
+            if ! jq -e '.ok == true' <<<"$response" >/dev/null 2>&1; then
+              echo "::warning::Slack alert failed; GitHub remains the alert fallback."
+            fi
+          }
+
+          if [[ "$CURRENT" == "fail" && "$previous" == "fail" && "$FINGERPRINT" == "$previous_fingerprint" ]]; then
+            echo "::warning title=Ongoing Drapeon service incident::$SUMMARY"
+            echo "The same incident is still open; duplicate GitHub and Slack alerts were suppressed." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           if [[ "$CURRENT" == "fail" ]]; then
-            echo "::error title=New beta service incident::$SUMMARY"
-            echo "A new beta service incident started: $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+            send_slack "Drapeon service incident changed" ":rotating_light:"
+            echo "::error title=Drapeon service incident::$SUMMARY"
+            echo "A new or changed service incident was detected: $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
           if [[ "$previous" == "fail" ]]; then
-            echo "::notice title=Beta service recovered::$SUMMARY"
-            echo "The prior beta service incident recovered." >> "$GITHUB_STEP_SUMMARY"
+            send_slack "Drapeon services recovered" ":white_check_mark:"
+            echo "::notice title=Drapeon services recovered::$SUMMARY"
+            echo "The prior service incident recovered." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Beta service health remains clear." >> "$GITHUB_STEP_SUMMARY"
+            echo "Drapeon and monitored provider health remains clear." >> "$GITHUB_STEP_SUMMARY"
           fi
