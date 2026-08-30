@@ -43,19 +43,30 @@ function parseManifest(path) {
   }
 
   const parsed = JSON.parse(readFileSync(path, 'utf8'))
-  if (!Array.isArray(parsed.tailors) || parsed.tailors.length < 3) {
-    throw new Error('Media manifest must include at least 3 tailors.')
+  if (parsed.assetRoot) {
+    for (const tailor of parsed.tailors ?? []) {
+      const assetKey = tailor.assetKey ?? tailor.key
+      tailor.avatarPath = `${parsed.assetRoot}/identity/${assetKey}-founder-v1.png`
+      tailor.portfolioPaths = Array.from(
+        { length: 6 },
+        (_, index) => `${parsed.assetRoot}/portfolio/${assetKey}/${String(index + 1).padStart(2, '0')}.png`,
+      )
+    }
+  }
+  if (!Array.isArray(parsed.tailors) || parsed.tailors.length < 8) {
+    throw new Error('Media manifest must include at least 8 globally representative showcase tailors.')
   }
 
   for (const tailor of parsed.tailors) {
     if (!tailor.key || !tailor.email || !tailor.displayName) {
       throw new Error('Every tailor needs key, email, and displayName.')
     }
-    if (!Array.isArray(tailor.portfolioUrls) || tailor.portfolioUrls.length < 4) {
-      throw new Error(`${tailor.key} needs at least 4 portfolioUrls for store screenshots.`)
+    const portfolioMedia = tailor.portfolioPaths ?? tailor.portfolioUrls
+    if (!Array.isArray(portfolioMedia) || portfolioMedia.length < 6) {
+      throw new Error(`${tailor.key} needs at least 6 portfolioPaths or portfolioUrls for store screenshots.`)
     }
-    if (!tailor.avatarUrl) {
-      throw new Error(`${tailor.key} needs avatarUrl or an intentional initials-only launch decision.`)
+    if (!tailor.avatarPath && !tailor.avatarUrl) {
+      throw new Error(`${tailor.key} needs avatarPath or avatarUrl.`)
     }
   }
 
@@ -101,6 +112,7 @@ async function ensureAuthUser(baseUrl, headers, input) {
           role: input.role,
           display_name: input.displayName,
           demo_account: true,
+          showcase_account: true,
         },
       }),
     },
@@ -126,6 +138,14 @@ async function upsertRows(baseUrl, headers, table, rows, onConflict) {
   )
 }
 
+async function existingRows(baseUrl, headers, table, select, filter) {
+  return fetchJson(
+    `${baseUrl}/rest/v1/${table}?select=${encodeURIComponent(select)}&${filter}`,
+    { headers },
+    `Load existing ${table}`,
+  )
+}
+
 function requireUrlList(values, label) {
   const urls = (values ?? [])
     .filter((value) => typeof value === 'string')
@@ -144,11 +164,12 @@ function manifestMediaEntries(manifest) {
     entries.push({
       label: `${tailor.key}.avatarUrl`,
       url: tailor.avatarUrl,
+      path: tailor.avatarPath,
     })
-    for (const [index, url] of tailor.portfolioUrls.entries()) {
+    for (const [index, value] of (tailor.portfolioPaths ?? tailor.portfolioUrls).entries()) {
       entries.push({
-        label: `${tailor.key}.portfolioUrls.${index}`,
-        url,
+        label: `${tailor.key}.portfolio.${index}`,
+        ...(tailor.portfolioPaths ? { path: value } : { url: value }),
       })
     }
     for (const [itemIndex, item] of (tailor.shopItems ?? []).entries()) {
@@ -227,6 +248,16 @@ async function validateManifestMedia(manifest) {
   const checkedUrls = new Map()
 
   for (const entry of manifestMediaEntries(manifest)) {
+    if (entry.path) {
+      const bytes = new Uint8Array(readFileSync(entry.path))
+      if (bytes.byteLength === 0) throw new Error(`${entry.label} is empty.`)
+      const incompatibleChunks = pngChunkTypes(bytes.slice(0, MEDIA_PREFLIGHT_BYTES))
+        .filter((type) => IOS_INCOMPATIBLE_PNG_CHUNKS.has(type))
+      if (incompatibleChunks.length > 0) {
+        throw new Error(`${entry.label} contains iOS-incompatible PNG metadata (${incompatibleChunks.join(', ')}).`)
+      }
+      continue
+    }
     const url = typeof entry.url === 'string' ? entry.url.trim() : ''
     if (!url || checkedUrls.has(url)) continue
 
@@ -258,6 +289,40 @@ async function validateManifestMedia(manifest) {
   }
 }
 
+async function uploadLocalMedia(baseUrl, headers, sourcePath, objectPath) {
+  const bytes = readFileSync(sourcePath)
+  const response = await fetch(`${baseUrl}/storage/v1/object/portfolio-photos/${objectPath}`, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      'content-type': 'image/png',
+      'x-upsert': 'true',
+    },
+    body: bytes,
+  })
+  if (!response.ok) throw new Error(`Upload ${sourcePath} failed (${response.status}): ${await response.text()}`)
+  return `${baseUrl}/storage/v1/object/public/portfolio-photos/${objectPath}`
+}
+
+async function materializeLocalMedia(manifest, baseUrl, headers) {
+  for (const tailor of manifest.tailors) {
+    if (tailor.avatarPath) {
+      tailor.avatarUrl = await uploadLocalMedia(baseUrl, headers, tailor.avatarPath, `showcase/${tailor.key}/avatar.png`)
+    }
+    if (tailor.portfolioPaths) {
+      tailor.portfolioUrls = []
+      for (const [index, sourcePath] of tailor.portfolioPaths.entries()) {
+        tailor.portfolioUrls.push(await uploadLocalMedia(
+          baseUrl,
+          headers,
+          sourcePath,
+          `showcase/${tailor.key}/portfolio-${String(index + 1).padStart(2, '0')}.png`,
+        ))
+      }
+    }
+  }
+}
+
 const env = {
   ...loadEnv('apps/web/.env.local'),
   ...process.env,
@@ -279,57 +344,64 @@ const headers = {
   'content-type': 'application/json',
 }
 
+await materializeLocalMedia(manifest, baseUrl, headers)
+
 const publicUsers = []
 const customerProfiles = []
 const tailorProfiles = []
 const portfolioPhotos = []
 const sellerItems = []
+const pickupDetails = []
 
-const reviewerCustomer = manifest.reviewerCustomer ?? {
+const showcaseOrigins = {
+  'alder-rue': { line1: '18 Review Studio Lane', city: 'London', region: 'London', postalCode: 'EC1A 1BB', countryCode: 'GB' },
+  'maison-elara': { line1: '24 Rue de la Démonstration', city: 'Paris', region: 'Île-de-France', postalCode: '75002', countryCode: 'FR' },
+  northline: { line1: '80 Review Workshop Road', city: 'Toronto', region: 'ON', postalCode: 'M5V 2T6', countryCode: 'CA' },
+  sora: { line1: '2-10 Review Atelier', city: 'Tokyo', region: 'Tokyo', postalCode: '150-0001', countryCode: 'JP' },
+  'iya-dara': { line1: '14 Showcase Studio Close', city: 'Lagos', region: 'Lagos', postalCode: '101233', countryCode: 'NG' },
+  'noor-form': { line1: '12 Review Design District', city: 'Dubai', region: 'Dubai', postalCode: '00000', countryCode: 'AE' },
+  'studio-mare': { line1: '48 Rua Estúdio Showcase', city: 'São Paulo', region: 'SP', postalCode: '01310-100', countryCode: 'BR' },
+  'common-thread': { line1: '100 Review Loft Avenue', city: 'New York', region: 'NY', postalCode: '10013', countryCode: 'US' },
+}
+
+const reviewerCustomers = manifest.reviewerCustomers ?? [manifest.reviewerCustomer ?? {
   email: 'reviewer.customer@drapeon.co',
   displayName: 'Drape Reviewer',
   phone: '+15550101010',
   defaultCurrency: 'USD',
+}]
+
+for (const [reviewerIndex, reviewerCustomer] of reviewerCustomers.entries()) {
+  const reviewerCustomerId = await ensureAuthUser(baseUrl, headers, {
+    email: reviewerCustomer.email,
+    role: 'CUSTOMER',
+    displayName: reviewerCustomer.displayName,
+    password: reviewerCustomer.password,
+  })
+  publicUsers.push({
+    id: reviewerCustomerId,
+    email: reviewerCustomer.email,
+    display_name: reviewerCustomer.displayName,
+    role: 'CUSTOMER',
+    phone: reviewerCustomer.phone ?? `+15550101${String(10 + reviewerIndex).padStart(4, '0')}`,
+    default_currency: reviewerCustomer.defaultCurrency ?? 'USD',
+    currency_source: 'USER_SELECTED',
+    region_code: reviewerCustomer.regionCode ?? 'US',
+    updated_at: new Date().toISOString(),
+  })
+  customerProfiles.push({
+    user_id: reviewerCustomerId,
+    display_name: reviewerCustomer.displayName,
+    measurements: {
+      unit: 'in', height: 68, chest: 36, waist: 29, hips: 39,
+      shoulderWidth: 16, sleeveLength: 23.5, inseam: 30,
+      fitStyle: 'Relaxed', fitPreference: 'RELAXED', measurementSource: 'STORE_DEMO',
+    },
+    updated_at: new Date().toISOString(),
+  })
 }
 
-const reviewerCustomerId = await ensureAuthUser(baseUrl, headers, {
-  email: reviewerCustomer.email,
-  role: 'CUSTOMER',
-  displayName: reviewerCustomer.displayName,
-})
-
-publicUsers.push({
-  id: reviewerCustomerId,
-  email: reviewerCustomer.email,
-  display_name: reviewerCustomer.displayName,
-  role: 'CUSTOMER',
-  phone: reviewerCustomer.phone ?? '+15550101010',
-  default_currency: reviewerCustomer.defaultCurrency ?? 'USD',
-  currency_source: 'STORE_DEMO',
-  region_code: reviewerCustomer.regionCode ?? 'US',
-  updated_at: new Date().toISOString(),
-})
-
-customerProfiles.push({
-  user_id: reviewerCustomerId,
-  display_name: reviewerCustomer.displayName,
-  measurements: {
-    unit: 'in',
-    height: 68,
-    chest: 36,
-    waist: 29,
-    hips: 39,
-    shoulderWidth: 16,
-    sleeveLength: 23.5,
-    inseam: 30,
-    fitStyle: 'Relaxed',
-    fitPreference: 'RELAXED',
-    measurementSource: 'STORE_DEMO',
-  },
-  updated_at: new Date().toISOString(),
-})
-
-for (const tailor of manifest.tailors) {
+for (const [tailorIndex, tailor] of manifest.tailors.entries()) {
   const userId = await ensureAuthUser(baseUrl, headers, {
     email: tailor.email,
     role: 'TAILOR',
@@ -337,6 +409,7 @@ for (const tailor of manifest.tailors) {
     password: tailor.password,
   })
   const profileId = stableUuid(`store-demo-tailor-profile:${tailor.key}`)
+  const assetKey = tailor.assetKey ?? tailor.key
   const portfolioUrls = requireUrlList(tailor.portfolioUrls, `${tailor.key}.portfolioUrls`)
   const avatarUrl = typeof tailor.avatarUrl === 'string' ? tailor.avatarUrl.trim() : null
 
@@ -345,10 +418,27 @@ for (const tailor of manifest.tailors) {
     email: tailor.email,
     display_name: tailor.displayName,
     role: 'TAILOR',
-    phone: tailor.phone ?? '+15550102020',
+    phone: tailor.phone ?? `+15550102${String(tailorIndex).padStart(4, '0')}`,
     default_currency: tailor.currency ?? 'USD',
-    currency_source: 'STORE_DEMO',
+    currency_source: 'USER_SELECTED',
     region_code: tailor.regionCode ?? 'US',
+    updated_at: new Date().toISOString(),
+  })
+
+  const origin = showcaseOrigins[assetKey]
+  if (!origin) throw new Error(`Missing showcase fulfillment origin for ${assetKey}`)
+  pickupDetails.push({
+    user_id: userId,
+    pickup_address: `${origin.line1}, ${origin.city}`,
+    pickup_instructions: 'Synthetic showcase location; not a customer-facing walk-in address.',
+    pickup_address_line1: origin.line1,
+    pickup_city: origin.city,
+    pickup_region: origin.region,
+    pickup_postal_code: origin.postalCode,
+    pickup_country_code: origin.countryCode,
+    pickup_location_verification_source: 'STORE_SHOWCASE_FIXTURE',
+    pickup_location_verification_reference: `showcase:${tailor.key}`,
+    pickup_location_verified_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   })
 
@@ -358,8 +448,8 @@ for (const tailor of manifest.tailors) {
     display_name: tailor.displayName,
     business_name: tailor.businessName ?? tailor.displayName,
     seller_type: tailor.sellerType ?? 'TAILOR',
-    bio: tailor.bio ?? 'Launch demo tailor profile for reviewer and screenshot QA.',
-    location: tailor.location ?? 'Lagos, Nigeria',
+    bio: tailor.bio ?? 'Independent studio available for the Drapeon store showcase.',
+    location: tailor.location ?? 'New York, USA',
     languages: tailor.languages ?? ['English'],
     specialty_tags: tailor.specialtyTags ?? ['Occasion wear', 'Traditional'],
     price_range_min: tailor.priceRangeMin ?? 120,
@@ -374,9 +464,9 @@ for (const tailor of manifest.tailors) {
     availability: tailor.availability ?? 'OPEN',
     is_verified: true,
     is_live: true,
-    avg_rating: tailor.avgRating ?? 4.8,
-    total_reviews: tailor.totalReviews ?? 18,
-    total_orders: tailor.totalOrders ?? 42,
+    avg_rating: tailor.avgRating ?? 0,
+    total_reviews: tailor.totalReviews ?? 0,
+    total_orders: tailor.totalOrders ?? 0,
     avg_response_hours: tailor.avgResponseHours ?? 3,
     supports_custom_orders: tailor.supportsCustomOrders ?? true,
     supports_ready_made: tailor.supportsReadyMade ?? true,
@@ -386,7 +476,7 @@ for (const tailor of manifest.tailors) {
     delivery_fee: tailor.deliveryFee ?? 1500,
     shipping_fee: tailor.shippingFee ?? 3500,
     ships_internationally: tailor.shipsInternationally ?? true,
-    id_verification_status: 'APPROVED',
+    id_verification_status: 'VERIFIED',
     id_verified_at: new Date().toISOString(),
     portfolio_photo_urls: portfolioUrls,
     updated_at: new Date().toISOString(),
@@ -433,17 +523,51 @@ for (const tailor of manifest.tailors) {
   }
 }
 
+// Verified profile identity, public identity, and payout fields are protected by
+// database triggers. Repeat runs update ordinary showcase fields while leaving
+// reviewed values untouched, so rerunning this seed does not weaken that trust
+// boundary or fail on a fresh id_verified_at timestamp.
+const existingTailorRows = await existingRows(
+  baseUrl,
+  headers,
+  'tailor_profiles',
+  'user_id',
+  `user_id=in.(${tailorProfiles.map((profile) => profile.user_id).join(',')})`,
+)
+const existingTailorUserIds = new Set(existingTailorRows.map((row) => row.user_id))
+const protectedExistingProfileFields = [
+  'avatar_url',
+  'display_name',
+  'bio',
+  'location',
+  'languages',
+  'specialty_tags',
+  'currency',
+  'payout_currency',
+  'payout_provider',
+  'payout_account_type',
+  'payout_account_verified',
+  'stripe_connect_account_id',
+  'id_verification_status',
+  'id_verified_at',
+]
+for (const profile of tailorProfiles) {
+  if (!existingTailorUserIds.has(profile.user_id)) continue
+  for (const field of protectedExistingProfileFields) delete profile[field]
+}
+
 await upsertRows(baseUrl, headers, 'users', publicUsers, 'id')
 await upsertRows(baseUrl, headers, 'customer_profiles', customerProfiles, 'user_id')
 await upsertRows(baseUrl, headers, 'tailor_profiles', tailorProfiles, 'user_id')
+await upsertRows(baseUrl, headers, 'tailor_pickup_details', pickupDetails, 'user_id')
 await upsertRows(baseUrl, headers, 'portfolio_photos', portfolioPhotos, 'id')
 await upsertRows(baseUrl, headers, 'seller_items', sellerItems, 'id')
 
 console.log(JSON.stringify({
   ok: true,
-  password: DEFAULT_PASSWORD,
-  reviewerCustomer: reviewerCustomer.email,
+  reviewerCustomers: reviewerCustomers.map(({ email }) => email),
   tailorCount: tailorProfiles.length,
   portfolioPhotoCount: portfolioPhotos.length,
+  fulfillmentOriginCount: pickupDetails.length,
   sellerItemCount: sellerItems.length,
 }, null, 2))

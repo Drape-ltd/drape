@@ -901,6 +901,7 @@ Deno.serve(async (req) => {
         order_kind: 'CUSTOM',
         reference: orderReference,
         garment_type: body.garmentType,
+        description: body.description,
         garment_description: body.description,
         occasion: body.occasion?.trim() || null,
         deadline: body.deadline ?? null,

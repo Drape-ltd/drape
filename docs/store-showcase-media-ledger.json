@@ -1,0 +1,399 @@
+{
+  "generatedAt": "2026-08-30T21:32:24.057Z",
+  "rightsNote": "Project-generated synthetic imagery. Retain this ledger with the store-submission archive and re-review before licensing imagery outside Drapeon-owned channels.",
+  "assetCount": 56,
+  "assets": [
+    {
+      "path": "assets/store-showcase/identity/alder-rue-founder-v1.png",
+      "bytes": 2131331,
+      "sha256": "9b64503505b51d6553640eaec4bad7a965f68e70a09edc28de8d7471b61451ee",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/common-thread-founder-v1.png",
+      "bytes": 2569921,
+      "sha256": "e2625abc743add0a573ecb95d15033041966f1abb4d308690af1212c35473337",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/iya-dara-founder-v1.png",
+      "bytes": 2776824,
+      "sha256": "25e63cdd759560475ddf0b9f234af0865aaac7c19fdbd88c735d2fb196bd5ab5",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/maison-elara-founder-v1.png",
+      "bytes": 2194690,
+      "sha256": "2b70e3d3adaaaab29584a2ef3c15aaf618259d5fd03692f0d15f222f2d175bfd",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/noor-form-founder-v1.png",
+      "bytes": 2040229,
+      "sha256": "406fd376708b79d41c4dc185baeb72a66a3795ad39c009938472903061db8fda",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/northline-founder-v1.png",
+      "bytes": 2338371,
+      "sha256": "bb99d7b318c8ba04775b3ee245bcfd6fd6f8de062197ab6cbc39dbe686050930",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/sora-founder-v1.png",
+      "bytes": 2490271,
+      "sha256": "3d5b6d95ac16a760ff0357f822e9d8c8addd046a4d6e4ab6dff73c8576360d73",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/identity/studio-mare-founder-v1.png",
+      "bytes": 2359623,
+      "sha256": "bd94ab7376a2c179c920e0f66bf14d6e691b644dcb01323306a35ee11d932988",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/01.png",
+      "bytes": 2026209,
+      "sha256": "c75208dfb29666351f49523a424b69140042663a893abcdebefd9f985b39c89e",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/02.png",
+      "bytes": 2241209,
+      "sha256": "c6665601f6bbadff547131bc279fd68439586e3b9391c2405f592bb447c50c9d",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/03.png",
+      "bytes": 2113020,
+      "sha256": "67b963e0bfe9d6a001c6b8b7c57c791085947eb3cf3dd29c661e2827eea44845",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/04.png",
+      "bytes": 2019363,
+      "sha256": "e04557ab703d14c4f0e30bebe440fabe8a790675f6624f0a5172cbcb61b58610",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/05.png",
+      "bytes": 2062884,
+      "sha256": "465433c48641518aa670a2d3dd56d73481b001e9e5588d8202b3afd7db8d6465",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/alder-rue/06.png",
+      "bytes": 1993029,
+      "sha256": "02272573658d7fd2210814283e4dd043e8ea52e4f23175c2c85329f6971f4c7a",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/01.png",
+      "bytes": 2356025,
+      "sha256": "82599e2ad12ebde88605c120f6b0e7e9c25522c3e8f37819d78686f4b8f8630e",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/02.png",
+      "bytes": 2413370,
+      "sha256": "69542f434f5e02b76b8235639603bb8824a97e461702381a44b509c3ced7b357",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/03.png",
+      "bytes": 2451278,
+      "sha256": "6969f18ea41b7c7dcf8f5d74611f44adb7bfdabdf0977575a3cac114c38712f9",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/04.png",
+      "bytes": 2312653,
+      "sha256": "14b0448679d9dc5aab580f706489920cb1fde07e7835aa5db1e720c21ac27087",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/05.png",
+      "bytes": 2318474,
+      "sha256": "0028aed265407b76900cf02cb19df2f9b65e6afcf5bfb113c95f5274fafc6827",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/common-thread/06.png",
+      "bytes": 2315620,
+      "sha256": "992a78047811a74653e2ef598369a65a1e09763e92f2738c87a50979eef89684",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/01.png",
+      "bytes": 2565417,
+      "sha256": "6a707fe6b3cabcbd152cfb5947ce54494c1d8c8b0d960e412d733b84fabb788d",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/02.png",
+      "bytes": 2644358,
+      "sha256": "2365a895235e9677327465c23b32d324c64854648e4bf51495908f47e2957ee6",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/03.png",
+      "bytes": 2959567,
+      "sha256": "b7b3e9ea9ac4d1a07024cbe7ccc07d2a6eb45066572d51f8c0a8ba4a72ce2a3f",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/04.png",
+      "bytes": 2674556,
+      "sha256": "3108c64699a487b6e5af5896570c318e95eb46dd180703c37cc6ef4b77c41fa7",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/05.png",
+      "bytes": 2374480,
+      "sha256": "23ac65e238ba39e797cab6c951c4d2441363ec3bcc69a27d8d76ea6aff9a8a90",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/iya-dara/06.png",
+      "bytes": 2675603,
+      "sha256": "a77eab33b689f8174a04dd2455ea2bded9d587a5c858c38a1cae5df0742752a8",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/01.png",
+      "bytes": 2037108,
+      "sha256": "21152fbcf61299f30fa7bfe4266e36f509a8b355c36c7c43572e05f189abe1a2",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/02.png",
+      "bytes": 2144320,
+      "sha256": "8e0c28ec83dd14edd6ba523ed9474d5054508d47a1a10b16a4a64746208850e5",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/03.png",
+      "bytes": 1953912,
+      "sha256": "57666d178088d5c97f530e7d13e3917046f691915d50456a603fb203d04485e6",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/04.png",
+      "bytes": 1941783,
+      "sha256": "e95e05a6c512d4db93412f37b8d9785fb74252c01092be025ac05e675fa1607b",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/05.png",
+      "bytes": 1946839,
+      "sha256": "0c56b6ace9f8d11e8ec759e7bbb75eedb7557470b478930f54b6f41c1d2433c3",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/maison-elara/06.png",
+      "bytes": 1899262,
+      "sha256": "c9ec7db1eec97887bbecb3b8b32d217b42acba5780327e24a9268b2594dcbb6e",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/01.png",
+      "bytes": 2016920,
+      "sha256": "e5c7ce714e4aa35e4d9570325ea678a02253a825a3624bdde6621f57466a8132",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/02.png",
+      "bytes": 1991267,
+      "sha256": "5bc6f5118c566ed93c7c717f4930ca365be3d2cc7692ebedcae783bfeedb5f77",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/03.png",
+      "bytes": 1986265,
+      "sha256": "6a2bc0ae7fa4a89516303d3a15c8261bae414e776b634ed1b568abcae8a31b48",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/04.png",
+      "bytes": 1921650,
+      "sha256": "d3e362f13fda81788025c5fca4e576d5773f82ecd32114d808afe9c94d667b5e",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/05.png",
+      "bytes": 2114132,
+      "sha256": "d30bcdfdcf06bd092442556e4682c8fdbc5b994bdaa45c1d9973b79f1e7fb190",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/noor-form/06.png",
+      "bytes": 2003899,
+      "sha256": "5e6a4ccd12105c17c857f451a84f041e68684422544d06991758a1e6e977b501",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/01.png",
+      "bytes": 2167331,
+      "sha256": "46d865eb30a4e0919a9e1ceb3d6165e15b50029a6fbdde90a40c5090d3671c1f",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/02.png",
+      "bytes": 2186756,
+      "sha256": "0a25bf1ca06f365ee657b8dfa61d860cd2a9d0237205b81b8d36ab9c4935c798",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/03.png",
+      "bytes": 2177868,
+      "sha256": "a7f57fcab7f0c1fb2237213c093bdfbb1329f77e8ff229d56ab9b364ecdf5aff",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/04.png",
+      "bytes": 2181769,
+      "sha256": "5ae6a3ff9f05d15dee30b1ddb558222907e61346f79f8b9fba745bf122028529",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/05.png",
+      "bytes": 2021648,
+      "sha256": "4d4047fd5aa152cdf6212b1a1fc0fb7387b3bb985e82dd645afe9d2fe77b57c3",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/northline/06.png",
+      "bytes": 2010249,
+      "sha256": "4748fe50eaa2842f6946769d76f7758e3c8b8a29a391a7bed6ece687a695692e",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/01.png",
+      "bytes": 2358918,
+      "sha256": "f780a4a86925057acfe4aa0df87953ece8b6f5aeb9b771160e042667359e0881",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/02.png",
+      "bytes": 2331656,
+      "sha256": "582876e83bcd5aa1ad0d41885c4c95fa0ba03e7bbd7f23f85459fc73abb7b612",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/03.png",
+      "bytes": 2418764,
+      "sha256": "23173a6273636bec36c94cc7201bb011d704f85c03558eb4ec448d88db94528d",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/04.png",
+      "bytes": 2255905,
+      "sha256": "64fb83fbdf9dee225042972d57a84f1311f71c3c03c922b1866d66ca0a7f294c",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/05.png",
+      "bytes": 2421264,
+      "sha256": "5399828b510d073cd03533f6f32ca625e05bcc843ee9f4fb3937ff570ff602c1",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/sora/06.png",
+      "bytes": 2352403,
+      "sha256": "39d733a667c753ba896c5656d272ffe9527efbdda09f8edf7b69c2153c37bc0d",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/01.png",
+      "bytes": 2270073,
+      "sha256": "b07fa41f6b9b4443781bb37d5b91f068d39a3530516326227564a11cb79f7d3b",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/02.png",
+      "bytes": 2311167,
+      "sha256": "e1b8a7df4e0cf5abe1cf2eb0e09fd1768ce85ce5a61b666ffce0019464d52dda",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/03.png",
+      "bytes": 2332495,
+      "sha256": "5e05929796944f705565ab19e5824276b25b3be9002215b8427f21325200acd8",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/04.png",
+      "bytes": 2242015,
+      "sha256": "3679564484d80ec709a508651c9e627a3c5428632e376ab33d3457d97eee23b3",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/05.png",
+      "bytes": 2292926,
+      "sha256": "9d397059836569cc93d3eff3e35e6b50d072d47670f3e2ac985c0134021256bd",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    },
+    {
+      "path": "assets/store-showcase/portfolio/studio-mare/06.png",
+      "bytes": 2292172,
+      "sha256": "ef6c4294103bc40d97dda61bff1e0af23a24d2f45bbacdddb61b76da1023db92",
+      "provenance": "Generated for Drapeon with OpenAI image generation; no third-party stock asset was supplied.",
+      "intendedUse": "Drapeon app surfaces, store listing screenshots, reviewer fixtures, and Drapeon marketing."
+    }
+  ]
+}

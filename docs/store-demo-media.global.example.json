@@ -1,0 +1,106 @@
+{
+  "assetRoot": "assets/store-showcase",
+  "reviewerCustomers": [
+    {"email": "review.apple@drapeon.co", "displayName": "Apple Reviewer", "defaultCurrency": "USD", "regionCode": "US"},
+    {"email": "review.google@drapeon.co", "displayName": "Google Reviewer", "defaultCurrency": "USD", "regionCode": "US"},
+    {"email": "review.spare@drapeon.co", "displayName": "Deletion Reviewer", "defaultCurrency": "USD", "regionCode": "US"}
+  ],
+  "tailors": [
+    {
+      "key": "alder-rue-london",
+      "assetKey": "alder-rue",
+      "email": "showcase.alder-rue@drapeon.co",
+      "displayName": "Alder & Rue",
+      "location": "London, UK",
+      "currency": "GBP",
+      "specialtyTags": ["Contemporary womenswear", "Alterations", "Bespoke"],
+      "bio": "A contemporary studio focused on precise fit, architectural separates, and thoughtful alterations.",
+      "avatarUrl": "https://media.example/alder-rue/avatar.jpg",
+      "portfolioUrls": ["https://media.example/alder-rue/01.jpg", "https://media.example/alder-rue/02.jpg", "https://media.example/alder-rue/03.jpg", "https://media.example/alder-rue/04.jpg", "https://media.example/alder-rue/05.jpg", "https://media.example/alder-rue/06.jpg"]
+    },
+    {
+      "key": "maison-elara-paris",
+      "assetKey": "maison-elara",
+      "email": "showcase.maison-elara@drapeon.co",
+      "displayName": "Maison Elara",
+      "location": "Paris, France",
+      "currency": "EUR",
+      "specialtyTags": ["Bridal", "Occasion wear", "Hand finishing"],
+      "bio": "A bridal and occasion atelier creating quietly expressive silhouettes with considered hand finishing.",
+      "avatarUrl": "https://media.example/maison-elara/avatar.jpg",
+      "portfolioUrls": ["https://media.example/maison-elara/01.jpg", "https://media.example/maison-elara/02.jpg", "https://media.example/maison-elara/03.jpg", "https://media.example/maison-elara/04.jpg", "https://media.example/maison-elara/05.jpg", "https://media.example/maison-elara/06.jpg"]
+    },
+    {
+      "key": "northline-toronto",
+      "assetKey": "northline",
+      "email": "showcase.northline@drapeon.co",
+      "displayName": "Northline Bespoke",
+      "location": "Toronto, Canada",
+      "currency": "CAD",
+      "specialtyTags": ["Suits", "Formal tailoring", "Made to measure"],
+      "bio": "Modern bespoke suiting with clean structure, careful fittings, and understated formalwear.",
+      "avatarUrl": "https://media.example/northline/avatar.jpg",
+      "portfolioUrls": ["https://media.example/northline/01.jpg", "https://media.example/northline/02.jpg", "https://media.example/northline/03.jpg", "https://media.example/northline/04.jpg", "https://media.example/northline/05.jpg", "https://media.example/northline/06.jpg"]
+    },
+    {
+      "key": "sora-tokyo",
+      "assetKey": "sora",
+      "email": "showcase.sora@drapeon.co",
+      "displayName": "Sora Studio",
+      "location": "Tokyo, Japan",
+      "currency": "USD",
+      "specialtyTags": ["Minimal separates", "Visible repair", "Natural fibers"],
+      "bio": "Minimal everyday garments and careful repair work shaped by natural fibers and long wear.",
+      "avatarUrl": "https://media.example/sora/avatar.jpg",
+      "portfolioUrls": ["https://media.example/sora/01.jpg", "https://media.example/sora/02.jpg", "https://media.example/sora/03.jpg", "https://media.example/sora/04.jpg", "https://media.example/sora/05.jpg", "https://media.example/sora/06.jpg"]
+    },
+    {
+      "key": "iya-dara-lagos",
+      "assetKey": "iya-dara",
+      "email": "showcase.iya-dara@drapeon.co",
+      "displayName": "Iya Dara Atelier",
+      "location": "Lagos, Nigeria",
+      "currency": "NGN",
+      "specialtyTags": ["Aso oke", "Bridal", "Celebration wear"],
+      "bio": "Ceremonial bridal and celebration pieces grounded in woven textiles, proportion, and hand finishing.",
+      "avatarUrl": "https://media.example/iya-dara/avatar.jpg",
+      "portfolioUrls": ["https://media.example/iya-dara/01.jpg", "https://media.example/iya-dara/02.jpg", "https://media.example/iya-dara/03.jpg", "https://media.example/iya-dara/04.jpg", "https://media.example/iya-dara/05.jpg", "https://media.example/iya-dara/06.jpg"]
+    },
+    {
+      "key": "noor-form-dubai",
+      "assetKey": "noor-form",
+      "email": "showcase.noor-form@drapeon.co",
+      "displayName": "Noor Form",
+      "location": "Dubai, UAE",
+      "currency": "USD",
+      "specialtyTags": ["Modest fashion", "Eveningwear", "Embellishment"],
+      "bio": "Fluid modest silhouettes and refined eveningwear with restrained, detail-led embellishment.",
+      "avatarUrl": "https://media.example/noor-form/avatar.jpg",
+      "portfolioUrls": ["https://media.example/noor-form/01.jpg", "https://media.example/noor-form/02.jpg", "https://media.example/noor-form/03.jpg", "https://media.example/noor-form/04.jpg", "https://media.example/noor-form/05.jpg", "https://media.example/noor-form/06.jpg"]
+    },
+    {
+      "key": "studio-mare-sao-paulo",
+      "assetKey": "studio-mare",
+      "email": "showcase.studio-mare@drapeon.co",
+      "displayName": "Studio Maré",
+      "location": "São Paulo, Brazil",
+      "currency": "USD",
+      "specialtyTags": ["Resort tailoring", "Dresses", "Natural fabrics"],
+      "bio": "Expressive dresses and relaxed tailoring designed around movement, color, and lightweight natural cloth.",
+      "avatarUrl": "https://media.example/studio-mare/avatar.jpg",
+      "portfolioUrls": ["https://media.example/studio-mare/01.jpg", "https://media.example/studio-mare/02.jpg", "https://media.example/studio-mare/03.jpg", "https://media.example/studio-mare/04.jpg", "https://media.example/studio-mare/05.jpg", "https://media.example/studio-mare/06.jpg"]
+    },
+    {
+      "key": "common-thread-new-york",
+      "assetKey": "common-thread",
+      "email": "showcase.common-thread@drapeon.co",
+      "displayName": "Common Thread Works",
+      "location": "New York, USA",
+      "currency": "USD",
+      "specialtyTags": ["Adaptive clothing", "Upcycling", "Alterations"],
+      "bio": "Inclusive adaptations and one-of-one reconstruction focused on comfort, access, and personal expression.",
+      "avatarUrl": "https://media.example/common-thread/avatar.jpg",
+      "portfolioUrls": ["https://media.example/common-thread/01.jpg", "https://media.example/common-thread/02.jpg", "https://media.example/common-thread/03.jpg", "https://media.example/common-thread/04.jpg", "https://media.example/common-thread/05.jpg", "https://media.example/common-thread/06.jpg"]
+    }
+  ]
+}
