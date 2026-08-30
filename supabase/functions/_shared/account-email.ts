@@ -13,6 +13,7 @@ export async function sendAccountEventEmail(
   supabase: SupabaseClient,
   input: {
     userId: string
+    recipientEmail?: string | null
     subject: string
     headline: string
     body: string
@@ -23,7 +24,7 @@ export async function sendAccountEventEmail(
     details?: Array<{ label: string; value: string }>
   },
 ) {
-  const email = await userEmail(supabase, input.userId)
+  const email = input.recipientEmail?.trim() || await userEmail(supabase, input.userId)
   if (!email) return { status: 'SKIPPED' as const, reason: 'MISSING_EMAIL' }
   const apiKey = Deno.env.get('RESEND_API_KEY')?.trim() ?? ''
   if (!apiKey) throw new Error('RESEND_API_KEY is not configured.')

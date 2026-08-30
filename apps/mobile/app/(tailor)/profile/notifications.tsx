@@ -9,10 +9,10 @@
  * Badge clears by stamping last_tailor_notif_check on open, same as customer.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  Alert, View, Text, StyleSheet, FlatList, TouchableOpacity, type GestureResponderEvent,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -29,6 +29,11 @@ import {
 } from '@drape/shared'
 import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
+import {
+  listCommunicationInbox,
+  markCommunicationInbox,
+  type CommunicationInboxItem,
+} from '@/lib/communications'
 
 type NotifItem = {
   id: string
@@ -43,6 +48,14 @@ type NotifItem = {
   note: string | null
   createdAt: string
   isNew: boolean
+  durableId?: string
+  titleOverride?: string
+  category?: CommunicationInboxItem['category']
+  severity?: CommunicationInboxItem['severity']
+  destinationKey?: string | null
+  destinationParams?: Record<string, unknown> | null
+  acknowledgementRequired?: boolean
+  acknowledgedAt?: string | null
 }
 
 type CustomerProfileJoinRow = {
@@ -83,7 +96,14 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
   return value ?? null
 }
 
-function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name'] {
+function itemIcon(item: NotifItem): ComponentProps<typeof Feather>['name'] {
+  if (item.category) {
+    return ({
+      ORDER: 'package', MESSAGE: 'message-circle', PAYMENT: 'credit-card', PAYOUT: 'dollar-sign',
+      ACCOUNT: 'user', SECURITY: 'shield', SUPPORT: 'help-circle', SAFETY: 'alert-triangle',
+      SERVICE_STATUS: 'activity', PROMOTION: 'gift', PRODUCT_UPDATE: 'zap',
+    } satisfies Record<NonNullable<NotifItem['category']>, ComponentProps<typeof Feather>['name']>)[item.category]
+  }
   if (item.kind === 'message') return 'message-circle'
   const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
   if (materialDecision === 'APPROVED') return 'check-circle'
@@ -111,6 +131,8 @@ function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name']
 }
 
 function itemColor(item: NotifItem): string {
+  if (item.severity === 'CRITICAL' || item.severity === 'WARNING') return Colors.kanteRust
+  if (item.severity === 'NOTICE') return Colors.warning
   if (item.kind === 'message') return Colors.needleGreen
   const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
   if (materialDecision === 'APPROVED') return Colors.success
@@ -133,6 +155,7 @@ function itemColor(item: NotifItem): string {
 }
 
 function itemTitle(item: NotifItem): string {
+  if (item.titleOverride) return item.titleOverride
   if (item.kind === 'message') return 'New message'
   const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
   if (materialDecision === 'APPROVED') return 'Material request approved'
@@ -145,6 +168,40 @@ function itemTitle(item: NotifItem): string {
   if (styleDecision === 'CHANGES_REQUESTED') return 'Style clarification requested'
   if (!item.stage) return 'Order update'
   return stageDescription({ stage: item.stage, orderKind: item.orderKind })
+}
+
+function stringParam(params: Record<string, unknown> | null | undefined, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = params?.[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function durableInboxItem(item: CommunicationInboxItem): NotifItem {
+  const orderId = stringParam(item.destination_params, 'orderId', 'order_id') ?? ''
+  return {
+    id: `inbox-${item.id}`,
+    durableId: item.id,
+    orderId,
+    orderRef: stringParam(item.destination_params, 'orderRef', 'order_ref', 'reference') ?? '',
+    garmentType: stringParam(item.destination_params, 'garmentType', 'garment_type', 'itemName') ?? 'Drapeon',
+    orderKind: stringParam(item.destination_params, 'orderKind', 'order_kind') === 'READY_MADE' ? 'READY_MADE' : 'CUSTOM',
+    customerName: stringParam(item.destination_params, 'customerName', 'customer_name') ?? 'Update',
+    kind: item.category === 'MESSAGE' ? 'message' : 'stage_update',
+    stage: null,
+    messagePreview: item.body,
+    note: item.category === 'MESSAGE' ? null : item.body,
+    createdAt: item.created_at,
+    isNew: !item.read_at,
+    titleOverride: item.title,
+    category: item.category,
+    severity: item.severity,
+    destinationKey: item.destination_key,
+    destinationParams: item.destination_params,
+    acknowledgementRequired: item.acknowledgement_required,
+    acknowledgedAt: item.acknowledged_at,
+  }
 }
 
 function buildMessagePreview(type: string, body: string | null, senderName: string): string {
@@ -216,7 +273,8 @@ export default function TailorNotificationsScreen() {
         const lastCheck = lastTailorNotifCheckRef.current
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         try {
-          const [newOrdersRes, updatesRes, messagesRes] = await Promise.allSettled([
+          const [inboxRes, newOrdersRes, updatesRes, messagesRes] = await Promise.allSettled([
+            listCommunicationInbox(null, 60),
             supabase
               .from('orders')
               .select(`id, reference, garment_type, order_kind, stage, created_at, customer_profiles!customer_id(display_name)`)
@@ -332,6 +390,7 @@ export default function TailorNotificationsScreen() {
           })
 
           if (
+            inboxRes.status === 'rejected' &&
             (newOrdersRes.status === 'rejected' || (newOrdersRes.status === 'fulfilled' && newOrdersRes.value.error)) &&
             (updatesRes.status === 'rejected' || (updatesRes.status === 'fulfilled' && updatesRes.value.error)) &&
             (messagesRes.status === 'rejected' || (messagesRes.status === 'fulfilled' && messagesRes.value.error))
@@ -343,12 +402,17 @@ export default function TailorNotificationsScreen() {
 
           const seen = new Set<string>()
           const merged: NotifItem[] = []
-          for (const item of [...bookingItems, ...updateItems, ...messageItems].sort(
+          const durableItems = inboxRes.status === 'fulfilled'
+            ? inboxRes.value.items.map(durableInboxItem)
+            : []
+          for (const item of [...durableItems, ...bookingItems, ...updateItems, ...messageItems].sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           )) {
             // Deduplicate stage items by orderId+stage; messages already deduped per order
             const materialDecision = materialAdvanceCustomerDecisionFromNote(item.note)
-            const key = item.kind === 'message'
+            const key = item.durableId
+              ? `inbox-${item.durableId}`
+              : item.kind === 'message'
               ? `msg-${item.orderId}`
               : materialDecision
                 ? `material-${item.id}`
@@ -382,6 +446,69 @@ export default function TailorNotificationsScreen() {
   function goBack() {
     goBackOrFallback(router, navigation, '/(tailor)/profile')
   }
+
+  async function openItem(item: NotifItem) {
+    if (item.durableId && item.isNew) {
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, isNew: false } : entry))
+      void markCommunicationInbox(item.durableId, 'READ').catch(() => {
+        setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, isNew: true } : entry))
+      })
+    }
+
+    if (item.destinationKey?.toUpperCase() === 'SERVICE_STATUS') {
+      router.push('/(tailor)/profile/service-status')
+      return
+    }
+    if (item.orderId) {
+      router.push({
+        pathname: '/(tailor)/orders/[id]',
+        params: {
+          id: item.orderId,
+          historyChain: appendToHistory(undefined, '/(tailor)/profile/notifications'),
+        },
+      })
+      return
+    }
+    const destination = item.destinationKey?.toUpperCase() ?? ''
+    if (destination.includes('PAYOUT') || item.category === 'PAYOUT') {
+      router.push('/(tailor)/profile/payout-setup')
+    } else if (destination.includes('NOTIFICATION') || destination.includes('COMMUNICATION')) {
+      router.push('/(tailor)/profile/notification-settings')
+    } else if (destination.includes('ACCOUNT') || destination.includes('SECURITY')) {
+      router.push('/(tailor)/profile/account-settings')
+    }
+  }
+
+  async function acknowledgeItem(event: GestureResponderEvent, item: NotifItem) {
+    event.stopPropagation()
+    if (!item.durableId || item.acknowledgedAt) return
+    const acknowledgedAt = new Date().toISOString()
+    setItems((current) => current.map((entry) => (
+      entry.id === item.id ? { ...entry, isNew: false, acknowledgedAt } : entry
+    )))
+    try {
+      await markCommunicationInbox(item.durableId, 'ACKNOWLEDGED')
+    } catch {
+      setItems((current) => current.map((entry) => (
+        entry.id === item.id ? { ...entry, acknowledgedAt: null } : entry
+      )))
+      Alert.alert(
+        'Could not acknowledge update',
+        'Please try again. The update is still available in your notifications.',
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (!userId) return
+    const channel = supabase
+      .channel(`tailor-communication-inbox-${userId}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'communication_inbox', filter: `recipient_id=eq.${userId}`,
+      }, () => setRetryTrigger((value) => value + 1))
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [userId])
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -457,13 +584,7 @@ export default function TailorNotificationsScreen() {
             return (
               <TouchableOpacity
                 style={[styles.card, item.isNew && styles.cardNew]}
-                onPress={() => router.push({
-                  pathname: '/(tailor)/orders/[id]',
-                  params: {
-                    id: item.orderId,
-                    historyChain: appendToHistory(undefined, '/(tailor)/profile/notifications'),
-                  },
-                })}
+                onPress={() => void openItem(item)}
                 activeOpacity={0.7}
               >
                 {item.isNew && <View style={styles.unreadDot} />}
@@ -486,6 +607,20 @@ export default function TailorNotificationsScreen() {
                     <Text style={styles.note} numberOfLines={2}>
                       {formatEmbeddedDateTimes(item.note)}
                     </Text>
+                  ) : null}
+                  {item.acknowledgementRequired ? (
+                    item.acknowledgedAt ? (
+                      <Text style={styles.acknowledged}>Acknowledged</Text>
+                    ) : (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel={`Acknowledge ${itemTitle(item)}`}
+                        style={styles.ackButton}
+                        onPress={(event) => void acknowledgeItem(event, item)}
+                      >
+                        <Text style={styles.ackButtonText}>Acknowledge</Text>
+                      </TouchableOpacity>
+                    )
                   ) : null}
                 </View>
               </TouchableOpacity>
@@ -534,5 +669,12 @@ const styles = StyleSheet.create({
   },
   metaLine: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
   note: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  acknowledged: { fontSize: 12, color: Colors.needleGreen, fontWeight: FontWeight.semibold, marginTop: 8 },
+  ackButton: {
+    alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: Radius.full, backgroundColor: Colors.needleGreen + '12',
+    borderWidth: 1, borderColor: Colors.needleGreen + '35',
+  },
+  ackButtonText: { fontSize: 12, color: Colors.needleGreen, fontWeight: FontWeight.bold },
   time: { fontSize: 12, color: Colors.midGrey, flexShrink: 0, marginTop: 1, maxWidth: 70 },
 })

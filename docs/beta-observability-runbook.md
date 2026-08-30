@@ -126,6 +126,81 @@ limit 200;
 circuits, payout watchdog state, Android registration freshness, and required
 cron jobs.
 
+## Slack Ops alerting
+
+Slack is a read-only operational alert surface. Decisions, evidence, money
+movement, safety actions, and terminal resolution remain inside authenticated
+Drapeon Ops. Every Slack alert links to the exact case through
+`https://ops.drapeon.co/ops?view=workflow-issues&focusIssue=<id>#workflow-issue-<id>`
+in production. Development uses the configured local Ops origin. Never link an
+alert to the public `drapeon.co/ops` path because production middleware reserves
+the authenticated Ops surface for `ops.drapeon.co`.
+
+| Channel | Routed work |
+| --- | --- |
+| `#ops-intake` | account deletion, trust/verification, support, and uncategorized operational cases |
+| `#ops-money` | payment, payout, refund, transfer, settlement, ledger, and tax cases |
+| `#ops-delivery` | dispatch, shipping, courier, rider, fulfillment, and delivery cases |
+| `#ops-safety` | abuse, threats, content flags, and conversation-safety cases |
+| `#ops-critical` | a duplicate of every critical case, regardless of specialist queue |
+| `#engineering-errors` | runtime and system alerts; fatal alerts also duplicate to `#ops-critical` |
+
+One root Slack message is created per case and channel. Reopen, refresh,
+escalation, SLA reminder, and resolution events reply in that root's thread.
+`ops_slack_deliveries` records channel, Slack timestamp, attempt count, provider
+result, dedupe key, and terminal outcome. Failed posts retry through `job_queue`;
+exhausted attempts become `DEAD` and fail readiness until investigated. Do not
+manually repost a case whose dedupe row already says `DELIVERED`.
+
+SLA reminders run every 15 minutes. Initial reminder thresholds are 15 minutes
+for critical, 1 hour for high, 8 hours for medium, and 24 hours for low. The
+daily digest posts at 14:00 UTC with active counts and the oldest case. Both DEV
+and PROD messages carry an explicit environment label.
+
+New Slack jobs wake the shared worker immediately after the durable queue row is
+committed. `process-ops-slack-jobs-recovery` also sweeps due retries every five
+minutes, so a missed network wake-up cannot strand an alert indefinitely.
+
+Slack summaries deliberately exclude operator-entered reasons, evidence URLs,
+customer correspondence, contact details, secrets, and payment credentials.
+Use the authenticated case link for those details. Useful inspection queries:
+
+```sql
+select status, channel_key, event_kind, attempt_count, error_code, delivered_at
+from public.ops_slack_deliveries
+order by created_at desc
+limit 200;
+
+select id, job_type, status, attempt_count, max_attempts, last_error
+from public.job_queue
+where job_type in ('SEND_OPS_SLACK', 'SEND_OPS_SLACK_DIGEST')
+order by created_at desc
+limit 200;
+```
+
+The native Sentry Slack integration requires a paid Sentry plan. Drapeon uses
+`sentry-ops-webhook` instead: configure a Sentry webhook/action to POST with
+`x-drape-sentry-secret`, using the matching `SENTRY_OPS_WEBHOOK_SECRET`. The
+endpoint stores only opaque Sentry/project identifiers and a sanitized title,
+then creates or refreshes a `SYSTEM_ALERT` case. It never accepts Sentry as an
+authoritative business-state source.
+
+Because Sentry's native Slack alert rules require a paid plan, Drapeon also runs
+`monitor-sentry-issues` every five minutes with a read-only Sentry API token. It
+discovers unresolved issues in the configured projects, sanitizes titles, and
+creates the same durable `SYSTEM_ALERT` Ops cases. New issues, severity
+escalations, and occurrence growth after a 30-minute cooldown create Slack
+thread activity; unchanged issues are suppressed. `sentry_ops_monitor_state`
+stores only opaque issue/project identifiers, counts, severity, and timestamps.
+Never store Sentry payloads, stack traces, permalinks, contact data, or secrets.
+
+```sql
+select sentry_issue_id, project_slug, last_count, last_severity,
+       last_seen_at, last_notified_at
+from public.sentry_ops_monitor_state
+order by updated_at desc;
+```
+
 ## Commercial payment alert taxonomy
 
 Stripe and Paystack use the same alert boundary. Sentry receives stable event

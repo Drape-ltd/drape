@@ -6,6 +6,7 @@ export type OpsRole = 'ops' | 'customer_success' | 'trust' | 'finance' | 'engine
 export type OpsView =
   | 'overview'
   | 'incidents'
+  | 'communications'
   | 'access'
   | 'support'
   | 'shop'
@@ -62,6 +63,15 @@ export type OpsActionKind =
   | 'benefit-campaign-activate'
   | 'benefit-grant-create'
   | 'consultation-attendance-resolution'
+  | 'communication-campaign-create'
+  | 'communication-campaign-review'
+  | 'communication-campaign-publish'
+  | 'communication-campaign-pause'
+  | 'communication-campaign-resume'
+  | 'communication-campaign-cancel'
+  | 'communication-recipient-retry'
+  | 'service-incident-upsert'
+  | 'incident-communication-create'
 
 export type OpsSectionDefinition = {
   key: OpsView
@@ -102,6 +112,19 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     status: 'live',
     anchor: 'incidents',
     summaryCount: (summary) => summary.deadJobs + summary.retryableJobs + summary.providersDegraded,
+  },
+  {
+    key: 'communications',
+    label: 'Communications',
+    shortLabel: 'Comms',
+    eyebrow: 'Communications control',
+    title: 'Send service updates, action notices, and promotions with proof.',
+    description:
+      'Create, independently approve, publish, pause, and recover Drapeon communications across in-app, push, email, and justified SMS from one auditable queue.',
+    team: 'OPS',
+    status: 'live',
+    anchor: 'communications',
+    summaryCount: (summary) => summary.activeCommunicationCampaigns,
   },
   {
     key: 'access',
@@ -304,11 +327,11 @@ export const OPS_FUTURE_SURFACES = [] as const
 
 const ROLE_SECTION_ACCESS: Record<OpsRole, OpsView[]> = {
   admin: OPS_LIVE_SECTIONS.map((section) => section.key),
-  ops: ['overview', 'support', 'shop', 'dispatch', 'applications', 'money-desk', 'payouts', 'runbook'],
-  customer_success: ['overview', 'support', 'order-reviews', 'disputes', 'money-desk', 'workflow-issues', 'runbook'],
+  ops: ['overview', 'communications', 'support', 'shop', 'dispatch', 'applications', 'money-desk', 'payouts', 'runbook'],
+  customer_success: ['overview', 'communications', 'support', 'order-reviews', 'disputes', 'money-desk', 'workflow-issues', 'runbook'],
   trust: ['overview', 'support', 'reviews', 'verification', 'deletions', 'bypass', 'workflow-issues', 'runbook'],
-  finance: ['overview', 'money-desk', 'payouts', 'runbook'],
-  engineering: ['overview', 'incidents', 'workflow-issues', 'dispatch', 'runbook'],
+  finance: ['overview', 'communications', 'money-desk', 'payouts', 'runbook'],
+  engineering: ['overview', 'incidents', 'communications', 'workflow-issues', 'dispatch', 'runbook'],
 }
 
 const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
@@ -350,12 +373,21 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'benefit-campaign-activate',
     'benefit-grant-create',
     'consultation-attendance-resolution',
+    'communication-campaign-create',
+    'communication-campaign-review',
+    'communication-campaign-publish',
+    'communication-campaign-pause',
+    'communication-campaign-resume',
+    'communication-campaign-cancel',
+    'communication-recipient-retry',
+    'service-incident-upsert',
+    'incident-communication-create',
   ],
-  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'dispatch-quote', 'dispatch-event', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution'],
-  customer_success: ['dispute-status', 'dispute-resolution', 'order-cancellation-refund-request', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution'],
+  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'dispatch-quote', 'dispatch-event', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
+  customer_success: ['dispute-status', 'dispute-resolution', 'order-cancellation-refund-request', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
   trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'profile-change-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
-  finance: ['order-cancellation-refund-request', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'payout-release', 'payout-change-decision', 'material-advance-release', 'material-overage-resolution', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release', 'money-desk-elevation', 'money-desk-request', 'money-desk-decision', 'money-desk-execution', 'return-refund-prepare', 'benefit-campaign-create', 'benefit-campaign-activate', 'benefit-grant-create', 'consultation-attendance-resolution'],
-  engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve'],
+  finance: ['order-cancellation-refund-request', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'payout-release', 'payout-change-decision', 'material-advance-release', 'material-overage-resolution', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release', 'money-desk-elevation', 'money-desk-request', 'money-desk-decision', 'money-desk-execution', 'return-refund-prepare', 'benefit-campaign-create', 'benefit-campaign-activate', 'benefit-grant-create', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry'],
+  engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
 }
 
 export function parseOpsView(value: string | null | undefined): OpsView {

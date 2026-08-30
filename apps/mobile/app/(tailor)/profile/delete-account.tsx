@@ -1,30 +1,56 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, TextInput, Linking,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { requestAccountDeletion } from '@/lib/account-deletion'
+import {
+  getAccountDeletionRequestStatus,
+  issueProviderDeletionProof,
+  requestAccountDeletion,
+  type AccountDeletionRequestState,
+} from '@/lib/account-deletion'
 import { useAuth } from '@/lib/auth'
 import { issueReauthProof } from '@/lib/reauth-proof'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
-import { goBackOrFallback } from '@/lib/navigation'
+import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
 
 export default function TailorDeleteAccountScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const { user } = useAuth()
+  const params = useLocalSearchParams<{ returnTo?: string }>()
+  const { user, reauthenticateWithProvider } = useAuth()
   const [reason, setReason] = useState('')
   const [confirmationText, setConfirmationText] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
-  const [activeOrderCount, setActiveOrderCount] = useState<number | null>(null)
-  const canSubmit = confirmationText.trim() === 'DELETE' && password.length > 0
+  const [requestState, setRequestState] = useState<AccountDeletionRequestState | null>(null)
+  const [statusLoading, setStatusLoading] = useState(true)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const providers = Array.isArray(user?.app_metadata?.providers) ? user.app_metadata.providers : []
+  const providerReauth = !providers.includes('email')
+    ? providers.includes('apple') ? 'apple' as const : providers.includes('google') ? 'google' as const : null
+    : null
+  const canSubmit = confirmationText.trim() === 'DELETE' && (providerReauth !== null || password.length > 0) && !statusError
+  const fallbackRoute = '/(tailor)/profile/account-settings' as const
+  const returnTo = pickSafeReturnTo(params.returnTo, fallbackRoute) ?? fallbackRoute
+  const returnLabel = returnTo.includes('/privacy') ? 'privacy settings' : 'account settings'
+
+  const loadStatus = useCallback(async () => {
+    setStatusLoading(true)
+    const result = await getAccountDeletionRequestStatus()
+    setStatusLoading(false)
+    setStatusError(result.error)
+    if (!result.error) setRequestState(result.request)
+  }, [])
+
+  useEffect(() => {
+    void loadStatus()
+  }, [loadStatus])
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     try {
@@ -48,7 +74,7 @@ export default function TailorDeleteAccountScreen() {
       Alert.alert('Confirmation required', 'Type DELETE to confirm this account deletion request.')
       return
     }
-    if (!password) {
+    if (!providerReauth && !password) {
       Alert.alert('Password required', 'Enter your current password before submitting this deletion request.')
       return
     }
@@ -57,13 +83,27 @@ export default function TailorDeleteAccountScreen() {
       return
     }
     setSubmitting(true)
-    const proofResult = await issueReauthProof({
-      password,
-      purpose: 'ACCOUNT_DELETION',
-    })
+    let appleAuthorizationCode: string | null | undefined
+    if (providerReauth) {
+      const providerResult = await reauthenticateWithProvider(providerReauth)
+      if (providerResult.error) {
+        setSubmitting(false)
+        Alert.alert('Sign-in check failed', providerResult.error)
+        return
+      }
+      appleAuthorizationCode = providerReauth === 'apple' ? providerResult.authorizationCode : null
+      if (providerReauth === 'apple' && !appleAuthorizationCode) {
+        setSubmitting(false)
+        Alert.alert('Apple confirmation incomplete', 'Apple did not return the authorization needed to disconnect your account. Please try again.')
+        return
+      }
+    }
+    const proofResult = providerReauth
+      ? await issueProviderDeletionProof(providerReauth)
+      : await issueReauthProof({ password, purpose: 'ACCOUNT_DELETION' })
     if (proofResult.error || !proofResult.proof) {
       setSubmitting(false)
-      Alert.alert('Password check failed', proofResult.error ?? 'Confirm your password again before continuing.')
+      Alert.alert('Identity check failed', proofResult.error ?? 'Confirm your identity again before continuing.')
       return
     }
 
@@ -71,6 +111,7 @@ export default function TailorDeleteAccountScreen() {
       reason,
       confirmationText: confirmationText.trim(),
       reauthProof: proofResult.proof,
+      appleAuthorizationCode: appleAuthorizationCode ?? undefined,
     })
     setSubmitting(false)
 
@@ -82,19 +123,43 @@ export default function TailorDeleteAccountScreen() {
       return
     }
 
-    setActiveOrderCount(result.activeOrderCount ?? null)
-    setSubmitted(true)
+    if (result.request) {
+      setRequestState(result.request)
+    } else {
+      await loadStatus()
+    }
   }
 
   function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)/profile/privacy' as never)
+    goBackOrReturnTo(router, navigation, returnTo, fallbackRoute)
   }
 
-  if (submitted) {
+  if (statusLoading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
+          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
+            <Feather name="arrow-left" size={20} color={Colors.ink} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Delete account</Text>
+        </View>
+        <View style={styles.loadingState}>
+          <ActivityIndicator color={Colors.needleGreen} />
+          <Text style={styles.sectionCopy}>Checking for an existing deletion request…</Text>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (requestState) {
+    const submittedAt = new Date(requestState.createdAt)
+    const submittedLabel = Number.isNaN(submittedAt.getTime())
+      ? requestState.createdAt
+      : submittedAt.toLocaleString()
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
             <Feather name="arrow-left" size={20} color={Colors.ink} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Delete account</Text>
@@ -107,8 +172,16 @@ export default function TailorDeleteAccountScreen() {
             </View>
             <Text style={styles.heroTitle}>Your deletion request is now in Drapeon.</Text>
             <Text style={styles.heroCopy}>
-              We sent a receipt to your account email. {activeOrderCount && activeOrderCount > 0 ? `We found ${activeOrderCount} active order${activeOrderCount === 1 ? '' : 's'}, so Drapeon will resolve open transactions before deletion or anonymization.` : 'We may contact you if we need confirmation.'} Some records may be retained where required for security, active transactions, legal obligations, or claims handling.
+              Your request is recorded. We’ll send updates by email and in-app notification as it moves through review. {requestState.activeOrderCount > 0 ? `We found ${requestState.activeOrderCount} active order${requestState.activeOrderCount === 1 ? '' : 's'}, so Drapeon will resolve open transactions before deletion or anonymization.` : 'We may contact you if we need confirmation.'}
             </Text>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Request receipt</Text>
+            <View style={styles.detailRow}><Text style={styles.detailLabel}>Status</Text><Text style={styles.detailValue}>{requestState.status.replaceAll('_', ' ')}</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailLabel}>Submitted</Text><Text style={styles.detailValue}>{submittedLabel}</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailLabel}>Active orders</Text><Text style={styles.detailValue}>{requestState.activeOrderCount}</Text></View>
+            <Text style={styles.requestId}>Request {requestState.id}</Text>
           </View>
 
           <View style={styles.noteCard}>
@@ -116,8 +189,33 @@ export default function TailorDeleteAccountScreen() {
             <Text style={styles.noteCopy}>Email {CONTACTS.privacy} from your account email if anything about the request changes or you need to add more context.</Text>
           </View>
 
-          <TouchableOpacity style={styles.actionBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
-            <Text style={styles.actionBtnText}>Back to privacy</Text>
+          <TouchableOpacity style={styles.actionBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
+            <Text style={styles.actionBtnText}>Back to {returnLabel}</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (statusError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
+            <Feather name="arrow-left" size={20} color={Colors.ink} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Delete account</Text>
+        </View>
+        <View style={styles.body}>
+          <View style={styles.statusWarning}>
+            <Text style={styles.noteTitle}>We couldn’t confirm your request status</Text>
+            <Text style={styles.noteCopy}>Drapeon will not start another deletion request until this check succeeds.</Text>
+          </View>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => void loadStatus()} accessibilityRole="button" accessibilityLabel="Retry deletion request status check">
+            <Text style={styles.actionBtnText}>Try again</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
+            <Text style={styles.secondaryBtnText}>Back to {returnLabel}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -127,7 +225,7 @@ export default function TailorDeleteAccountScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
+        <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel={`Back to ${returnLabel}`}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Delete account</Text>
@@ -170,7 +268,7 @@ export default function TailorDeleteAccountScreen() {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Confirm deletion request</Text>
-          <Text style={styles.sectionCopy}>Type DELETE, then confirm your current password. This keeps an unlocked phone from starting a deletion request by accident.</Text>
+          <Text style={styles.sectionCopy}>Type DELETE, then {providerReauth ? `continue with ${providerReauth === 'apple' ? 'Apple' : 'Google'}` : 'confirm your current password'}. This keeps an unlocked phone from starting a deletion request by accident.</Text>
           <TextInput
             style={styles.textInput}
             value={confirmationText}
@@ -180,7 +278,7 @@ export default function TailorDeleteAccountScreen() {
             autoCapitalize="characters"
             autoCorrect={false}
           />
-          <View style={styles.passwordWrap}>
+          {!providerReauth ? <View style={styles.passwordWrap}>
             <TextInput
               style={styles.passwordInput}
               value={password}
@@ -199,7 +297,7 @@ export default function TailorDeleteAccountScreen() {
             >
               <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={Colors.midGrey} />
             </TouchableOpacity>
-          </View>
+          </View> : null}
         </View>
 
         <View style={styles.noteCard}>
@@ -214,7 +312,7 @@ export default function TailorDeleteAccountScreen() {
           accessibilityRole="button"
           accessibilityLabel="Submit account deletion request"
         >
-          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={[styles.actionBtnText, !canSubmit && styles.actionBtnTextDisabled]}>Submit deletion request</Text>}
+          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={[styles.actionBtnText, !canSubmit && styles.actionBtnTextDisabled]}>{providerReauth ? `Continue with ${providerReauth === 'apple' ? 'Apple' : 'Google'}` : 'Submit deletion request'}</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -248,6 +346,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md, flexGrow: 1 },
+  loadingState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md, padding: Spacing.lg },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -278,6 +377,11 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   sectionCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: Spacing.md },
+  detailLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
+  detailValue: { flex: 1, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'right', textTransform: 'capitalize' },
+  requestId: { fontSize: FontSize.xs, color: Colors.midGrey },
+  statusWarning: { backgroundColor: Colors.errorLight, borderRadius: Radius.lg, padding: Spacing.md, gap: 4 },
   accountValue: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey },
   reasonInput: {

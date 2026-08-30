@@ -17,12 +17,37 @@ import { checkRateLimit, getClientIp, rateLimitExceededResponse } from '../_shar
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'reauth-proof-action'
+const PROVIDER_REAUTH_WINDOW_SECONDS = 2 * 60
 
 const BodySchema = z.object({
-  action: z.literal('issue-proof').default('issue-proof'),
+  action: z.enum(['issue-proof', 'issue-provider-proof']).default('issue-proof'),
   purpose: z.enum(REAUTH_PROOF_PURPOSES),
-  password: z.string().min(1, 'Current password is required').max(1024),
+  password: z.string().max(1024).optional(),
+  provider: z.enum(['apple', 'google']).optional(),
 })
+
+function bearerClaims(req: Request): Record<string, unknown> | null {
+  const token = req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim()
+  const payload = token?.split('.')[1]
+  if (!payload) return null
+  try {
+    const normalized = payload.replaceAll('-', '+').replaceAll('_', '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    return JSON.parse(atob(padded)) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function claimProviders(claims: Record<string, unknown> | null) {
+  const appMetadata = claims?.app_metadata
+  const providers = appMetadata && typeof appMetadata === 'object'
+    ? (appMetadata as Record<string, unknown>).providers
+    : null
+  return Array.isArray(providers)
+    ? providers.filter((provider): provider is string => typeof provider === 'string')
+    : []
+}
 
 function jsonResponse(payload: Record<string, unknown>, status: number, cors: HeadersInit) {
   if (typeof payload.error === 'string' && typeof payload.message !== 'string') {
@@ -53,6 +78,7 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const claims = bearerClaims(req)
     const clientIp = getClientIp(req)
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}:${clientIp}`, 300, 5)
     if (!allowed) {
@@ -65,15 +91,20 @@ Deno.serve(async (req) => {
       return rateLimitExceededResponse(cors)
     }
 
+    const providerProof = parsed.data.action === 'issue-provider-proof'
     const emailPreflight = runPreflight([
       {
-        name: 'user_has_email_password_identity',
-        condition: !!caller.email,
+        name: providerProof ? 'user_has_provider_identity' : 'user_has_email_password_identity',
+        condition: providerProof
+          ? !!parsed.data.provider && claimProviders(claims).includes(parsed.data.provider)
+          : !!caller.email && !!parsed.data.password,
         errorCode: 'REAUTH_EMAIL_REQUIRED',
-        message: 'This account needs an email and password before this action can continue.',
-        field: 'email',
+        message: providerProof
+          ? 'Sign in with the provider connected to this account before continuing.'
+          : 'This account needs an email and password before this action can continue.',
+        field: providerProof ? 'provider' : 'email',
         severity: 'BLOCKING',
-        actual: { hasEmail: !!caller.email },
+        actual: { hasEmail: !!caller.email, provider: parsed.data.provider ?? null },
       },
     ])
 
@@ -114,29 +145,46 @@ Deno.serve(async (req) => {
       return preflightFailureResponse(secretPreflight, cors, 503)
     }
 
-    const authClient = createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
-    const { data: passwordData, error: passwordError } = await authClient.auth.signInWithPassword({
-      email: caller.email!,
-      password: parsed.data.password,
-    })
+    let verificationPassed = false
+    let verificationCode = 'REAUTH_USER_MISMATCH'
+    let verificationMessage = 'Confirm your identity again before continuing.'
+    let verificationActual: Record<string, unknown> = {}
+
+    if (providerProof) {
+      const issuedAt = typeof claims?.iat === 'number' ? claims.iat : null
+      const subject = typeof claims?.sub === 'string' ? claims.sub : null
+      const ageSeconds = issuedAt == null ? null : Math.floor(Date.now() / 1000) - issuedAt
+      verificationPassed = subject === caller.id && ageSeconds != null && ageSeconds >= -30 && ageSeconds <= PROVIDER_REAUTH_WINDOW_SECONDS
+      verificationCode = verificationPassed ? '' : 'REAUTH_PROVIDER_SESSION_STALE'
+      verificationMessage = 'Complete a fresh provider sign-in before continuing.'
+      verificationActual = { provider: parsed.data.provider, issuedAt, ageSeconds, subjectMatches: subject === caller.id }
+    } else {
+      const authClient = createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+      const { data: passwordData, error: passwordError } = await authClient.auth.signInWithPassword({
+        email: caller.email!,
+        password: parsed.data.password!,
+      })
+      verificationPassed = !passwordError && passwordData.user?.id === caller.id
+      verificationCode = passwordError ? 'REAUTH_PASSWORD_INCORRECT' : 'REAUTH_USER_MISMATCH'
+      verificationMessage = passwordError ? 'Incorrect password. Try again.' : 'Confirm your password again before continuing.'
+      verificationActual = {
+        authError: passwordError?.message ?? null,
+        signedInUserId: passwordData.user?.id ?? null,
+        expectedUserId: caller.id,
+      }
+    }
 
     const passwordPreflight = runPreflight([
       {
-        name: 'password_verified_for_current_user',
-        condition: !passwordError && passwordData.user?.id === caller.id,
-        errorCode: passwordError ? 'REAUTH_PASSWORD_INCORRECT' : 'REAUTH_USER_MISMATCH',
-        message: passwordError
-          ? 'Incorrect password. Try again.'
-          : 'Confirm your password again before continuing.',
-        field: 'password',
+        name: providerProof ? 'provider_verified_for_current_user' : 'password_verified_for_current_user',
+        condition: verificationPassed,
+        errorCode: verificationCode,
+        message: verificationMessage,
+        field: providerProof ? 'provider' : 'password',
         severity: 'BLOCKING',
-        actual: {
-          authError: passwordError?.message ?? null,
-          signedInUserId: passwordData.user?.id ?? null,
-          expectedUserId: caller.id,
-        },
+        actual: verificationActual,
       },
     ])
 
@@ -150,7 +198,7 @@ Deno.serve(async (req) => {
         source: FN,
         metadata: { purpose: parsed.data.purpose, ip: clientIp },
       })
-      return preflightFailureResponse(passwordPreflight, cors, passwordError ? 401 : 403)
+      return preflightFailureResponse(passwordPreflight, cors, 401)
     }
 
     const { proof, payload } = await issueReauthProof({
@@ -165,6 +213,7 @@ Deno.serve(async (req) => {
       payload: {
         function: FN,
         purpose: parsed.data.purpose,
+        method: providerProof ? parsed.data.provider : 'password',
         issued_at: new Date(payload.issuedAt).toISOString(),
         expires_at: new Date(payload.expiresAt).toISOString(),
       },

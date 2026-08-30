@@ -65,6 +65,7 @@ import type { Session, RealtimeChannel } from '@supabase/supabase-js'
 import { ConsultationAttendancePanel } from './consultation-attendance-panel'
 import { ConsultationReschedulePanel } from './consultation-reschedule-panel'
 import { ConsultationLifecyclePanel } from './consultation-lifecycle-panel'
+import { CommunicationCenter } from './communication-center'
 import { FabricWorkflowPanel } from './fabric-workflow-panel'
 import { MoneyInput } from './money-input'
 import { StructuredAddressSearch } from './structured-address-search'
@@ -20539,124 +20540,6 @@ function EmailChangePanel({ session }: { session: Session | null }) {
   )
 }
 
-type WebNotificationPrefs = {
-  orderUpdates: boolean
-  messages: boolean
-  quotes: boolean
-  paymentConfirmations: boolean
-  newOrders: boolean
-  paymentReleased: boolean
-  lowStockAlerts: boolean
-  reviews: boolean
-  platformUpdates: boolean
-  promotions: boolean
-}
-
-const defaultWebNotificationPrefs: WebNotificationPrefs = {
-  orderUpdates: true,
-  messages: true,
-  quotes: true,
-  paymentConfirmations: true,
-  newOrders: true,
-  paymentReleased: true,
-  lowStockAlerts: true,
-  reviews: true,
-  platformUpdates: false,
-  promotions: false,
-}
-
-function boolPref(source: Record<string, unknown>, key: string) {
-  return typeof source[key] === 'boolean' ? source[key] as boolean : undefined
-}
-
-function normalizeWebNotificationPrefs(metadata: Record<string, unknown> | null | undefined): WebNotificationPrefs {
-  const canonical = metadata?.notif_prefs && typeof metadata.notif_prefs === 'object'
-    ? metadata.notif_prefs as Record<string, unknown>
-    : {}
-  const legacy = metadata?.notification_prefs && typeof metadata.notification_prefs === 'object'
-    ? metadata.notification_prefs as Record<string, unknown>
-    : {}
-
-  return {
-    ...defaultWebNotificationPrefs,
-    orderUpdates: boolPref(canonical, 'orderUpdates') ?? boolPref(legacy, 'email_order_updates') ?? defaultWebNotificationPrefs.orderUpdates,
-    messages: boolPref(canonical, 'messages') ?? boolPref(legacy, 'email_messages') ?? defaultWebNotificationPrefs.messages,
-    quotes: boolPref(canonical, 'quotes') ?? defaultWebNotificationPrefs.quotes,
-    paymentConfirmations: boolPref(canonical, 'paymentConfirmations') ?? boolPref(legacy, 'email_payment') ?? defaultWebNotificationPrefs.paymentConfirmations,
-    newOrders: boolPref(canonical, 'newOrders') ?? boolPref(legacy, 'email_order_updates') ?? defaultWebNotificationPrefs.newOrders,
-    paymentReleased: boolPref(canonical, 'paymentReleased') ?? boolPref(legacy, 'email_payment') ?? defaultWebNotificationPrefs.paymentReleased,
-    lowStockAlerts: boolPref(canonical, 'lowStockAlerts') ?? defaultWebNotificationPrefs.lowStockAlerts,
-    reviews: boolPref(canonical, 'reviews') ?? defaultWebNotificationPrefs.reviews,
-    platformUpdates: boolPref(canonical, 'platformUpdates') ?? boolPref(canonical, 'promotions') ?? boolPref(legacy, 'email_marketing') ?? defaultWebNotificationPrefs.platformUpdates,
-    promotions: boolPref(canonical, 'promotions') ?? boolPref(canonical, 'platformUpdates') ?? boolPref(legacy, 'email_marketing') ?? defaultWebNotificationPrefs.promotions,
-  }
-}
-
-function legacyNotificationPrefs(prefs: WebNotificationPrefs) {
-  return {
-    email_order_updates: prefs.orderUpdates || prefs.newOrders,
-    email_messages: prefs.messages,
-    email_payment: prefs.paymentConfirmations || prefs.paymentReleased,
-    email_marketing: prefs.promotions || prefs.platformUpdates,
-  }
-}
-
-function NotificationPrefsPanel({ session, onRefresh }: { session: Session | null; onRefresh: () => void }) {
-  const [prefs, setPrefs] = useState<WebNotificationPrefs>(() => normalizeWebNotificationPrefs(session?.user.user_metadata))
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-
-  if (!session) return null
-
-  async function savePrefs() {
-    setBusy(true); setError(null); setSuccess(null)
-    try {
-      const { error: updateError } = await createClient().auth.updateUser({
-        data: {
-          notif_prefs: prefs,
-          notification_prefs: legacyNotificationPrefs(prefs),
-        },
-      })
-      if (updateError) throw updateError
-      setSuccess('Notification preferences saved.')
-      onRefresh()
-    } catch (err) {
-      setError(friendlyActionError(err, 'Preferences could not save.'))
-    } finally { setBusy(false) }
-  }
-
-  const toggles: Array<[keyof WebNotificationPrefs, string, string]> = [
-    ['orderUpdates', 'Order updates', 'Stage changes, delivery, handoff readiness, and auto-release notices.'],
-    ['messages', 'Messages and calls', 'New order messages, voice notes, photos, call activity, and consultations.'],
-    ['quotes', 'Quotes', 'Quote sent, accepted, declined, or expired updates.'],
-    ['paymentConfirmations', 'Customer payments', 'Checkout, refunds, receipts, and failed payment notices.'],
-    ['newOrders', 'Tailor order requests', 'New custom briefs, ready-made orders, and customer requests.'],
-    ['paymentReleased', 'Tailor earnings', 'Payout, release, and blocked payment notices.'],
-    ['lowStockAlerts', 'Stock alerts', 'Low stock, sold out, and inventory notices.'],
-    ['reviews', 'Reviews', 'Customer or tailor review activity.'],
-    ['platformUpdates', 'Platform updates', 'Policy, feature, and operational announcements.'],
-  ]
-
-  return (
-    <div className="grid gap-3">
-      {toggles.map(([key, label, body]) => (
-        <div key={key} className="flex items-start justify-between gap-4 rounded-[8px] border border-ui-border bg-ui-muted/45 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink">{label}</p>
-            <p className="mt-0.5 text-xs text-ink/48">{body}</p>
-          </div>
-          <Switch checked={prefs[key]} onCheckedChange={(checked) => setPrefs((p) => ({ ...p, [key]: checked }))} aria-label={label} />
-        </div>
-      ))}
-      <ActionNotice error={error} success={success} />
-      <Button onClick={savePrefs} disabled={busy} className="w-fit">
-        {busy ? 'Saving...' : 'Save preferences'}
-      </Button>
-    </div>
-  )
-}
-
 function SessionPanel({ session }: { session: Session | null }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -20688,12 +20571,45 @@ function SessionPanel({ session }: { session: Session | null }) {
 }
 
 function AccountDeletionPanel({ session, onRefresh }: { session: Session | null; onRefresh: () => void }) {
+  type DeletionRequestState = {
+    id: string
+    status: string
+    createdAt: string
+    activeOrderCount: number
+  }
   const [confirm, setConfirm] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [requestState, setRequestState] = useState<DeletionRequestState | null>(null)
+  const [statusLoading, setStatusLoading] = useState(true)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      if (!session) {
+        setStatusLoading(false)
+        setRequestState(null)
+        return
+      }
+      setStatusLoading(true)
+      setStatusError(null)
+      void invokeAccountFunction<{ request?: DeletionRequestState | null }>('request-account-deletion', { action: 'STATUS' })
+        .then((result) => {
+          if (!cancelled) setRequestState(result.request ?? null)
+        })
+        .catch((err) => {
+          if (!cancelled) setStatusError(friendlyActionError(err, 'Could not confirm the current deletion request status.'))
+        })
+        .finally(() => {
+          if (!cancelled) setStatusLoading(false)
+        })
+    }, 0)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [session])
 
   if (!session) return null
 
@@ -20707,7 +20623,10 @@ function AccountDeletionPanel({ session, onRefresh }: { session: Session | null;
         alreadyPending?: boolean
         activeOrderCount?: number
         deletionPath?: 'OPS_REVIEW_ACTIVE_ORDERS' | 'OPS_REVIEW_STANDARD'
+        request?: DeletionRequestState | null
       }>('request-account-deletion', {
+        action: 'SUBMIT',
+        source: 'WEB_APP',
         confirmationText: 'DELETE',
         reauthProof: proof.proof,
         reason: reason.trim() || undefined,
@@ -20715,15 +20634,58 @@ function AccountDeletionPanel({ session, onRefresh }: { session: Session | null;
       setSuccess(result.alreadyPending
         ? 'A deletion request is already pending for this account.'
         : result.activeOrderCount && result.activeOrderCount > 0
-          ? `Deletion request submitted. Ops will review ${result.activeOrderCount} active order${result.activeOrderCount === 1 ? '' : 's'} before deletion proceeds.`
-          : 'Deletion request submitted. Ops will confirm privacy review by email.')
+          ? `Deletion request submitted. Drapeon will resolve ${result.activeOrderCount} active order${result.activeOrderCount === 1 ? '' : 's'} before deletion proceeds.`
+          : 'Deletion request submitted. Drapeon will confirm privacy review by email.')
       setConfirm('')
       setCurrentPassword('')
       setReason('')
+      setRequestState(result.request ?? null)
       onRefresh()
     } catch (err) {
       setError(friendlyActionError(err, `Deletion request could not submit. Email ${CONTACTS.privacy} directly.`))
     } finally { setBusy(false) }
+  }
+
+  if (statusLoading) {
+    return <p className="text-sm text-ink/50">Checking for an existing deletion request…</p>
+  }
+
+  if (statusError) {
+    return (
+      <div className="grid gap-3">
+        <div className="rounded-2xl border border-rust/20 bg-rust/[0.04] p-5">
+          <p className="text-sm font-semibold text-rust">We couldn’t confirm your request status</p>
+          <p className="mt-2 text-sm leading-6 text-ink/60">Drapeon will not start another deletion request until this check succeeds.</p>
+        </div>
+        <Button variant="outline" onClick={() => window.location.reload()} className="w-fit">Try again</Button>
+      </div>
+    )
+  }
+
+  if (requestState) {
+    const submittedAt = new Date(requestState.createdAt)
+    const submittedLabel = Number.isNaN(submittedAt.getTime())
+      ? requestState.createdAt
+      : submittedAt.toLocaleString()
+    return (
+      <div className="grid gap-4">
+        <div className="rounded-2xl border border-rust/20 bg-rust/[0.04] p-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rust">Request received</p>
+          <h3 className="mt-2 font-display text-xl font-semibold text-ink">Your deletion request is in review.</h3>
+          <p className="mt-2 text-sm leading-6 text-ink/60">
+            We’ll send updates by email and in-app notification. You cannot start another request while this one is active.
+          </p>
+          <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
+            <div><dt className="text-ink/45">Status</dt><dd className="font-semibold capitalize text-ink">{requestState.status.replaceAll('_', ' ').toLowerCase()}</dd></div>
+            <div><dt className="text-ink/45">Submitted</dt><dd className="font-semibold text-ink">{submittedLabel}</dd></div>
+            <div><dt className="text-ink/45">Active orders</dt><dd className="font-semibold text-ink">{requestState.activeOrderCount}</dd></div>
+          </dl>
+          <p className="mt-4 break-all font-mono text-xs text-ink/40">Request {requestState.id}</p>
+        </div>
+        <p className="text-xs text-ink/50">Need to add context? Email {CONTACTS.privacy} from your account email.</p>
+        <ActionNotice error={error} success={success} />
+      </div>
+    )
   }
 
   return (
@@ -20861,8 +20823,8 @@ function RenderSettings({ data, session, onRefresh }: { data: SettingsRenderData
           label="Currency"
           sublabel="Used for price display. Checkout still routes by order and provider."
         />
-        <div className="px-5 pb-4">
-          <NotificationPrefsPanel session={session} onRefresh={onRefresh} />
+        <div className="px-5 pb-5">
+          <CommunicationCenter session={session} />
         </div>
       </SettingsSection>
 
@@ -20884,7 +20846,7 @@ function RenderSettings({ data, session, onRefresh }: { data: SettingsRenderData
             <Link href="/account/payout" className="text-sm font-semibold text-needle">Payout setup →</Link>
           ) : null}
         </SettingsRow>
-        <div className="border-t border-rust/8 bg-rust/4 px-5 py-4">
+        <div id="delete-account" className="scroll-mt-28 border-t border-rust/8 bg-rust/4 px-5 py-4">
           <p className="mb-3 text-sm font-semibold text-rust">Delete account</p>
           <AccountDeletionPanel session={session} onRefresh={onRefresh} />
         </div>

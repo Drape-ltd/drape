@@ -184,7 +184,10 @@ export default function TailorPrivacyScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
           <View style={styles.card}>
-            <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(tailor)/profile/delete-account' as never)} activeOpacity={0.6}>
+            <TouchableOpacity style={styles.linkRow} onPress={() => router.push({
+              pathname: '/(tailor)/profile/delete-account',
+              params: { returnTo: '/(tailor)/profile/privacy' },
+            } as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="trash-2" size={20} color={Colors.error} />
                 <View style={{ flex: 1 }}>

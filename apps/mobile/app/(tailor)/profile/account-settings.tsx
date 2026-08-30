@@ -151,7 +151,10 @@ export default function TailorAccountSettingsScreen() {
             label="Delete account"
             sublabel="Password confirmation required"
             tone="destructive"
-            onPress={() => router.push('/(tailor)/profile/delete-account' as never)}
+            onPress={() => router.push({
+              pathname: '/(tailor)/profile/delete-account',
+              params: { returnTo: '/(tailor)/profile/account-settings' },
+            } as never)}
           />
           <View style={styles.divider} />
           <NavRow

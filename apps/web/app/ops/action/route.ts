@@ -39,8 +39,19 @@ const APPLICATION_STATUSES = new Set(['PENDING', 'REVIEWING', 'CONTACTED', 'APPR
 const DISPUTE_STATUSES = new Set(['OPEN', 'UNDER_REVIEW'])
 const DISPUTE_OUTCOMES = new Set(['REFUND', 'RELEASE'])
 const VERIFICATION_DECISIONS = new Set(['APPROVE', 'REJECT'])
-const DELETION_STATUSES = new Set(['PENDING', 'ACKNOWLEDGED', 'COMPLETED', 'REJECTED'])
+const DELETION_STATUSES = new Set([
+  'PENDING',
+  'ACKNOWLEDGED',
+  'BLOCKED',
+  'READY_FOR_FINALIZATION',
+  'REJECTED',
+])
 const REVIEW_VISIBILITY_ACTIONS = new Set(['PUBLISH', 'HOLD'])
+const COMMUNICATION_CAMPAIGN_KINDS = new Set(['PSA', 'SERVICE_STATUS', 'PRODUCT_UPDATE', 'PROMOTION'])
+const COMMUNICATION_CATEGORIES = new Set(['SERVICE_STATUS', 'PROMOTION', 'PRODUCT_UPDATE', 'SAFETY', 'SUPPORT', 'ACCOUNT'])
+const COMMUNICATION_PURPOSES = new Set(['TRANSACTIONAL', 'OPERATIONAL', 'MARKETING'])
+const COMMUNICATION_SEVERITIES = new Set(['INFO', 'NOTICE', 'WARNING', 'CRITICAL'])
+const COMMUNICATION_RISK_LEVELS = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])
 const CONVERSATION_ACCESS_ACTIONS = new Set(['BLOCK', 'UNBLOCK'])
 const DISPATCH_TARGETS = new Set(['OUT_FOR_DELIVERY', 'SHIPPED'])
 const DISPATCH_EVENT_TYPES = new Set([
@@ -97,6 +108,15 @@ const OPS_ACTION_RATE_LIMITS: Partial<Record<OpsActionKind, { windowSeconds: num
   'benefit-campaign-create': { windowSeconds: 5 * 60, maxRequests: 8 },
   'benefit-campaign-activate': { windowSeconds: 5 * 60, maxRequests: 8 },
   'benefit-grant-create': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'communication-campaign-create': { windowSeconds: 5 * 60, maxRequests: 6 },
+  'communication-campaign-review': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'communication-campaign-publish': { windowSeconds: 5 * 60, maxRequests: 8 },
+  'communication-campaign-pause': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'communication-campaign-resume': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'communication-campaign-cancel': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'communication-recipient-retry': { windowSeconds: 5 * 60, maxRequests: 20 },
+  'service-incident-upsert': { windowSeconds: 5 * 60, maxRequests: 20 },
+  'incident-communication-create': { windowSeconds: 5 * 60, maxRequests: 8 },
 }
 
 let opsPulseCache: {
@@ -141,6 +161,26 @@ function sanitizeRedirect(value: FormDataEntryValue | null) {
 function readString(formData: FormData, key: string) {
   const value = formData.get(key)
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readStrings(formData: FormData, key: string) {
+  return formData.getAll(key)
+    .map(value => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean)
+}
+
+function readCsvStrings(formData: FormData, key: string) {
+  return readString(formData, key).split(',').map(value => value.trim()).filter(Boolean)
+}
+
+function readCheckbox(formData: FormData, key: string) {
+  return ['true', 'on', '1', 'yes'].includes(readString(formData, key).toLowerCase())
+}
+
+function parseOptionalIso(value: string) {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
 function parseMajorAmountToMinor(value: string) {
@@ -705,6 +745,142 @@ async function enqueuePayoutChangePush(
       },
     })
   }
+}
+
+type AccountDeletionDeliveryStatus =
+  | 'ACKNOWLEDGED'
+  | 'BLOCKED'
+  | 'READY_FOR_FINALIZATION'
+  | 'REJECTED'
+
+const ACCOUNT_DELETION_DELIVERY_COPY: Record<AccountDeletionDeliveryStatus, {
+  subject: string
+  headline: string
+  body: string
+  pushTitle: string
+}> = {
+  ACKNOWLEDGED: {
+    subject: 'Drapeon has started reviewing your deletion request',
+    headline: 'Your deletion request is under review',
+    body: 'Privacy Ops acknowledged your request and is checking active orders, payments, disputes, and other obligations before deletion can continue.',
+    pushTitle: 'Deletion request under review',
+  },
+  BLOCKED: {
+    subject: 'Your Drapeon deletion request needs an obligation resolved',
+    headline: 'Your deletion request is temporarily blocked',
+    body: 'Drapeon cannot finish deletion while an active order, payment, dispute, payout, or legal obligation remains. Open the request to review its current status and next step.',
+    pushTitle: 'Deletion request needs attention',
+  },
+  READY_FOR_FINALIZATION: {
+    subject: 'Your Drapeon deletion request passed privacy review',
+    headline: 'Your deletion request is ready for final processing',
+    body: 'Privacy Ops completed its review. Drapeon will run the final safety checks, anonymize eligible records, revoke access, and send a completion confirmation.',
+    pushTitle: 'Deletion request ready for processing',
+  },
+  REJECTED: {
+    subject: 'Drapeon could not continue your deletion request',
+    headline: 'Your deletion request could not be completed',
+    body: 'Privacy Ops could not continue this request. Open the request for its current status, or contact Drapeon Privacy if you believe this decision needs another review.',
+    pushTitle: 'Deletion request could not continue',
+  },
+}
+
+async function enqueueAccountDeletionStatusDelivery(
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  input: {
+    requestId: string
+    userId: string
+    recipientEmail: string | null
+    role: string
+    status: AccountDeletionDeliveryStatus
+  },
+) {
+  const copy = ACCOUNT_DELETION_DELIVERY_COPY[input.status]
+  const isTailor = input.role.toUpperCase() === 'TAILOR'
+  const mobileHref = isTailor
+    ? '/(tailor)/profile/delete-account?returnTo=%2F(tailor)%2Fprofile%2Faccount-settings'
+    : '/(customer)/profile/delete-account?returnTo=%2F(customer)%2Fprofile%2Faccount-settings'
+
+  const { error } = await client.rpc('enqueue_domain_event', {
+    p_event_type: 'ACCOUNT_DELETION_STATUS_CHANGED',
+    p_aggregate_type: 'account_deletion_request',
+    p_aggregate_id: input.requestId,
+    p_actor_id: null,
+    p_actor_role: 'OPS',
+    p_order_id: null,
+    p_idempotency_key: `account-deletion-status:v1:${input.requestId}:${input.status.toLowerCase()}`,
+    p_payload: {
+      userId: input.userId,
+      recipientEmail: input.recipientEmail,
+      subject: copy.subject,
+      eyebrow: 'Privacy request',
+      headline: copy.headline,
+      body: copy.body,
+      ctaLabel: 'Review deletion request',
+      webPath: '/account?view=settings#delete-account',
+      appUrl: 'drape://profile/delete-account',
+      details: [
+        { label: 'Request ID', value: input.requestId },
+        { label: 'Status', value: input.status.replaceAll('_', ' ') },
+      ],
+      notification: {
+        title: copy.pushTitle,
+        body: copy.body,
+        preferenceKey: 'orderUpdates',
+        data: {
+          destination: 'ACCOUNT_SETTINGS',
+          href: mobileHref,
+          deletionRequestId: input.requestId,
+          deletionStatus: input.status,
+        },
+      },
+    },
+    p_metadata: { source: 'ops-account-deletion-review' },
+    p_jobs: ['SEND_PUSH', 'SEND_ACCOUNT_EVENT_EMAIL'],
+    p_priority: input.status === 'BLOCKED' || input.status === 'REJECTED' ? 18 : 12,
+    p_max_attempts: 6,
+    p_run_at: new Date().toISOString(),
+  })
+
+  if (error) {
+    await client.from('audit_logs').insert({
+      actor_role: 'OPS',
+      event: 'ops.account_deletion_status_notification_enqueue_failed',
+      severity: 'error',
+      payload: {
+        deletion_request_id: input.requestId,
+        status: input.status,
+        error: error.message,
+      },
+    })
+  }
+}
+
+async function invokeAccountDeletionFinalizer(requestId: string) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Account deletion finalization is unavailable because server credentials are missing.')
+  }
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/finalize-account-deletions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ requestId }),
+    cache: 'no-store',
+  })
+  const result = await response.json().catch(() => ({})) as {
+    completed?: number
+    blocked?: number
+    failed?: number
+    error?: string
+  }
+  if (!response.ok) {
+    throw new Error(result.error ?? `Account deletion finalizer failed with ${response.status}.`)
+  }
+  return result
 }
 
 async function syncOpsIssueById(options: {
@@ -1335,6 +1511,15 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
     case 'benefit-campaign-create':
     case 'benefit-campaign-activate':
     case 'benefit-grant-create':
+    case 'communication-campaign-create':
+    case 'communication-campaign-review':
+    case 'communication-campaign-publish':
+    case 'communication-campaign-pause':
+    case 'communication-campaign-resume':
+    case 'communication-campaign-cancel':
+    case 'communication-recipient-retry':
+    case 'service-incident-upsert':
+    case 'incident-communication-create':
     case 'material-overage-resolution':
     case 'consultation-attendance-resolution':
       return kind
@@ -1387,6 +1572,203 @@ export async function POST(request: Request) {
   }
 
   try {
+    const communicationActions = new Set([
+      'communication-campaign-create',
+      'communication-campaign-review',
+      'communication-campaign-publish',
+      'communication-campaign-pause',
+      'communication-campaign-resume',
+      'communication-campaign-cancel',
+      'communication-recipient-retry',
+      'service-incident-upsert',
+      'incident-communication-create',
+    ])
+    if (communicationActions.has(kind)) {
+      if (!isNamedOpsWorkforceSession(session) || !session.email || !hasFreshOpsMfa(session)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'money-desk-elevation-required')
+      }
+
+      if (kind === 'communication-campaign-create') {
+        const name = readString(formData, 'name')
+        const campaignKind = readString(formData, 'campaignKind').toUpperCase()
+        const category = readString(formData, 'category').toUpperCase()
+        const purpose = readString(formData, 'purpose').toUpperCase()
+        const subject = readString(formData, 'subject')
+        const title = readString(formData, 'title')
+        const body = readString(formData, 'body')
+        const severity = readString(formData, 'severity').toUpperCase()
+        const riskLevel = readString(formData, 'riskLevel').toUpperCase()
+        const roles = [...new Set(readStrings(formData, 'audienceRoles').map(value => value.toUpperCase()))]
+          .filter(value => ['CUSTOMER', 'TAILOR', 'OPS'].includes(value))
+        const userIds = [...new Set(readCsvStrings(formData, 'userIds'))]
+        const channels = [...new Set(['IN_APP', ...readStrings(formData, 'channels').map(value => value.toUpperCase())])]
+          .filter(value => ['IN_APP', 'PUSH', 'EMAIL', 'SMS'].includes(value))
+        const destinationKey = readString(formData, 'destinationKey').toUpperCase()
+        const destinationPath = readString(formData, 'destinationPath')
+        const scheduledRaw = readString(formData, 'scheduledAt')
+        const expiresRaw = readString(formData, 'expiresAt')
+        const scheduledAt = parseOptionalIso(scheduledRaw)
+        const expiresAt = parseOptionalIso(expiresRaw)
+        const commercialCampaignId = readString(formData, 'commercialCampaignId') || null
+        if (
+          !name || !COMMUNICATION_CAMPAIGN_KINDS.has(campaignKind) ||
+          !COMMUNICATION_CATEGORIES.has(category) || !COMMUNICATION_PURPOSES.has(purpose) ||
+          !COMMUNICATION_SEVERITIES.has(severity) || !COMMUNICATION_RISK_LEVELS.has(riskLevel) ||
+          !subject || !title || !body ||
+          !destinationKey || !destinationPath || (roles.length === 0 && userIds.length === 0) ||
+          (scheduledRaw && !scheduledAt) || (expiresRaw && !expiresAt)
+        ) {
+          return redirectWithMessage(request, redirectTo, 'error', 'conflict', 'Complete the campaign, audience, destination, and valid schedule before saving.')
+        }
+        const { error } = await client.rpc('ops_create_communication_campaign', {
+          p_name: name,
+          p_kind: campaignKind,
+          p_category: category,
+          p_purpose: purpose,
+          p_severity: severity,
+          p_subject: subject,
+          p_title: title,
+          p_body: body,
+          p_audience_definition: { roles, user_ids: userIds },
+          p_channel_policy: { channels },
+          p_destination: { destinationKey, path: destinationPath },
+          p_acknowledgement_required: readCheckbox(formData, 'acknowledgementRequired'),
+          p_risk_level: riskLevel,
+          p_scheduled_at: scheduledAt,
+          p_expires_at: expiresAt,
+          p_actor_id: null,
+          p_actor_email: session.email,
+          p_commercial_campaign_id: commercialCampaignId,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-created')
+      }
+
+      if (kind === 'communication-campaign-review') {
+        const campaignId = readString(formData, 'campaignId')
+        const decision = readString(formData, 'decision').toUpperCase()
+        const reason = readString(formData, 'reason')
+        if (!campaignId || !['APPROVE', 'REJECT'].includes(decision) || reason.length < 8) {
+          return redirectWithMessage(request, redirectTo, 'error', 'conflict', 'Choose a decision and record a meaningful independent review reason.')
+        }
+        const { error } = await client.rpc('ops_review_communication_campaign', {
+          p_campaign_id: campaignId,
+          p_decision: decision,
+          p_reason: reason,
+          p_reviewer_id: null,
+          p_reviewer_email: session.email,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-reviewed')
+      }
+
+      if (kind === 'communication-campaign-publish') {
+        const campaignId = readString(formData, 'campaignId')
+        if (!campaignId) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+        const { error } = await client.rpc('ops_publish_communication_campaign', {
+          p_campaign_id: campaignId,
+          p_actor_id: null,
+          p_actor_email: session.email,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-published')
+      }
+
+      if (kind === 'communication-campaign-pause') {
+        const campaignId = readString(formData, 'campaignId')
+        const reason = readString(formData, 'reason')
+        if (!campaignId || reason.length < 8) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+        const { error } = await client.rpc('ops_pause_communication_campaign', { p_campaign_id: campaignId, p_reason: reason })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-paused')
+      }
+
+      if (kind === 'communication-campaign-resume') {
+        const campaignId = readString(formData, 'campaignId')
+        if (!campaignId) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+        const { error } = await client.rpc('ops_resume_communication_campaign', {
+          p_campaign_id: campaignId,
+          p_actor_id: null,
+          p_actor_email: session.email,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-resumed')
+      }
+
+      if (kind === 'communication-campaign-cancel') {
+        const campaignId = readString(formData, 'campaignId')
+        const reason = readString(formData, 'reason')
+        if (!campaignId || reason.length < 8) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+        const { error } = await client.rpc('ops_cancel_communication_campaign', { p_campaign_id: campaignId, p_reason: reason })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-campaign-cancelled')
+      }
+
+      if (kind === 'communication-recipient-retry') {
+        const recipientId = readString(formData, 'recipientId')
+        const reason = readString(formData, 'reason')
+        if (!recipientId || reason.length < 8) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+        const { error } = await client.rpc('ops_retry_communication_recipient', {
+          p_recipient_id: recipientId,
+          p_actor_id: null,
+          p_actor_email: session.email,
+          p_reason: reason,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'communication-recipient-retry-queued')
+      }
+
+      if (kind === 'service-incident-upsert') {
+        const incidentKey = readString(formData, 'incidentKey')
+        const title = readString(formData, 'title')
+        const summary = readString(formData, 'summary')
+        const severityInput = readString(formData, 'severity').toUpperCase()
+        const severity = ({ MINOR: 'NOTICE', MAJOR: 'WARNING' } as Record<string, string>)[severityInput] ?? severityInput
+        const status = readString(formData, 'status').toUpperCase()
+        const affectedServices = [...new Set(readCsvStrings(formData, 'affectedServices'))]
+        const sourceInput = readString(formData, 'source').toUpperCase()
+        const source = sourceInput === 'OPS' ? 'DRAPEON_OPS' : sourceInput
+        const sourceReference = readString(formData, 'sourceReference')
+        const destinationKey = readString(formData, 'destinationKey').toUpperCase()
+        const destinationPath = readString(formData, 'destinationPath')
+        if (!incidentKey || !title || !summary || affectedServices.length === 0 || !sourceReference || !destinationKey || !destinationPath) {
+          return redirectWithMessage(request, redirectTo, 'error', 'conflict', 'Complete the incident, affected services, source reference, and destination.')
+        }
+        const { error } = await client.rpc('ops_upsert_service_incident', {
+          p_incident_key: incidentKey,
+          p_title: title,
+          p_summary: summary,
+          p_severity: severity,
+          p_status: status,
+          p_affected_services: affectedServices,
+          p_public_visible: readCheckbox(formData, 'publicVisible'),
+          p_acknowledgement_required: readCheckbox(formData, 'acknowledgementRequired'),
+          p_destination: { destinationKey, path: destinationPath },
+          p_source: source,
+          p_source_reference: sourceReference,
+          p_started_at: null,
+        })
+        if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+        return redirectWithMessage(request, redirectTo, 'notice', 'service-incident-saved')
+      }
+
+      const incidentId = readString(formData, 'incidentId')
+      const channels = [...new Set(['IN_APP', ...readStrings(formData, 'channels').map(value => value.toUpperCase())])]
+        .filter(value => ['IN_APP', 'PUSH', 'EMAIL', 'SMS'].includes(value))
+      if (!incidentId) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      const { error } = await client.rpc('ops_create_incident_communication_campaign', {
+        p_incident_id: incidentId,
+        p_audience_definition: { roles: ['CUSTOMER', 'TAILOR'] },
+        p_channel_policy: { channels },
+        p_actor_id: null,
+        p_actor_email: session.email,
+        p_scheduled_at: null,
+        p_expires_at: null,
+      })
+      if (error) return redirectWithMessage(request, redirectTo, 'error', 'conflict', error.message)
+      return redirectWithMessage(request, redirectTo, 'notice', 'incident-communication-created')
+    }
+
     if (kind === 'benefit-campaign-create' || kind === 'benefit-campaign-activate' || kind === 'benefit-grant-create') {
       if (!isNamedOpsWorkforceSession(session) || !session.email || !hasFreshOpsMfa(session)) return redirectWithMessage(request, redirectTo, 'error', 'money-desk-elevation-required')
       if (kind === 'benefit-campaign-create') {
@@ -2455,7 +2837,13 @@ export async function POST(request: Request) {
 
     if (kind === 'deletion-status') {
       const deletionRequestId = readString(formData, 'deletionRequestId')
-      const status = readString(formData, 'status').toUpperCase()
+      const requestedStatus = readString(formData, 'status').toUpperCase()
+      // Older open Ops tabs used ACKNOWLEDGED as a separate waiting state.
+      // Treat that legacy action as approval so the request reaches a terminal
+      // worker outcome instead of becoming a customer-facing dead end.
+      const status = requestedStatus === 'ACKNOWLEDGED'
+        ? 'READY_FOR_FINALIZATION'
+        : requestedStatus
 
       if (!deletionRequestId || !DELETION_STATUSES.has(status)) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
@@ -2463,7 +2851,7 @@ export async function POST(request: Request) {
 
       const { data: existing, error: existingError } = await client
         .from('account_deletion_requests')
-        .select('id, status, acknowledged_at, processed_at')
+        .select('id, user_id, email, role, status, acknowledged_at, processed_at, finalization_approved_at')
         .eq('id', deletionRequestId)
         .maybeSingle()
 
@@ -2475,27 +2863,37 @@ export async function POST(request: Request) {
         return redirectWithMessage(request, redirectTo, 'error', 'conflict')
       }
 
+      if (existing.status === 'COMPLETED' || existing.status === 'REJECTED') {
+        return redirectWithMessage(request, redirectTo, 'error', 'conflict')
+      }
+
       const now = new Date().toISOString()
       const acknowledgedAt =
         status === 'PENDING'
           ? null
           : existing.acknowledged_at ?? now
-      const processedAt =
-        status === 'COMPLETED' || status === 'REJECTED'
-          ? existing.processed_at ?? now
-          : null
+      const processedAt = status === 'REJECTED' ? existing.processed_at ?? now : null
+      const finalizationApprovedAt = status === 'READY_FOR_FINALIZATION' ? now : null
 
-      const { error } = await client
+      const { data: updated, error } = await client
         .from('account_deletion_requests')
         .update({
           status,
           acknowledged_at: acknowledgedAt,
           processed_at: processedAt,
+          finalization_approved_at: finalizationApprovedAt,
         })
         .eq('id', deletionRequestId)
+        .eq('status', existing.status)
+        .select('id')
+        .maybeSingle()
 
       if (error) {
         return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+      }
+
+      if (!updated?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'conflict')
       }
 
       await client.from('audit_logs').insert({
@@ -2514,12 +2912,53 @@ export async function POST(request: Request) {
         issueType: 'ACCOUNT_DELETION_REQUEST',
         relatedEntityType: 'account_deletion_request',
         relatedEntityId: deletionRequestId,
-        status: status === 'COMPLETED' || status === 'REJECTED' ? 'RESOLVED' : status === 'ACKNOWLEDGED' ? 'IN_REVIEW' : 'OPEN',
+        status: status === 'REJECTED' ? 'RESOLVED' : status === 'PENDING' ? 'OPEN' : 'IN_REVIEW',
         performedBy: session.email ?? session.role,
         performedRole: session.role.toUpperCase(),
         actionTaken: 'ACCOUNT_DELETION_STATUS_UPDATED',
         reason: status,
       })
+
+      if (
+        status !== existing.status &&
+        (status === 'ACKNOWLEDGED' ||
+          status === 'BLOCKED' ||
+          status === 'REJECTED')
+      ) {
+        await enqueueAccountDeletionStatusDelivery(client, {
+          requestId: deletionRequestId,
+          userId: existing.user_id,
+          recipientEmail: existing.email,
+          role: existing.role,
+          status,
+        })
+      }
+
+      if (status === 'READY_FOR_FINALIZATION') {
+        try {
+          const finalization = await invokeAccountDeletionFinalizer(deletionRequestId)
+          if ((finalization.failed ?? 0) > 0) {
+            return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+          }
+          return redirectWithMessage(
+            request,
+            redirectTo,
+            'notice',
+            (finalization.completed ?? 0) > 0 ? 'deletion-completed' : 'deletion-blocked',
+          )
+        } catch (finalizationError) {
+          await client.from('audit_logs').insert({
+            actor_role: 'OPS',
+            event: 'ops.account_deletion_finalization_invoke_failed',
+            severity: 'error',
+            payload: {
+              deletion_request_id: deletionRequestId,
+              error: finalizationError instanceof Error ? finalizationError.message : String(finalizationError),
+            },
+          })
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+      }
 
       return redirectWithMessage(request, redirectTo, 'notice', 'deletion-saved')
     }

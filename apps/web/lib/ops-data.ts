@@ -1011,6 +1011,7 @@ export type OpsDashboardData = {
     shopInventoryAlerts: number
     activeSupportThreads: number
     pendingMoneyDeskApprovals: number
+    activeCommunicationCampaigns: number
   }
   systemHealth: {
     jobQueue: {
@@ -1044,6 +1045,24 @@ export type OpsDashboardData = {
   benefitCampaigns: Array<{campaignId:string;benefitId:string|null;name:string;status:string;fundingSource:string;currency:string|null;budgetAmount:number|null;reservedAmount:number;consumedAmount:number;redemptionCount:number;redeemedAmount:number;reversalCount:number}>
   tips: Array<{id:string;orderId:string;amount:number;currency:string;status:string;provider:string|null;providerReference:string|null;correlationId:string;createdAt:string}>
   commercialDeliveryOutcomes: Array<{source:string;jobType:string;status:string;outcomeCount:number;oldestCreatedAt:string|null;latestUpdatedAt:string|null}>
+  communicationCampaigns: Array<{
+    id:string;name:string;kind:string;category:string;purpose:string;severity:string;status:string;
+    templateVersionId:string|null;commercialCampaignId:string|null;audienceDefinition:Record<string,unknown>;
+    channelPolicy:Record<string,unknown>;destination:Record<string,unknown>;acknowledgementRequired:boolean;
+    riskLevel:string;scheduledAt:string|null;expiresAt:string|null;createdBy:string|null;createdByEmail:string|null;
+    approvedAt:string|null;startedAt:string|null;completedAt:string|null;correlationId:string;createdAt:string;
+    updatedAt:string;requiredApprovals:number;lastError:string|null;recipientCount:number;deliveredCount:number;
+    failedCount:number;skippedCount:number;approvals:Array<{reviewerId:string|null;reviewerEmail:string|null;decision:string;reason:string;createdAt:string}>;
+  }>
+  communicationRecipients: Array<{
+    id:string;campaignId:string;userId:string;status:string;channels:string[];channelOutcomes:Record<string,unknown>;
+    queuedAt:string|null;completedAt:string|null;createdAt:string;updatedAt:string;
+  }>
+  serviceIncidents: Array<{
+    id:string;incidentKey:string;title:string;summary:string;severity:string;status:string;affectedServices:string[];
+    publicVisible:boolean;acknowledgementRequired:boolean;destination:Record<string,unknown>;source:string;
+    sourceReference:string|null;startedAt:string;resolvedAt:string|null;updatedAt:string;communicationCampaignId:string|null;
+  }>
   taxControls: Array<{
     activationId:string; environment:string; policyVersion:string; status:string;
     jurisdictionCountryCode:string; originCountryCode:string|null; destinationCountryCode:string|null;
@@ -1100,6 +1119,7 @@ function emptySummary() {
     shopInventoryAlerts: 0,
     activeSupportThreads: 0,
     pendingMoneyDeskApprovals: 0,
+    activeCommunicationCampaigns: 0,
   }
 }
 
@@ -1690,6 +1710,10 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     benefitCampaignsResult,
     tipsResult,
     commercialDeliveryOutcomesResult,
+    communicationCampaignsResult,
+    communicationApprovalsResult,
+    communicationRecipientsResult,
+    serviceIncidentsResult,
     opsIssuesResult,
     legacyWorkflowIssuesResult,
     escrowOrdersResult,
@@ -1795,6 +1819,10 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     client.from('commercial_benefit_reporting').select('campaign_id, benefit_id, name, status, funding_source, currency, budget_amount, reserved_amount, consumed_amount, redemption_count, redeemed_amount, reversal_count').order('name').limit(100),
     client.from('order_tips').select('id, order_id, amount, currency, status, provider, provider_reference, correlation_id, created_at').order('created_at', { ascending: false }).limit(100),
     client.from('commercial_delivery_outcome_reporting').select('source, job_type, status, outcome_count, oldest_created_at, latest_updated_at').limit(100),
+    client.from('communication_campaigns').select('id,name,kind,category,purpose,severity,status,template_version_id,commercial_campaign_id,audience_definition,channel_policy,destination,acknowledgement_required,risk_level,scheduled_at,expires_at,created_by,created_by_email,approved_at,started_at,completed_at,correlation_id,created_at,updated_at,required_approvals,last_error,recipient_count,delivered_count,failed_count,skipped_count').order('created_at', { ascending: false }).limit(100),
+    client.from('communication_campaign_approvals').select('campaign_id,reviewer_id,reviewer_email,decision,reason,created_at').order('created_at', { ascending: false }).limit(300),
+    client.from('communication_campaign_recipients').select('id,campaign_id,user_id,status,channel_outcomes,channels,queued_at,completed_at,created_at,updated_at').order('created_at', { ascending: false }).limit(300),
+    client.from('service_incidents').select('id,incident_key,title,summary,severity,status,affected_services,public_visible,acknowledgement_required,destination,source,source_reference,started_at,resolved_at,updated_at,communication_campaign_id').order('updated_at', { ascending: false }).limit(100),
     client
       .from('ops_issues')
       .select('id, issue_number, issue_type, severity, status, source, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action, metadata, created_at, updated_at')
@@ -1835,7 +1863,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     client
       .from('account_deletion_requests')
       .select('id', { count: 'exact', head: true })
-      .eq('status', 'PENDING'),
+      .in('status', ['PENDING', 'ACKNOWLEDGED', 'BLOCKED', 'READY_FOR_FINALIZATION']),
     client
       .from('reviews')
       .select('id', { count: 'exact', head: true })
@@ -2019,6 +2047,15 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   const benefitCampaigns = benefitCampaignsResult.status === 'fulfilled' && !benefitCampaignsResult.value.error ? ((benefitCampaignsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
   const tips = tipsResult.status === 'fulfilled' && !tipsResult.value.error ? ((tipsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
   const commercialDeliveryOutcomes = commercialDeliveryOutcomesResult.status === 'fulfilled' && !commercialDeliveryOutcomesResult.value.error ? ((commercialDeliveryOutcomesResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const communicationCampaigns = communicationCampaignsResult.status === 'fulfilled' && !communicationCampaignsResult.value.error ? ((communicationCampaignsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const communicationApprovals = communicationApprovalsResult.status === 'fulfilled' && !communicationApprovalsResult.value.error ? ((communicationApprovalsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const communicationRecipients = communicationRecipientsResult.status === 'fulfilled' && !communicationRecipientsResult.value.error ? ((communicationRecipientsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const serviceIncidents = serviceIncidentsResult.status === 'fulfilled' && !serviceIncidentsResult.value.error ? ((serviceIncidentsResult.value.data ?? []) as Array<Record<string, unknown>>) : []
+  const communicationApprovalsByCampaign = new Map<string, Array<Record<string, unknown>>>()
+  for (const approval of communicationApprovals) {
+    const campaignId = String(approval.campaign_id)
+    communicationApprovalsByCampaign.set(campaignId, [...(communicationApprovalsByCampaign.get(campaignId) ?? []), approval])
+  }
   const opsIssues =
     opsIssuesResult.status === 'fulfilled' && !opsIssuesResult.value.error
       ? ((opsIssuesResult.value.data ?? []) as OpsIssueLedgerRow[])
@@ -2392,6 +2429,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   const openPayouts = payouts.filter((payout) => OPEN_PAYOUT_STATUSES.includes(payout.status as (typeof OPEN_PAYOUT_STATUSES)[number]))
   summary.pendingPayoutCount = openPayouts.length
   summary.pendingMoneyDeskApprovals = moneyDeskRequests.filter((request) => request.status === 'PENDING_APPROVAL').length
+  summary.activeCommunicationCampaigns = communicationCampaigns.filter((campaign) => !['COMPLETED', 'CANCELLED'].includes(String(campaign.status))).length
   summary.pendingPayoutValueLabel = formatGroupedCurrencyTotals(
     openPayouts.map((payout) => ({
       amount: payout.amount,
@@ -3111,6 +3149,19 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     benefitCampaigns: benefitCampaigns.map(row=>({campaignId:String(row.campaign_id),benefitId:typeof row.benefit_id==='string'?row.benefit_id:null,name:String(row.name),status:String(row.status),fundingSource:String(row.funding_source),currency:typeof row.currency==='string'?row.currency:null,budgetAmount:typeof row.budget_amount==='number'?row.budget_amount:null,reservedAmount:Number(row.reserved_amount??0),consumedAmount:Number(row.consumed_amount??0),redemptionCount:Number(row.redemption_count??0),redeemedAmount:Number(row.redeemed_amount??0),reversalCount:Number(row.reversal_count??0)})),
     tips: tips.map(row=>({id:String(row.id),orderId:String(row.order_id),amount:Number(row.amount),currency:String(row.currency),status:String(row.status),provider:typeof row.provider==='string'?row.provider:null,providerReference:typeof row.provider_reference==='string'?row.provider_reference:null,correlationId:String(row.correlation_id),createdAt:String(row.created_at)})),
     commercialDeliveryOutcomes: commercialDeliveryOutcomes.map(row=>({source:String(row.source),jobType:String(row.job_type),status:String(row.status),outcomeCount:Number(row.outcome_count??0),oldestCreatedAt:typeof row.oldest_created_at==='string'?row.oldest_created_at:null,latestUpdatedAt:typeof row.latest_updated_at==='string'?row.latest_updated_at:null})),
+    communicationCampaigns: communicationCampaigns.map((row) => ({
+      id:String(row.id),name:String(row.name),kind:String(row.kind),category:String(row.category),purpose:String(row.purpose),severity:String(row.severity),status:String(row.status),
+      templateVersionId:typeof row.template_version_id==='string'?row.template_version_id:null,commercialCampaignId:typeof row.commercial_campaign_id==='string'?row.commercial_campaign_id:null,
+      audienceDefinition:row.audience_definition && typeof row.audience_definition==='object'?row.audience_definition as Record<string,unknown>:{},
+      channelPolicy:row.channel_policy && typeof row.channel_policy==='object'?row.channel_policy as Record<string,unknown>:{},destination:row.destination && typeof row.destination==='object'?row.destination as Record<string,unknown>:{},
+      acknowledgementRequired:row.acknowledgement_required===true,riskLevel:String(row.risk_level),scheduledAt:typeof row.scheduled_at==='string'?row.scheduled_at:null,expiresAt:typeof row.expires_at==='string'?row.expires_at:null,
+      createdBy:typeof row.created_by==='string'?row.created_by:null,createdByEmail:typeof row.created_by_email==='string'?row.created_by_email:null,approvedAt:typeof row.approved_at==='string'?row.approved_at:null,
+      startedAt:typeof row.started_at==='string'?row.started_at:null,completedAt:typeof row.completed_at==='string'?row.completed_at:null,correlationId:String(row.correlation_id),createdAt:String(row.created_at),updatedAt:String(row.updated_at),
+      requiredApprovals:Number(row.required_approvals??1),lastError:typeof row.last_error==='string'?row.last_error:null,recipientCount:Number(row.recipient_count??0),deliveredCount:Number(row.delivered_count??0),failedCount:Number(row.failed_count??0),skippedCount:Number(row.skipped_count??0),
+      approvals:(communicationApprovalsByCampaign.get(String(row.id))??[]).map((approval)=>({reviewerId:typeof approval.reviewer_id==='string'?approval.reviewer_id:null,reviewerEmail:typeof approval.reviewer_email==='string'?approval.reviewer_email:null,decision:String(approval.decision),reason:String(approval.reason),createdAt:String(approval.created_at)})),
+    })),
+    communicationRecipients: communicationRecipients.map((row)=>({id:String(row.id),campaignId:String(row.campaign_id),userId:String(row.user_id),status:String(row.status),channels:Array.isArray(row.channels)?row.channels.map(String):[],channelOutcomes:row.channel_outcomes&&typeof row.channel_outcomes==='object'?row.channel_outcomes as Record<string,unknown>:{},queuedAt:typeof row.queued_at==='string'?row.queued_at:null,completedAt:typeof row.completed_at==='string'?row.completed_at:null,createdAt:String(row.created_at),updatedAt:String(row.updated_at)})),
+    serviceIncidents: serviceIncidents.map((row)=>({id:String(row.id),incidentKey:String(row.incident_key),title:String(row.title),summary:String(row.summary),severity:String(row.severity),status:String(row.status),affectedServices:Array.isArray(row.affected_services)?row.affected_services.map(String):[],publicVisible:row.public_visible===true,acknowledgementRequired:row.acknowledgement_required===true,destination:row.destination&&typeof row.destination==='object'?row.destination as Record<string,unknown>:{},source:String(row.source),sourceReference:typeof row.source_reference==='string'?row.source_reference:null,startedAt:String(row.started_at),resolvedAt:typeof row.resolved_at==='string'?row.resolved_at:null,updatedAt:String(row.updated_at),communicationCampaignId:typeof row.communication_campaign_id==='string'?row.communication_campaign_id:null})),
     shopItems: sellerItems.map((item) => {
       const tailorProfile = tailorProfilesById.get(item.tailor_profile_id)
       const tailorUser = tailorProfile ? usersById.get(tailorProfile.user_id) : null

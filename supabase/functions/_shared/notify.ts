@@ -20,6 +20,11 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  defaultCommunicationEnabled,
+  isMandatoryCommunicationCategory,
+  type CommunicationCategory,
+} from './communications.ts'
 import { log } from './logger.ts'
 import { sendWebPushToUser } from './web-push.ts'
 
@@ -39,6 +44,21 @@ export interface PushPayload {
   channelId?: string
   sound?: string
   interruptionLevel?: 'passive' | 'active' | 'time-sensitive' | 'critical'
+  communication?: {
+    category: CommunicationCategory
+    purpose: 'TRANSACTIONAL' | 'OPERATIONAL' | 'MARKETING'
+    severity?: 'INFO' | 'NOTICE' | 'WARNING' | 'CRITICAL'
+    mandatory?: boolean
+    inApp?: boolean
+    destinationKey?: string
+    destinationParams?: Record<string, unknown>
+    media?: Array<Record<string, unknown>>
+    correlationId?: string
+    deduplicationKey?: string
+    sourceEventId?: string
+    campaignId?: string
+    expiresAt?: string
+  }
 }
 
 export type PushPreferenceKey =
@@ -136,8 +156,113 @@ function resolvePreferenceKey(notification: PushPayload): PushPreferenceKey | un
   return undefined
 }
 
+function legacyCategory(key: PushPreferenceKey | undefined): CommunicationCategory | null {
+  switch (key) {
+    case 'messages': return 'MESSAGE'
+    case 'quotes':
+    case 'newOrders':
+    case 'orderUpdates':
+    case 'reviews': return 'ORDER'
+    case 'paymentConfirmations': return 'PAYMENT'
+    case 'paymentReleased': return 'PAYOUT'
+    case 'promotions': return 'PROMOTION'
+    case 'platformUpdates':
+    case 'lowStockAlerts': return 'PRODUCT_UPDATE'
+    default: return null
+  }
+}
+
 function optionalUuid(value: unknown) {
   return typeof value === 'string' && UUID_PATTERN.test(value.trim()) ? value.trim() : null
+}
+
+const DESTINATION_KEYS = new Set([
+  'NOTIFICATIONS', 'ORDER_DETAIL', 'ORDER_CHAT', 'PAYOUT_SETUP',
+  'ACCOUNT_SETTINGS', 'SERVICE_STATUS', 'SUPPORT_CASE', 'PROMOTION',
+])
+
+function inboxDestination(notification: PushPayload) {
+  const requested = notification.communication?.destinationKey?.trim().toUpperCase()
+  if (requested && DESTINATION_KEYS.has(requested)) return requested
+  const category = notification.communication?.category
+  if (category === 'ORDER') return optionalUuid(notification.data?.orderId) ? 'ORDER_DETAIL' : 'NOTIFICATIONS'
+  if (category === 'MESSAGE') return optionalUuid(notification.data?.orderId) ? 'ORDER_CHAT' : 'NOTIFICATIONS'
+  if (category === 'PAYOUT') return 'PAYOUT_SETUP'
+  if (category === 'ACCOUNT' || category === 'SECURITY') return 'ACCOUNT_SETTINGS'
+  if (category === 'SERVICE_STATUS') return 'SERVICE_STATUS'
+  if (category === 'SUPPORT' || category === 'SAFETY') return 'SUPPORT_CASE'
+  if (category === 'PROMOTION' || category === 'PRODUCT_UPDATE') return 'PROMOTION'
+  return 'NOTIFICATIONS'
+}
+
+function safeDestinationParams(notification: PushPayload) {
+  const supplied = notification.communication?.destinationParams ?? {}
+  const params: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(supplied)) {
+    if (['orderId', 'orderRef', 'messageId', 'caseId', 'campaignId', 'tab', 'type'].includes(key) &&
+      (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
+      params[key] = value
+    }
+  }
+  for (const key of ['orderId', 'orderRef', 'messageId', 'type', 'kind', 'event'] as const) {
+    const value = notification.data?.[key]
+    if (typeof value === 'string' && value.trim()) params[key] = value.slice(0, 160)
+  }
+  return params
+}
+
+function safeInboxMedia(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const source = item as Record<string, unknown>
+    const media: Record<string, unknown> = {}
+    for (const key of ['id', 'kind', 'mimeType', 'width', 'height', 'durationMs', 'posterId', 'alt'] as const) {
+      const field = source[key]
+      if (typeof field === 'string' || typeof field === 'number') media[key] = field
+    }
+    return Object.keys(media).length > 0 ? [media] : []
+  })
+}
+
+async function recordCommunicationInbox(
+  supabase: SupabaseClient,
+  userId: string,
+  notification: PushPayload,
+) {
+  const communication = notification.communication
+  if (!communication || communication.inApp === false) return
+  const explicitDedup = communication.deduplicationKey?.trim()
+  const inferredDedup = notification.data?.idempotencyKey?.trim() ||
+    notification.data?.eventId?.trim() || notification.data?.messageId?.trim()
+  const deduplicationKey = (explicitDedup || inferredDedup || '').slice(0, 240) || null
+  const correlationId = optionalUuid(communication.correlationId)
+  const row: Record<string, unknown> = {
+    recipient_id: userId,
+    category: communication.category,
+    purpose: communication.purpose,
+    severity: communication.severity ?? 'INFO',
+    title: notification.title.slice(0, 180),
+    body: notification.body.slice(0, 1200),
+    destination_key: inboxDestination(notification),
+    destination_params: safeDestinationParams(notification),
+    media: safeInboxMedia(communication.media),
+    source_event_id: optionalUuid(communication.sourceEventId),
+    campaign_id: optionalUuid(communication.campaignId),
+    deduplication_key: deduplicationKey,
+    expires_at: typeof communication.expiresAt === 'string' ? communication.expiresAt : null,
+  }
+  if (correlationId) row.correlation_id = correlationId
+
+  const { error } = await supabase.from('communication_inbox').insert(row)
+  if (error && error.code !== '23505') {
+    log('error', PUSH_FN, 'communication.inbox_persist_failed', {
+      user_id: userId,
+      category: communication.category,
+      correlation_id: correlationId,
+      error: error.message,
+    })
+  }
 }
 
 function notificationKind(notification: PushPayload, preferenceKey: PushPreferenceKey | undefined) {
@@ -193,19 +318,69 @@ async function userAllowsPush(
   supabase: SupabaseClient,
   userId: string,
   key: PushPreferenceKey | undefined,
+  notification: PushPayload,
 ): Promise<boolean> {
-  if (!key) return true
+  const category = notification.communication?.category ?? legacyCategory(key)
+  const purpose = notification.communication?.purpose ?? (category === 'PROMOTION' ? 'MARKETING' : 'TRANSACTIONAL')
+  const mandatory = notification.communication?.mandatory === true || (
+    purpose !== 'MARKETING' && category !== null && (
+      isMandatoryCommunicationCategory(category) || notification.communication?.severity === 'CRITICAL'
+    )
+  )
 
   try {
+    if (category) {
+      const { data: suppressionRows, error: suppressionError } = await supabase
+        .from('communication_suppressions')
+        .select('reason,purpose')
+        .eq('user_id', userId)
+        .eq('channel', 'PUSH')
+        .eq('active', true)
+        .in('purpose', [purpose, 'ALL_OPTIONAL'])
+
+      if (!suppressionError) {
+        const hardSuppressed = (suppressionRows ?? []).some((row) =>
+          ['HARD_BOUNCE', 'COMPLAINT', 'INVALID_DESTINATION', 'STOP', 'PROVIDER'].includes(String(row.reason)),
+        )
+        if (hardSuppressed) return false
+        if (!mandatory && (suppressionRows?.length ?? 0) > 0) return false
+      }
+
+      if (purpose === 'MARKETING') {
+        const { data: consent } = await supabase
+          .from('communication_consents')
+          .select('status')
+          .eq('user_id', userId)
+          .eq('purpose', 'MARKETING')
+          .eq('channel', 'PUSH')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (consent?.status !== 'GRANTED') return false
+      }
+
+      const { data: preference } = await supabase
+        .from('communication_preferences')
+        .select('enabled')
+        .eq('user_id', userId)
+        .eq('category', category)
+        .eq('channel', 'PUSH')
+        .maybeSingle()
+
+      if (mandatory) return true
+      if (typeof preference?.enabled === 'boolean') return preference.enabled
+    }
+
+    if (!key) return category ? defaultCommunicationEnabled(category, 'PUSH') : true
     const { data, error } = await supabase.auth.admin.getUserById(userId)
-    if (error) return true
+    if (error) return category ? defaultCommunicationEnabled(category, 'PUSH') : true
 
     const stored = data.user?.user_metadata?.notif_prefs
     const value = readPreference(stored, key)
-    return value ?? DEFAULT_PUSH_PREFS[key]
+    return value ?? (category ? defaultCommunicationEnabled(category, 'PUSH') : DEFAULT_PUSH_PREFS[key])
   } catch {
-    // Preference lookup failure should not block critical transactional flows.
-    return true
+    // Preference lookup failure must not block mandatory transactional flows.
+    return mandatory || (category ? defaultCommunicationEnabled(category, 'PUSH') : true)
   }
 }
 
@@ -215,8 +390,9 @@ export async function sendPushToUser(
   notification: PushPayload,
 ): Promise<PushSendResult> {
   try {
+    await recordCommunicationInbox(supabase, userId, notification)
     const preferenceKey = resolvePreferenceKey(notification)
-    const allowed = await userAllowsPush(supabase, userId, preferenceKey)
+    const allowed = await userAllowsPush(supabase, userId, preferenceKey, notification)
     if (!allowed) return { status: 'SKIPPED', reason: 'PREFERENCE_DISABLED' }
 
     const webPushResult = await sendWebPushToUser(supabase, userId)

@@ -24,6 +24,7 @@ const controls = {
   serviceHealth: ['DRAPE_HEALTHCHECK_SECRET', 'HEALTHCHECK_SECRET'],
   mixedUserOrServiceRole: ['serviceRoleRequest(', 'getAuthUser('],
   trustedServiceOrUser: ['isTrustedServiceRoleToken(', 'getAuthUser('],
+  sentryWebhook: ['SENTRY_OPS_WEBHOOK_SECRET', 'timingSafeEqual('],
 }
 
 const manifest = {
@@ -41,6 +42,7 @@ const manifest = {
   'consultation-attendance-resolution': ['cron'],
   'consultation-lifecycle-action': ['user'],
   'consultation-reschedule-action': ['user'],
+  'communications-action': ['user'],
   'commercial-adjustment-action': ['user'],
   'return-resolution-action': ['user'],
   'commercial-benefit-action': ['user'],
@@ -69,6 +71,7 @@ const manifest = {
   'monitor-settlements': ['cron'],
   'monitor-material-reconciliation': ['cron'],
   'monitor-payout-changes': ['cron'],
+  'monitor-sentry-issues': ['cron'],
   'monitor-tax-controls': ['cron'],
   'message-action': ['user'],
   'message-translation': ['user'],
@@ -100,6 +103,7 @@ const manifest = {
   'seller-item-action': ['user'],
   'send-consultation-reminders': ['cron'],
   'service-health': ['serviceHealth'],
+  'sentry-ops-webhook': ['sentryWebhook'],
   'stripe-webhook': ['stripeWebhook'],
   'settlement-action': ['trustedServiceOrUser'],
   'tailor-order-action': ['user'],

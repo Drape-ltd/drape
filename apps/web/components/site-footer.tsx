@@ -14,6 +14,7 @@ const productLinks: Array<{ href: Route; label: string }> = [
 
 const companyLinks: Array<{ href: Route; label: string }> = [
   { href: '/about', label: 'About' },
+  { href: '/status', label: 'Service status' },
   { href: '/contact', label: 'Contact' },
   { href: '/press', label: 'Press' },
   { href: '/careers', label: 'Careers' },

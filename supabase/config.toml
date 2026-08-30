@@ -304,3 +304,12 @@ verify_jwt = false
 
 [functions.fabric-workflow-action]
 verify_jwt = false
+
+[functions.sentry-ops-webhook]
+verify_jwt = false
+
+[functions.monitor-sentry-issues]
+verify_jwt = false
+
+[functions.communications-action]
+verify_jwt = false

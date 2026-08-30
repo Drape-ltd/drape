@@ -479,3 +479,14 @@ export async function getOpsSession(): Promise<OpsSession | null> {
 
   return null
 }
+
+export async function getOpsAccessIdentityHint(): Promise<string | null> {
+  if (getOpsAccessMode() !== 'cloudflare-access') return null
+
+  const assertedEmail = (await headers())
+    .get('cf-access-authenticated-user-email')
+    ?.trim()
+    .toLowerCase()
+
+  return assertedEmail && assertedEmail.includes('@') ? assertedEmail : null
+}

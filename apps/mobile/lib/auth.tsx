@@ -1,18 +1,19 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { Platform } from 'react-native'
+import { Alert, Platform } from 'react-native'
 import { type Session, type User } from '@supabase/supabase-js'
 import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { validatePasswordStrength } from '@drape/shared/auth-security'
-import { supabase } from './supabase'
+import { clearActiveAuthStorage, supabase } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
 import { clearPersistedQueryCache } from './queryPersistence'
 import { unregisterPushInstallation } from './push-registration'
 import { syncUserRow } from './syncUserRow'
 import { reset as resetAnalytics } from './analytics'
+import { consumeAccountDeletionDeviceMarker } from './account-deletion'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -32,6 +33,7 @@ interface AuthContextValue {
   signIn: (email: string, password: string, roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   signInWithGoogle: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   signInWithApple: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
+  reauthenticateWithProvider: (provider: 'apple' | 'google') => Promise<{ error: string | null; authorizationCode?: string | null }>
   switchRole: (role: DrapeRole) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
@@ -73,6 +75,23 @@ function displayNameFromMetadata(metadata: User['user_metadata']) {
 function isInvalidCredentialError(message: string | null | undefined) {
   const normalized = (message ?? '').toLowerCase()
   return normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')
+}
+
+function isRevokedSessionError(error: unknown) {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : ''
+  const normalized = message.toLowerCase()
+
+  return (
+    normalized.includes('invalid refresh token') ||
+    normalized.includes('refresh token not found') ||
+    normalized.includes('refresh_token_not_found') ||
+    normalized.includes('user not found') ||
+    normalized.includes('user from sub claim in jwt does not exist')
+  )
 }
 
 function mapAuthErrorMessage(message: string | null | undefined, fallback = 'We could not complete this auth step right now. Please try again in a moment.') {
@@ -310,10 +329,22 @@ function withAuthBootstrapTimeout<T>(promise: Promise<T>, label: string): Promis
 }
 
 async function clearStoredAuthSession() {
+  // Clear storage first. A revoked/deleted-account refresh token makes the
+  // network-aware signOut path fail, but should never prevent local sign-out.
+  await clearActiveAuthStorage().catch(() => {})
   await withAuthBootstrapTimeout(
     supabase.auth.signOut({ scope: 'local' }),
     'Local auth cleanup',
   ).catch(() => {})
+}
+
+async function showDeletedAccountNoticeIfExpected() {
+  const expected = await consumeAccountDeletionDeviceMarker()
+  if (!expected) return
+  Alert.alert(
+    'Account deleted',
+    'Your Drapeon account has been deleted and you have been signed out.',
+  )
 }
 
 async function clearUserScopedLocalState(userId: string | null | undefined) {
@@ -340,9 +371,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
   const lastSessionUserIdRef = useRef<string | null | undefined>(undefined)
+  const authRefreshStartedRef = useRef(false)
+  const manualSignOutRef = useRef(false)
 
   useEffect(() => {
     let mounted = true
+
+    function startValidatedSessionRefresh() {
+      if (authRefreshStartedRef.current) return
+      authRefreshStartedRef.current = true
+      void supabase.auth.startAutoRefresh()
+    }
+
+    function stopSessionRefresh() {
+      if (!authRefreshStartedRef.current) return
+      authRefreshStartedRef.current = false
+      void supabase.auth.stopAutoRefresh()
+    }
 
     async function bootstrap() {
       try {
@@ -355,8 +400,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (sessionError || !session) {
           if (sessionError) {
-            console.warn('Unable to restore auth session; clearing local auth state.', sessionError.message)
+            if (!isRevokedSessionError(sessionError)) {
+              console.warn('Unable to restore auth session; clearing local auth state.', sessionError.message)
+            }
             await clearStoredAuthSession()
+            if (isRevokedSessionError(sessionError)) {
+              await showDeletedAccountNoticeIfExpected()
+            }
             if (!mounted) return
           }
           setSession(null)
@@ -371,22 +421,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!mounted) return
 
         if (error || !data.user) {
-          if (error) {
+          if (error && !isRevokedSessionError(error)) {
             console.warn('Stored auth session is no longer valid; signing out locally.', error.message)
           }
           await clearStoredAuthSession()
+          if (isRevokedSessionError(error)) {
+            await showDeletedAccountNoticeIfExpected()
+          }
           if (!mounted) return
           setSession(null)
           setLoading(false)
           return
         }
 
+        startValidatedSessionRefresh()
         setSession(session)
         setLoading(false)
         void logAuthDebugSnapshot('bootstrap restored session', session)
       } catch (error) {
-        console.warn('Auth bootstrap failed; continuing signed out.', error)
+        if (!isRevokedSessionError(error)) {
+          console.warn('Auth bootstrap failed; continuing signed out.', error)
+        }
         await clearStoredAuthSession()
+        if (isRevokedSessionError(error)) {
+          await showDeletedAccountNoticeIfExpected()
+        }
         if (!mounted) return
         setSession(null)
         setLoading(false)
@@ -405,6 +464,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: session?.user?.user_metadata?.role ?? null,
         })
       }
+      if (event === 'SIGNED_OUT') {
+        stopSessionRefresh()
+        if (!manualSignOutRef.current) {
+          void showDeletedAccountNoticeIfExpected()
+        }
+      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        startValidatedSessionRefresh()
+      }
       setSession(session)
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
         void logAuthDebugSnapshot(`auth event ${event}`, session)
@@ -414,6 +481,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false
       subscription.unsubscribe()
+      stopSessionRefresh()
     }
   }, [])
 
@@ -633,7 +701,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function signInWithApple(roleIntent?: DrapeRole | null): Promise<{ error: string | null }> {
+  async function signInWithApple(roleIntent?: DrapeRole | null): Promise<{ error: string | null; authorizationCode?: string | null }> {
     if (Platform.OS !== 'ios') return { error: 'Apple sign-in is only available on iOS' }
     try {
       // Dynamic import so Android doesn't crash on missing native module
@@ -683,7 +751,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const roleError = await applyRoleIntent(roleIntent)
-      return { error: roleError }
+      return { error: roleError, authorizationCode: credential.authorizationCode }
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string }
       if (err.code === 'ERR_REQUEST_CANCELED') return { error: null } // user cancelled
@@ -730,28 +798,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    const currentUserId = session?.user?.id ?? null
-    if (currentUserId) {
-      try {
-        await unregisterPushInstallation()
-      } catch {
-        // Sign-out should still clear local state if push-token cleanup cannot reach Supabase.
+    manualSignOutRef.current = true
+    try {
+      const currentUserId = session?.user?.id ?? null
+      if (currentUserId) {
+        try {
+          await unregisterPushInstallation()
+        } catch {
+          // Sign-out should still clear local state if push-token cleanup cannot reach Supabase.
+        }
       }
+      const { error } = await supabase.auth.signOut({ scope: 'global' })
+      if (error) {
+        console.warn('Global sign-out failed; clearing local session on this device.', error.message)
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      }
+      queryClient.clear()
+      await clearPersistedQueryCache()
+      await clearUserScopedLocalState(currentUserId)
+      resetAnalytics()
+      setSession(null)
+    } finally {
+      manualSignOutRef.current = false
     }
-    const { error } = await supabase.auth.signOut({ scope: 'global' })
-    if (error) {
-      console.warn('Global sign-out failed; clearing local session on this device.', error.message)
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
-    }
-    queryClient.clear()
-    await clearPersistedQueryCache()
-    await clearUserScopedLocalState(currentUserId)
-    resetAnalytics()
-    setSession(null)
+  }
+
+  async function reauthenticateWithProvider(provider: 'apple' | 'google') {
+    return provider === 'apple' ? signInWithApple() : signInWithGoogle()
   }
 
   return (
-    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, signInWithGoogle, signInWithApple, switchRole, signOut }}>
+    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, signInWithGoogle, signInWithApple, reauthenticateWithProvider, switchRole, signOut }}>
       {children}
     </AuthContext.Provider>
   )

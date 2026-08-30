@@ -9,9 +9,10 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { normalizeDrapeonSender } from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { enqueueDomainEvent } from '../_shared/jobs.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { appleRevocationConfigFromEnv, revokeAppleAuthorizationCode } from '../_shared/apple-token-revocation.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import {
   logPreflightFailure,
@@ -23,13 +24,102 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { optionalNote, parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'request-account-deletion'
-const RESEND_API = 'https://api.resend.com/emails'
+
+const StatusSchema = z.object({
+  action: z.literal('STATUS'),
+})
 
 const BodySchema = z.object({
+  action: z.literal('SUBMIT').optional(),
+  source: z.enum(['MOBILE_APP', 'WEB_APP']).optional(),
   reason: optionalNote,
   confirmationText: z.literal('DELETE'),
   reauthProof: z.string().trim().min(20),
+  appleAuthorizationCode: z.string().trim().min(8).optional(),
 })
+
+type DeletionRequestRow = {
+  id: string
+  status: string
+  requested_at: string
+  email: string | null
+  role: string
+  metadata: Record<string, unknown> | null
+}
+
+function numberFromMetadata(metadata: Record<string, unknown> | null, key: string) {
+  const value = metadata?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function stringFromMetadata(metadata: Record<string, unknown> | null, key: string) {
+  const value = metadata?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function serializeRequest(request: DeletionRequestRow) {
+  return {
+    id: request.id,
+    status: request.status,
+    createdAt: request.requested_at,
+    activeOrderCount: numberFromMetadata(request.metadata, 'active_order_count'),
+    deletionPath: stringFromMetadata(request.metadata, 'deletion_path'),
+    role: request.role,
+  }
+}
+
+async function ensureAcknowledgement(
+  supabase: SupabaseClient,
+  caller: { id: string; email?: string | null },
+  request: DeletionRequestRow,
+) {
+  const activeOrderCount = numberFromMetadata(request.metadata, 'active_order_count')
+  const isTailor = request.role === 'TAILOR'
+  const appPath = isTailor
+    ? '/(tailor)/profile/delete-account?returnTo=%2F(tailor)%2Fprofile%2Faccount-settings'
+    : '/(customer)/profile/delete-account?returnTo=%2F(customer)%2Fprofile%2Faccount-settings'
+
+  await enqueueDomainEvent(supabase, {
+    eventType: 'ACCOUNT_DELETION_ACKNOWLEDGEMENT_REQUIRED',
+    aggregateType: 'account_deletion_request',
+    aggregateId: request.id,
+    actorId: caller.id,
+    actorRole: request.role,
+    idempotencyKey: `account-deletion-acknowledgement:v2:${request.id}`,
+    jobs: ['SEND_ACCOUNT_EVENT_EMAIL', 'SEND_PUSH'],
+    payload: {
+      userId: caller.id,
+      recipientEmail: request.email ?? caller.email ?? null,
+      subject: 'We received your Drapeon account deletion request',
+      eyebrow: 'Privacy request',
+      headline: 'Deletion request received',
+      body: activeOrderCount > 0
+        ? 'Your request is recorded. Drapeon will resolve active order and payment obligations before deletion or anonymization is completed.'
+        : 'Your request is recorded and is moving through privacy review.',
+      ctaLabel: 'Review deletion request',
+      webPath: '/account?view=settings#delete-account',
+      appUrl: 'drape://profile/delete-account',
+      details: [
+        { label: 'Request ID', value: request.id },
+        { label: 'Status', value: request.status },
+        { label: 'Submitted', value: request.requested_at },
+        { label: 'Active orders', value: String(activeOrderCount) },
+      ],
+      notification: {
+        title: 'Deletion request received',
+        body: activeOrderCount > 0
+          ? 'Your request is recorded. Active order obligations will be resolved first.'
+          : 'Your account deletion request is recorded for privacy review.',
+        preferenceKey: 'orderUpdates',
+        data: {
+          destination: 'ACCOUNT_SETTINGS',
+          href: appPath,
+          deletionRequestId: request.id,
+        },
+      },
+    },
+  })
+}
 
 const ACTIVE_ORDER_STAGES = [
   'DRAFT',
@@ -53,111 +143,50 @@ const ACTIVE_ORDER_STAGES = [
   'IN_DISPUTE',
 ] as const
 
-function getSiteUrl() {
-  return (
-    Deno.env.get('SITE_URL') ??
-    Deno.env.get('NEXT_PUBLIC_SITE_URL') ??
-    'https://drapeon.co'
-  ).replace(/\/+$/u, '')
-}
-
-function getResendFrom() {
-  return normalizeDrapeonSender(
-    Deno.env.get('RESEND_FROM'),
-    'Drapeon Privacy',
-    'privacy@drapeon.co'
-  )
-}
-
-function getResendApiKey() {
-  return Deno.env.get('RESEND_API_KEY')?.trim() ?? ''
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
-async function sendDeletionReceiptEmail(input: {
-  to: string | null | undefined
-  role: string
-  activeOrderCount: number
-  requestId: string | null
-}) {
-  const to = input.to?.trim()
-  if (!to) return
-
-  const apiKey = getResendApiKey()
-  if (!apiKey) {
-    log('warn', FN, 'resend.missing_api_key')
-    return
-  }
-
-  const appUrl = getSiteUrl()
-  const hasActiveOrders = input.activeOrderCount > 0
-  const subject = 'We received your Drapeon account deletion request'
-  const nextStep = hasActiveOrders
-    ? 'Because this account has active orders, payouts, disputes, or transaction obligations, Drapeon will review those first, then complete deletion or anonymization where permitted.'
-    : 'Drapeon will move this through privacy review and complete deletion or anonymization where permitted.'
-
-  const response = await fetch(RESEND_API, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'User-Agent': 'drape-account-deletion/1.0',
-    },
-    body: JSON.stringify({
-      from: getResendFrom(),
-      to: [to],
-      subject,
-      html: `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">Deletion request received</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Drapeon received your account deletion request.</p>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(nextStep)}</p>
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Account type</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.role)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Active orders found</td><td style="padding:8px 0;font-weight:600">${input.activeOrderCount}</td></tr>
-    ${input.requestId ? `<tr><td style="padding:8px 0;color:#6b7280">Request ID</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.requestId)}</td></tr>` : ''}
-  </table>
-  <p style="line-height:1.6;margin:0 0 16px">If this was not you, contact privacy@drapeon.co immediately from this email address.</p>
-  <a href="${appUrl}/account-deletion" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Account deletion information</a>
-</div>`,
-    }),
-  })
-
-  if (!response.ok) {
-    log('warn', FN, 'resend.send_failed', {
-      status: response.status,
-      contentType: response.headers.get('content-type'),
-    })
-  }
-}
-
-async function countActiveOrders(supabase: SupabaseClient, userId: string) {
-  const [customerOrders, tailorOrders] = await Promise.all([
+async function countActiveOrders(
+  supabase: SupabaseClient,
+  userId: string,
+  tailorProfileId?: string | null
+) {
+  const [customerOrders, tailorAccountOrders, tailorProfileOrders] = await Promise.all([
     supabase
       .from('orders')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('customer_id', userId)
       .in('stage', ACTIVE_ORDER_STAGES),
     supabase
       .from('orders')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('tailor_id', userId)
       .in('stage', ACTIVE_ORDER_STAGES),
+    tailorProfileId
+      ? supabase
+          .from('orders')
+          .select('id')
+          .eq('tailor_profile_id', tailorProfileId)
+          .in('stage', ACTIVE_ORDER_STAGES)
+      : Promise.resolve({ data: [], error: null }),
   ])
 
+  const customerOrderIds = new Set(
+    (customerOrders.data ?? []).map((order) => String(order.id))
+  )
+  const tailorOrderIds = new Set([
+    ...(tailorAccountOrders.data ?? []).map((order) => String(order.id)),
+    ...(tailorProfileOrders.data ?? []).map((order) => String(order.id)),
+  ])
+
+  const lookupError =
+    customerOrders.error?.message ??
+    tailorAccountOrders.error?.message ??
+    tailorProfileOrders.error?.message ??
+    null
+
   return {
-    activeCustomerOrderCount: customerOrders.count ?? 0,
-    activeTailorOrderCount: tailorOrders.count ?? 0,
-    lookupFailed: !!customerOrders.error || !!tailorOrders.error,
-    lookupError: customerOrders.error?.message ?? tailorOrders.error?.message ?? null,
+    activeCustomerOrderCount: customerOrderIds.size,
+    activeTailorOrderCount: tailorOrderIds.size,
+    lookupFailed: !!lookupError,
+    lookupError,
   }
 }
 
@@ -188,7 +217,37 @@ Deno.serve(async (req) => {
       return jsonError(cors, 401, 'Please sign in again before requesting account deletion.')
     }
 
-    const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
+    const rawBody = await req.json().catch(() => ({}))
+    const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+
+    if (StatusSchema.safeParse(rawBody).success) {
+      const { data: existing, error: existingError } = await supabase
+        .from('account_deletion_requests')
+        .select('id, status, requested_at, email, role, metadata')
+        .eq('user_id', caller.id)
+        .in('status', ['PENDING', 'ACKNOWLEDGED', 'BLOCKED', 'READY_FOR_FINALIZATION'])
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (existingError) {
+        log('error', FN, 'status.db_error', { actor_id: caller.id, error: existingError.message })
+        return jsonError(cors, 500, 'We could not load your deletion request status right now.')
+      }
+      if (!existing) return jsonResponse({ ok: true, request: null }, 200, cors)
+
+      try {
+        await ensureAcknowledgement(supabase, caller, existing as DeletionRequestRow)
+      } catch (queueError) {
+        log('warn', FN, 'acknowledgement.enqueue_failed', {
+          request_id: existing.id,
+          error: queueError instanceof Error ? queueError.message : String(queueError),
+        })
+      }
+      return jsonResponse({ ok: true, request: serializeRequest(existing as DeletionRequestRow) }, 200, cors)
+    }
+
+    const parsed = parseBody(BodySchema, rawBody)
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
       return jsonError(
@@ -197,8 +256,6 @@ Deno.serve(async (req) => {
         'Type DELETE and confirm your password before submitting this request.'
       )
     }
-
-    const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
 
     const allowed = await checkRateLimit(
       supabase,
@@ -257,9 +314,9 @@ Deno.serve(async (req) => {
 
     const { data: existing, error: existingError } = await supabase
       .from('account_deletion_requests')
-      .select('id')
+      .select('id, status, requested_at, email, role, metadata')
       .eq('user_id', caller.id)
-      .eq('status', 'PENDING')
+      .in('status', ['PENDING', 'ACKNOWLEDGED', 'BLOCKED', 'READY_FOR_FINALIZATION'])
       .maybeSingle()
 
     if (existingError) {
@@ -268,10 +325,19 @@ Deno.serve(async (req) => {
     }
 
     if (existing) {
-      return new Response(JSON.stringify({ ok: true, alreadyPending: true }), {
-        status: 200,
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      try {
+        await ensureAcknowledgement(supabase, caller, existing as DeletionRequestRow)
+      } catch (queueError) {
+        log('warn', FN, 'acknowledgement.enqueue_failed', {
+          request_id: existing.id,
+          error: queueError instanceof Error ? queueError.message : String(queueError),
+        })
+      }
+      return jsonResponse({
+        ok: true,
+        alreadyPending: true,
+        request: serializeRequest(existing as DeletionRequestRow),
+      }, 200, cors)
     }
 
     const [{ data: tailorProfile }, { data: customerProfile }] = await Promise.all([
@@ -281,7 +347,7 @@ Deno.serve(async (req) => {
 
     const role = tailorProfile ? 'TAILOR' : customerProfile ? 'CUSTOMER' : 'UNKNOWN'
 
-    const activeOrders = await countActiveOrders(supabase, caller.id)
+    const activeOrders = await countActiveOrders(supabase, caller.id, tailorProfile?.id)
     if (activeOrders.lookupFailed) {
       log('warn', FN, 'active_orders.lookup_failed', {
         actor_id: caller.id,
@@ -301,20 +367,6 @@ Deno.serve(async (req) => {
         field: 'orders',
         severity: 'BLOCKING',
         actual: { lookupError: activeOrders.lookupError },
-      },
-      {
-        name: 'no_active_orders',
-        condition: activeOrderCount === 0,
-        errorCode: 'ACTIVE_ORDERS_PRESENT',
-        message:
-          'You have active orders. Wait for them to complete or cancel them before deleting your account.',
-        field: 'orders',
-        severity: 'BLOCKING',
-        actual: {
-          activeCustomerOrderCount: activeOrders.activeCustomerOrderCount,
-          activeTailorOrderCount: activeOrders.activeTailorOrderCount,
-          activeOrderCount,
-        },
       },
     ])
 
@@ -346,7 +398,7 @@ Deno.serve(async (req) => {
         role,
         reason: parsed.data.reason ?? null,
         metadata: {
-          source: 'MOBILE_APP',
+          source: parsed.data.source ?? 'MOBILE_APP',
           confirmation_text_entered: true,
           reauth_proof_verified: true,
           reauth_proof_issued_at: proofResult.ok
@@ -362,7 +414,7 @@ Deno.serve(async (req) => {
           active_order_lookup_failed: activeOrders.lookupFailed,
         },
       })
-      .select('id')
+      .select('id, status, requested_at, email, role, metadata')
       .single()
 
     if (insertError) {
@@ -399,7 +451,7 @@ Deno.serve(async (req) => {
       metadata: {
         account_email: caller.email ?? null,
         reason: parsed.data.reason ?? null,
-        source: 'MOBILE_APP',
+        source: parsed.data.source ?? 'MOBILE_APP',
         deletion_path: deletionPath,
         active_customer_order_count: activeOrders.activeCustomerOrderCount,
         active_tailor_order_count: activeOrders.activeTailorOrderCount,
@@ -407,12 +459,50 @@ Deno.serve(async (req) => {
       },
     })
 
-    await sendDeletionReceiptEmail({
-      to: caller.email,
-      role,
-      activeOrderCount,
-      requestId: (insertedRequest as { id?: string } | null)?.id ?? null,
-    })
+    const requestId = (insertedRequest as { id?: string } | null)?.id ?? null
+    if (parsed.data.appleAuthorizationCode && requestId) {
+      const appleConfig = appleRevocationConfigFromEnv()
+      const revocation = appleConfig
+        ? await revokeAppleAuthorizationCode(parsed.data.appleAuthorizationCode, appleConfig)
+            .catch((error) => ({ ok: false as const, stage: 'request' as const, error: error instanceof Error ? error.message : String(error) }))
+        : { ok: false as const, stage: 'configuration' as const, error: 'APPLE_REVOCATION_NOT_CONFIGURED' }
+      const revocationAt = new Date().toISOString()
+      const currentMetadata = (insertedRequest as DeletionRequestRow).metadata ?? {}
+      await supabase.from('account_deletion_requests').update({
+        metadata: {
+          ...currentMetadata,
+          apple_authorization_revocation: {
+            status: revocation.ok ? 'SUCCEEDED' : 'FAILED',
+            attempted_at: revocationAt,
+            stage: revocation.ok ? 'revoke' : revocation.stage,
+            error: revocation.ok ? null : revocation.error,
+          },
+        },
+      }).eq('id', requestId)
+      await audit(supabase, {
+        event: revocation.ok ? 'account_deletion.apple_authorization_revoked' : 'account_deletion.apple_authorization_revocation_failed',
+        actor_id: caller.id,
+        actor_role: role,
+        severity: revocation.ok ? 'info' : 'error',
+        payload: { request_id: requestId, stage: revocation.ok ? 'revoke' : revocation.stage },
+      })
+      if (!revocation.ok) {
+        log('error', FN, 'apple_authorization.revocation_failed', {
+          actor_id: caller.id,
+          request_id: requestId,
+          stage: revocation.stage,
+          error: revocation.error,
+        })
+      }
+    }
+    try {
+      await ensureAcknowledgement(supabase, caller, insertedRequest as DeletionRequestRow)
+    } catch (emailQueueError) {
+      log('warn', FN, 'receipt.enqueue_failed', {
+        request_id: requestId,
+        error: emailQueueError instanceof Error ? emailQueueError.message : String(emailQueueError),
+      })
+    }
 
     log('info', FN, 'account_deletion.requested', { actor_id: caller.id, actor_role: role })
 
@@ -421,6 +511,7 @@ Deno.serve(async (req) => {
         ok: true,
         activeOrderCount,
         deletionPath,
+        request: serializeRequest(insertedRequest as DeletionRequestRow),
       }),
       {
         status: 200,

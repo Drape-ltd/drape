@@ -12,6 +12,7 @@ const LINKED_PROJECT_REF_PATH = path.join(ROOT, 'supabase', '.temp', 'project-re
 const LOCAL_TARGETS_PATH = path.join(ROOT, '.env.supabase-targets.local')
 const SUPABASE_FUNCTIONS_DIR = path.join(ROOT, 'supabase', 'functions')
 const DEFAULT_DEV_PROJECT_REF = 'pqptfuqogvrajozfsqzi'
+const MAX_PRODUCTION_MIGRATIONS_PER_PUSH = 5
 
 const RUNTIME_PROVIDED_FUNCTION_ENVS = [
   'SUPABASE_URL',
@@ -46,6 +47,9 @@ const CUSTOM_FUNCTION_SECRETS = [
   'SHIPBUBBLE_WEBHOOK_SECRET',
   'SHIPPO_WEBHOOK_SECRET',
   'SENTRY_DSN',
+  'SENTRY_MONITOR_ORG',
+  'SENTRY_MONITOR_PROJECTS',
+  'SENTRY_MONITOR_TOKEN',
   'SITE_URL',
   'SMS_PROVIDER',
   'SUPABASE_SENTRY_DSN',
@@ -157,6 +161,41 @@ function runSupabase(args) {
   }
 
   process.exit(result.status ?? 1)
+}
+
+function inspectPendingMigrations(args) {
+  const result = spawnSync('supabase', ['db', 'push', '--dry-run', ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  })
+
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+  process.stdout.write(output)
+
+  if (result.error) fail(result.error.message)
+  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1)
+
+  // Supabase has emitted both plain version lines and full migration filenames
+  // across CLI releases. Count only reviewed migration records and tolerate ANSI
+  // formatting so a production batch can never be reported as an empty batch.
+  const normalizedOutput = output.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, '')
+  const versions = new Set(
+    Array.from(
+      normalizedOutput.matchAll(/(?:^|[\/\s])((?:19|20)\d{12})(?=_[^\s/]+\.sql\b|\s|$)/gm),
+      (match) => match[1]
+    )
+  )
+
+  if (/Would push these migrations|migration[s]? to apply/i.test(normalizedOutput) && versions.size === 0) {
+    fail('Supabase reported pending production migrations, but the guard could not parse the batch. Refusing to continue.')
+  }
+  if (versions.size > MAX_PRODUCTION_MIGRATIONS_PER_PUSH) {
+    fail(
+      `Production push contains ${versions.size} pending migrations; the reviewed limit is ${MAX_PRODUCTION_MIGRATIONS_PER_PUSH}. Split and verify the batch on development first.`
+    )
+  }
+
+  return versions.size
 }
 
 function getDeployableFunctionNames() {
@@ -286,6 +325,17 @@ if (command === 'link') {
 
 if (command === 'db:push') {
   assertLinkedProject(target, expectedRef, linkedRef)
+
+  if (target === 'production') {
+    const forwardedArgs = rest.filter((value) => value !== '--dry-run')
+    const pendingCount = inspectPendingMigrations(forwardedArgs)
+    console.log(
+      `\n[Drape Supabase Guard] Reviewed production batch: ${pendingCount} pending migration(s).\n`
+    )
+
+    if (rest.includes('--dry-run')) process.exit(0)
+  }
+
   console.log(
     `\n[Drape Supabase Guard] Running db push against ${target} project ${expectedRef}.\n`
   )

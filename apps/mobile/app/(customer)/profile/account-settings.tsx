@@ -146,7 +146,10 @@ export default function AccountSettingsScreen() {
             label="Delete account"
             sublabel="Password confirmation required"
             tone="destructive"
-            onPress={() => router.push('/(customer)/profile/delete-account' as never)}
+            onPress={() => router.push({
+              pathname: '/(customer)/profile/delete-account',
+              params: { returnTo: '/(customer)/profile/account-settings' },
+            } as never)}
           />
           <View style={styles.divider} />
           <NavRow

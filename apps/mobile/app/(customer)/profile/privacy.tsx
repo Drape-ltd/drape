@@ -201,7 +201,10 @@ export default function PrivacyScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
           <View style={styles.card}>
-            <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(customer)/profile/delete-account' as never)} activeOpacity={0.6}>
+            <TouchableOpacity style={styles.linkRow} onPress={() => router.push({
+              pathname: '/(customer)/profile/delete-account',
+              params: { returnTo: '/(customer)/profile/privacy' },
+            } as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="trash-2" size={20} color={Colors.error} />
                 <View style={{ flex: 1 }}>

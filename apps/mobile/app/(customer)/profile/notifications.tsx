@@ -7,9 +7,11 @@
  * in auth user_metadata and the bell badge clears.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native'
+import {
+  Alert, View, Text, StyleSheet, FlatList, TouchableOpacity, type GestureResponderEvent,
+} from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -20,6 +22,11 @@ import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
+import {
+  listCommunicationInbox,
+  markCommunicationInbox,
+  type CommunicationInboxItem,
+} from '@/lib/communications'
 
 type NotifItem = {
   id: string
@@ -34,6 +41,14 @@ type NotifItem = {
   note: string | null
   createdAt: string
   isNew: boolean
+  durableId?: string
+  titleOverride?: string
+  category?: CommunicationInboxItem['category']
+  severity?: CommunicationInboxItem['severity']
+  destinationKey?: string | null
+  destinationParams?: Record<string, unknown> | null
+  acknowledgementRequired?: boolean
+  acknowledgedAt?: string | null
 }
 
 type TailorProfileJoinRow = {
@@ -69,7 +84,14 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
 }
 
-function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name'] {
+function itemIcon(item: NotifItem): ComponentProps<typeof Feather>['name'] {
+  if (item.category) {
+    return ({
+      ORDER: 'package', MESSAGE: 'message-circle', PAYMENT: 'credit-card', PAYOUT: 'dollar-sign',
+      ACCOUNT: 'user', SECURITY: 'shield', SUPPORT: 'help-circle', SAFETY: 'alert-triangle',
+      SERVICE_STATUS: 'activity', PROMOTION: 'gift', PRODUCT_UPDATE: 'zap',
+    } satisfies Record<NonNullable<NotifItem['category']>, ComponentProps<typeof Feather>['name']>)[item.category]
+  }
   if (item.kind === 'message') return 'message-circle'
   const stage = item.stage
   if (!stage) return 'bell'
@@ -90,6 +112,8 @@ function itemIcon(item: NotifItem): React.ComponentProps<typeof Feather>['name']
 }
 
 function itemColor(item: NotifItem): string {
+  if (item.severity === 'CRITICAL' || item.severity === 'WARNING') return Colors.kanteRust
+  if (item.severity === 'NOTICE') return Colors.warning
   if (item.kind === 'message') return Colors.needleGreen
   const stage = item.stage
   if (!stage) return Colors.needleGreen
@@ -102,9 +126,44 @@ function itemColor(item: NotifItem): string {
 }
 
 function itemTitle(item: NotifItem): string {
+  if (item.titleOverride) return item.titleOverride
   if (item.kind === 'message') return 'New message'
   if (!item.stage) return 'Order update'
   return customerOrderStageLabel(item.stage, item.orderKind)
+}
+
+function stringParam(params: Record<string, unknown> | null | undefined, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = params?.[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function durableInboxItem(item: CommunicationInboxItem): NotifItem {
+  const orderId = stringParam(item.destination_params, 'orderId', 'order_id') ?? ''
+  return {
+    id: `inbox-${item.id}`,
+    durableId: item.id,
+    orderId,
+    orderRef: stringParam(item.destination_params, 'orderRef', 'order_ref', 'reference') ?? '',
+    garmentType: stringParam(item.destination_params, 'garmentType', 'garment_type', 'itemName') ?? 'Drapeon',
+    tailorName: stringParam(item.destination_params, 'tailorName', 'tailor_name') ?? 'Update',
+    orderKind: stringParam(item.destination_params, 'orderKind', 'order_kind') === 'READY_MADE' ? 'READY_MADE' : 'CUSTOM',
+    kind: item.category === 'MESSAGE' ? 'message' : 'stage_update',
+    stage: null,
+    messagePreview: item.body,
+    note: item.category === 'MESSAGE' ? null : item.body,
+    createdAt: item.created_at,
+    isNew: !item.read_at,
+    titleOverride: item.title,
+    category: item.category,
+    severity: item.severity,
+    destinationKey: item.destination_key,
+    destinationParams: item.destination_params,
+    acknowledgementRequired: item.acknowledgement_required,
+    acknowledgedAt: item.acknowledged_at,
+  }
 }
 
 function buildMessagePreview(type: string, body: string | null, senderName: string): string {
@@ -161,7 +220,8 @@ export default function NotificationsScreen() {
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
         try {
-          const [stageRes, messageRes] = await Promise.allSettled([
+          const [inboxRes, stageRes, messageRes] = await Promise.allSettled([
+            listCommunicationInbox(null, 60),
             supabase
               .from('order_stage_updates')
               .select(`
@@ -192,6 +252,7 @@ export default function NotificationsScreen() {
           ])
 
           if (
+            inboxRes.status === 'rejected' &&
             (stageRes.status === 'rejected' || (stageRes.status === 'fulfilled' && stageRes.value.error)) &&
             (messageRes.status === 'rejected' || (messageRes.status === 'fulfilled' && messageRes.value.error))
           ) {
@@ -255,7 +316,10 @@ export default function NotificationsScreen() {
             }
           })
 
-          const merged = [...stageItems, ...messageItems].sort(
+          const durableItems = inboxRes.status === 'fulfilled'
+            ? inboxRes.value.items.map(durableInboxItem)
+            : []
+          const merged = [...durableItems, ...stageItems, ...messageItems].sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           )
           setItems(merged)
@@ -281,6 +345,67 @@ export default function NotificationsScreen() {
   function goBack() {
     goBackOrFallback(router, navigation, '/(customer)/profile')
   }
+
+  async function openItem(item: NotifItem) {
+    if (item.durableId && item.isNew) {
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, isNew: false } : entry))
+      void markCommunicationInbox(item.durableId, 'READ').catch(() => {
+        setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, isNew: true } : entry))
+      })
+    }
+
+    if (item.destinationKey?.toUpperCase() === 'SERVICE_STATUS') {
+      router.push('/(customer)/profile/service-status')
+      return
+    }
+    if (item.orderId) {
+      router.push({
+        pathname: '/(customer)/orders/[id]',
+        params: {
+          id: item.orderId,
+          historyChain: appendToHistory(undefined, '/(customer)/profile/notifications'),
+        },
+      })
+      return
+    }
+    const destination = item.destinationKey?.toUpperCase() ?? ''
+    if (destination.includes('NOTIFICATION') || destination.includes('COMMUNICATION')) {
+      router.push('/(customer)/profile/notification-settings')
+    } else if (destination.includes('ACCOUNT') || destination.includes('SECURITY')) {
+      router.push('/(customer)/profile/account-settings')
+    }
+  }
+
+  async function acknowledgeItem(event: GestureResponderEvent, item: NotifItem) {
+    event.stopPropagation()
+    if (!item.durableId || item.acknowledgedAt) return
+    const acknowledgedAt = new Date().toISOString()
+    setItems((current) => current.map((entry) => (
+      entry.id === item.id ? { ...entry, isNew: false, acknowledgedAt } : entry
+    )))
+    try {
+      await markCommunicationInbox(item.durableId, 'ACKNOWLEDGED')
+    } catch {
+      setItems((current) => current.map((entry) => (
+        entry.id === item.id ? { ...entry, acknowledgedAt: null } : entry
+      )))
+      Alert.alert(
+        'Could not acknowledge update',
+        'Please try again. The update is still available in your notifications.',
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (!user?.id) return
+    const channel = supabase
+      .channel(`customer-communication-inbox-${user.id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'communication_inbox', filter: `recipient_id=eq.${user.id}`,
+      }, () => setRetryTrigger((value) => value + 1))
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [user?.id])
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -356,15 +481,7 @@ export default function NotificationsScreen() {
             return (
               <TouchableOpacity
                 style={[styles.card, item.isNew && styles.cardNew]}
-                onPress={() =>
-                  router.push({
-                    pathname: '/(customer)/orders/[id]',
-                    params: {
-                      id: item.orderId,
-                      historyChain: appendToHistory(undefined, '/(customer)/profile/notifications'),
-                    },
-                  })
-                }
+                onPress={() => void openItem(item)}
                 activeOpacity={0.7}
               >
                 {item.isNew && <View style={styles.unreadDot} />}
@@ -387,6 +504,20 @@ export default function NotificationsScreen() {
                     <Text style={styles.note} numberOfLines={2}>
                       {formatEmbeddedDateTimes(item.note)}
                     </Text>
+                  ) : null}
+                  {item.acknowledgementRequired ? (
+                    item.acknowledgedAt ? (
+                      <Text style={styles.acknowledged}>Acknowledged</Text>
+                    ) : (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel={`Acknowledge ${itemTitle(item)}`}
+                        style={styles.ackButton}
+                        onPress={(event) => void acknowledgeItem(event, item)}
+                      >
+                        <Text style={styles.ackButtonText}>Acknowledge</Text>
+                      </TouchableOpacity>
+                    )
                   ) : null}
                 </View>
               </TouchableOpacity>
@@ -476,5 +607,12 @@ const styles = StyleSheet.create({
   },
   metaLine: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
   note: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  acknowledged: { fontSize: 12, color: Colors.needleGreen, fontWeight: FontWeight.semibold, marginTop: 8 },
+  ackButton: {
+    alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: Radius.full, backgroundColor: Colors.needleGreen + '12',
+    borderWidth: 1, borderColor: Colors.needleGreen + '35',
+  },
+  ackButtonText: { fontSize: 12, color: Colors.needleGreen, fontWeight: FontWeight.bold },
   time: { fontSize: 12, color: Colors.midGrey, flexShrink: 0, marginTop: 1, maxWidth: 70 },
 })

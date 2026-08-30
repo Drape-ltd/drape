@@ -19,7 +19,9 @@ import {
 } from '@drape/shared'
 import { isVideoMediaUrl, videoPosterFrameUrl } from '@drape/shared/media-policy'
 import type { JSX, ReactNode } from 'react'
+import { ArrowLeft, LogOut, RefreshCw, ShieldAlert } from 'lucide-react'
 import {
+  getOpsAccessIdentityHint,
   getOpsAccessMode,
   getOpsBootstrapRole,
   getOpsDashboardTokenStatus,
@@ -66,6 +68,7 @@ import { OpsActionBridge } from '../../components/ops-action-bridge'
 import { StatusChip } from '../../components/ui/status-chip'
 import { FormMoneyInput } from '../../components/money-input'
 import { DispatchContextFields } from '../../components/dispatch-context-fields'
+import { OpsCommunicationsWorkspace } from '../../components/ops-communications-workspace'
 
 export const dynamic = 'force-dynamic'
 
@@ -117,6 +120,8 @@ const NOTICE_COPY: Record<string, string> = {
   'payout-change-rejected': 'Payout destination change rejected.',
   'payout-change-already-decided': 'This payout destination request was already decided. Its review card has been closed.',
   'deletion-saved': 'Deletion request status updated.',
+  'deletion-completed': 'Account deletion completed. Sign-in access is revoked and the customer received confirmation.',
+  'deletion-blocked': 'Deletion could not complete because an active obligation still needs a terminal outcome. The customer was notified.',
   'dispatch-saved': 'Dispatch stage updated.',
   'dispatch-quote-saved': 'Provider quote saved. Funding, refund, and customer-decision jobs are now being tracked.',
   'dispatch-event-saved': 'Drapeon Dispatch update saved and sent to both order participants.',
@@ -140,6 +145,15 @@ const NOTICE_COPY: Record<string, string> = {
   'payouts-bulk-released': 'Payout release triggered for all visible orders.',
   'bypass-bulk-reviewed': 'All visible bypass logs marked as reviewed.',
   'manual-issue-created': 'Manual ops issue created.',
+  'communication-campaign-created': 'Campaign saved. Its audience and channels are ready for review.',
+  'communication-campaign-reviewed': 'Independent campaign review recorded.',
+  'communication-campaign-published': 'Campaign published. Delivery progress is now tracked per recipient and channel.',
+  'communication-campaign-paused': 'Campaign paused. No new recipients will be delivered until it resumes.',
+  'communication-campaign-resumed': 'Campaign resumed and eligible delivery work was re-queued.',
+  'communication-campaign-cancelled': 'Campaign cancelled. Its terminal state and reason were recorded.',
+  'communication-recipient-retry-queued': 'Failed recipient delivery was safely queued for retry.',
+  'service-incident-saved': 'Service incident saved. The public status and Ops record now agree.',
+  'incident-communication-created': 'Incident communication created and linked to the service incident.',
   'seller-item-hidden': 'Ready-made item is hidden from buyers.',
   'seller-item-restored': 'Ready-made item is live again.',
   'money-desk-elevated': 'Money Desk elevation is active for 15 minutes.',
@@ -1668,6 +1682,8 @@ function DeletionRequestCard({
   request: OpsAccountDeletionRequest
   redirectTo: string
 }): React.JSX.Element {
+  const isTerminal = request.status === 'COMPLETED' || request.status === 'REJECTED'
+
   return (
     <CardCollapse
       background="bg-white/86"
@@ -1721,30 +1737,41 @@ function DeletionRequestCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
-        <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
-          <input type="hidden" name="kind" value="deletion-status" />
-          <input type="hidden" name="redirectTo" value={redirectTo} />
-          <input type="hidden" name="deletionRequestId" value={request.id} />
-          <label className="grid gap-2 text-sm text-ink/70">
-            Deletion status
-            <select
-              name="status"
-              defaultValue={request.status}
-              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+        {isTerminal ? (
+          <div className="rounded-[8px] border border-needle/15 bg-mint/35 p-4 text-sm leading-7 text-ink/72">
+            {request.status === 'COMPLETED'
+              ? 'The deletion worker completed anonymization and revoked sign-in access. This record is read-only.'
+              : 'Privacy Ops rejected this request. The terminal decision remains read-only in the audit trail.'}
+          </div>
+        ) : (
+          <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
+            <input type="hidden" name="kind" value="deletion-status" />
+            <input type="hidden" name="redirectTo" value={redirectTo} />
+            <input type="hidden" name="deletionRequestId" value={request.id} />
+            <label className="grid gap-2 text-sm text-ink/70">
+              Deletion status
+              <select
+                name="status"
+                defaultValue={request.status}
+                className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+              >
+                <option value="PENDING">Pending</option>
+                <option value="BLOCKED">Blocked by an active obligation</option>
+                <option value="READY_FOR_FINALIZATION">Approve deletion now</option>
+                <option value="REJECTED">Rejected</option>
+              </select>
+            </label>
+            <button
+              type="submit"
+              className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
             >
-              <option value="PENDING">Pending</option>
-              <option value="ACKNOWLEDGED">Acknowledged</option>
-              <option value="COMPLETED">Completed</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
-          </label>
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
-          >
-            Save deletion status
-          </button>
-        </form>
+              Save deletion status
+            </button>
+          </form>
+        )}
+        <p className="mt-3 text-xs leading-6 text-ink/48">
+          Approving runs the deletion worker immediately. It either completes deletion and revokes access, or returns a precise active-order, dispute, or payout blocker.
+        </p>
       </div>
 
       <IssueHistoryBlock history={request.history} />
@@ -3627,44 +3654,60 @@ function LoginView({
 
 function WorkforceAccessView({
   error,
+  identity,
+  retryHref,
 }: {
   error: string | null
+  identity: string | null
+  retryHref: string
 }): React.JSX.Element {
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
-      <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
-        <section className="w-full rounded-lg border border-white/70 bg-white/82 p-7 shadow-[0_28px_90px_rgba(22,28,24,0.12)] backdrop-blur sm:p-10">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
-          <h1 className="mt-4 text-5xl leading-[0.94] text-ink sm:text-6xl">Use Drapeon workforce access, not a shared token.</h1>
-          <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
-            This control plane is configured for workforce login. Cloudflare Access should challenge the request before the app loads, and only `@drapeon.co` identities with an assigned role should reach this page.
+    <main className="min-h-screen bg-bone px-5 py-8 sm:px-8 sm:py-12">
+      <div className="mx-auto max-w-2xl">
+        <a
+          href="https://drapeon.co"
+          className="inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-semibold text-ink/68 transition-colors duration-200 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/50"
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+          Back to Drapeon
+        </a>
+
+        <section className="mt-5 rounded-lg border border-ink/10 bg-white p-6 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-9">
+          <div className="flex size-11 items-center justify-center rounded-full bg-rust/10 text-rust-700">
+            <ShieldAlert aria-hidden="true" className="size-5" />
+          </div>
+          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-needle">Internal Ops</p>
+          <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">You’re signed in, but Ops isn’t available.</h1>
+          <p className="mt-4 max-w-xl text-base leading-7 text-ink/70">
+            Cloudflare accepted the account{identity ? <> <strong className="font-semibold text-ink">{identity}</strong></> : null}, but Drapeon could not find an Ops role for this session.
           </p>
 
-          <div className="mt-8 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-lg bg-ink p-6 text-white">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/62">What happens here</p>
-              <div className="mt-4 grid gap-3 text-sm leading-7 text-white/78">
-                <p>Cloudflare Access gates the route before page load.</p>
-                <p>Only `@drapeon.co` workforce identities should be admitted.</p>
-                <p>App-level permissions still decide which sections and actions are allowed.</p>
-                <p>If access feels wrong, it is usually an Access policy, audience, or role assignment issue.</p>
-              </div>
+          {error ? (
+            <div role="alert" className="mt-5 rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-rust-700">
+              {error}
             </div>
+          ) : null}
 
-            <div className="rounded-lg border border-ink/8 bg-[linear-gradient(180deg,#faf5ed_0%,#f2eade_100%)] p-6">
-              <h2 className="text-3xl text-ink">Workforce checklist</h2>
-              <div className="mt-4 grid gap-3 text-sm leading-7 text-ink/66">
-                <p>1. The route is behind Cloudflare Access.</p>
-                <p>2. Your sign-in identity uses `@drapeon.co`.</p>
-                <p>3. The Access application audience is configured in web envs.</p>
-                <p>4. Your email or group is assigned to a Drapeon control-plane role.</p>
-              </div>
-              {error ? (
-                <div className="mt-5 rounded-[8px] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
-                  {error}
-                </div>
-              ) : null}
-            </div>
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            <a
+              href={retryHref}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-needle px-5 text-sm font-semibold text-white transition-colors duration-200 hover:bg-needle/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/50 focus-visible:ring-offset-2"
+            >
+              <RefreshCw aria-hidden="true" className="size-4" />
+              Try again
+            </a>
+            <a
+              href="/cdn-cgi/access/logout"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-ink/15 bg-white px-5 text-sm font-semibold text-ink transition-colors duration-200 hover:bg-bone focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-needle/50 focus-visible:ring-offset-2"
+            >
+              <LogOut aria-hidden="true" className="size-4" />
+              Sign out or switch account
+            </a>
+          </div>
+
+          <div className="mt-7 border-t border-ink/10 pt-5 text-sm leading-6 text-ink/60">
+            <p className="font-semibold text-ink">What to do next</p>
+            <p className="mt-1">If access was just assigned, choose Try again. Otherwise, switch accounts or ask an administrator to assign this email an Ops role.</p>
           </div>
         </section>
       </div>
@@ -4983,6 +5026,15 @@ function renderOpsSection(
   context: OpsRenderContext,
 ): React.JSX.Element {
   switch (sectionKey) {
+    case 'communications':
+      return (
+        <OpsCommunicationsWorkspace
+          data={data}
+          redirectTo={buildOpsRedirectTarget(currentView, 'communications')}
+          actorEmail={context.session.email}
+          roleActions={getOpsRoleActions(context.session.role)}
+        />
+      )
     case 'money-desk':
       return <MoneyDeskSurface data={data} context={context} currentView={currentView} />
     case 'incidents':
@@ -5427,7 +5479,12 @@ export default async function OpsPage({
 
   const session = await getOpsSession()
   if (!session) {
-    return accessMode === 'cloudflare-access' ? <WorkforceAccessView error={error} /> : <LoginView error={error} />
+    if (accessMode === 'cloudflare-access') {
+      const identity = await getOpsAccessIdentityHint()
+      return <WorkforceAccessView error={error} identity={identity} retryHref={buildOpsHref(view)} />
+    }
+
+    return <LoginView error={error} />
   }
 
   const visibleSections = getVisibleOpsSections(session.role)

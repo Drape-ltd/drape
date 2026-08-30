@@ -16,6 +16,7 @@
  *   DECISION_FUNCTION_URL – optional public URL of the handle-verification-decision function
  *                           (defaults to https://<project-ref>.supabase.co/functions/v1/handle-verification-decision)
  *   OPS_DASHBOARD_URL – optional direct URL for the ops verification dashboard
+ *   OPS_WEB_BASE_URL  – optional protected Ops origin (defaults to ops.drapeon.co)
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -242,10 +243,12 @@ function renderProofItems(items: OpsVerificationProofItemEvidence[]) {
 
 function getOpsDashboardUrl() {
   const explicit = Deno.env.get('OPS_DASHBOARD_URL')?.trim()
+  const opsBase = (Deno.env.get('OPS_WEB_BASE_URL')?.trim() || 'https://ops.drapeon.co')
+    .replace(/\/+$/u, '')
   const candidate =
     explicit && explicit.length > 0
       ? explicit
-      : 'https://drapeon.co/ops?view=verification#verification'
+      : `${opsBase}/ops?view=verification#verification`
   try {
     const url = new URL(candidate)
     return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null

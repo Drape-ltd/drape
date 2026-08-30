@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const VALID_APP_VARIANTS = new Set(['development', 'preview', 'testflight', 'production'])
 const VALID_SUPABASE_ENVS = new Set(['development', 'preview', 'staging', 'test', 'production'])
+const PRODUCTION_DATA_APP_VARIANTS = new Set(['testflight', 'production'])
 
 function getSupabaseProjectRef(url: string) {
   try {
@@ -28,6 +29,7 @@ function assertMobileSupabaseConfig() {
   const supabaseEnv = process.env.EXPO_PUBLIC_SUPABASE_ENV?.trim().toLowerCase() ?? ''
   const declaredProjectRef = process.env.EXPO_PUBLIC_SUPABASE_PROJECT_REF?.trim() ?? ''
   const actualProjectRef = getSupabaseProjectRef(supabaseUrl)
+  const usesProductionData = PRODUCTION_DATA_APP_VARIANTS.has(appVariant)
 
   if (!VALID_APP_VARIANTS.has(appVariant)) {
     throw new Error(
@@ -59,7 +61,7 @@ function assertMobileSupabaseConfig() {
     )
   }
 
-  if (appVariant !== 'production' && !declaredProjectRef) {
+  if (!usesProductionData && !declaredProjectRef) {
     throw new Error(
       `Missing EXPO_PUBLIC_SUPABASE_PROJECT_REF for the ${appVariant} mobile environment.`
     )
@@ -71,11 +73,13 @@ function assertMobileSupabaseConfig() {
     )
   }
 
-  if (appVariant === 'production' && supabaseEnv !== 'production') {
-    throw new Error('Production mobile builds must use EXPO_PUBLIC_SUPABASE_ENV=production.')
+  if (usesProductionData && supabaseEnv !== 'production') {
+    throw new Error(
+      `${appVariant} mobile builds must use EXPO_PUBLIC_SUPABASE_ENV=production.`
+    )
   }
 
-  if (appVariant !== 'production' && supabaseEnv === 'production') {
+  if (!usesProductionData && supabaseEnv === 'production') {
     throw new Error(
       `Refusing to initialize Supabase for the ${appVariant} app with production mobile data settings.`
     )
@@ -235,13 +239,31 @@ async function clearLegacyAuthStorage() {
   )
 }
 
+/**
+ * Remove the active persisted session without asking Auth to refresh or revoke
+ * it first. This is required when the server has already revoked/deleted the
+ * refresh token and `signOut()` would otherwise touch that invalid token again.
+ */
+export async function clearActiveAuthStorage() {
+  const activeKeys = [
+    supabaseStorageKey,
+    `${supabaseStorageKey}-user`,
+    `${supabaseStorageKey}-code-verifier`,
+  ]
+
+  await Promise.all(activeKeys.map((key) => ExpoSecureStoreAdapter.removeItem(key)))
+}
+
 void clearLegacyAuthStorage()
 
 export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   auth: {
     storage: ExpoSecureStoreAdapter,
     storageKey: supabaseStorageKey,
-    autoRefreshToken: true,
+    // AuthProvider starts refresh only after it has validated the persisted
+    // session with Auth. This prevents a deleted/revoked account's stale token
+    // from being refreshed (and logged as an app error) during client startup.
+    autoRefreshToken: false,
     persistSession: true,
     detectSessionInUrl: false,
     flowType: 'pkce',
