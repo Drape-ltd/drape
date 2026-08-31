@@ -25,6 +25,7 @@
     "NEXT_PUBLIC_SUPABASE_URL": "https://wkfsrunetmgjdtcurmoj.supabase.co",
     "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndrZnNydW5ldG1namR0Y3VybW9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyMzIzODksImV4cCI6MjA4OTgwODM4OX0.O--hKpkahwpyU4SEFh_IDNFyN5tBm3xKmYZc-EmBC18",
     "CF_ACCESS_TEAM_DOMAIN": "drapeon.cloudflareaccess.com",
+    "OPS_ADMIN_EMAILS": "founders@drapeon.co",
     "OPS_HOSTNAME": "ops.drapeon.co"
   },
   "secrets": {
