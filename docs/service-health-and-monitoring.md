@@ -115,6 +115,11 @@ SLACK_BOT_TOKEN=<DrapeTalk bot token with chat:write>
 Before deploying the Cloudflare synthetic, set the same values as Worker
 secrets without printing them in shell history:
 
+> Operator note: the Cloudflare monitor requires the existing DEV health
+> secret, PROD health secret, and Slack bot token. Enter each value only through
+> the interactive `wrangler secret put` prompt. Never paste credential values
+> into a command, shell history, issue, document, or chat.
+
 ```text
 cd apps/health-monitor
 pnpm exec wrangler secret put DRAPE_HEALTHCHECK_SECRET
