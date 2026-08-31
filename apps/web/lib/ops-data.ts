@@ -3505,3 +3505,47 @@ export async function loadOpsDashboardData(options: { bypassCache?: boolean } = 
 
   return data
 }
+
+export async function loadOpsDeletionRequests(): Promise<OpsAccountDeletionRequest[] | null> {
+  const client = createServiceRoleClient()
+  if (!client) return null
+
+  const { data: requestData, error: requestError } = await client
+    .from('account_deletion_requests')
+    .select('id, user_id, email, role, status, reason, requested_at, acknowledged_at, processed_at, metadata')
+    .order('requested_at', { ascending: false })
+    .limit(50)
+  if (requestError) throw requestError
+
+  const deletionRequests = (requestData ?? []) as AccountDeletionRequestRow[]
+  const userIds = [...new Set(deletionRequests.map((request) => request.user_id).filter(Boolean))]
+  const { data: userData, error: userError } = userIds.length > 0
+    ? await client.from('users').select('id, email, display_name').in('id', userIds)
+    : { data: [], error: null }
+  if (userError) throw userError
+
+  const usersById = new Map(
+    ((userData ?? []) as Array<{ id: string; email: string | null; display_name: string | null }>)
+      .map((user) => [user.id, user] as const),
+  )
+
+  return deletionRequests.map((request) => {
+    const user = usersById.get(request.user_id)
+    return {
+      id: request.id,
+      displayId: issueDisplayId('DEL', request.id),
+      issueId: null,
+      userId: request.user_id,
+      displayName: user?.display_name ?? request.email ?? 'Unknown user',
+      email: user?.email ?? request.email,
+      role: request.role,
+      status: request.status,
+      reason: request.reason,
+      requestedAt: request.requested_at,
+      acknowledgedAt: request.acknowledged_at,
+      processedAt: request.processed_at,
+      source: metadataStringValue(request.metadata, 'source'),
+      history: [],
+    }
+  })
+}

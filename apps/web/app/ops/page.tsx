@@ -48,6 +48,7 @@ import {
   type OpsAccountDeletionRequest,
   type OpsDashboardData,
   loadOpsDashboardData,
+  loadOpsDeletionRequests,
   type OpsBypassLog,
   type OpsDispatchItem,
   type OpsDispute,
@@ -5492,6 +5493,66 @@ export default async function OpsPage({
   const safeView = canAccessOpsSection(session.role, view) ? view : visibleSections[0]?.key ?? 'overview'
   const safeSection = getOpsSection(safeView)
   const roleError = safeView !== view ? ERROR_COPY.forbidden : error
+
+  if (safeView === 'deletions') {
+    const deletionRequests = await loadOpsDeletionRequests()
+    if (!deletionRequests) {
+      return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} />
+    }
+
+    return (
+      <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),linear-gradient(180deg,#f7f1e8_0%,#f1eadf_100%)]">
+        <OpsActionBridge initialNotice={notice} initialError={roleError} initialErrorDetail={errorDetail} />
+        <div className="mx-auto max-w-6xl px-5 py-6 sm:px-8 lg:px-12">
+          <header className="flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-white/72 bg-white/82 px-5 py-3 shadow-sm backdrop-blur sm:px-6">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <a href="/ops?view=overview" className="inline-flex items-center gap-2 text-sm font-semibold text-ink hover:text-needle">
+                <ArrowLeft aria-hidden="true" className="size-4" />
+                Drapeon Ops
+              </a>
+              <span className="text-ink/20">/</span>
+              <h1 className="truncate text-sm text-ink/60">{safeSection.label}</h1>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="rounded-full border border-needle/14 bg-needle/8 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-needle-700">
+                {formatDatabaseEnumLabel(session.role)}
+              </span>
+              <form action="/ops/logout" method="post">
+                <button type="submit" className="inline-flex items-center justify-center rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-ink/88">
+                  Lock
+                </button>
+              </form>
+            </div>
+          </header>
+          <div className="mt-6">
+            <SectionFrame
+              id="deletions"
+              eyebrow="Privacy ops"
+              title="Deletion requests should never disappear into a support inbox."
+              description="This focused queue loads independently from unrelated Ops workspaces so privacy actions remain available during provider or dashboard degradation."
+            >
+              {deletionRequests.length > 0 ? (
+                <div className="grid gap-5">
+                  {deletionRequests.map((request) => (
+                    <DeletionRequestCard
+                      key={request.id}
+                      request={request}
+                      redirectTo={buildOpsRedirectTarget('deletions', 'deletions')}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No account deletion requests are waiting right now."
+                  body="When a customer or tailor starts a deletion request, it will appear here with its current handling status."
+                />
+              )}
+            </SectionFrame>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   const loadedData = await loadOpsDashboardData({ bypassCache: Boolean(noticeKey || errorKey) })
   if (!loadedData) {
