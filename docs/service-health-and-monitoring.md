@@ -77,8 +77,20 @@ DRAPE_HEALTHCHECK_SECRET=<long random value>
 ```
 
 The external GitHub observer lives at
-`.github/workflows/beta-service-health.yml`. It runs outside Supabase every five
-minutes so it can still report a Supabase outage. It monitors:
+`.github/workflows/beta-service-health.yml`. Its cron requests a run every five
+minutes, but GitHub does not guarantee exact scheduled execution. It remains a
+durable secondary observer and manual diagnostic. An unchanged open incident
+keeps the workflow red while duplicate Slack messages remain suppressed.
+
+Once deployed with all required secrets, the primary independent synthetic is the Cloudflare Worker in
+`apps/health-monitor`. Cloudflare invokes it every five minutes and stores the
+last completed state in `HEALTH_STATE`, outside Supabase. Its `/health` endpoint
+fails closed when the last check is older than 12 minutes. It monitors protected
+DEV and PROD readiness and records verified Slack delivery metadata for incident
+and recovery transitions.
+
+Both observers run outside Supabase so they can still report a Supabase outage.
+Together they monitor:
 
 - Drape DEV and PROD public liveness
 - Drape DEV and PROD protected readiness when their secrets are configured
@@ -86,9 +98,11 @@ minutes so it can still report a Supabase outage. It monitors:
   their official public status APIs
 
 The observer fingerprints the active incident set. A new or changed incident
-opens one failed GitHub run and one Slack alert. An unchanged incident is kept
-visible without sending duplicates. Recovery produces one recovery message.
-GitHub remains the fallback when Slack itself is unavailable.
+opens one failed GitHub run and one Slack alert. An unchanged incident keeps the
+GitHub run failed without sending duplicate Slack messages. Recovery produces
+one recovery message. Each transition artifact records the safe Slack outcome,
+channel ID, message timestamp, and delivery time. GitHub remains the fallback
+when Slack itself is unavailable.
 
 Configure these GitHub repository secrets:
 
@@ -97,6 +111,21 @@ DRAPE_HEALTHCHECK_SECRET=<DEV dedicated health secret>
 DRAPE_PROD_HEALTHCHECK_SECRET=<PROD dedicated health secret>
 SLACK_BOT_TOKEN=<DrapeTalk bot token with chat:write>
 ```
+
+Before deploying the Cloudflare synthetic, set the same values as Worker
+secrets without printing them in shell history:
+
+```text
+cd apps/health-monitor
+pnpm exec wrangler secret put DRAPE_HEALTHCHECK_SECRET
+pnpm exec wrangler secret put DRAPE_PROD_HEALTHCHECK_SECRET
+pnpm exec wrangler secret put SLACK_BOT_TOKEN
+pnpm exec wrangler deploy
+```
+
+Then trigger one scheduled check from the Cloudflare dashboard and verify
+`/health` returns a fresh state. Do not deploy the Worker with missing secrets;
+an incomplete monitor creates false incidents and cannot prove Slack delivery.
 
 Slack transition alerts go to `#ops-critical` and include links to the exact
 GitHub monitor run and Drapeon Ops. Add the bot to that channel. Never use an

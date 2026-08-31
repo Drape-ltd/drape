@@ -81,7 +81,7 @@ export default function ContactPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Public channels"
           title="Phone and social links."
@@ -105,7 +105,7 @@ export default function ContactPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Specialized inboxes"
           title="Use these when the topic is specific."

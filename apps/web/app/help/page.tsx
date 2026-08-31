@@ -86,7 +86,7 @@ export default function HelpPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Real-life exceptions"
           title="When the normal path is not enough, Drapeon still has a path."
@@ -104,7 +104,7 @@ export default function HelpPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="When Signal Is Weak"
           title="Use the durable path first."
@@ -133,7 +133,7 @@ export default function HelpPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Need a direct path?"
           title="Use the team that matches the issue."

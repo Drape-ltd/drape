@@ -8,23 +8,25 @@ import { createClient } from '../lib/supabase'
 import { signOutWebSession } from '../lib/web-auth-session'
 import { SocialIconLinks } from './social-links'
 
-const navItems: Array<{ href: Route; label: string }> = [
-  { href: '/how-it-works', label: 'How it works' },
-  { href: '/tailors', label: 'For tailors' },
-  { href: '/vision', label: 'Drapeon Vision' },
+const navItems: Array<{ href: Route; label: string; ownsPath: (pathname: string) => boolean }> = [
+  { href: '/explore', label: 'Explore', ownsPath: (pathname) => pathname === '/explore' || pathname.startsWith('/tailors/') },
+  { href: '/how-it-works', label: 'How it works', ownsPath: (pathname) => pathname === '/how-it-works' },
+  { href: '/tailors', label: 'For tailors', ownsPath: (pathname) => pathname === '/tailors' },
+  { href: '/vision', label: 'Drapeon Vision', ownsPath: (pathname) => pathname === '/vision' },
 ]
 
 
-export function PublicSiteHeader(): React.JSX.Element {
+export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay' }): React.JSX.Element {
   const pathname = usePathname()
   const [menuOpen, setMenuOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
   const [signingOut, setSigningOut] = useState(false)
   const isActive = (href: string): boolean => pathname === href || pathname?.startsWith(`${href}/`) === true
+  const isNavItemActive = (item: (typeof navItems)[number]): boolean => item.ownsPath(pathname ?? '')
 
-  const linkClassName = (href: string) => {
-    const active = isActive(href)
+  const linkClassName = (item: (typeof navItems)[number]) => {
+    const active = isNavItemActive(item)
     return active
       ? 'rounded-full border border-needle/12 bg-needle/10 px-3 py-2 text-needle'
       : 'rounded-full border border-transparent px-3 py-2 text-ink/72 transition hover:bg-bone hover:text-ink'
@@ -86,12 +88,16 @@ export function PublicSiteHeader(): React.JSX.Element {
     setSigningOut(false)
   }
 
+  const overlay = tone === 'overlay'
+
   return (
-    <header className="viewport-safe-shell sticky top-3 z-40 min-w-0 rounded-[8px] border border-ink/8 bg-white/92 px-4 py-3 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur">
+    <header className={overlay
+      ? 'relative z-40 min-w-0 border-b border-white/18 px-5 py-4 text-white sm:px-7'
+      : 'viewport-safe-shell sticky top-3 z-40 min-w-0 rounded-[8px] border border-ink/8 bg-white/92 px-4 py-3 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur'}>
       <div className="flex items-center justify-between gap-4">
         <Link
           href="/"
-          className="shrink-0 text-2xl font-semibold text-needle sm:text-3xl"
+          className={overlay ? 'shrink-0 text-2xl font-semibold text-white sm:text-3xl' : 'shrink-0 text-2xl font-semibold text-needle sm:text-3xl'}
           data-analytics-event="nav_click"
           data-analytics-label="Drapeon home"
         >
@@ -100,7 +106,9 @@ export function PublicSiteHeader(): React.JSX.Element {
 
         <button
           type="button"
-          className="inline-flex min-h-11 items-center justify-center rounded-full border border-ink/10 bg-white px-4 text-sm font-semibold text-ink transition hover:bg-bone lg:hidden"
+          className={overlay
+            ? 'inline-flex min-h-11 items-center justify-center rounded-full border border-white/24 bg-black/18 px-4 text-sm font-semibold text-white backdrop-blur transition hover:bg-black/28 lg:hidden'
+            : 'inline-flex min-h-11 items-center justify-center rounded-full border border-ink/10 bg-white px-4 text-sm font-semibold text-ink transition hover:bg-bone lg:hidden'}
           aria-controls="public-site-menu"
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((open) => !open)}
@@ -113,22 +121,26 @@ export function PublicSiteHeader(): React.JSX.Element {
             <Link
               key={item.href}
               href={item.href}
-              className={linkClassName(item.href)}
-              aria-current={isActive(item.href) ? 'page' : undefined}
+              className={overlay ? 'rounded-full border border-transparent px-3 py-2 text-white/82 transition hover:bg-white/12 hover:text-white' : linkClassName(item)}
+              aria-current={isNavItemActive(item) ? 'page' : undefined}
               data-analytics-event="nav_click"
               data-analytics-label={item.label}
             >
               {item.label}
             </Link>
           ))}
-          <span className="mx-1 h-6 w-px bg-ink/8" />
-          <SocialIconLinks size="sm" />
-          <span className="mx-1 h-6 w-px bg-ink/8" />
+          {!overlay ? (
+            <>
+              <span className="mx-1 h-6 w-px bg-ink/8" />
+              <SocialIconLinks size="sm" />
+            </>
+          ) : null}
+          <span className={overlay ? 'mx-1 h-6 w-px bg-white/18' : 'mx-1 h-6 w-px bg-ink/8'} />
           {signedIn ? (
             <>
               <Link
                 href="/account/work"
-                className="rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600"
+                className={overlay ? 'rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:bg-bone' : 'rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600'}
                 data-analytics-event="nav_click"
                 data-analytics-label="Dashboard"
               >
@@ -138,7 +150,7 @@ export function PublicSiteHeader(): React.JSX.Element {
                 type="button"
                 onClick={() => { void signOut() }}
                 disabled={signingOut}
-                className="px-2 py-2 text-sm font-semibold text-ink/46 transition hover:text-ink disabled:cursor-not-allowed"
+                className={overlay ? 'px-2 py-2 text-sm font-semibold text-white/64 transition hover:text-white disabled:cursor-not-allowed' : 'px-2 py-2 text-sm font-semibold text-ink/46 transition hover:text-ink disabled:cursor-not-allowed'}
               >
                 {signingOut ? 'Signing out...' : 'Sign out'}
               </button>
@@ -147,7 +159,7 @@ export function PublicSiteHeader(): React.JSX.Element {
             <>
               <Link
                 href="/sign-in"
-                className={isActive('/sign-in') ? 'rounded-full border border-ink/8 bg-bone px-4 py-2 text-sm font-semibold text-ink' : 'rounded-full border border-ink/8 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone'}
+                className={overlay ? 'rounded-full px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/12' : isActive('/sign-in') ? 'rounded-full border border-ink/8 bg-bone px-4 py-2 text-sm font-semibold text-ink' : 'rounded-full border border-ink/8 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone'}
                 aria-current={isActive('/sign-in') ? 'page' : undefined}
                 data-analytics-event="nav_click"
                 data-analytics-label="Sign in"
@@ -155,12 +167,12 @@ export function PublicSiteHeader(): React.JSX.Element {
                 Sign in
               </Link>
               <Link
-                href="/join"
-                className="rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600"
+                href="/sign-up"
+                className={overlay ? 'rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:bg-bone' : 'rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600'}
                 data-analytics-event="primary_cta_click"
-                data-analytics-label="Join waitlist"
+                data-analytics-label="Create account"
               >
-                Join waitlist
+                Create account
               </Link>
             </>
           )}
@@ -169,15 +181,15 @@ export function PublicSiteHeader(): React.JSX.Element {
 
       <nav
         id="public-site-menu"
-        className={`${menuOpen ? 'grid' : 'hidden'} mt-4 gap-2 border-t border-ink/6 pt-4 text-sm font-medium lg:hidden`}
+        className={`${menuOpen ? 'grid' : 'hidden'} mt-4 gap-2 border-t ${overlay ? 'border-white/18 bg-ink/72 p-3 backdrop-blur' : 'border-ink/6'} pt-4 text-sm font-medium lg:hidden`}
         aria-label="Mobile navigation"
       >
         {navItems.map((item) => (
           <Link
             key={item.href}
             href={item.href}
-            className={`${linkClassName(item.href)} min-h-11 text-center`}
-            aria-current={isActive(item.href) ? 'page' : undefined}
+            className={`${overlay ? 'rounded-full px-3 py-2 text-center text-white transition hover:bg-white/12' : linkClassName(item)} min-h-11 text-center`}
+            aria-current={isNavItemActive(item) ? 'page' : undefined}
             data-analytics-event="nav_click"
             data-analytics-label={item.label}
             onClick={() => setMenuOpen(false)}
@@ -217,13 +229,13 @@ export function PublicSiteHeader(): React.JSX.Element {
               Sign in
             </Link>
             <Link
-              href="/join"
+              href="/sign-up"
               className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600"
               data-analytics-event="primary_cta_click"
-              data-analytics-label="Join waitlist"
+              data-analytics-label="Create account"
               onClick={() => setMenuOpen(false)}
             >
-              Join waitlist
+              Create account
             </Link>
           </div>
         )}

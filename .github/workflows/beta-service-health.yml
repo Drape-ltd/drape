@@ -73,15 +73,6 @@ jobs:
           [[ -n "$DRAPE_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_HEALTHCHECK_SECRET is missing; DEV protected readiness is not monitored."
           [[ -n "$DRAPE_PROD_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_PROD_HEALTHCHECK_SECRET is missing; PROD protected readiness is not monitored."
 
-      - name: Persist health state
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: beta-service-health-state
-          path: /tmp/current-health
-          retention-days: 7
-          if-no-files-found: error
-
       - name: Notify only when the incident changes
         if: ${{ always() }}
         env:
@@ -105,6 +96,10 @@ jobs:
             local emoji="$2"
             if [[ -z "$SLACK_BOT_TOKEN" ]]; then
               echo "::warning::SLACK_BOT_TOKEN is missing; GitHub remains the alert fallback."
+              jq -n \
+                --arg deliveredAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{ok: false, error: "missing_token", deliveredAt: $deliveredAt}' \
+                > /tmp/current-health/slack-delivery.json
               return 0
             fi
             payload="$(jq -n \
@@ -118,13 +113,28 @@ jobs:
               https://slack.com/api/chat.postMessage || true)"
             if ! jq -e '.ok == true' <<<"$response" >/dev/null 2>&1; then
               echo "::warning::Slack alert failed; GitHub remains the alert fallback."
+              jq -n \
+                --arg error "$(jq -r '.error // "unknown_error"' <<<"$response" 2>/dev/null || printf unknown_error)" \
+                --arg deliveredAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{ok: false, error: $error, deliveredAt: $deliveredAt}' \
+                > /tmp/current-health/slack-delivery.json
+              return 0
             fi
+            jq -n \
+              --arg channel "$(jq -r '.channel // empty' <<<"$response")" \
+              --arg messageTs "$(jq -r '.ts // empty' <<<"$response")" \
+              --arg deliveredAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{ok: true, channel: $channel, messageTs: $messageTs, deliveredAt: $deliveredAt}' \
+              > /tmp/current-health/slack-delivery.json
           }
 
           if [[ "$CURRENT" == "fail" && "$previous" == "fail" && "$FINGERPRINT" == "$previous_fingerprint" ]]; then
+            if [[ -f /tmp/previous-health/slack-delivery.json ]]; then
+              cp /tmp/previous-health/slack-delivery.json /tmp/current-health/slack-delivery.json
+            fi
             echo "::warning title=Ongoing Drapeon service incident::$SUMMARY"
             echo "The same incident is still open; duplicate GitHub and Slack alerts were suppressed." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
 
           if [[ "$CURRENT" == "fail" ]]; then
@@ -141,3 +151,12 @@ jobs:
           else
             echo "Drapeon and monitored provider health remains clear." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Persist health state and notification outcome
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-service-health-state
+          path: /tmp/current-health
+          retention-days: 7
+          if-no-files-found: error

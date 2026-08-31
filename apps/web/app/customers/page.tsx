@@ -53,7 +53,7 @@ export default function CustomersPage(): React.JSX.Element {
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/join"
+            href="/sign-up"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
             data-analytics-event="primary_cta_click"
             data-analytics-label="Customers join"
@@ -83,7 +83,7 @@ export default function CustomersPage(): React.JSX.Element {
       </section>
 
       {/* Customer journey */}
-      <section className="border-t border-ink/6 py-14">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
           <div className="lg:sticky lg:top-10">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Customer journey</p>
@@ -107,7 +107,7 @@ export default function CustomersPage(): React.JSX.Element {
       </section>
 
       {/* App surfaces */}
-      <section className="border-t border-ink/6 py-14">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
           <div className="lg:sticky lg:top-10">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">App surface</p>
@@ -131,24 +131,24 @@ export default function CustomersPage(): React.JSX.Element {
       </section>
 
       {/* CTA */}
-      <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
+      <section className="public-section-compact border-t border-ink/6">
+        <div className="overflow-hidden rounded-[8px] bg-needle px-8 py-10 text-white">
           <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Early access</p>
-              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Join the customer queue.</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Customer account</p>
+              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Start when you are ready.</h2>
               <p className="mt-3 text-sm leading-7 text-white/62">
-                We&apos;re onboarding soon. Join the waitlist and be among the first customers on Drapeon.
+                Browse approved makers first, then create an account when you want to save, message, or order.
               </p>
             </div>
             <div className="flex shrink-0 flex-col gap-3">
               <Link
-                href="/join"
+                href="/sign-up"
                 className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-ink"
                 data-analytics-event="primary_cta_click"
                 data-analytics-label="Customer CTA join bottom"
               >
-                Join as a customer
+                Create customer account
               </Link>
               <Link
                 href="/tailors"

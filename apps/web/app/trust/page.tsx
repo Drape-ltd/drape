@@ -50,7 +50,7 @@ export default function TrustPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Exception OS"
           title="The launch trust chain has named failure paths."
@@ -69,9 +69,9 @@ export default function TrustPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="rounded-[8px] bg-ink p-7 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
+          <div className="rounded-[8px] bg-needle p-7 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/60">Trust principle</p>
             <h3 className="mt-4 text-3xl sm:text-4xl">People can feel the difference before they sign in.</h3>
             <p className="mt-4 text-sm leading-7 text-white/74">Clarity beats noise.</p>
@@ -94,7 +94,7 @@ export default function TrustPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Contact routes"
           title="The right issue reaches the right team."

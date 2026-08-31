@@ -8,7 +8,7 @@ import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Customer account access',
-  description: 'Open the Drapeon customer app, join the queue, or get customer account help.',
+  description: 'Open the Drapeon customer app, create an account, or get customer account help.',
   path: '/account/customer',
 })
 

@@ -315,6 +315,7 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
     ...rows.flatMap((row) => [
       typeof row.avatar_url === 'string' ? row.avatar_url.trim() : null,
       ...asStringList(row.portfolio_photo_urls),
+      ...asStringList(row.portfolio_video_urls),
     ]),
   ].filter((value): value is string => !!value)
   const blockedUrls = await findBlockedMediaUrls(
@@ -334,11 +335,15 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
   }
 
   return rows.map((row) => {
+    const safeVideos = asStringList(row.portfolio_video_urls).filter((url) => !blockedUrls.has(url))
     const cover = typeof row.id === 'string' ? coverByTailor.get(row.id) : null
     if (cover) {
       return {
         ...row,
+        portfolio_photo_urls: asStringList(row.portfolio_photo_urls).filter((url) => !blockedUrls.has(url)),
+        portfolio_video_urls: safeVideos,
         explore_image_url: cover,
+        explore_video_url: safeVideos[0] ?? null,
         explore_image_bucket: 'portfolio-photos',
       }
     }
@@ -350,7 +355,10 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
     const fallbackPhotos = asStringList(row.portfolio_photo_urls).filter((url) => !blockedUrls.has(url))
     return {
       ...row,
+      portfolio_photo_urls: fallbackPhotos,
+      portfolio_video_urls: safeVideos,
       explore_image_url: safeAvatarUrl ?? fallbackPhotos[0] ?? null,
+      explore_video_url: safeVideos[0] ?? null,
       explore_image_bucket: safeAvatarUrl ? 'avatars' : fallbackPhotos[0] ? 'portfolio-photos' : null,
     }
   })
@@ -366,8 +374,9 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
   const strictLocation = payload.strictLocation === true
   let builder = supabase
     .from('tailor_profiles')
-    .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, availability, accepts_custom_orders_now, shop_paused, specialty_tags, avatar_url, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, price_range_min, price_range_max, avg_response_hours, ranking_score')
+    .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, availability, accepts_custom_orders_now, shop_paused, specialty_tags, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, price_range_min, price_range_max, avg_response_hours, ranking_score')
     .eq('is_live', true)
+    .eq('is_verified', true)
     .order('ranking_score', { ascending: false, nullsFirst: false })
     .order('avg_rating', { ascending: false, nullsFirst: false })
     .order('total_reviews', { ascending: false, nullsFirst: false })
@@ -406,6 +415,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       .select('id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable')
       .eq('id', tailorId)
       .eq('is_live', true)
+      .eq('is_verified', true)
       .maybeSingle(),
     supabase
       .from('reviews')
@@ -487,9 +497,10 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       priceRangeMin: typeof profileRow.price_range_min === 'number' ? profileRow.price_range_min : null,
       priceRangeMax: typeof profileRow.price_range_max === 'number' ? profileRow.price_range_max : null,
       avatarUrl: profileAvatarUrl && !blockedProfileMedia.has(profileAvatarUrl) ? profileAvatarUrl : null,
-      portfolioPhotos: safePortfolioPhotosFromItems.length > 0
-        ? safePortfolioPhotosFromItems
-        : safeProfilePortfolioPhotos,
+      portfolioPhotos: Array.from(new Set([
+        ...safePortfolioPhotosFromItems,
+        ...safeProfilePortfolioPhotos,
+      ])),
       portfolioVideos: safeProfilePortfolioVideos,
       supportsCustomOrders: profileRow.supports_custom_orders !== false,
       supportsReadyMade: profileRow.supports_ready_made === true,
@@ -541,8 +552,17 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
     isSaved = !!savedData
   }
 
+  const publicPayload = asRecord(publicData)
+  const publicProfile = asRecord(publicPayload.profile)
+
   return {
-    ...asRecord(publicData),
+    ...publicPayload,
+    profile: {
+      ...publicProfile,
+      // The auth user id is required by signed-in conversation/order flows,
+      // but it is an internal account identifier and is not public metadata.
+      userId: authUserId ? publicProfile.userId ?? null : null,
+    },
     isSaved,
   }
 }

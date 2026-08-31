@@ -80,7 +80,7 @@ export default function AccountDeletionPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="What happens next"
           title="Deletion is handled as a verified workflow."
@@ -93,7 +93,7 @@ export default function AccountDeletionPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="What may be retained"
           title="Some records cannot be erased immediately."
@@ -118,7 +118,7 @@ export default function AccountDeletionPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Need help?"
           title="Use the right inbox so the request does not disappear."

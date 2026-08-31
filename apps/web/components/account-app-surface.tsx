@@ -5091,7 +5091,7 @@ function AccountRouteShell({
         {
           title: 'Buying',
           items: [
-            { label: 'Explore', href: '/account/explore' as Route, icon: 'search' as const },
+            { label: 'Explore', href: '/explore' as Route, icon: 'search' as const },
             { label: 'Marketplace', href: '/account/shop' as Route, icon: 'card' as const },
             { label: 'Saved', href: '/account/saved' as Route, icon: 'heart' as const },
             { label: 'Orders', href: '/account/orders' as Route, icon: 'orders' as const, badge: customerActiveOrderCount > 0 ? String(customerActiveOrderCount) : null },
@@ -5111,7 +5111,7 @@ function AccountRouteShell({
   function isActive(href: string) {
     if (!pathname) return false
     if (href === '/account/orders') return pathname === href || pathname.startsWith('/account/orders/')
-    if (href === '/account/explore') return pathname === href || pathname.startsWith('/account/tailors/')
+    if (href === '/explore') return pathname === href || pathname.startsWith('/tailors/')
     if (href === '/account/shop') return pathname === href || pathname.startsWith('/account/items/')
     return pathname === href
   }
@@ -5305,6 +5305,10 @@ function AccountRouteShell({
 }
 
 function AuthRequiredCard() {
+  const pathname = usePathname()
+  const signInHref = pathname?.startsWith('/account/')
+    ? (`/sign-in?next=${encodeURIComponent(pathname)}` as Route)
+    : ('/sign-in' as Route)
   return (
     <main className="min-h-screen bg-ui-canvas">
       <div className="mx-auto max-w-3xl px-5 py-12">
@@ -5315,7 +5319,7 @@ function AuthRequiredCard() {
             Access your protected orders, messages, measurements, payments, and support.
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg"><Link href="/sign-in">Sign in</Link></Button>
+            <Button asChild size="lg"><Link href={signInHref}>Sign in</Link></Button>
             <Button asChild size="lg" variant="secondary"><Link href="/sign-up">Create account</Link></Button>
           </div>
         </div>

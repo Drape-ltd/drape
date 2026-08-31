@@ -123,19 +123,7 @@ export function TailorApplicationForm(): React.JSX.Element {
   }
 
   return (
-    <form className="mt-10 grid gap-4 lg:grid-cols-2" onSubmit={onSubmit}>
-      <div className="grid gap-3 rounded-[8px] border border-ink/6 bg-bone/72 p-5 lg:col-span-2 sm:grid-cols-3">
-        {[
-          'Show your strongest specialty clearly.',
-          'Share one or two links that represent your work well.',
-          'Tell us the kind of orders that fit your studio best.',
-        ].map((item) => (
-          <div key={item} className="text-sm leading-6 text-ink/68">
-            {item}
-          </div>
-        ))}
-      </div>
-
+    <form className="mt-7 grid gap-5 lg:grid-cols-2" onSubmit={onSubmit}>
       {source === 'SIGNED_IN_ACCOUNT' ? (
         <div className="rounded-lg border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle lg:col-span-2">
           This application is tied to your signed-in Drapeon account. Ops will review it before tailor workspace setup opens.
@@ -152,7 +140,7 @@ export function TailorApplicationForm(): React.JSX.Element {
             if (status === 'error') setMessage('')
           }}
           autoComplete="organization"
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="Studio name"
         />
       </label>
@@ -167,7 +155,7 @@ export function TailorApplicationForm(): React.JSX.Element {
             if (status === 'error') setMessage('')
           }}
           autoComplete="name"
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="e.g. John Doe"
         />
       </label>
@@ -185,7 +173,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           autoComplete="email"
           inputMode="email"
           spellCheck={false}
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="you@example.com"
         />
       </label>
@@ -218,7 +206,7 @@ export function TailorApplicationForm(): React.JSX.Element {
             setSpecialty(event.target.value)
             if (status === 'error') setMessage('')
           }}
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="Suits, bridal, occasionwear..."
         />
       </label>
@@ -235,7 +223,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           autoComplete="url"
           inputMode="url"
           spellCheck={false}
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="https://..."
         />
         <span className="text-xs leading-5 text-ink/48">At least one proof-of-craft link is required.</span>
@@ -253,7 +241,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           autoComplete="url"
           inputMode="url"
           spellCheck={false}
-          className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="https://instagram.com/..."
         />
         <span className="text-xs leading-5 text-ink/48">Instagram, TikTok, Pinterest, website, or another live proof link.</span>
@@ -268,12 +256,12 @@ export function TailorApplicationForm(): React.JSX.Element {
             setNotes(event.target.value)
             if (status === 'error') setMessage('')
           }}
-          className="min-h-32 rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
+          className="min-h-32 resize-y rounded-[10px] border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white focus:ring-2 focus:ring-needle/10"
           placeholder="What do you make best, who do you serve, and what should we know about your studio?"
         />
       </label>
 
-      <div className="rounded-[8px] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
+      <div className="rounded-[10px] border border-ink/6 bg-[linear-gradient(180deg,#faf6f0_0%,#f3ece1_100%)] p-5 lg:col-span-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <p className="text-sm leading-6 text-ink/60">
             We’ll review it and reach out if there’s a fit.
@@ -281,7 +269,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           <button
             type="submit"
             disabled={status === 'submitting'}
-            className="inline-flex w-full items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-[0_16px_35px_rgba(45,106,79,0.16)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white shadow-[0_16px_35px_rgba(45,106,79,0.16)] transition hover:bg-needle-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
             data-analytics-event="form_cta_click"
             data-analytics-label="Tailor application"
           >

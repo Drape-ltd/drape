@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 import { OpenAppButton } from '../../components/open-app-button'
 import { MarketingShell } from '../../components/marketing-shell'
@@ -40,15 +41,16 @@ export default function VisionPage(): React.JSX.Element {
       eyebrow="Drapeon Vision"
       title="Your measurements, from your phone camera."
       description="Drapeon Vision guides you through a body scan using computer vision. No tape measure, no guesswork — just reviewed measurements you can use on any order."
+      visual={<div className="relative aspect-[4/3] overflow-hidden rounded-[12px] bg-[#e7dfd0]"><Image src="/editorial/drapeon-vision-figure-head-v3.png" alt="An abstract fitting figure with clothing and head measurement guides" fill sizes="(min-width:1024px) 40vw,100vw" className="object-cover object-center" /></div>}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/join"
+            href="/sign-up"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
             data-analytics-event="primary_cta_click"
-            data-analytics-label="Vision get early access"
+            data-analytics-label="Vision create account"
           >
-            Join the waitlist
+            Create account
           </Link>
           <OpenAppButton
             label="Open in the app"
@@ -72,7 +74,7 @@ export default function VisionPage(): React.JSX.Element {
       </section>
 
       {/* Privacy */}
-      <section className="border-t border-ink/6 py-14">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="grid gap-10 lg:grid-cols-[1fr_1.5fr] lg:items-start">
           <div className="lg:sticky lg:top-10">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>
@@ -96,7 +98,7 @@ export default function VisionPage(): React.JSX.Element {
       </section>
 
       {/* App CTA */}
-      <section className="border-t border-ink/6 py-14">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="overflow-hidden rounded-[8px] border border-needle/14 bg-needle/6 p-8">
           <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
@@ -108,8 +110,8 @@ export default function VisionPage(): React.JSX.Element {
             </div>
             <div className="flex shrink-0 flex-col gap-3">
               <OpenAppButton label="Open Drapeon Vision" className="inline-flex items-center justify-center rounded-full bg-needle px-6 py-3.5 text-sm font-semibold text-white" />
-              <Link href="/join" className="inline-flex items-center justify-center rounded-full border border-needle/20 px-6 py-3.5 text-sm font-semibold text-needle">
-                Join the waitlist
+              <Link href="/sign-up" className="inline-flex items-center justify-center rounded-full border border-needle/20 px-6 py-3.5 text-sm font-semibold text-needle">
+                Create account
               </Link>
             </div>
           </div>

@@ -8,7 +8,7 @@ export default function NotFound(): React.JSX.Element {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Not found</p>
           <h1 className="mt-4 text-5xl leading-[0.95] text-ink sm:text-6xl">That page is not available.</h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-ink/68">
-            Start from the homepage, explore the product, or join the queue for access updates.
+            Start from the homepage, browse approved makers, or create your account.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link
@@ -18,16 +18,16 @@ export default function NotFound(): React.JSX.Element {
               Back to homepage
             </Link>
             <Link
-              href="/discover"
+              href="/explore"
               className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-bone px-6 py-4 text-sm font-semibold text-ink"
             >
-              Explore discovery
+              Explore Drapeon
             </Link>
             <Link
-              href="/join"
+              href="/sign-up"
               className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-bone px-6 py-4 text-sm font-semibold text-ink"
             >
-              Join the waitlist
+              Create account
             </Link>
           </div>
         </div>

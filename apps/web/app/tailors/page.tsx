@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -38,6 +39,7 @@ export default function TailorsPage(): React.JSX.Element {
       eyebrow="For tailors"
       title="Run your tailoring business from one place."
       description="Drapeon gives tailors a structured workspace for briefs, quotes, shop, production, clients, earnings, and payout — on web and mobile."
+      visual={<div className="relative aspect-[4/3] overflow-hidden rounded-[12px] bg-[#14271f]"><Image src="/editorial/drapeon-finishing-detail-v1.png" alt="Close-up of precise garment finishing at a tailor's worktable" fill sizes="(min-width:1024px) 40vw,100vw" className="object-cover" /></div>}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
@@ -71,7 +73,7 @@ export default function TailorsPage(): React.JSX.Element {
       </section>
 
       {/* Journey */}
-      <section className="border-t border-ink/6 py-14">
+      <section className="public-section-compact border-t border-ink/6">
         <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
           <div className="lg:sticky lg:top-10">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailor journey</p>
@@ -95,14 +97,14 @@ export default function TailorsPage(): React.JSX.Element {
       </section>
 
       {/* CTA */}
-      <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
+      <section className="public-section-compact border-t border-ink/6">
+        <div className="overflow-hidden rounded-[8px] bg-needle px-8 py-10 text-white">
           <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Early access</p>
-              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Join the tailor queue.</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Tailor applications</p>
+              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Build your Drapeon workspace.</h2>
               <p className="mt-3 text-sm leading-7 text-white/62">
-                We&apos;re reviewing tailor applications and onboarding in batches. Apply now to secure your spot.
+                Tailors are reviewed before becoming publicly visible. Apply with your real profile and portfolio when you are ready.
               </p>
             </div>
             <div className="flex shrink-0 flex-col gap-3">
@@ -115,10 +117,10 @@ export default function TailorsPage(): React.JSX.Element {
                 Apply as a tailor
               </Link>
               <Link
-                href="/join"
+                href="/sign-up"
                 className="inline-flex items-center justify-center rounded-full border border-white/16 px-6 py-3.5 text-sm font-semibold text-white"
               >
-                Join customer waitlist
+                Create customer account
               </Link>
             </div>
           </div>

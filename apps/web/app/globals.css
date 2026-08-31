@@ -15,6 +15,10 @@
     --danger: #B84A29;
     --font-body: "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+    --space-section-compact: clamp(2rem, 4vw, 3.5rem);
+    --space-section: clamp(3rem, 6vw, 5rem);
+    --space-section-editorial: clamp(4rem, 8vw, 7rem);
+    --space-page-gutter: clamp(1.25rem, 3vw, 3rem);
   }
 
   * {
@@ -93,6 +97,56 @@
     border-radius: 8px;
     background: var(--surface);
   }
+
+  .public-section-compact {
+    padding-block: var(--space-section-compact);
+  }
+
+  .public-section {
+    padding-block: var(--space-section);
+  }
+
+  .public-section-editorial {
+    padding-block: var(--space-section-editorial);
+  }
+}
+
+@keyframes craft-hero-settle {
+  0% {
+    transform: scale(1.045) translate3d(0.65%, 0, 0);
+  }
+  45% {
+    transform: scale(1.025) translate3d(0, -0.25%, 0);
+  }
+  100% {
+    transform: scale(1.01) translate3d(-0.35%, 0, 0);
+  }
+}
+
+@keyframes craft-light-pass {
+  0%,
+  12% {
+    opacity: 0;
+    transform: translate3d(-180%, 0, 0) skewX(-8deg);
+  }
+  42% {
+    opacity: 0.55;
+  }
+  72%,
+  100% {
+    opacity: 0;
+    transform: translate3d(360%, 0, 0) skewX(-8deg);
+  }
+}
+
+.craft-hero-motion {
+  animation: craft-hero-settle 9s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+.craft-hero-light {
+  animation: craft-light-pass 4.8s 0.6s ease-out both;
+  will-change: opacity, transform;
 }
 
 @media (prefers-reduced-motion: reduce) {

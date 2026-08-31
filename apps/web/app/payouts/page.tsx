@@ -63,7 +63,7 @@ export default function PayoutsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Lifecycle"
           title="From customer payment to tailor payout."
@@ -79,7 +79,7 @@ export default function PayoutsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="When to contact payouts"
           title="Use the payout inbox for money movement questions."

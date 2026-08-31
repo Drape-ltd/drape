@@ -66,7 +66,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="What Drapeon is"
           title="A fashion marketplace with ordering, fit, payment, and support tools."
@@ -88,7 +88,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Account rules"
           title="Use Drapeon honestly and keep order decisions on record."
@@ -103,7 +103,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Orders and Drapeon Vision"
           title="The accepted order is the source of truth."
@@ -119,7 +119,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Payments, refunds, and payouts"
           title="Money movement follows order state and provider rules."
@@ -145,7 +145,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Disputes and safety"
           title="Problems belong in Drapeon support."
@@ -167,7 +167,7 @@ export default function TermsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Legal"
           title="O4 Group LLC operates Drapeon."

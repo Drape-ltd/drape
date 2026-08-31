@@ -48,7 +48,7 @@ export default function SecurityPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Responsible disclosure"
           title="Send enough detail for us to reproduce and triage."
@@ -76,7 +76,7 @@ export default function SecurityPage(): React.JSX.Element {
         </a>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Contact routes"
           title="Use the right inbox for the right issue."

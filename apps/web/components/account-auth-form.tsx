@@ -3,6 +3,7 @@
 import { useId, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import type { Route } from 'next'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
   MAX_PASSWORD_LENGTH,
@@ -26,6 +27,7 @@ import {
   type CurrencySource,
 } from '@drape/shared'
 import { createClient } from '../lib/supabase'
+import { safeAccountReturnPath } from '../lib/account-return-path'
 import {
   type CustomerGarmentContext,
   type DrapeRole,
@@ -243,6 +245,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialRole = useMemo(() => normalizeRole(searchParams.get('role')), [searchParams])
+  const contextualReturn = useMemo(() => safeAccountReturnPath(searchParams.get('next')), [searchParams])
   const detectedCurrency = useMemo(() => detectCurrencyPreference({ locale: browserLocale() }), [])
   const isSignUp = mode === 'sign-up'
 
@@ -324,7 +327,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     const { data, error: providerError } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: buildAuthCallbackUrl('/account/dashboard'),
+        redirectTo: buildAuthCallbackUrl(contextualReturn ?? '/account/dashboard'),
         skipBrowserRedirect: true,
       },
     })
@@ -342,7 +345,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     return (
       <div className="mt-6 grid gap-3">
         <Link
-          href="/discover"
+          href="/explore"
           className="inline-flex min-h-[52px] items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600"
         >
           Explore Drapeon
@@ -642,7 +645,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     window.localStorage.removeItem('drapeon.web.auth.roleIntent')
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
     setLoading(false)
-    router.replace(accountHomeForRole(signedInRole ?? role))
+    router.replace((contextualReturn ?? accountHomeForRole(signedInRole ?? role)) as Route)
   }
 
   async function resendConfirmation() {

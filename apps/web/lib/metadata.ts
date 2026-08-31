@@ -12,6 +12,30 @@ export const socialLinks = [
 ] as const
 export const socialUrls = socialLinks.map((link) => link.url)
 
+export function buildShareImageUrl({
+  title,
+  description,
+  path,
+}: {
+  title: string
+  description: string
+  path: string
+}) {
+  const routeLabel = path === '/'
+    ? 'Drapeon marketplace'
+    : path
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => segment.replace(/-/g, ' '))
+      .join(' · ')
+  const params = new URLSearchParams({
+    title: title === 'Drapeon' ? 'Made for you, wherever you are.' : title,
+    description,
+    label: routeLabel,
+  })
+  return `${siteUrl}/api/share-card?${params.toString()}`
+}
+
 export function buildMetadata({
   title,
   description,
@@ -25,6 +49,7 @@ export function buildMetadata({
 }): Metadata {
   const url = `${siteUrl}${path}`
   const shouldNoindex = noindex || path === '/account' || path.startsWith('/account/')
+  const shareImageUrl = buildShareImageUrl({ title, description, path })
 
   return {
     title,
@@ -47,10 +72,10 @@ export function buildMetadata({
       locale: 'en_US',
       images: [
         {
-          url: '/opengraph-image',
+          url: shareImageUrl,
           width: 1200,
           height: 630,
-          alt: 'Drapeon',
+          alt: `${title} on Drapeon`,
         },
       ],
     },
@@ -60,7 +85,7 @@ export function buildMetadata({
       creator: '@Drapeonn',
       title: title === 'Drapeon' ? defaultTitle : `${title} | Drapeon`,
       description,
-      images: ['/opengraph-image'],
+      images: [shareImageUrl],
     },
   }
 }

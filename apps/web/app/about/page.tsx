@@ -40,8 +40,8 @@ export default function AboutPage(): React.JSX.Element {
         </p>
       </section>
 
-      <section className="border-t border-ink/6 py-14">
-        <div className="overflow-hidden rounded-[8px] bg-ink px-8 py-10 text-white">
+      <section className="public-section-compact border-t border-ink/6">
+        <div className="overflow-hidden rounded-[8px] bg-needle px-8 py-10 text-white">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Mission</p>
           <h2 className="mt-3 max-w-2xl text-3xl text-white sm:text-4xl">Make fashion feel personal without making it complicated.</h2>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-white/64">

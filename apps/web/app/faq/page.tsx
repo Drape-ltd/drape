@@ -40,15 +40,15 @@ const FAQ: Array<{ question: string; answer: string }> = [
       'Drapeon keeps messages, payment state, media, production stages, delivery context, and support history attached to the order so a support or dispute review starts from the shared record.',
   },
   {
-    question: 'Can I download Drapeon today?',
+    question: 'Can I create a Drapeon account today?',
     answer:
-      'Drapeon is in invite-only testing. Join the early-access queue and we will notify you when your customer or tailor access opens.',
+      'Yes. Customers can create an account from the website or app. Tailors complete an application and trust review before their profile can become publicly visible.',
   },
 ]
 
 export const metadata: Metadata = buildMetadata({
   title: 'FAQ',
-  description: 'Learn how Drapeon works for custom tailoring orders, verified tailors, payment state, order tracking, Drapeon Vision, and invite-only access.',
+  description: 'Learn how Drapeon works for custom tailoring orders, approved tailors, payment state, order tracking, and Drapeon Vision.',
   path: '/faq',
 })
 

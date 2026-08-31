@@ -1,0 +1,172 @@
+import { unstable_cache } from 'next/cache'
+import { getSupabasePublishableKey, getSupabaseUrl } from './supabase-config'
+
+export type PublicTailor = {
+  id: string
+  displayName: string
+  businessName: string | null
+  bio: string | null
+  location: string | null
+  specialties: string[]
+  availability: string | null
+  acceptsCustomOrders: boolean
+  supportsReadyMade: boolean
+  portfolioPhotos: string[]
+  portfolioVideos: string[]
+  coverVideoUrl: string | null
+  avatarUrl: string | null
+}
+
+type PublicTailorGatewayRow = {
+  id: string
+  display_name: string | null
+  location: string | null
+  specialty_tags: string[] | null
+  availability: string | null
+  accepts_custom_orders_now: boolean | null
+  supports_custom_orders: boolean | null
+  supports_ready_made: boolean | null
+  portfolio_photo_urls: string[] | null
+  portfolio_video_urls?: string[] | null
+  avatar_url: string | null
+  explore_image_url?: string | null
+  explore_video_url?: string | null
+}
+
+type PublicTailorProfileGateway = {
+  profile?: {
+    id?: string
+    displayName?: string | null
+    bio?: string | null
+    location?: string | null
+    specialtyTags?: string[] | null
+    availability?: string | null
+    acceptsCustomOrdersNow?: boolean | null
+    supportsCustomOrders?: boolean | null
+    supportsReadyMade?: boolean | null
+    portfolioPhotos?: string[] | null
+    portfolioVideos?: string[] | null
+    avatarUrl?: string | null
+  } | null
+}
+
+function safeText(value: string | null | undefined, fallback = '') {
+  const clean = value?.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  return clean || fallback
+}
+
+function safeMediaUrls(values: string[] | null | undefined) {
+  return Array.from(new Set((values ?? []).filter((value) => {
+    try {
+      const url = new URL(value)
+      return url.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }))).slice(0, 40)
+}
+
+async function invokePublicReadGateway<T>(body: Record<string, unknown>): Promise<T | null> {
+  const url = getSupabaseUrl()
+  const key = getSupabasePublishableKey()
+  if (!url || !key) return null
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15_000)
+  try {
+    const response = await fetch(`${url}/functions/v1/read-gateway`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        authorization: `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    const payload = await response.json().catch(() => null) as { ok?: boolean; data?: T; message?: string } | null
+    if (!response.ok || !payload?.ok) {
+      console.error('[public-marketplace] Public read gateway failed.', {
+        action: body.action,
+        status: response.status,
+        message: payload?.message ?? 'Invalid gateway response',
+      })
+      return null
+    }
+    return payload.data ?? null
+  } catch (error) {
+    console.error('[public-marketplace] Public read gateway unavailable.', {
+      action: body.action,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
+  const portfolioPhotos = safeMediaUrls([
+    ...(row.explore_image_url ? [row.explore_image_url] : []),
+    ...(row.portfolio_photo_urls ?? []),
+  ])
+  const avatarUrl = safeMediaUrls(row.avatar_url ? [row.avatar_url] : [])[0] ?? null
+  const portfolioVideos = safeMediaUrls(row.portfolio_video_urls)
+  const coverVideoUrl = safeMediaUrls(row.explore_video_url ? [row.explore_video_url] : [])[0] ?? portfolioVideos[0] ?? null
+  const displayName = safeText(row.display_name)
+  if (!displayName || (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl)) return null
+  return {
+    id: row.id,
+    displayName,
+    businessName: null,
+    bio: null,
+    location: safeText(row.location) || null,
+    specialties: (row.specialty_tags ?? []).map((tag) => safeText(tag)).filter(Boolean).slice(0, 6),
+    availability: safeText(row.availability) || null,
+    acceptsCustomOrders: row.supports_custom_orders === true && row.accepts_custom_orders_now === true,
+    supportsReadyMade: row.supports_ready_made === true,
+    portfolioPhotos,
+    portfolioVideos,
+    coverVideoUrl,
+    avatarUrl,
+  }
+}
+
+async function readApprovedPublicTailors(): Promise<PublicTailor[]> {
+  const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({ action: 'explore-tailors', limit: 40 })
+  return (rows ?? []).flatMap((row) => {
+    const tailor = mapGatewayTailor(row)
+    return tailor ? [tailor] : []
+  })
+}
+
+export const getApprovedPublicTailors = unstable_cache(readApprovedPublicTailors, ['approved-public-tailors-v2'], {
+  revalidate: 60,
+  tags: ['public-tailors'],
+})
+
+export async function getApprovedPublicTailor(profileId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(profileId)) return null
+  const data = await invokePublicReadGateway<PublicTailorProfileGateway>({ action: 'tailor-profile', tailorId: profileId })
+  const profile = data?.profile
+  if (!profile?.id || !profile.displayName) return null
+  const portfolioPhotos = safeMediaUrls(profile.portfolioPhotos)
+  const portfolioVideos = safeMediaUrls(profile.portfolioVideos)
+  const avatarUrl = safeMediaUrls(profile.avatarUrl ? [profile.avatarUrl] : [])[0] ?? null
+  if (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl) return null
+  return {
+    id: profile.id,
+    displayName: safeText(profile.displayName),
+    businessName: null,
+    bio: safeText(profile.bio) || null,
+    location: safeText(profile.location) || null,
+    specialties: (profile.specialtyTags ?? []).map((tag) => safeText(tag)).filter(Boolean).slice(0, 6),
+    availability: safeText(profile.availability) || null,
+    acceptsCustomOrders: profile.supportsCustomOrders === true && profile.acceptsCustomOrdersNow === true,
+    supportsReadyMade: profile.supportsReadyMade === true,
+    portfolioPhotos,
+    portfolioVideos,
+    coverVideoUrl: portfolioVideos[0] ?? null,
+    avatarUrl,
+  }
+}

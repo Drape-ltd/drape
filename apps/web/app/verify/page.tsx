@@ -46,7 +46,7 @@ export default function VerifyPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="What it means"
           title="A verified badge should reduce uncertainty, not replace judgment."

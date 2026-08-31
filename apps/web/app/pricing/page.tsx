@@ -20,7 +20,7 @@ const principles = [
   },
   {
     title: 'Published before paid launch',
-    body: 'Drapeon will publish the final fee table before broad paid availability. Until then, early-access cohorts receive pricing context during onboarding.',
+    body: 'Drapeon will publish the final fee table before broad paid availability. Until then, each available payment flow must show its commercial terms before confirmation.',
   },
 ]
 
@@ -41,12 +41,12 @@ export default function PricingPage(): React.JSX.Element {
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/join"
+            href="/sign-up"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
             data-analytics-event="primary_cta_click"
-            data-analytics-label="Pricing get early access"
+            data-analytics-label="Pricing create account"
           >
-            Get early access
+            Create account
           </Link>
           <Link
             href="/apply"
@@ -72,7 +72,7 @@ export default function PricingPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
+      <section className="public-section-compact border-t border-ink/6">
         <SectionTitle
           eyebrow="Before public paid launch"
           title="These are the pieces that must be explicit."
