@@ -1,6 +1,6 @@
 # TestFlight Review Notes
 
-Date: April 2, 2026
+Date: August 30, 2026
 
 ## Purpose
 
@@ -48,13 +48,13 @@ Drapeon is a two-sided tailoring marketplace:
 
 ### Customer
 
-1. Sign up or sign in.
-2. Complete customer setup.
-3. Open a tailor profile.
-4. Start a custom brief or ready-made order.
-5. Open an existing order and use the message thread.
-6. Open `Profile -> Privacy`.
-7. Open `Profile -> Privacy -> Delete account`.
+1. Sign in with the platform-specific reviewer identity.
+2. Open Explore and select **Alder & Rue**.
+3. Open the existing project with reference **DRPGBAT3D** to inspect the quote and contextual order state. Payment is intentionally unavailable and is not required for review.
+4. Open Notifications and select **Your review project has a quote**; it should open the same project.
+5. Open the project message thread.
+6. Open `Profile -> Settings -> Privacy`.
+7. Open `Profile -> Settings -> Privacy -> Delete account` to inspect the in-app path. Do not delete the reusable Apple or Google reviewer identity.
 
 ### Tailor
 
@@ -77,6 +77,12 @@ Drapeon is a two-sided tailoring marketplace:
 - Privacy: `privacy@drapeon.co`
 - Security: `security@drapeon.co`
 
-## Submission Reminder
+## Reviewer Identities
 
-Before submission, add the actual reviewer test credentials or test-account creation path to this file if the build is not self-serve.
+- Apple review customer: `review.apple@drapeon.co`
+- Google review customer: `review.google@drapeon.co`
+- Counterpart showcase tailor: `showcase.alder-rue@drapeon.co`
+
+The password is intentionally excluded from the repository. Copy it from the owner-only handoff at `/private/tmp/drape-reviewer-credentials.txt` directly into the store consoles.
+
+The reviewer accounts have no Ops role and no live payment capability. The synthetic deletion account is not a store-console credential.

@@ -525,6 +525,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     if (loading) return
 
     const inAuth = rootSegment === '(auth)'
+    const inPublic = rootSegment === '(public)'
     const inCustomer = rootSegment === '(customer)'
     const inTailor = rootSegment === '(tailor)'
     const inVision = rootSegment === 'vision'
@@ -533,6 +534,10 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const inPaymentReturn = rootSegment === 'paystack-redirect' || rootSegment === 'stripe-redirect'
     const onResetPassword = inAuth && secondSegment === 'reset-password'
     const onTailorSetup = inTailor && secondSegment === 'profile' && thirdSegment === 'setup'
+    const onCustomerAccountDeletion =
+      inCustomer && secondSegment === 'profile' && thirdSegment === 'delete-account'
+    const onTailorAccountDeletion =
+      inTailor && secondSegment === 'profile' && thirdSegment === 'delete-account'
     const onTailorOnboardingItemCreation =
       (inTailor && secondSegment === 'shop' && thirdSegment === 'new') ||
       pathname === '/(tailor)/shop/new' ||
@@ -542,7 +547,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const inPassport = rootSegment === 'passport'
 
     if (!session) {
-      if (!inAuth && !inPassport && !inVerifyHandoff) router.replace('/(auth)/welcome')
+      if (!inAuth && !inPublic && !inPassport && !inVerifyHandoff) router.replace('/(auth)/welcome')
       return
     }
 
@@ -561,31 +566,33 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
       if (!customerProfileChecked || customerProfileChecking) return
       if (customerProfileCheckFailed) {
         // A transient network failure should not send an existing customer into setup.
-        if (!inCustomer && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
+        if (!inCustomer && !inPublic && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
         return
       }
       if (!customerProfileComplete) {
-        // New customer — send to profile setup unless already there
+        // New customer — setup is the default, but account deletion must remain
+        // reachable even when onboarding is incomplete.
         const onSetup = inAuth && secondSegment === 'customer-setup'
-        if (!onSetup) router.replace('/(auth)/customer-setup')
+        if (!onSetup && !onCustomerAccountDeletion) router.replace('/(auth)/customer-setup')
         return
       }
-      if (!inCustomer && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
+      if (!inCustomer && !inPublic && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(customer)')
     } else if (role === 'TAILOR') {
       if (!tailorProfileChecked || tailorProfileChecking) return
       if (tailorProfileCheckFailed) {
         // Do not shove a signed-in tailor into setup because a transient profile
         // lookup failed. Individual screens can show their own retry states.
-        if (!inTailor && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
+        if (!inTailor && !inPublic && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
         return
       }
       if (!tailorHasProfile || !tailorProfileCompleted) {
-        // No profile row yet, or profile submitted but not yet completed — send to setup
-        if (!onTailorSetup && !onTailorOnboardingItemCreation) router.replace('/(tailor)/profile/setup')
+        // No profile row yet, or profile submitted but not yet completed — setup
+        // is the default, while deletion remains available by policy.
+        if (!onTailorSetup && !onTailorOnboardingItemCreation && !onTailorAccountDeletion) router.replace('/(tailor)/profile/setup')
         return
       }
       // Profile is complete — never redirect to setup again
-      if (!inTailor && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
+      if (!inTailor && !inPublic && !inVision && !inCallJoin && !inVerifyHandoff && !inPaymentReturn) router.replace('/(tailor)')
     }
   }, [
     customerProfileChecked,
@@ -746,6 +753,7 @@ export default function RootLayout() {
                     >
                       <Stack.Screen name="index" options={{ headerShown: false }} />
                       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                      <Stack.Screen name="(public)" options={{ headerShown: false }} />
                       <Stack.Screen name="(customer)" options={{ headerShown: false }} />
                       <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
                       <Stack.Screen name="passport" options={{ headerShown: false }} />

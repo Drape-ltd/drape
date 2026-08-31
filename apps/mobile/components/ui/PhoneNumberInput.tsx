@@ -23,8 +23,6 @@ import { FlashList } from '@shopify/flash-list'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import {
   composeInternationalPhoneNumber,
-  DEFAULT_PHONE_COUNTRY_CODE,
-  FEATURED_PHONE_COUNTRY_CODES,
   getNationalPhoneInput,
   getPhoneCountryOption,
   inferPhoneCountryCode,
@@ -51,7 +49,7 @@ type PhoneNumberInputProps = Omit<
   hint?: string
   required?: boolean
   containerStyle?: ViewStyle
-  defaultCountryCode?: PhoneCountryCode
+  defaultCountryCode?: PhoneCountryCode | null
   rightElement?: ReactNode
   onClearError?: () => void
 }
@@ -60,11 +58,7 @@ function prioritizedCountries(
   query: string,
 ): readonly PhoneCountryOption[] {
   const matches = searchPhoneCountries(query)
-  if (query.trim()) return matches
-
-  const featured = FEATURED_PHONE_COUNTRY_CODES.map(getPhoneCountryOption)
-  const featuredCodes = new Set(FEATURED_PHONE_COUNTRY_CODES)
-  return [...featured, ...matches.filter((item) => !featuredCodes.has(item.code))]
+  return matches
 }
 
 export function PhoneNumberInput({
@@ -75,7 +69,7 @@ export function PhoneNumberInput({
   hint,
   required,
   containerStyle,
-  defaultCountryCode = DEFAULT_PHONE_COUNTRY_CODE,
+  defaultCountryCode = null,
   rightElement,
   onClearError,
   onFocus,
@@ -86,11 +80,13 @@ export function PhoneNumberInput({
   ...inputProps
 }: PhoneNumberInputProps) {
   const { colors } = useDrapeTheme()
-  const initialCountry = inferPhoneCountryCode(value, defaultCountryCode)
+  const initialCountry = value.trim().startsWith('+')
+    ? inferPhoneCountryCode(value, defaultCountryCode ?? undefined)
+    : defaultCountryCode
   const [countryCode, setCountryCode] =
-    useState<PhoneCountryCode>(initialCountry)
+    useState<PhoneCountryCode | null>(initialCountry)
   const [nationalValue, setNationalValue] = useState(() =>
-    getNationalPhoneInput(value, initialCountry),
+    initialCountry ? getNationalPhoneInput(value, initialCountry) : value,
   )
   const [focused, setFocused] = useState(false)
   const [selectorVisible, setSelectorVisible] = useState(false)
@@ -100,12 +96,14 @@ export function PhoneNumberInput({
   useEffect(() => {
     if (value === lastEmittedValue.current) return
 
-    const nextCountry = inferPhoneCountryCode(value, countryCode)
+    const nextCountry = value.trim().startsWith('+')
+      ? inferPhoneCountryCode(value, countryCode ?? undefined)
+      : countryCode
     setCountryCode(nextCountry)
-    setNationalValue(getNationalPhoneInput(value, nextCountry))
+    setNationalValue(nextCountry ? getNationalPhoneInput(value, nextCountry) : value)
   }, [countryCode, value])
 
-  const selectedCountry = getPhoneCountryOption(countryCode)
+  const selectedCountry = countryCode ? getPhoneCountryOption(countryCode) : null
   const countries = useMemo(() => prioritizedCountries(query), [query])
   const hasError = Boolean(error)
 
@@ -113,15 +111,19 @@ export function PhoneNumberInput({
     if (error) onClearError?.()
     const normalizedValue = nextNationalValue.trim().replace(/^00/, '+')
     const nextCountryCode = normalizedValue.startsWith('+')
-      ? inferPhoneCountryCode(normalizedValue, code)
+      ? inferPhoneCountryCode(normalizedValue, code ?? undefined)
       : code
     const nextDisplayValue = normalizedValue.startsWith('+')
-      ? getNationalPhoneInput(normalizedValue, nextCountryCode)
+      ? nextCountryCode
+        ? getNationalPhoneInput(normalizedValue, nextCountryCode)
+        : normalizedValue
       : nextNationalValue
 
     if (nextCountryCode !== countryCode) setCountryCode(nextCountryCode)
     setNationalValue(nextDisplayValue)
-    const nextValue = composeInternationalPhoneNumber(nextNationalValue, nextCountryCode)
+    const nextValue = nextCountryCode
+      ? composeInternationalPhoneNumber(nextNationalValue, nextCountryCode)
+      : nextNationalValue
     lastEmittedValue.current = nextValue
     onChangeText(nextValue)
   }
@@ -174,22 +176,33 @@ export function PhoneNumberInput({
           ]}
           onPress={openCountrySelector}
           accessibilityRole="button"
-          accessibilityLabel={`Country code, ${selectedCountry.name} ${selectedCountry.callingCode}`}
+          accessibilityLabel={selectedCountry
+            ? `Country code, ${selectedCountry.name} ${selectedCountry.callingCode}`
+            : 'Choose phone country code'}
           accessibilityHint="Opens the country calling code list"
         >
-          <View
-            style={[
-              styles.isoBadge,
-              { backgroundColor: colors.boneDeep },
-            ]}
-          >
-            <Text style={[styles.isoText, { color: colors.ink }]}>
-              {selectedCountry.code}
-            </Text>
-          </View>
-          <Text style={[styles.callingCode, { color: colors.ink }]}>
-            {selectedCountry.callingCode}
-          </Text>
+          {selectedCountry ? (
+            <>
+              <View
+                style={[
+                  styles.isoBadge,
+                  { backgroundColor: colors.boneDeep },
+                ]}
+              >
+                <Text style={[styles.isoText, { color: colors.ink }]}>
+                  {selectedCountry.code}
+                </Text>
+              </View>
+              <Text style={[styles.callingCode, { color: colors.ink }]}>
+                {selectedCountry.callingCode}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Feather name="globe" size={16} color={colors.midGrey} />
+              <Text style={[styles.chooseCountry, { color: colors.ink }]}>Country</Text>
+            </>
+          )}
           <Feather name="chevron-down" size={16} color={colors.midGrey} />
         </Pressable>
 
@@ -431,6 +444,11 @@ const styles = StyleSheet.create({
   callingCode: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: 14,
+    fontWeight: FontWeight.semibold,
+  },
+  chooseCountry: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 13,
     fontWeight: FontWeight.semibold,
   },
   separator: {

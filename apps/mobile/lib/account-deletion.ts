@@ -4,6 +4,15 @@ import { isLikelyConnectivityIssue, readFunctionErrorMessage } from './function-
 
 const ACCOUNT_DELETION_DEVICE_MARKER = 'drape.account-deletion.pending.v1'
 
+export function preferredDeletionReauthProvider(
+  providers: readonly unknown[] | null | undefined,
+): 'apple' | 'google' | null {
+  if (!Array.isArray(providers)) return null
+  if (providers.includes('apple')) return 'apple'
+  if (providers.includes('google')) return 'google'
+  return null
+}
+
 export async function consumeAccountDeletionDeviceMarker() {
   const marker = await AsyncStorage.getItem(ACCOUNT_DELETION_DEVICE_MARKER).catch(() => null)
   if (!marker) return false

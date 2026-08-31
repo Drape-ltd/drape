@@ -6,6 +6,7 @@ import * as WebBrowser from 'expo-web-browser'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { validatePasswordStrength } from '@drape/shared/auth-security'
+import { shouldBootstrapRole } from '@drape/shared/auth-role'
 import { clearActiveAuthStorage, supabase } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
@@ -551,7 +552,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return 'Sign in completed, but Drapeon could not choose your mode. Sign in again if the app does not move.'
     }
 
-    if (currentSession.user.user_metadata?.role === roleIntent) {
+    const establishedRole = currentSession.user.user_metadata?.role
+    if (!shouldBootstrapRole(establishedRole, roleIntent)) {
+      // Entry intent is only a first-account bootstrap hint. Returning users keep
+      // their authoritative active role and can switch explicitly from settings.
+      // This prevents Apple/Google sign-in from silently moving an established
+      // account into an incomplete setup flow based on which auth CTA they used.
       return null
     }
 

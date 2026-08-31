@@ -22,12 +22,13 @@ import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useRefreshOnFocus, useWishlistCollections, type WishlistCollection, type WishlistItem } from '@/lib/queries'
-import { RemoteImage, SkeletonBlock, StateCard } from '@/components/ui'
+import { KeyboardAwareScrollView, RemoteImage, SkeletonBlock, StateCard } from '@/components/ui'
 import { useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { hapticLight, hapticWarning } from '@/lib/haptics'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
 import { appendToHistory } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { loadRecentlyViewedTailors, type RecentlyViewedTailor } from '@/lib/recently-viewed-tailors'
 
 const SAVED_GUIDE_KEY = 'drape_saved_best_use_dismissed'
@@ -108,6 +109,15 @@ export default function SavedScreen() {
     const timer = setTimeout(() => setSelectedCollectionId(null), 0)
     return () => clearTimeout(timer)
   }, [selectedCollection, selectedCollectionId])
+
+  function closeSelectedCollection() {
+    setSelectedCollectionId(null)
+  }
+
+  // A wishlist collection is an in-tab detail surface rather than a nested
+  // router screen. Consume Android system/gesture Back while it is open so it
+  // follows the same exit contract as the visible Back control.
+  useContextualBackHandler(closeSelectedCollection, selectedCollection !== null)
 
   async function dismissGuide() {
     setShowGuide(false)
@@ -267,7 +277,7 @@ export default function SavedScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.iconButton} onPress={() => setSelectedCollectionId(null)} accessibilityRole="button" accessibilityLabel="Back to wishlists">
+          <TouchableOpacity style={styles.iconButton} onPress={closeSelectedCollection} accessibilityRole="button" accessibilityLabel="Back to wishlists">
             <Feather name="arrow-left" size={20} color={Colors.ink} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.headerTitleButton} onPress={() => openRenameSheet(selectedCollection)} accessibilityRole="button" accessibilityLabel="Rename wishlist">
@@ -729,7 +739,11 @@ function WishlistSheet({
     <Modal visible={!!mode} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheetOverlay}>
         <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
-        <View style={styles.sheet}>
+        <KeyboardAwareScrollView
+          style={styles.sheet}
+          contentContainerStyle={styles.sheetContent}
+          keyboardClearance={88}
+        >
           <View style={styles.sheetHandle} />
           <View style={styles.sheetTitleRow}>
             <Text style={styles.sheetTitle}>{title}</Text>
@@ -754,8 +768,21 @@ function WishlistSheet({
             multiline={mode?.type === 'note'}
             returnKeyType={mode?.type === 'note' ? 'default' : 'done'}
             onSubmitEditing={mode?.type === 'note' ? undefined : onSubmit}
+            accessibilityLabel={mode?.type === 'note' ? 'Private wishlist note' : 'Wishlist name'}
           />
-          <TouchableOpacity style={[styles.sheetButton, disabled && styles.sheetButtonDisabled]} onPress={onSubmit} disabled={disabled}>
+          {mode?.type !== 'note' && !value.trim() ? (
+            <Text style={styles.sheetRequirement} accessibilityLiveRegion="polite">
+              Enter a wishlist name to continue.
+            </Text>
+          ) : null}
+          <TouchableOpacity
+            style={[styles.sheetButton, disabled && styles.sheetButtonDisabled]}
+            onPress={onSubmit}
+            disabled={disabled}
+            accessibilityRole="button"
+            accessibilityLabel={mode?.type === 'note' ? 'Save private note' : mode?.type === 'rename' ? 'Save wishlist name' : 'Create wishlist'}
+            accessibilityState={{ disabled, busy: submitting }}
+          >
             {submitting ? (
               <ActivityIndicator color={Colors.textInverse} />
             ) : (
@@ -764,7 +791,7 @@ function WishlistSheet({
               </Text>
             )}
           </TouchableOpacity>
-        </View>
+        </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
     </Modal>
   )
@@ -1144,6 +1171,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
+    maxHeight: '82%',
+  },
+  sheetContent: {
     padding: Spacing.xl,
     gap: Spacing.md,
   },
@@ -1187,6 +1217,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   sheetButtonDisabled: { opacity: 0.5 },
+  sheetRequirement: {
+    color: Colors.inkLight,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+  },
   sheetButtonText: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: 16,

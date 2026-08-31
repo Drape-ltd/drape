@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, TextInput, Linking,
+  View, Text, StyleSheet, TouchableOpacity,
+  Alert, ActivityIndicator, TextInput, Linking, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -9,6 +9,7 @@ import { Feather } from '@expo/vector-icons'
 import {
   getAccountDeletionRequestStatus,
   issueProviderDeletionProof,
+  preferredDeletionReauthProvider,
   requestAccountDeletion,
   type AccountDeletionRequestState,
 } from '@/lib/account-deletion'
@@ -17,11 +18,13 @@ import { issueReauthProof } from '@/lib/reauth-proof'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
 import { goBackOrReturnTo, pickSafeReturnTo } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
+import { KeyboardAwareScrollView } from '@/components/ui'
 
 export default function TailorDeleteAccountScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const params = useLocalSearchParams<{ returnTo?: string }>()
+  const params = useLocalSearchParams<{ returnTo?: string; historyChain?: string }>()
   const { user, reauthenticateWithProvider } = useAuth()
   const [reason, setReason] = useState('')
   const [confirmationText, setConfirmationText] = useState('')
@@ -32,12 +35,10 @@ export default function TailorDeleteAccountScreen() {
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusError, setStatusError] = useState<string | null>(null)
   const providers = Array.isArray(user?.app_metadata?.providers) ? user.app_metadata.providers : []
-  const providerReauth = !providers.includes('email')
-    ? providers.includes('apple') ? 'apple' as const : providers.includes('google') ? 'google' as const : null
-    : null
+  const providerReauth = preferredDeletionReauthProvider(providers)
   const canSubmit = confirmationText.trim() === 'DELETE' && (providerReauth !== null || password.length > 0) && !statusError
   const fallbackRoute = '/(tailor)/profile/account-settings' as const
-  const returnTo = pickSafeReturnTo(params.returnTo, fallbackRoute) ?? fallbackRoute
+  const returnTo = pickSafeReturnTo(params.historyChain, params.returnTo, fallbackRoute) ?? fallbackRoute
   const returnLabel = returnTo.includes('/privacy') ? 'privacy settings' : 'account settings'
 
   const loadStatus = useCallback(async () => {
@@ -133,6 +134,8 @@ export default function TailorDeleteAccountScreen() {
   function goBack() {
     goBackOrReturnTo(router, navigation, returnTo, fallbackRoute)
   }
+
+  useContextualBackHandler(goBack)
 
   if (statusLoading) {
     return (
@@ -231,7 +234,8 @@ export default function TailorDeleteAccountScreen() {
         <Text style={styles.headerTitle}>Delete account</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAwareScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Deletion request</Text>
@@ -262,6 +266,7 @@ export default function TailorDeleteAccountScreen() {
             placeholderTextColor={Colors.midGrey}
             maxLength={300}
             textAlignVertical="top"
+            accessibilityLabel="Optional reason for deleting account"
           />
           <Text style={styles.charCount}>{reason.trim().length}/300</Text>
         </View>
@@ -277,6 +282,7 @@ export default function TailorDeleteAccountScreen() {
             placeholderTextColor={Colors.midGrey}
             autoCapitalize="characters"
             autoCorrect={false}
+            accessibilityLabel="Type DELETE to confirm account deletion request"
           />
           {!providerReauth ? <View style={styles.passwordWrap}>
             <TextInput
@@ -288,6 +294,9 @@ export default function TailorDeleteAccountScreen() {
               secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoCorrect={false}
+              textContentType="password"
+              autoComplete="current-password"
+              accessibilityLabel="Current password"
             />
             <TouchableOpacity
               style={styles.eyeBtn}
@@ -311,6 +320,7 @@ export default function TailorDeleteAccountScreen() {
           disabled={submitting || !canSubmit}
           accessibilityRole="button"
           accessibilityLabel="Submit account deletion request"
+          accessibilityState={{ disabled: submitting || !canSubmit, busy: submitting }}
         >
           {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={[styles.actionBtnText, !canSubmit && styles.actionBtnTextDisabled]}>{providerReauth ? `Continue with ${providerReauth === 'apple' ? 'Apple' : 'Google'}` : 'Submit deletion request'}</Text>}
         </TouchableOpacity>
@@ -328,13 +338,15 @@ export default function TailorDeleteAccountScreen() {
         >
           <Text style={styles.secondaryBtnText}>Email privacy team instead</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardAwareScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  keyboardAvoider: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,

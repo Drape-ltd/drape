@@ -22,7 +22,7 @@ import { setAnalyticsConsent } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 
 type PrivacyPrefs = {
   marketingEmails: boolean
@@ -203,7 +203,10 @@ export default function PrivacyScreen() {
           <View style={styles.card}>
             <TouchableOpacity style={styles.linkRow} onPress={() => router.push({
               pathname: '/(customer)/profile/delete-account',
-              params: { returnTo: '/(customer)/profile/privacy' },
+              params: {
+                returnTo: '/(customer)/profile/privacy',
+                historyChain: appendToHistory(undefined, '/(customer)/profile/privacy'),
+              },
             } as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="trash-2" size={20} color={Colors.error} />

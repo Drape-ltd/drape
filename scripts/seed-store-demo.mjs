@@ -173,10 +173,10 @@ function manifestMediaEntries(manifest) {
       })
     }
     for (const [itemIndex, item] of (tailor.shopItems ?? []).entries()) {
-      for (const [mediaIndex, url] of (item.photoUrls ?? []).entries()) {
+      for (const [mediaIndex, value] of (item.photoPaths ?? item.photoUrls ?? []).entries()) {
         entries.push({
-          label: `${tailor.key}.shopItems.${itemIndex}.photoUrls.${mediaIndex}`,
-          url,
+          label: `${tailor.key}.shopItems.${itemIndex}.photos.${mediaIndex}`,
+          ...(item.photoPaths ? { path: value } : { url: value }),
         })
       }
     }
@@ -320,6 +320,18 @@ async function materializeLocalMedia(manifest, baseUrl, headers) {
         ))
       }
     }
+    for (const [itemIndex, item] of (tailor.shopItems ?? []).entries()) {
+      if (!item.photoPaths) continue
+      item.photoUrls = []
+      for (const [mediaIndex, sourcePath] of item.photoPaths.entries()) {
+        item.photoUrls.push(await uploadLocalMedia(
+          baseUrl,
+          headers,
+          sourcePath,
+          `showcase/${tailor.key}/shop-${String(itemIndex + 1).padStart(2, '0')}-${String(mediaIndex + 1).padStart(2, '0')}.png`,
+        ))
+      }
+    }
   }
 }
 
@@ -367,11 +379,19 @@ const showcaseOrigins = {
 const reviewerCustomers = manifest.reviewerCustomers ?? [manifest.reviewerCustomer ?? {
   email: 'reviewer.customer@drapeon.co',
   displayName: 'Drape Reviewer',
-  phone: '+15550101010',
+  phone: '+12025550110',
   defaultCurrency: 'USD',
 }]
 
 for (const [reviewerIndex, reviewerCustomer] of reviewerCustomers.entries()) {
+  const reviewerPhone = reviewerCustomer.phone ?? `+1202555${String(110 + reviewerIndex).padStart(4, '0')}`
+  const reviewerUnit = reviewerCustomer.unitPreference === 'cm' ? 'cm' : 'in'
+  const reviewerGarmentContext =
+    reviewerCustomer.garmentContext === 'MENSWEAR' ||
+    reviewerCustomer.garmentContext === 'WOMENSWEAR' ||
+    reviewerCustomer.garmentContext === 'PREFER_NOT_TO_SAY'
+      ? reviewerCustomer.garmentContext
+      : 'BOTH'
   const reviewerCustomerId = await ensureAuthUser(baseUrl, headers, {
     email: reviewerCustomer.email,
     role: 'CUSTOMER',
@@ -383,7 +403,7 @@ for (const [reviewerIndex, reviewerCustomer] of reviewerCustomers.entries()) {
     email: reviewerCustomer.email,
     display_name: reviewerCustomer.displayName,
     role: 'CUSTOMER',
-    phone: reviewerCustomer.phone ?? `+15550101${String(10 + reviewerIndex).padStart(4, '0')}`,
+    phone: reviewerPhone,
     default_currency: reviewerCustomer.defaultCurrency ?? 'USD',
     currency_source: 'USER_SELECTED',
     region_code: reviewerCustomer.regionCode ?? 'US',
@@ -392,8 +412,13 @@ for (const [reviewerIndex, reviewerCustomer] of reviewerCustomers.entries()) {
   customerProfiles.push({
     user_id: reviewerCustomerId,
     display_name: reviewerCustomer.displayName,
+    phone: reviewerPhone,
+    unit_preference: reviewerUnit,
+    garment_context: reviewerGarmentContext,
     measurements: {
-      unit: 'in', height: 68, chest: 36, waist: 29, hips: 39,
+      unit: reviewerUnit,
+      garmentContext: reviewerGarmentContext,
+      height: 68, chest: 36, waist: 29, hips: 39,
       shoulderWidth: 16, sleeveLength: 23.5, inseam: 30,
       fitStyle: 'Relaxed', fitPreference: 'RELAXED', measurementSource: 'STORE_DEMO',
     },
@@ -527,14 +552,6 @@ for (const [tailorIndex, tailor] of manifest.tailors.entries()) {
 // database triggers. Repeat runs update ordinary showcase fields while leaving
 // reviewed values untouched, so rerunning this seed does not weaken that trust
 // boundary or fail on a fresh id_verified_at timestamp.
-const existingTailorRows = await existingRows(
-  baseUrl,
-  headers,
-  'tailor_profiles',
-  'user_id',
-  `user_id=in.(${tailorProfiles.map((profile) => profile.user_id).join(',')})`,
-)
-const existingTailorUserIds = new Set(existingTailorRows.map((row) => row.user_id))
 const protectedExistingProfileFields = [
   'avatar_url',
   'display_name',
@@ -551,9 +568,18 @@ const protectedExistingProfileFields = [
   'id_verification_status',
   'id_verified_at',
 ]
+const existingTailorRows = await existingRows(
+  baseUrl,
+  headers,
+  'tailor_profiles',
+  `user_id,${protectedExistingProfileFields.join(',')}`,
+  `user_id=in.(${tailorProfiles.map((profile) => profile.user_id).join(',')})`,
+)
+const existingTailorRowsByUserId = new Map(existingTailorRows.map((row) => [row.user_id, row]))
 for (const profile of tailorProfiles) {
-  if (!existingTailorUserIds.has(profile.user_id)) continue
-  for (const field of protectedExistingProfileFields) delete profile[field]
+  const existing = existingTailorRowsByUserId.get(profile.user_id)
+  if (!existing) continue
+  for (const field of protectedExistingProfileFields) profile[field] = existing[field]
 }
 
 await upsertRows(baseUrl, headers, 'users', publicUsers, 'id')

@@ -67,8 +67,21 @@
       }
     },
     "android": {
+      "blockedPermissions": [
+        "android.permission.ACTIVITY_RECOGNITION"
+      ],
+      "splash": {
+        "image": "./assets/adaptive-icon-foreground.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#F9F7F3",
+        "dark": {
+          "image": "./assets/adaptive-icon-foreground.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#1A1A18"
+        }
+      },
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
         "backgroundColor": "#2D6A4F"
       },
       "package": "com.drape.app",

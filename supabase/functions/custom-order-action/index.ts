@@ -40,6 +40,7 @@ import { fulfillmentEligibilityCopy } from '../../../packages/shared/src/fulfill
 import { resolveAuthoritativeFulfillmentEligibility } from '../_shared/fulfillment-eligibility.ts'
 
 const FN = 'custom-order-action'
+const GROUP_ORDER_CREATION_ENABLED = Deno.env.get('GROUP_ORDERS_V1') === 'true'
 const STALE_MEASUREMENT_MONTHS = 6
 const ORDER_CONTRACT_VERSION = 1
 const MEASUREMENT_FALLBACK_MIN_CHARS = 24
@@ -261,6 +262,16 @@ Deno.serve(async (req) => {
     const supportMeta = body.supportMeta && typeof body.supportMeta === 'object' && !Array.isArray(body.supportMeta)
       ? body.supportMeta as Record<string, unknown>
       : null
+    const requestedBulkMeta = objectRecord(supportMeta?.bulkOrder)
+    const requestedWearerContext = normalizeWearerContext(supportMeta, body.customerMeasurementsSnapshot)
+    if (!GROUP_ORDER_CREATION_ENABLED && (requestedBulkMeta?.enabled === true || requestedWearerContext.mode === 'GROUP')) {
+      return jsonError(
+        cors,
+        409,
+        'GROUP_ORDERS_NOT_AVAILABLE',
+        'Group orders are not available yet. Send one custom request for one wearer, or contact Drapeon Support for a coordinated order.',
+      )
+    }
     const normalizedGarmentTypeOther = normalizeText(body.garmentTypeOther)
     const normalizedBodyNote = normalizeText(body.bodyNote) ?? normalizeText(body.fitNote)
     const referencePhotos = body.referencePhotos ?? []

@@ -26,6 +26,7 @@ import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
 import { fetchReadGateway } from '@/lib/read-gateway'
 import { appendToHistory } from '@/lib/navigation'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import {
   loadRecentlyViewedTailors,
   saveRecentlyViewedTailor,
@@ -722,6 +723,11 @@ export default function CustomerHomeScreen() {
     setAvailFilter('ALL')
     Keyboard.dismiss()
   }
+
+  // Search suggestions and results replace the primary tab body without
+  // creating a route entry. Android system/gesture Back must therefore close
+  // search just like the visible Cancel control instead of exiting the app.
+  useContextualBackHandler(cancelSearch, searchFocused || isSearchActive)
 
   function handleBlur() {
     setTimeout(() => setSearchFocused(false), 150)

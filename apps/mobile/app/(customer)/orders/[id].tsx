@@ -1262,6 +1262,9 @@ export default function OrderTrackingScreen() {
   const fetchOrder = useCallback(
     async (options?: { silent?: boolean }) => {
       const silent = options?.silent === true
+      // Route focus can beat auth hydration on cold/deep-link entry. Do not send
+      // an undefined customer id to PostgREST; the callback reruns when auth is ready.
+      if (!id || !userId) return
       const shouldReplaceSurface = !silent && loadedOrderIdRef.current !== id
       if (shouldReplaceSurface) {
         setLoading(true)
@@ -1301,7 +1304,28 @@ export default function OrderTrackingScreen() {
         const orderError = orderRes.status === 'fulfilled' ? orderRes.value.error : orderRes.reason
 
         if (orderError) {
-          throw orderError
+          const databaseError = orderError as {
+            code?: string
+            details?: string
+            hint?: string
+            message?: string
+          }
+          const normalizedError = new Error(
+            databaseError.message || 'The order query failed.',
+          )
+          Object.assign(normalizedError, {
+            name: 'OrderFetchError',
+            cause: databaseError,
+          })
+          Sentry.captureException(normalizedError, {
+            tags: { operation: 'fetchOrder', databaseCode: databaseError.code ?? 'unknown' },
+            extra: {
+              orderId: id,
+              details: databaseError.details,
+              hint: databaseError.hint,
+            },
+          })
+          throw normalizedError
         }
 
         const data = orderRes.status === 'fulfilled' ? orderRes.value.data : null
@@ -1548,15 +1572,19 @@ export default function OrderTrackingScreen() {
         if (shouldReplaceSurface) setLoading(false)
       } catch (error) {
         if (silent) {
-          Sentry.captureException(error, {
-            extra: { context: 'customer_order_realtime_refresh', orderId: id },
-          })
+          if (!(error instanceof Error && error.name === 'OrderFetchError')) {
+            Sentry.captureException(error, {
+              extra: { context: 'customer_order_realtime_refresh', orderId: id },
+            })
+          }
           return
         }
         if (!shouldReplaceSurface && loadedOrderIdRef.current === id) {
-          Sentry.captureException(error, {
-            extra: { context: 'customer_order_background_refresh', orderId: id },
-          })
+          if (!(error instanceof Error && error.name === 'OrderFetchError')) {
+            Sentry.captureException(error, {
+              extra: { context: 'customer_order_background_refresh', orderId: id },
+            })
+          }
           return
         }
         setFetchErrorMessage(

@@ -43,6 +43,7 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { MOBILE_FEATURE_FLAGS } from '@/lib/feature-flags'
 import { composeStructuredAddress } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
@@ -55,6 +56,7 @@ import {
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
+  KeyboardAwareScrollView,
   MoneyInput,
   MeasurementModule,
   PhoneNumberInput,
@@ -204,6 +206,7 @@ const STEP_SUBS = [
 const SUPPORTED_STYLE_LINK_LABELS = ['Instagram posts / reels', 'Pinterest pins', 'TikTok videos']
 const STALE_MEASUREMENT_MONTHS = 6
 const DRAPE_VISION_FIT_360_CAPTURE_METHOD = 'DRAPE_VISION_ROTATION'
+const GROUP_ORDERS_ENABLED = MOBILE_FEATURE_FLAGS.groupOrdersV1
 
 type MeasurementAgeSummary = {
   lastUpdatedAt: string
@@ -844,7 +847,7 @@ export default function OrderBriefScreen() {
         if (f.genderPresentation === 'Menswear' || f.genderPresentation === 'Womenswear' || f.genderPresentation === 'Unisex') setGenderPresentation(f.genderPresentation)
         setDescription(text('description')); setOccasion(text('occasion'))
         if (dateValue && Number.isFinite(new Date(dateValue).getTime())) setDeadline(new Date(dateValue))
-        setIsBulkOrder(f.isBulkOrder === true); setBulkRecipientCount(text('bulkRecipientCount'))
+        setIsBulkOrder(GROUP_ORDERS_ENABLED && f.isBulkOrder === true); setBulkRecipientCount(text('bulkRecipientCount'))
         setBulkLabel(text('bulkLabel')); setBulkNotes(text('bulkNotes')); setBulkMemberNames(text('bulkMemberNames'))
         if (f.wearerMode === 'SELF' || f.wearerMode === 'OTHER') setWearerMode(f.wearerMode)
         setWearerName(text('wearerName')); setPhotos(list('photos')); setInspirationLinks(list('inspirationLinks'))
@@ -1519,6 +1522,11 @@ export default function OrderBriefScreen() {
 
   async function submit() {
     if (submitting) return
+    if (isBulkOrder && !GROUP_ORDERS_ENABLED) {
+      Alert.alert('Group orders are not available yet', 'Send one custom request for one wearer. Drapeon Support can help plan a larger coordinated order.')
+      setIsBulkOrder(false)
+      return
+    }
     // Final guard — catches any placeholder values that bypassed per-field validation
     if (!validateDescription(description)) return
     if (!validateDeadline(deadline)) return
@@ -2236,7 +2244,7 @@ export default function OrderBriefScreen() {
           ))}
         </View>
 
-        <ScrollView
+        <KeyboardAwareScrollView
           style={styles.scroll}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{
@@ -2287,7 +2295,7 @@ export default function OrderBriefScreen() {
                         {selectedGarmentLabel || 'Choose garment type'}
                       </Text>
                       <Text style={styles.garmentSelectHint}>
-                        Browse cultural, formal, modest, and group order categories.
+                        Browse cultural, formal, modest, and contemporary categories.
                       </Text>
                     </View>
                     <Feather name="chevron-right" size={21} color={Colors.midGrey} />
@@ -2366,7 +2374,7 @@ export default function OrderBriefScreen() {
                   testID="occasion-input"
                 />
 
-                <View>
+                {GROUP_ORDERS_ENABLED ? <View>
                   <Text style={styles.fieldLabel}>Who is this order for?</Text>
                   <Text style={styles.fieldHint}>
                     Most orders are for one person. Use group when multiple people need linked
@@ -2406,7 +2414,7 @@ export default function OrderBriefScreen() {
                       </Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                </View> : null}
 
                 {isBulkOrder ? (
                   <View style={styles.measureSubcard}>
@@ -3264,6 +3272,8 @@ export default function OrderBriefScreen() {
                           ? 'This is the name the courier or rider should ask for.'
                           : 'Use the name of the person collecting this on your behalf.'
                       }
+                      textContentType="name"
+                      autoComplete="name"
                       required
                     />
                     <PhoneNumberInput
@@ -3327,6 +3337,8 @@ export default function OrderBriefScreen() {
                         if (deliveryAddressError) setDeliveryAddressError('')
                       }}
                       onBlur={validateDeliveryAddress}
+                      textContentType="streetAddressLine1"
+                      autoComplete="address-line1"
                       required
                     />
                     <Input
@@ -3338,6 +3350,8 @@ export default function OrderBriefScreen() {
                         clearDeliveryVerification()
                         if (deliveryAddressError) setDeliveryAddressError('')
                       }}
+                      textContentType="streetAddressLine2"
+                      autoComplete="address-line2"
                     />
                     <View style={styles.addressRow}>
                       <View style={styles.addressHalf}>
@@ -3351,6 +3365,8 @@ export default function OrderBriefScreen() {
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
+                          textContentType="addressCity"
+                          autoComplete="postal-address-locality"
                           required
                         />
                       </View>
@@ -3365,6 +3381,8 @@ export default function OrderBriefScreen() {
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
+                          textContentType="addressState"
+                          autoComplete="postal-address-region"
                           required
                         />
                       </View>
@@ -3381,6 +3399,8 @@ export default function OrderBriefScreen() {
                             if (deliveryAddressError) setDeliveryAddressError('')
                           }}
                           onBlur={validateDeliveryAddress}
+                          textContentType="postalCode"
+                          autoComplete="postal-code"
                         />
                       </View>
                       <View style={styles.addressHalf}>
@@ -3671,7 +3691,7 @@ export default function OrderBriefScreen() {
               </View>
             )}
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
 
         <DrapeFloatingActionDock
           compactWidth={76}

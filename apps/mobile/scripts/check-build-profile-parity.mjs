@@ -13,7 +13,7 @@ const shippedUiFlags = [
 ]
 const betaProfiles = ['development', 'development-device', 'preview', 'testflight']
 const allProfiles = [...betaProfiles, 'production']
-const defaultOffFlags = ['EXPO_PUBLIC_DARK_THEME_V1']
+const defaultOffFlags = ['EXPO_PUBLIC_DARK_THEME_V1', 'EXPO_PUBLIC_GROUP_ORDERS_V1']
 const errors = []
 
 for (const profileName of betaProfiles) {

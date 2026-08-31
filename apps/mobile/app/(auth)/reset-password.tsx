@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   View,
   Text,
   StyleSheet,
@@ -16,7 +15,7 @@ import { clearRecentReauth } from '@/lib/recent-reauth'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import {
   MAX_PASSWORD_LENGTH,
@@ -178,7 +177,7 @@ export default function ResetPasswordScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <KeyboardAwareScrollView contentContainerStyle={styles.content}>
           <AuthEntryHeader
             eyebrow="Choose a new password"
             title="Set a password you can come back to easily."
@@ -230,7 +229,7 @@ export default function ResetPasswordScreen() {
               disabled={!password || !confirm || !!passwordError || password !== confirm}
             />
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )

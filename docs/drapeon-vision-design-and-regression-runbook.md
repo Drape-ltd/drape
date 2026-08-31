@@ -86,6 +86,7 @@ Removing or bypassing this patch requires a fresh real-device proof of start, ex
 - `android_drape_vision` independently controls Android live scanning.
 - A UI flag must never implicitly enable a native engine on a platform whose engine gate is off.
 - The Vision hub may expose manual measurement even when native scanning is unavailable.
+- Launch discovery shows only modes that are currently runnable on the active platform. Android hides unavailable specialist modes instead of rendering disabled “Coming soon” cards; Fit 360 appears only when Android live scanning passes its independent gate. The same availability filter applies to the hub, result follow-ups, and “scan another” actions, while stale unavailable mode state returns to the hub.
 
 ## Canonical State Machines
 

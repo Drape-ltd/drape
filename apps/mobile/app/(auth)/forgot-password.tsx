@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   View,
   Text,
   StyleSheet,
@@ -16,7 +15,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 function isValidEmail(value: string) {
@@ -79,7 +78,7 @@ export default function ForgotPasswordScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <KeyboardAwareScrollView contentContainerStyle={styles.content}>
           {sent ? (
             <View style={styles.stateCard}>
               <Text style={styles.stateEyebrow}>Reset link sent</Text>
@@ -139,6 +138,8 @@ export default function ForgotPasswordScreen() {
                   value={email}
                   onChangeText={setEmail}
                   keyboardType="email-address"
+                  textContentType="username"
+                  autoComplete="email"
                   autoCapitalize="none"
                   autoCorrect={false}
                   required
@@ -158,7 +159,7 @@ export default function ForgotPasswordScreen() {
               </View>
             </>
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )

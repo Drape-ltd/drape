@@ -3110,6 +3110,18 @@ export default function DrapeVisionScreen() {
   const missingTailorDiaryTarget = mode === 'tailor_client_scan' && !hasDiaryTarget
   const canRunLiveBodyScan = supportsBodyScan && !missingTailorDiaryTarget
   const canStartLiveBodyScan = canRunLiveBodyScan && !isAndroidLiveScanPreflightBlocked()
+  const launchAvailableSpecialistModules = useMemo(
+    () => DRAPE_VISION_SPECIALIST_SCAN_MODULES.filter((item) => (
+      item.mode === 'fit_360'
+        ? canStartLiveBodyScan
+        : item.status === 'active' && Platform.OS === 'ios'
+    )),
+    [canStartLiveBodyScan],
+  )
+  const launchAvailableSpecialistModeSet = useMemo(
+    () => new Set(launchAvailableSpecialistModules.map((item) => item.mode)),
+    [launchAvailableSpecialistModules],
+  )
   const visionUiV2Enabled = MOBILE_FEATURE_FLAGS.drapeVisionUiV2
   const ctaBarInsetStyle = useMemo(() => ({
     paddingBottom: Math.max(Spacing.sm, insets.bottom),
@@ -9370,6 +9382,19 @@ export default function DrapeVisionScreen() {
   }
 
   function openSpecialistMode(specialistMode: DrapeVisionSpecialistScanMode) {
+    if (!launchAvailableSpecialistModeSet.has(specialistMode)) {
+      addVisionBreadcrumb('specialist_scan_launch_hidden', {
+        mode,
+        specialistMode,
+        platform: Platform.OS,
+      })
+      setSelectedSpecialistMode('fit_360')
+      setPendingScanAfterHeight(null)
+      setSpecialistStatusMessage(null)
+      setSpecialistReadinessStatus(null)
+      setPhase('suite')
+      return
+    }
     setSelectedSpecialistMode(specialistMode)
     setSpecialistStatusMessage(null)
     setSpecialistReadinessStatus(null)
@@ -9395,6 +9420,20 @@ export default function DrapeVisionScreen() {
     options: { skipHeightCheck?: boolean; watchdogRepair?: boolean } = {},
   ) {
     if (cameraRestartingRef.current) return
+    if (!launchAvailableSpecialistModeSet.has(specialistMode)) {
+      addVisionBreadcrumb('specialist_scan_launch_hidden', {
+        mode,
+        specialistMode,
+        platform: Platform.OS,
+        source: 'start',
+      })
+      setSelectedSpecialistMode('fit_360')
+      setPendingScanAfterHeight(null)
+      setSpecialistStatusMessage(null)
+      setSpecialistReadinessStatus(null)
+      setPhase('suite')
+      return
+    }
     preserveCurrentVisionNavigationContext()
 
     setSpecialistStatusMessage(null)
@@ -10092,7 +10131,7 @@ export default function DrapeVisionScreen() {
     const hasReusableHeight = savedVisionHeight != null
 
     if (visionUiV2Enabled) {
-      const options: VisionHubOption[] = DRAPE_VISION_SPECIALIST_SCAN_MODULES.map((item) => {
+      const options: VisionHubOption[] = launchAvailableSpecialistModules.map((item) => {
         const completed = completedSessionScanSet.has(item.mode)
         const saved = savedSessionScanSet.has(item.mode)
         const isFit360 = item.mode === 'fit_360'
@@ -10188,7 +10227,7 @@ export default function DrapeVisionScreen() {
           </View>
 
           <View style={styles.specialistModeList}>
-            {DRAPE_VISION_SPECIALIST_SCAN_MODULES.map((item) => {
+            {launchAvailableSpecialistModules.map((item) => {
               const completed = completedSessionScanSet.has(item.mode)
               const saved = savedSessionScanSet.has(item.mode)
               const isFit360 = item.mode === 'fit_360'
@@ -10783,7 +10822,7 @@ export default function DrapeVisionScreen() {
   }
 
   function renderScanAnotherSection(currentMode: DrapeVisionSpecialistScanMode) {
-    const allRemainingModules = DRAPE_VISION_SPECIALIST_SCAN_MODULES
+    const allRemainingModules = launchAvailableSpecialistModules
       .filter((item) => item.mode !== currentMode && !completedSessionScanSet.has(item.mode))
     const remainingModules = allRemainingModules
       .slice(0, 4)
@@ -10996,7 +11035,7 @@ export default function DrapeVisionScreen() {
           onChange: (value) => updateSpecialistTapeInput(key, value),
         }
       })
-      const followUps: VisionResultFollowUp[] = DRAPE_VISION_SPECIALIST_SCAN_MODULES
+      const followUps: VisionResultFollowUp[] = launchAvailableSpecialistModules
         .filter((item) => item.mode !== selectedMode && !completedSessionScanSet.has(item.mode))
         .slice(0, 4)
         .map((item) => ({
@@ -12012,7 +12051,7 @@ export default function DrapeVisionScreen() {
       ? 'I reviewed these measurements with the client'
       : 'These measurements look right'
     const showAndroidReviewNotice = Platform.OS === 'android'
-    const precisionModules = DRAPE_VISION_SPECIALIST_SCAN_MODULES.filter((item) => (
+    const precisionModules = launchAvailableSpecialistModules.filter((item) => (
       item.mode !== 'fit_360' &&
       !completedSessionScanSet.has(item.mode) &&
       specialistPrecisionFieldsForMode(item.mode).length > 0

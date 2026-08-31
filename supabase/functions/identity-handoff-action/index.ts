@@ -299,19 +299,55 @@ Deno.serve(async (req) => {
       if (!caller?.id)
         return jsonResponse({ error: 'Sign in before starting trust verification.' }, 401, cors)
 
-      const { data: profile, error: profileError } = await supabase
+      const { data: loadedProfile, error: profileError } = await supabase
         .from('tailor_profiles')
         .select('id, id_verification_status')
         .eq('user_id', caller.id)
         .maybeSingle()
 
       if (profileError) throw new Error('Could not load your tailor profile.')
+      let profile = loadedProfile
       if (!profile?.id) {
-        return jsonResponse(
-          { error: 'Complete your tailor profile before trust verification.' },
-          409,
-          cors
-        )
+        const { data: publicUser, error: publicUserError } = await supabase
+          .from('users')
+          .select('display_name, role')
+          .eq('id', caller.id)
+          .maybeSingle()
+        if (publicUserError) throw new Error('Could not load your account profile.')
+        if (String(publicUser?.role ?? '').toUpperCase() !== 'TAILOR') {
+          return jsonResponse({ error: 'Switch to a tailor account before starting trust verification.' }, 403, cors)
+        }
+
+        const displayName =
+          typeof publicUser?.display_name === 'string' && publicUser.display_name.trim().length > 0
+            ? publicUser.display_name.trim()
+            : 'Tailor setup'
+        const { data: draftProfile, error: draftProfileError } = await supabase
+          .from('tailor_profiles')
+          .insert({
+            user_id: caller.id,
+            display_name: displayName,
+            location: 'Setup in progress',
+            is_verified: false,
+            is_live: false,
+          })
+          .select('id, id_verification_status')
+          .single()
+        if (draftProfileError || !draftProfile?.id) {
+          log('error', FN, 'profile.draft_create_failed', {
+            actor_id: caller.id,
+            error: draftProfileError?.message ?? 'Draft profile was not returned.',
+          })
+          return jsonResponse({ error: 'Could not save your tailor setup before trust verification.' }, 500, cors)
+        }
+        profile = draftProfile
+        await audit(supabase, {
+          event: 'tailor_profile.trust_draft_created',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'info',
+          payload: { function: FN, profile_id: draftProfile.id },
+        })
       }
       if (
         ['PENDING', 'VERIFIED', 'APPROVED'].includes(String(profile.id_verification_status ?? ''))

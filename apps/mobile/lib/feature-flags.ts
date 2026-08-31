@@ -7,6 +7,7 @@ export const MOBILE_FEATURE_FLAGS = Object.freeze({
   chatOrderActionsV1: process.env.EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1 === 'true',
   drapeVisionUiV2: process.env.EXPO_PUBLIC_DRAPE_VISION_UI_V2 === 'true',
   darkThemeV1: process.env.EXPO_PUBLIC_DARK_THEME_V1 === 'true',
+  groupOrdersV1: process.env.EXPO_PUBLIC_GROUP_ORDERS_V1 === 'true',
 })
 
 type FeatureFlagAudience = 'ALL' | 'CUSTOMER' | 'TAILOR' | 'OPS'

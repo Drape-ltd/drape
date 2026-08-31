@@ -11,7 +11,7 @@ import { setAnalyticsConsent } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 
 type PrivacyPrefs = {
   marketingEmails: boolean
@@ -186,7 +186,10 @@ export default function TailorPrivacyScreen() {
           <View style={styles.card}>
             <TouchableOpacity style={styles.linkRow} onPress={() => router.push({
               pathname: '/(tailor)/profile/delete-account',
-              params: { returnTo: '/(tailor)/profile/privacy' },
+              params: {
+                returnTo: '/(tailor)/profile/privacy',
+                historyChain: appendToHistory(undefined, '/(tailor)/profile/privacy'),
+              },
             } as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="trash-2" size={20} color={Colors.error} />

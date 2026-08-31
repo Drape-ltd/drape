@@ -13,6 +13,7 @@
 import * as Sentry from '@sentry/react-native'
 
 const SENSITIVE_EVENT_KEYS = /authorization|cookie|password|token|secret|phone|email|address|message_body|voice_url/iu
+const GENERIC_OBJECT_EXCEPTION = /object captured as exception/iu
 
 function scrubDiagnosticValue(value: unknown, depth = 0): unknown {
   if (depth > 4 || value === null || value === undefined) return value
@@ -26,6 +27,63 @@ function scrubDiagnosticValue(value: unknown, depth = 0): unknown {
       : scrubDiagnosticValue(nestedValue, depth + 1)
   }
   return output
+}
+
+type StructuredFailure = {
+  name?: unknown
+  message?: unknown
+  code?: unknown
+  details?: unknown
+  hint?: unknown
+}
+
+export function normalizeCapturedException(exception: unknown): {
+  error: Error
+  diagnostic?: Record<string, unknown>
+} {
+  if (exception instanceof Error) return { error: exception }
+
+  if (exception && typeof exception === 'object') {
+    const failure = exception as StructuredFailure
+    const message = typeof failure.message === 'string' && failure.message.trim()
+      ? failure.message.trim()
+      : 'A structured provider or database operation failed.'
+    const error = new Error(message)
+    error.name = typeof failure.name === 'string' && failure.name.trim()
+      ? failure.name.trim()
+      : 'StructuredOperationError'
+    return {
+      error,
+      diagnostic: {
+        originalType: exception.constructor?.name ?? 'Object',
+        code: failure.code,
+        details: failure.details,
+        hint: failure.hint,
+      },
+    }
+  }
+
+  return {
+    error: new Error(
+      typeof exception === 'string' && exception.trim()
+        ? exception.trim()
+        : `A non-error value was captured (${String(exception)}).`,
+    ),
+    diagnostic: { originalType: typeof exception },
+  }
+}
+
+function captureNormalizedException(
+  exception: unknown,
+  hint?: Parameters<typeof Sentry.captureException>[1],
+) {
+  const normalized = normalizeCapturedException(exception)
+  if (!normalized.diagnostic) return Sentry.captureException(normalized.error, hint)
+
+  return Sentry.withScope((scope) => {
+    scope.setContext('original_failure', scrubDiagnosticValue(normalized.diagnostic) as Record<string, unknown>)
+    return Sentry.captureException(normalized.error, hint)
+  })
 }
 
 export function initSentry() {
@@ -44,6 +102,33 @@ export function initSentry() {
     attachStacktrace: true,
     enableAutoSessionTracking: true,
     beforeSend(event) {
+      // Sentry serializes rejected provider/database objects under __serialized__
+      // and otherwise titles them "Object captured as exception". Recover the
+      // actionable, non-sensitive fields even for automatic/unhandled captures.
+      const serialized = event.extra?.__serialized__
+      if (serialized && typeof serialized === 'object') {
+        const failure = serialized as StructuredFailure
+        const message = typeof failure.message === 'string' ? failure.message.trim() : ''
+        const exceptionValue = event.exception?.values?.[0]?.value ?? ''
+        if (message && GENERIC_OBJECT_EXCEPTION.test(exceptionValue)) {
+          const exception = event.exception?.values?.[0]
+          if (exception) {
+            exception.type = 'StructuredOperationError'
+            exception.value = message
+          }
+          if (typeof failure.code === 'string' && failure.code.trim()) {
+            event.tags = { ...event.tags, failure_code: failure.code.trim() }
+          }
+          event.contexts = {
+            ...event.contexts,
+            original_failure: scrubDiagnosticValue({
+              code: failure.code,
+              details: failure.details,
+              hint: failure.hint,
+            }) as Record<string, unknown>,
+          }
+        }
+      }
       if (event.user) {
         event.user = event.user.id ? { id: event.user.id } : undefined
       }
@@ -67,4 +152,11 @@ export function initSentry() {
   Sentry.setTag('supabase.environment', process.env.EXPO_PUBLIC_SUPABASE_ENV ?? 'unknown')
 }
 
-export { Sentry }
+const DrapeSentry = {
+  addBreadcrumb: Sentry.addBreadcrumb,
+  captureException: captureNormalizedException,
+  captureMessage: Sentry.captureMessage,
+  setUser: Sentry.setUser,
+}
+
+export { DrapeSentry as Sentry }

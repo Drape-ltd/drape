@@ -8,6 +8,7 @@
     "./order-machine": "./src/order-machine.ts",
     "./constants": "./src/constants.ts",
     "./auth-security": "./src/auth-security.ts",
+    "./auth-role": "./src/auth-role.ts",
     "./phone": "./src/phone.ts",
     "./phone-countries": "./src/phone-countries.ts",
     "./address": "./src/address.ts",

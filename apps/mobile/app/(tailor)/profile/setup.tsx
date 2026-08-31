@@ -33,6 +33,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as ImagePicker from 'expo-image-picker'
 import { requestRecordingPermissionsAsync } from 'expo-audio'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -77,6 +78,7 @@ import {
   DrapeIconButton,
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
   Input,
+  KeyboardAwareScrollView,
   MoneyInput,
   PhoneNumberInput,
   RemoteImage,
@@ -353,6 +355,11 @@ const PRICE_PRESETS: Array<{
 const FOCUSED_FIELD_SCROLL_DELAY_MS = 140
 const FOCUSED_FIELD_TOP_OFFSET = 96
 const PHONE_AVAILABILITY_DEBOUNCE_MS = 650
+const TAILOR_SETUP_DRAFT_VERSION = 1
+
+function tailorSetupDraftKey(userId: string) {
+  return `drape:tailor-setup-draft:v${TAILOR_SETUP_DRAFT_VERSION}:${userId}`
+}
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true)
@@ -592,6 +599,9 @@ export default function TailorSetupScreen() {
   const [setupToast, setSetupToast] = useState<SetupToast | null>(null)
   const [focusedTextField, setFocusedTextField] = useState<string | null>(null)
   const [profileHydrated, setProfileHydrated] = useState(false)
+  const [currencyHydrated, setCurrencyHydrated] = useState(false)
+  const [hasPersistedProfile, setHasPersistedProfile] = useState(false)
+  const [draftHydrated, setDraftHydrated] = useState(false)
   const [pickupHydrated, setPickupHydrated] = useState(false)
   const [mediaSheetMode, setMediaSheetMode] = useState<MediaSheetMode>(null)
   const [choiceSheetMode, setChoiceSheetMode] = useState<SetupChoiceSheetMode>(null)
@@ -696,15 +706,125 @@ export default function TailorSetupScreen() {
   const [uploadingId, setUploadingId] = useState(false)
 
   useEffect(() => {
+    if (!user?.id || !profileHydrated || !currencyHydrated || draftHydrated) return
+    let cancelled = false
+    void AsyncStorage.getItem(tailorSetupDraftKey(user.id))
+      .then((value) => {
+        if (cancelled || !value) return
+        const draft = JSON.parse(value) as Record<string, unknown>
+        if (draft.version !== TAILOR_SETUP_DRAFT_VERSION) return
+        if (draft.setupView === 'hub' || draft.setupView === 'section') setSetupView(draft.setupView)
+        if (typeof draft.step === 'number' && SETUP_STEP_IDS.includes(draft.step as TailorSetupStep)) {
+          setStep(draft.step as TailorSetupStep)
+        }
+        if (typeof draft.displayName === 'string') setDisplayName(draft.displayName)
+        if (typeof draft.phone === 'string') setPhone(draft.phone)
+        if (typeof draft.avatarUrl === 'string' || draft.avatarUrl === null) setAvatarUrl(draft.avatarUrl)
+        if (typeof draft.bio === 'string') setBio(draft.bio)
+        if (typeof draft.location === 'string') setLocation(draft.location)
+        if (Array.isArray(draft.languages)) setLanguages(draft.languages.filter((value): value is string => typeof value === 'string').slice(0, MAX_LANGUAGE_TAGS))
+        if (Array.isArray(draft.specialties)) setSpecialties(draft.specialties.filter((value): value is string => typeof value === 'string').slice(0, MAX_SPECIALTY_TAGS))
+        if (typeof draft.priceMin === 'string') setPriceMin(draft.priceMin)
+        if (typeof draft.priceMax === 'string') setPriceMax(draft.priceMax)
+        if (typeof draft.currency === 'string' && SUPPORTED_CURRENCIES.includes(draft.currency as typeof currency)) setCurrency(draft.currency as typeof currency)
+        if (Array.isArray(draft.portfolioItems)) {
+          const restoredItems = draft.portfolioItems.filter((item): item is PortfolioItem => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+            const record = item as Record<string, unknown>
+            return (record.type === 'photo' || record.type === 'video') && typeof record.url === 'string'
+          })
+          if (restoredItems.length > 0) setPortfolioItems(restoredItems.slice(0, MAX_PORTFOLIO_ITEMS))
+        }
+        if (draft.availability === 'OPEN' || draft.availability === 'LIMITED' || draft.availability === 'FULLY_BOOKED') setAvailability(draft.availability)
+        if (draft.sellerType === 'TAILOR' || draft.sellerType === 'BOUTIQUE' || draft.sellerType === 'TAILOR_SHOP') setSellerType(draft.sellerType)
+        if (typeof draft.supportsCustomOrders === 'boolean') setSupportsCustomOrders(draft.supportsCustomOrders)
+        if (typeof draft.supportsReadyMade === 'boolean') setSupportsReadyMade(draft.supportsReadyMade)
+        if (typeof draft.acceptsCustomOrdersNow === 'boolean') setAcceptsCustomOrdersNow(draft.acceptsCustomOrdersNow)
+        if (typeof draft.shopPaused === 'boolean') setShopPaused(draft.shopPaused)
+        if (typeof draft.pickupAvailable === 'boolean') setPickupAvailable(draft.pickupAvailable)
+        if (typeof draft.pickupAddress === 'string') setPickupAddress(draft.pickupAddress)
+        if (typeof draft.pickupCity === 'string') setPickupCity(draft.pickupCity)
+        if (typeof draft.pickupRegion === 'string') setPickupRegion(draft.pickupRegion)
+        if (typeof draft.pickupPostalCode === 'string') setPickupPostalCode(draft.pickupPostalCode)
+        if (typeof draft.pickupCountryCode === 'string') setPickupCountryCode(draft.pickupCountryCode)
+        if (typeof draft.pickupInstructions === 'string') setPickupInstructions(draft.pickupInstructions)
+        if (typeof draft.deliveryAvailable === 'boolean') setDeliveryAvailable(draft.deliveryAvailable)
+        if (typeof draft.shippingAvailable === 'boolean') setShippingAvailable(draft.shippingAvailable)
+        if (typeof draft.identityConsentGranted === 'boolean') setIdentityConsentGranted(draft.identityConsentGranted)
+      })
+      .catch((error) => {
+        Sentry.captureException(error, { extra: { context: 'tailor_setup_draft_restore', userId: user.id } })
+      })
+      .finally(() => {
+        if (!cancelled) setDraftHydrated(true)
+      })
+    return () => { cancelled = true }
+  }, [currencyHydrated, draftHydrated, profileHydrated, user?.id])
+
+  useEffect(() => {
+    if (!user?.id || !draftHydrated) return
+    const timer = setTimeout(() => {
+      const draft = {
+        version: TAILOR_SETUP_DRAFT_VERSION,
+        updatedAt: new Date().toISOString(),
+        setupView,
+        step,
+        displayName,
+        phone,
+        avatarUrl,
+        bio,
+        location,
+        languages,
+        specialties,
+        priceMin,
+        priceMax,
+        currency,
+        portfolioItems,
+        availability,
+        sellerType,
+        supportsCustomOrders,
+        supportsReadyMade,
+        acceptsCustomOrdersNow,
+        shopPaused,
+        pickupAvailable,
+        pickupAddress,
+        pickupCity,
+        pickupRegion,
+        pickupPostalCode,
+        pickupCountryCode,
+        pickupInstructions,
+        deliveryAvailable,
+        shippingAvailable,
+        identityConsentGranted,
+      }
+      void AsyncStorage.setItem(tailorSetupDraftKey(user.id), JSON.stringify(draft)).catch((error) => {
+        Sentry.captureException(error, { extra: { context: 'tailor_setup_draft_save', userId: user.id } })
+      })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [
+    acceptsCustomOrdersNow, availability, avatarUrl, bio, currency, deliveryAvailable,
+    displayName, draftHydrated, identityConsentGranted, languages, location, phone,
+    pickupAddress, pickupAvailable, pickupCity, pickupCountryCode, pickupInstructions,
+    pickupPostalCode, pickupRegion, portfolioItems, priceMax, priceMin, sellerType,
+    setupView, shippingAvailable, shopPaused, specialties, step, supportsCustomOrders, supportsReadyMade,
+    user?.id,
+  ])
+
+  useEffect(() => {
     if (!user?.id) return
     let cancelled = false
 
-    void fetchCurrencyPreferenceContext().then((resolved) => {
-      if (cancelled) return
-      setCurrency(resolved.currency)
-      setCurrencySource(resolved.source)
-      setRegionCode(resolved.regionCode)
-    })
+    void fetchCurrencyPreferenceContext()
+      .then((resolved) => {
+        if (cancelled) return
+        setCurrency(resolved.currency)
+        setCurrencySource(resolved.source)
+        setRegionCode(resolved.regionCode)
+      })
+      .finally(() => {
+        if (!cancelled) setCurrencyHydrated(true)
+      })
 
     fetchOwnTailorSetupProfile<TailorSetupProfileRow>().then(({ data, error }) => {
         if (cancelled) return
@@ -714,6 +834,7 @@ export default function TailorSetupScreen() {
         }
 
         const row = data as TailorSetupProfileRow
+        setHasPersistedProfile(true)
         const nextDisplayName = row.display_name ?? oauthName
         const nextAvatarUrl = row.avatar_url ?? null
         const nextBio = row.bio ?? ''
@@ -1792,9 +1913,17 @@ export default function TailorSetupScreen() {
     if (trustChallengeLoading) return
     setTrustChallengeLoading(true)
     try {
+      if (!hasPersistedProfile) {
+        const { error } = await persistSetupProfile()
+        if (error) throw error
+        setHasPersistedProfile(true)
+      }
       await ensureTrustVideoSession()
       setMediaSheetMode('trust-video')
     } catch (sessionError) {
+      Sentry.captureException(sessionError, {
+        extra: { context: 'tailor_setup_identity_handoff_create', userId: user?.id },
+      })
       Alert.alert(
         'Trust video unavailable',
         await readFunctionErrorMessage(sessionError, 'Could not load your private challenge. Please try again.')
@@ -1802,6 +1931,52 @@ export default function TailorSetupScreen() {
     } finally {
       setTrustChallengeLoading(false)
     }
+  }
+
+  function currentSetupProfilePayload() {
+    return {
+      displayName: displayName.trim(),
+      avatarUrl,
+      bio: bio.trim() || null,
+      location: location.trim(),
+      languages: languages.slice(0, MAX_LANGUAGE_TAGS),
+      specialties: specialties.slice(0, MAX_SPECIALTY_TAGS),
+      priceRangeMin: priceMin ? Math.round(parseTailorPriceMajor(priceMin) * 100) : null,
+      priceRangeMax: priceMax ? Math.round(parseTailorPriceMajor(priceMax) * 100) : null,
+      currency,
+      portfolioPhotoUrls: portfolioItems.filter((i) => i.type === 'photo').map((i) => i.url),
+      portfolioVideoUrls: portfolioItems.filter((i) => i.type === 'video').map((i) => i.url),
+      availability,
+      sellerType,
+      supportsCustomOrders,
+      supportsReadyMade,
+      acceptsCustomOrdersNow,
+      shopPaused,
+      pickupAvailable,
+      pickupAddress: pickupAddress.trim() || null,
+      pickupAddressLine1: pickupAddress.trim() || null,
+      pickupCity: pickupCity.trim() || null,
+      pickupRegion: pickupRegion.trim() || null,
+      pickupPostalCode: pickupPostalCode.trim() || null,
+      pickupCountryCode: pickupCountryCode.trim().toUpperCase() || null,
+      pickupLocationVerificationSource: pickupAvailable ? 'TAILOR_CONFIRMED_STRUCTURED' : null,
+      pickupLocationVerificationReference: null,
+      pickupLocationVerifiedAt: pickupAvailable ? new Date().toISOString() : null,
+      pickupInstructions: pickupInstructions.trim() || null,
+      deliveryAvailable,
+      shippingAvailable,
+      deliveryFee: 0,
+      shippingFee: 0,
+    }
+  }
+
+  function persistSetupProfile() {
+    return invokeFunction('tailor-profile-action', {
+      body: {
+        action: 'upsert-setup',
+        profile: currentSetupProfilePayload(),
+      },
+    })
   }
 
   async function ensureTrustVideoSession() {
@@ -2038,45 +2213,7 @@ export default function TailorSetupScreen() {
 
     const normalizedPhone = normalizePhoneForStorage(phone)
 
-    const { error } = await invokeFunction('tailor-profile-action', {
-      body: {
-        action: 'upsert-setup',
-        profile: {
-          displayName: displayName.trim(),
-          avatarUrl,
-          bio: bio.trim() || null,
-          location: location.trim(),
-          languages: languages.slice(0, MAX_LANGUAGE_TAGS),
-          specialties: specialties.slice(0, MAX_SPECIALTY_TAGS),
-          priceRangeMin: priceMin ? Math.round(parseTailorPriceMajor(priceMin) * 100) : null,
-          priceRangeMax: priceMax ? Math.round(parseTailorPriceMajor(priceMax) * 100) : null,
-          currency,
-          portfolioPhotoUrls: portfolioItems.filter((i) => i.type === 'photo').map((i) => i.url),
-          portfolioVideoUrls: portfolioItems.filter((i) => i.type === 'video').map((i) => i.url),
-          availability,
-          sellerType,
-          supportsCustomOrders,
-          supportsReadyMade,
-          acceptsCustomOrdersNow,
-          shopPaused,
-          pickupAvailable,
-          pickupAddress: pickupAddress.trim() || null,
-          pickupAddressLine1: pickupAddress.trim() || null,
-          pickupCity: pickupCity.trim() || null,
-          pickupRegion: pickupRegion.trim() || null,
-          pickupPostalCode: pickupPostalCode.trim() || null,
-          pickupCountryCode: pickupCountryCode.trim().toUpperCase() || null,
-          pickupLocationVerificationSource: pickupAvailable ? 'TAILOR_CONFIRMED_STRUCTURED' : null,
-          pickupLocationVerificationReference: null,
-          pickupLocationVerifiedAt: pickupAvailable ? new Date().toISOString() : null,
-          pickupInstructions: pickupInstructions.trim() || null,
-          deliveryAvailable,
-          shippingAvailable,
-          deliveryFee: 0,
-          shippingFee: 0,
-        },
-      },
-    })
+    const { error } = await persistSetupProfile()
 
     setSaving(false)
 
@@ -2109,6 +2246,7 @@ export default function TailorSetupScreen() {
       Alert.alert('Setup not saved', message)
       return
     }
+    setHasPersistedProfile(true)
 
     const phoneVerifiedAt = isCurrentPhoneVerified(normalizedPhone) ? new Date().toISOString() : null
 
@@ -2166,6 +2304,12 @@ export default function TailorSetupScreen() {
         return
       }
     }
+
+    await AsyncStorage.removeItem(tailorSetupDraftKey(user.id)).catch((draftError) => {
+      Sentry.captureException(draftError, {
+        extra: { context: 'tailor_setup_draft_clear', userId: user.id },
+      })
+    })
 
     Alert.alert(
       'Profile submitted',
@@ -2390,6 +2534,9 @@ export default function TailorSetupScreen() {
         : step === 3
           ? 'Submit for review'
           : 'Save and continue'
+  const currentSetupSectionBlocked =
+    setupView === 'section' &&
+    (!setupProgress.stepValid[step] || (step === 3 && !hasTrustVideoForSetup()))
   const editingLayoutActive = keyboard.visible || focusedTextField !== null
   const scrollBottomPadding =
     DRAPE_FLOATING_ACTION_DOCK_CLEARANCE +
@@ -2466,7 +2613,7 @@ export default function TailorSetupScreen() {
           </View>
         ) : null}
 
-        <ScrollView
+        <KeyboardAwareScrollView
           ref={scrollRef}
           style={styles.scroll}
           showsVerticalScrollIndicator={false}
@@ -2583,6 +2730,9 @@ export default function TailorSetupScreen() {
                         onPress={openProfilePhotoPicker}
                         disabled={uploadingAvatar}
                         activeOpacity={0.86}
+                        accessibilityRole="button"
+                        accessibilityLabel={avatarUrl ? 'Change profile photo' : 'Add profile photo'}
+                        accessibilityState={{ disabled: uploadingAvatar, busy: uploadingAvatar }}
                       >
                         <View style={[styles.profilePhotoPreview, profileImageRejectionActive && styles.profilePhotoPreviewRejected]}>
                           {uploadingAvatar ? (
@@ -2614,7 +2764,7 @@ export default function TailorSetupScreen() {
                         <Text style={styles.profilePhotoAction}>{profileImageRejectionActive ? 'Replace' : avatarUrl ? 'Change' : 'Add'}</Text>
                       </TouchableOpacity>
                       {!!visibleErrors.profilePhoto && (
-                        <Text style={styles.helperError}>{visibleErrors.profilePhoto}</Text>
+                        <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.profilePhoto}</Text>
                       )}
                     </View>
                   ) : null}
@@ -2636,6 +2786,8 @@ export default function TailorSetupScreen() {
                       error={nameError || visibleErrors.displayName}
                       required
                       autoCapitalize="words"
+                      textContentType="name"
+                      autoComplete="name"
                       hint="No @, URLs, or phone numbers. This is your public name."
                       testID="display-name-input"
                     />
@@ -2689,6 +2841,8 @@ export default function TailorSetupScreen() {
                               i === locationSuggestions.length - 1 && styles.suggestionRowLast,
                             ]}
                             onPress={() => selectLocation(s)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Use location ${s}`}
                           >
                             <Text style={styles.suggestionText}>{s}</Text>
                           </TouchableOpacity>
@@ -2754,7 +2908,7 @@ export default function TailorSetupScreen() {
                       searchOnly
                     />
                     {!!visibleErrors.languages && (
-                      <Text style={styles.helperError}>{visibleErrors.languages}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.languages}</Text>
                     )}
                   </View>
                 </View>
@@ -2781,7 +2935,7 @@ export default function TailorSetupScreen() {
                       searchable
                     />
                     {!!visibleErrors.specialties && (
-                      <Text style={styles.helperError}>{visibleErrors.specialties}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.specialties}</Text>
                     )}
                   </View>
 
@@ -2877,10 +3031,10 @@ export default function TailorSetupScreen() {
                     {!!priceMin &&
                       !!priceMax &&
                       parseTailorPriceMajor(priceMax) < parseTailorPriceMajor(priceMin) && (
-                        <Text style={styles.priceError}>"To" must be greater than "From"</Text>
+                        <Text style={styles.priceError} accessibilityRole="alert">"To" must be greater than "From"</Text>
                       )}
                     {!!visibleErrors.priceRange && (
-                      <Text style={styles.helperError}>{visibleErrors.priceRange}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.priceRange}</Text>
                     )}
                   </View>
                 </View>
@@ -2905,7 +3059,7 @@ export default function TailorSetupScreen() {
                       {proofCountText}{proofVideoText}
                     </Text>
                     {!!visibleErrors.portfolio && (
-                      <Text style={styles.helperError}>{visibleErrors.portfolio}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.portfolio}</Text>
                     )}
                     {portfolioMediaStatus ? (
                       <View style={styles.portfolioMediaStatus}>
@@ -2928,6 +3082,8 @@ export default function TailorSetupScreen() {
                         style={styles.inlineActionButton}
                         onPress={() => { void openReadyMadeItemCreator() }}
                         activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Create ready-made item"
                       >
                         <Text style={styles.inlineActionText}>Create ready-made item</Text>
                       </TouchableOpacity>
@@ -3037,7 +3193,7 @@ export default function TailorSetupScreen() {
                       onPress={() => setChoiceSheetMode('fulfillment')}
                     />
                     {!!visibleErrors.fulfillment && (
-                      <Text style={styles.helperError}>{visibleErrors.fulfillment}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.fulfillment}</Text>
                     )}
                     {pickupAvailable ? (
                       <View style={styles.fulfillmentFeeBlock} onLayout={rememberSetupFieldY('pickupAddress')}>
@@ -3072,18 +3228,24 @@ export default function TailorSetupScreen() {
                           placeholder="City"
                           value={pickupCity}
                           onChangeText={setPickupCity}
+                          textContentType="addressCity"
+                          autoComplete="postal-address-locality"
                         />
                         <Input
                           label="State / region"
                           placeholder="State or region"
                           value={pickupRegion}
                           onChangeText={setPickupRegion}
+                          textContentType="addressState"
+                          autoComplete="postal-address-region"
                         />
                         <Input
                           label="Postcode / ZIP (optional)"
                           placeholder="Postcode / ZIP"
                           value={pickupPostalCode}
                           onChangeText={setPickupPostalCode}
+                          textContentType="postalCode"
+                          autoComplete="postal-code"
                         />
                         <Input
                           label="Pickup country code"
@@ -3101,15 +3263,15 @@ export default function TailorSetupScreen() {
                           onBlur={() => blurTextField('pickupInstructions')}
                         />
                         {pickupAddress.trim().length === 0 ? (
-                          <Text style={styles.helperError}>
+                          <Text style={styles.helperError} accessibilityRole="alert">
                             Add your exact pickup address to keep pickup turned on.
                           </Text>
                         ) : pickupAddress.trim().length < 8 ? (
-                          <Text style={styles.helperError}>
+                          <Text style={styles.helperError} accessibilityRole="alert">
                             Add a fuller pickup address before offering pickup.
                           </Text>
                         ) : visibleErrors.pickupAddress ? (
-                          <Text style={styles.helperError}>{visibleErrors.pickupAddress}</Text>
+                          <Text style={styles.helperError} accessibilityRole="alert">{visibleErrors.pickupAddress}</Text>
                         ) : null}
                       </View>
                     ) : null}
@@ -3198,7 +3360,7 @@ export default function TailorSetupScreen() {
                       </TouchableOpacity>
                     )}
                     {!!(idError || visibleErrors.idDocument) && (
-                      <Text style={styles.helperError}>{idError || visibleErrors.idDocument}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{idError || visibleErrors.idDocument}</Text>
                     )}
                     <TouchableOpacity
                       style={styles.identityConsentRow}
@@ -3228,7 +3390,7 @@ export default function TailorSetupScreen() {
                       <Text style={styles.identityPrivacyLink}>Read the Privacy Policy</Text>
                     </TouchableOpacity>
                     {identityConsentError ? (
-                      <Text style={styles.helperError}>{identityConsentError}</Text>
+                      <Text style={styles.helperError} accessibilityRole="alert">{identityConsentError}</Text>
                     ) : null}
                   </View>
                 </View>
@@ -3241,6 +3403,9 @@ export default function TailorSetupScreen() {
                   onPress={switchBackToCustomer}
                   style={styles.modeSwitchLink}
                   disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+                  accessibilityRole="button"
+                  accessibilityLabel="Use Drapeon as a customer instead"
+                  accessibilityState={{ disabled: saving || uploadingId || uploadingMedia || switchingToCustomer, busy: switchingToCustomer }}
                 >
                   {switchingToCustomer ? (
                     <ActivityIndicator size="small" color={Colors.needleGreen} />
@@ -3252,25 +3417,37 @@ export default function TailorSetupScreen() {
                   onPress={handleSignOut}
                   style={styles.signOutLink}
                   disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign out or switch account"
+                  accessibilityState={{ disabled: saving || uploadingId || uploadingMedia || switchingToCustomer }}
                 >
                   <Text style={styles.signOutText}>Sign out</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => router.push('/(tailor)/profile/delete-account')}
+                  style={styles.signOutLink}
+                  disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete this account"
+                >
+                  <Text style={styles.deleteAccountText}>Delete this account</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
-            {setupView === 'section' && stepBlockingNote && !editingLayoutActive ? (
-              <Text style={styles.minNote}>{stepBlockingNote}</Text>
+            {setupView === 'section' && stepBlockingNote ? (
+              <Text style={styles.minNote} accessibilityLiveRegion="polite">{stepBlockingNote}</Text>
             ) : null}
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
 
-        <DrapeFloatingActionDock compactWidth={76} testID="tailor-setup-action-dock">
+        <DrapeFloatingActionDock compactWidth={76} forceCompact={editingLayoutActive} testID="tailor-setup-action-dock">
           {actionDockCompact ? (
             <DrapeIconButton
               icon={step === 3 || setupView === 'hub' ? 'check' : 'arrow-right'}
               accessibilityLabel={primaryCtaLabel}
               tone="primary"
               onPress={() => { void next() }}
-              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying || currentSetupSectionBlocked}
             />
           ) : (
             <DrapeCapsuleButton
@@ -3279,7 +3456,7 @@ export default function TailorSetupScreen() {
               style={styles.primaryDockButton}
               onPress={() => { void next() }}
               loading={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
-              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying}
+              disabled={saving || uploadingId || uploadingMedia || phoneAvailabilityChecking || phoneOtpSending || phoneOtpVerifying || currentSetupSectionBlocked}
             />
           )}
         </DrapeFloatingActionDock>
@@ -3402,7 +3579,7 @@ function PhoneOtpModal({
             <View style={styles.otpIcon}>
               <Feather name="shield" size={18} color={Colors.needleGreen} />
             </View>
-            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityLabel="Close phone verification">
+            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close phone verification">
               <Feather name="x" size={20} color={Colors.midGrey} />
             </TouchableOpacity>
           </View>
@@ -3420,10 +3597,11 @@ function PhoneOtpModal({
             autoComplete="sms-otp"
             maxLength={6}
             style={[styles.otpInput, !!error && styles.otpInputError]}
+            accessibilityLabel="Phone verification code"
             editable={!verifying}
             autoFocus
           />
-          {!!error && <Text style={styles.otpError}>{error}</Text>}
+          {!!error && <Text style={styles.otpError} accessibilityRole="alert">{error}</Text>}
           <View style={styles.otpActions}>
             <Button
               label="Verify code"
@@ -4973,6 +5151,7 @@ const styles = StyleSheet.create({
   modeSwitchText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   signOutLink: { alignSelf: 'center' },
   signOutText: { fontSize: FontSize.sm, color: Colors.error },
+  deleteAccountText: { fontSize: FontSize.sm, color: Colors.error, fontWeight: FontWeight.medium },
   minNote: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
   sheetOverlay: {
     flex: 1,

@@ -2,6 +2,7 @@
 
 import { useId, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
   MAX_PASSWORD_LENGTH,
@@ -275,6 +276,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [rememberDevice, setRememberDevice] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [skipProfileSetup, setSkipProfileSetup] = useState(false)
+  const [providerLoading, setProviderLoading] = useState<'apple' | 'google' | null>(null)
 
 
   const passwordInputId = useId()
@@ -307,6 +309,69 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       setError('Account access is temporarily unavailable. Please try again later or contact support.')
       return null
     }
+  }
+
+  async function continueWithProvider(provider: 'apple' | 'google') {
+    if (loading || providerLoading) return
+    setError(null)
+    const supabase = getSupabase()
+    if (!supabase) return
+
+    setProviderLoading(provider)
+    window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+    window.localStorage.removeItem('drapeon.web.auth.onboarding')
+
+    const { data, error: providerError } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: buildAuthCallbackUrl('/account/dashboard'),
+        skipBrowserRedirect: true,
+      },
+    })
+
+    if (providerError || !data.url) {
+      setProviderLoading(null)
+      setError(mapAuthError(providerError?.message))
+      return
+    }
+
+    window.location.assign(data.url)
+  }
+
+  function renderProviderEntry() {
+    return (
+      <div className="mt-6 grid gap-3">
+        <Link
+          href="/discover"
+          className="inline-flex min-h-[52px] items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600"
+        >
+          Explore Drapeon
+        </Link>
+        <button
+          type="button"
+          onClick={() => void continueWithProvider('apple')}
+          disabled={loading || providerLoading !== null}
+          className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-current"><path d="M17.1 12.5c0-2.7 2.2-4 2.3-4.1-1.3-1.9-3.3-2.1-4-2.1-1.7-.2-3.3 1-4.2 1-.9 0-2.3-1-3.8-.9-1.9 0-3.7 1.1-4.7 2.8-2 3.5-.5 8.7 1.4 11.5.9 1.4 2.1 2.9 3.6 2.8 1.4-.1 2-1 3.7-1s2.2 1 3.8 1c1.6 0 2.6-1.4 3.5-2.8 1.1-1.6 1.5-3.1 1.5-3.2-.1 0-3.1-1.2-3.1-5zM14.3 4.5c.8-1 1.3-2.3 1.2-3.5-1.2.1-2.6.8-3.4 1.7-.7.8-1.4 2.2-1.2 3.4 1.3.1 2.6-.6 3.4-1.6z"/></svg>
+          {providerLoading === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void continueWithProvider('google')}
+          disabled={loading || providerLoading !== null}
+          className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full border border-ink/12 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z"/><path fill="#FBBC05" d="M6.4 14a6 6 0 0 1 0-3.9V7.4H3.1a10 10 0 0 0 0 9.2L6.4 14z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 3.1 7.4l3.3 2.7C7.2 7.7 9.4 5.9 12 5.9z"/></svg>
+          {providerLoading === 'google' ? 'Opening Google…' : 'Continue with Google'}
+        </button>
+        <div className="flex items-center gap-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/36">
+          <span className="h-px flex-1 bg-ink/10" />
+          Continue with email
+          <span className="h-px flex-1 bg-ink/10" />
+        </div>
+      </div>
+    )
   }
 
   async function fetchStoredAccountRole(userId: string): Promise<DrapeRole | null> {
@@ -671,8 +736,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           <p className="mt-4 text-sm leading-7 text-ink/66">Use your Drapeon account.</p>
         </div>
 
+        {renderProviderEntry()}
+
         <form
-          className="mt-6 grid gap-4"
+          className="mt-1 grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
             void submit()
@@ -816,7 +883,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </p>
           </div>
 
-          <div className="mt-6 grid gap-4">
+          {renderProviderEntry()}
+
+          <div className="mt-1 grid gap-4">
             <label className="grid gap-2 text-sm font-semibold text-ink">
               Display name
               <input

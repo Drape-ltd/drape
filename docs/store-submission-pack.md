@@ -1,7 +1,7 @@
 # Store Submission Pack
 
 Date: August 30, 2026
-Status: Metadata and production reviewer-fixture baseline; device capture intentionally pending
+Status: Metadata, production reviewer fixtures, public URLs, and deletion approval verified; physical-device capture pending
 
 ## Purpose
 
@@ -16,7 +16,9 @@ Use it with:
 ## App Basics
 
 - App name: `Drapeon`
-- Bundle ID: `com.drape.app`
+- iOS bundle ID: `co.drapeon.app`
+- App Store Connect app ID: `6784264202`
+- Android application ID: `com.drape.app`
 - Privacy URL: `https://drapeon.co/privacy`
 - Terms URL: `https://drapeon.co/terms`
 - Support URL: `https://drapeon.co/help`
@@ -99,6 +101,8 @@ Apple accepts one to ten screenshots. Google Play requires at least two screensh
 Optional for first pass:
 
 - App preview video
+
+Use `docs/store-screenshot-capture-plan.md` for the exact cross-platform shot order, fixture state, redaction rules, and acceptance checks.
 
 ## Reviewer Access
 
@@ -220,11 +224,16 @@ Retention:
 
 ## Production API Proof — August 30, 2026
 
+- App Store Connect: existing app record `6784264202` resolves to **Drapeon** with iOS bundle ID `co.drapeon.app`; no duplicate record is needed.
+- App Store version: `1.0` exists in `PREPARE_FOR_SUBMISSION`; no build or review submission is attached yet.
+- Existing iOS artifact: build 17 / version `1.0.0` is valid, unexpired, and encryption-exempt in App Store Connect.
+- Existing Android artifact: EAS build `02bfa4c9-b77d-40fe-9842-7aea29a5892e`, version `1.0.0` / code 17, is a finished store-distribution AAB. Do not rebuild merely for capture.
 - Apple reviewer password login: passed.
 - Google reviewer password login: passed.
 - Apple and Google provider configuration: enabled in production Auth settings. A real OAuth UI round trip remains a physical-device capture gate.
 - Explore: all eight global showcase studios returned from the public production read gateway.
 - Custom order: `DRPGBAT3D` (`bdbefdbf-4ee6-4343-b66e-3ada57d0ca2a`) created against Alder & Rue and advanced to `QUOTE_SENT` with a GBP 384.00 tax-inclusive quote. No payment was created.
 - Notification contract: inbox record `74e838bb-d43a-4f8b-b643-1839fefd9852` persists `ORDER_DETAIL` with the exact order ID.
-- Deletion initiation: synthetic spare reviewer request `4f8f937e-1edd-41cc-b637-4f4741ebc3fa` entered `PENDING` through reauthentication and typed confirmation. Terminal Ops finalization remains required before this fixture can count as end-to-end deletion proof.
+- Deletion lifecycle: synthetic spare reviewer request `4f8f937e-1edd-41cc-b637-4f4741ebc3fa` entered `PENDING` through reauthentication and typed confirmation; the founder then approved it in production Ops and observed the corresponding app notification. Confirm the terminal finalizer result before deleting or reusing the fixture.
+- Public submission URLs: `/privacy`, `/terms`, `/help`, and `/account-deletion` each returned HTTP 200 from production on August 30, 2026.
 - Screenshot capture, notification tap navigation, real Apple/Google OAuth, and release builds were intentionally not run in this phase.

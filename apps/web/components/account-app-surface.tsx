@@ -295,6 +295,7 @@ type AccountSurface =
   | 'item-detail'
 
 const ORDER_REALTIME_SURFACES = new Set<AccountSurface>(['orders', 'order-detail', 'work', 'checkout'])
+const GROUP_ORDERS_ENABLED = process.env.NEXT_PUBLIC_GROUP_ORDERS_V1 === 'true'
 const QUOTE_NEGOTIATION_UI_ENABLED = process.env.NEXT_PUBLIC_QUOTE_NEGOTIATION_V1 === 'true'
 const ORDER_REALTIME_ROW_EVENTS = ['INSERT', 'UPDATE', 'DELETE'] as const
 const ORDER_REALTIME_CHILD_TABLES = [
@@ -14232,7 +14233,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       if (f.genderPresentation === 'Menswear' || f.genderPresentation === 'Womenswear' || f.genderPresentation === 'Unisex') setGenderPresentation(f.genderPresentation)
       setDescription(text('description')); setOccasion(text('occasion') || 'Event'); setOccasionOther(text('occasionOther'))
       setDeadline(text('deadline') || defaultDeadlineInput());
-      if (f.wearerMode === 'SELF' || f.wearerMode === 'OTHER' || f.wearerMode === 'GROUP') setWearerMode(f.wearerMode)
+      if (f.wearerMode === 'SELF' || f.wearerMode === 'OTHER' || (GROUP_ORDERS_ENABLED && f.wearerMode === 'GROUP')) setWearerMode(f.wearerMode)
       setWearerName(text('wearerName')); setBulkRecipientCount(text('bulkRecipientCount')); setBulkLabel(text('bulkLabel'))
       setBulkMemberNames(text('bulkMemberNames')); setBulkNotes(text('bulkNotes')); setStyleLinks(text('styleLinks'))
       setStyleNotes(text('styleNotes')); setFitNote(text('fitNote')); setMeasurementChoice(text('measurementChoice') || firstMeasurementId)
@@ -14373,6 +14374,11 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
     setError(null)
     setSuccess(null)
     setCreatedOrderId(null)
+    if (wearerMode === 'GROUP' && !GROUP_ORDERS_ENABLED) {
+      setError('Group orders are not available yet. Send one custom request for one wearer, or contact Drapeon Support for a coordinated order.')
+      setWearerMode('SELF')
+      return
+    }
     const deadlineIso = dateInputToIso(deadline)
     const deadlineDate = deadlineIso ? new Date(deadlineIso) : null
     const normalizedRecipientPhone = needsDeliveryDetails ? normalizePhoneForStorage(recipientPhone) : ''
@@ -14863,7 +14869,7 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
               <select value={wearerMode} onChange={(event) => setWearerMode(event.target.value as typeof wearerMode)} className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm font-semibold text-ink outline-none focus:border-needle/50">
                 <option value="SELF">Me</option>
                 <option value="OTHER">Someone else</option>
-                <option value="GROUP">Group order</option>
+                {GROUP_ORDERS_ENABLED ? <option value="GROUP">Group order</option> : null}
               </select>
             </label>
             {wearerMode === 'OTHER' ? (

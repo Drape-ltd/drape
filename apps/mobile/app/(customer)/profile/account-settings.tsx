@@ -10,7 +10,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { goBackOrFallback } from '@/lib/navigation'
+import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import { useCurrency } from '@/lib/currency'
 
@@ -144,11 +144,14 @@ export default function AccountSettingsScreen() {
           <NavRow
             icon="trash-2"
             label="Delete account"
-            sublabel="Password confirmation required"
+            sublabel="Identity confirmation required"
             tone="destructive"
             onPress={() => router.push({
               pathname: '/(customer)/profile/delete-account',
-              params: { returnTo: '/(customer)/profile/account-settings' },
+              params: {
+                returnTo: '/(customer)/profile/account-settings',
+                historyChain: appendToHistory(undefined, '/(customer)/profile/account-settings'),
+              },
             } as never)}
           />
           <View style={styles.divider} />

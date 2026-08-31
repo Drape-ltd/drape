@@ -36,6 +36,16 @@
   - auth metadata role
   - profile existence/completion checks
 
+### Provider role intent and returning accounts
+
+- A customer/tailor choice attached to an Apple, Google, or email auth entry is a bootstrap hint for an account that does not have a role yet.
+- Signing in must not overwrite an established account role based on the auth button or landing page used. Returning users switch roles explicitly from account settings.
+- Mobile and web callbacks prefer the authenticated account's established role over cached route or browser intent.
+- Incomplete onboarding is resumable after sign-in and must always expose an exit. Customer and tailor setup provide a contextual back path, sign-out/switch-account, an explicit mode switch, and account deletion.
+- Customer and tailor setup keep a versioned, user-scoped device draft after authoritative profile data hydrates. Async upload, verification, connectivity failure, process death, or a deliberate exit must not erase completed text fields or the tailor's current setup section. Drafts are cleared only after the authoritative setup transition succeeds; temporary local media URIs are not treated as durable uploads.
+- Phone entry begins without an assumed country for a new number. A stored international number may restore its country, but users must otherwise choose a country code or enter a complete international number; Drapeon does not default a global account to Nigeria or the United States.
+- Account deletion remains reachable before profile setup is complete; route guards may not redirect deletion back into onboarding.
+
 ## Server Authorization Model
 
 - Edge functions authenticate callers by reading the bearer token and resolving the real user through Supabase Auth.
@@ -87,3 +97,5 @@ Before launch, verify:
 - service-role secrets never ship in client bundles
 - edge functions derive auth from bearer tokens, not request payload claims
 - password and recovery flows work on a fresh device and from signed-out state
+- a returning Apple/Google account keeps its established role regardless of which auth entry CTA is used
+- partial customer and tailor onboarding can exit, sign out, switch account, resume, and open deletion without a redirect loop

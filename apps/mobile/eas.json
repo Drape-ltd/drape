@@ -21,6 +21,7 @@
         "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "true",
         "EXPO_PUBLIC_DRAPE_VISION_UI_V2": "true",
         "EXPO_PUBLIC_DARK_THEME_V1": "false",
+        "EXPO_PUBLIC_GROUP_ORDERS_V1": "false",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
@@ -41,6 +42,7 @@
         "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "true",
         "EXPO_PUBLIC_DRAPE_VISION_UI_V2": "true",
         "EXPO_PUBLIC_DARK_THEME_V1": "false",
+        "EXPO_PUBLIC_GROUP_ORDERS_V1": "false",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
@@ -58,7 +60,8 @@
         "EXPO_PUBLIC_QUOTE_NEGOTIATION_V1": "true",
         "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "true",
         "EXPO_PUBLIC_DRAPE_VISION_UI_V2": "true",
-        "EXPO_PUBLIC_DARK_THEME_V1": "false"
+        "EXPO_PUBLIC_DARK_THEME_V1": "false",
+        "EXPO_PUBLIC_GROUP_ORDERS_V1": "false"
       },
       "ios": { "simulator": false },
       "android": { "buildType": "apk" }
@@ -77,7 +80,8 @@
         "EXPO_PUBLIC_QUOTE_NEGOTIATION_V1": "true",
         "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "true",
         "EXPO_PUBLIC_DRAPE_VISION_UI_V2": "true",
-        "EXPO_PUBLIC_DARK_THEME_V1": "false"
+        "EXPO_PUBLIC_DARK_THEME_V1": "false",
+        "EXPO_PUBLIC_GROUP_ORDERS_V1": "false"
       },
       "ios": { "simulator": false },
       "android": { "buildType": "app-bundle" },
@@ -96,7 +100,8 @@
         "EXPO_PUBLIC_QUOTE_NEGOTIATION_V1": "false",
         "EXPO_PUBLIC_CHAT_ORDER_ACTIONS_V1": "false",
         "EXPO_PUBLIC_DRAPE_VISION_UI_V2": "false",
-        "EXPO_PUBLIC_DARK_THEME_V1": "false"
+        "EXPO_PUBLIC_DARK_THEME_V1": "false",
+        "EXPO_PUBLIC_GROUP_ORDERS_V1": "false"
       },
       "android": { "buildType": "app-bundle" },
       "autoIncrement": true

@@ -1,9 +1,9 @@
 {
   "assetRoot": "assets/store-showcase",
   "reviewerCustomers": [
-    {"email": "review.apple@drapeon.co", "displayName": "Apple Reviewer", "defaultCurrency": "USD", "regionCode": "US"},
-    {"email": "review.google@drapeon.co", "displayName": "Google Reviewer", "defaultCurrency": "USD", "regionCode": "US"},
-    {"email": "review.spare@drapeon.co", "displayName": "Deletion Reviewer", "defaultCurrency": "USD", "regionCode": "US"}
+    {"email": "review.apple@drapeon.co", "displayName": "Apple Reviewer", "phone": "+12025550110", "defaultCurrency": "USD", "regionCode": "US"},
+    {"email": "review.google@drapeon.co", "displayName": "Google Reviewer", "phone": "+12025550111", "defaultCurrency": "USD", "regionCode": "US"},
+    {"email": "review.spare@drapeon.co", "displayName": "Deletion Reviewer", "phone": "+12025550112", "defaultCurrency": "USD", "regionCode": "US"}
   ],
   "tailors": [
     {
@@ -16,7 +16,41 @@
       "specialtyTags": ["Contemporary womenswear", "Alterations", "Bespoke"],
       "bio": "A contemporary studio focused on precise fit, architectural separates, and thoughtful alterations.",
       "avatarUrl": "https://media.example/alder-rue/avatar.jpg",
-      "portfolioUrls": ["https://media.example/alder-rue/01.jpg", "https://media.example/alder-rue/02.jpg", "https://media.example/alder-rue/03.jpg", "https://media.example/alder-rue/04.jpg", "https://media.example/alder-rue/05.jpg", "https://media.example/alder-rue/06.jpg"]
+      "portfolioUrls": ["https://media.example/alder-rue/01.jpg", "https://media.example/alder-rue/02.jpg", "https://media.example/alder-rue/03.jpg", "https://media.example/alder-rue/04.jpg", "https://media.example/alder-rue/05.jpg", "https://media.example/alder-rue/06.jpg"],
+      "shopItems": [
+        {
+          "title": "Ivory Atelier Waistcoat",
+          "description": "A softly structured ivory waistcoat cut for easy layering, with a clean V neckline, tonal buttons, and precise welt pockets.",
+          "category": "Waistcoat",
+          "sizes": ["XS", "S", "M", "L"],
+          "priceAmount": 22000,
+          "currency": "GBP",
+          "photoPaths": [
+            "assets/store-showcase/portfolio/alder-rue/06.png",
+            "assets/store-showcase/portfolio/alder-rue/04.png",
+            "assets/store-showcase/portfolio/alder-rue/03.png"
+          ],
+          "inventoryQuantity": 4,
+          "sizeInventory": {"XS": 1, "S": 1, "M": 1, "L": 1},
+          "sizeGuide": {
+            "version": 1,
+            "unit": "cm",
+            "fields": ["chest", "waist"],
+            "sizeRanges": {
+              "XS": {"chest": {"min": 81, "max": 84}, "waist": {"min": 63, "max": 66}},
+              "S": {"chest": {"min": 85, "max": 88}, "waist": {"min": 67, "max": 70}},
+              "M": {"chest": {"min": 89, "max": 94}, "waist": {"min": 71, "max": 76}},
+              "L": {"chest": {"min": 95, "max": 100}, "waist": {"min": 77, "max": 82}}
+            },
+            "fitNotes": "Tailored close to the body with light ease through the waist.",
+            "stretchNotes": "Woven cloth with no stretch.",
+            "sizeAdvice": "ASK_SELLER"
+          },
+          "pickupAvailable": true,
+          "deliveryAvailable": true,
+          "shippingAvailable": true
+        }
+      ]
     },
     {
       "key": "maison-elara-paris",

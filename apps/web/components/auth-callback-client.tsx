@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
+import { resolveAuthenticatedRole } from '@drape/shared/auth-role'
 import { createClient } from '../lib/supabase'
 import {
   bootstrapWebOnboarding,
@@ -130,26 +131,48 @@ export function AuthCallbackClient(): React.JSX.Element {
 
         const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
         const metadataRole = data.user.user_metadata?.role
-        const role =
-          onboarding?.role ??
-          (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR' ? roleIntent : null) ??
-          (metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR' ? metadataRole : null)
+        const { data: roleMirror } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', data.user.id)
+          .maybeSingle()
+        const establishedRole = metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
+          ? metadataRole
+          : roleMirror?.role
+        const role = resolveAuthenticatedRole({
+          establishedRole,
+          onboardingRole: onboarding?.role,
+          entryIntent: roleIntent,
+        })
+        const matchingOnboarding = onboarding?.role === role ? onboarding : null
+
+        if (!role) {
+          window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+          window.localStorage.removeItem('drapeon.web.auth.onboarding')
+          markWebSessionScope(true)
+          if (active) {
+            setFailed(false)
+            setMessage('Choose how you will use Drapeon…')
+            router.replace(`/account/choose-role?next=${encodeURIComponent(next)}` as Route)
+          }
+          return
+        }
 
         if (role) {
           const { error: metadataError } = await supabase.auth.updateUser({
             data: {
               role,
-              display_name: onboarding?.displayName,
-              phone: onboarding?.phone,
-              web_onboarding: onboarding ?? undefined,
+              display_name: matchingOnboarding?.displayName,
+              phone: matchingOnboarding?.phone,
+              web_onboarding: matchingOnboarding ?? undefined,
             },
           })
           if (metadataError) throw metadataError
 
-          if (onboarding) {
+          if (matchingOnboarding) {
             await bootstrapWebOnboarding(supabase, {
               userId: data.user.id,
-              onboarding,
+              onboarding: matchingOnboarding,
             })
           } else {
             await syncRoleMirror(role)

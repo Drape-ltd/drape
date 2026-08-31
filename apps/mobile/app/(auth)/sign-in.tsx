@@ -6,7 +6,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  ScrollView,
   KeyboardAvoidingView,
   Linking,
 } from 'react-native'
@@ -18,7 +17,7 @@ import { capture } from '@/lib/analytics'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
-import { Button, Input, Divider } from '@/components/ui'
+import { Button, Input, Divider, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
 import { colors } from '@drape/shared/design-system'
@@ -171,7 +170,7 @@ export default function SignInScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
@@ -189,7 +188,7 @@ export default function SignInScreen() {
               <Text style={styles.formEyebrow}>Your account</Text>
               <Text style={styles.formTitle}>
                 {intentLabel
-                  ? `Use your email or a connected account. We’ll open the ${intentLabel} side after sign in.`
+                  ? `Use your email or a connected account. New accounts can start on the ${intentLabel} side; returning accounts keep their current workspace.`
                   : 'Use your email or a connected account.'}
               </Text>
             </View>
@@ -205,6 +204,8 @@ export default function SignInScreen() {
               onBlur={() => validateEmail(email)}
               error={emailError}
               keyboardType="email-address"
+              textContentType="username"
+              autoComplete="email"
               autoCapitalize="none"
               autoCorrect={false}
               required
@@ -303,12 +304,12 @@ export default function SignInScreen() {
               <Text style={styles.nextEyebrow}>Protected access</Text>
               <Text style={styles.nextTitle}>
                 {intentLabel
-                  ? `If this account has not used the ${intentLabel} side yet, we’ll take you to setup first.`
+                  ? `If this account is new, we’ll start ${intentLabel} setup. Returning accounts resume their established workspace.`
                   : 'We’ll return you to the right side of your account after sign in.'}
               </Text>
             </View>
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )

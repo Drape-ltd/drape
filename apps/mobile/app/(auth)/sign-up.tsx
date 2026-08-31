@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Alert,
   KeyboardAvoidingView,
-  ScrollView,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -17,7 +16,7 @@ import { capture } from '@/lib/analytics'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
-import { Button, Input, Divider } from '@/components/ui'
+import { Button, Input, Divider, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 import { colors } from '@drape/shared/design-system'
 import { validateDisplayName } from '@drape/shared/contact-filter'
@@ -186,9 +185,8 @@ export default function SignUpScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           <AuthEntryHeader
@@ -283,6 +281,8 @@ export default function SignUpScreen() {
               filterContact
               required
               autoCapitalize="words"
+              textContentType="name"
+              autoComplete="name"
               testID="display-name-input"
             />
 
@@ -297,6 +297,8 @@ export default function SignUpScreen() {
               onBlur={() => validateEmail(email)}
               error={emailError}
               keyboardType="email-address"
+              textContentType="emailAddress"
+              autoComplete="email"
               autoCapitalize="none"
               autoCorrect={false}
               required
@@ -419,7 +421,7 @@ export default function SignUpScreen() {
               </Text>
             </Text>
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )

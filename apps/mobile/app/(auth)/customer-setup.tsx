@@ -18,6 +18,7 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -35,15 +36,17 @@ import {
 } from '@/lib/account-profile-actions'
 import { Sentry } from '@/lib/sentry'
 import { useKeyboardState } from '@/lib/useKeyboardState'
+import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { hapticSuccess, hapticWarning } from '@/lib/haptics'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
+import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import {
   SUPPORTED_CURRENCIES,
   detectDeviceCurrencyPreference,
   fetchCurrencyPreferenceContext,
   type CurrencyCode,
 } from '@/lib/currency'
-import { Button, ChoiceSheet, Input, PhoneNumberInput } from '@/components/ui'
+import { Button, ChoiceSheet, Input, KeyboardAwareScrollView, PhoneNumberInput } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import {
   DRAPE_FLOATING_ACTION_DOCK_CLEARANCE,
@@ -94,8 +97,13 @@ const GARMENT_OPTIONS: Array<{ value: GarmentContext; label: string; hint: strin
 ]
 
 const PHONE_AVAILABILITY_DEBOUNCE_MS = 650
+const CUSTOMER_SETUP_DRAFT_VERSION = 1
 const ERROR_SCROLL_TOP_OFFSET = 92
 const ERROR_SCROLL_DELAY_MS = 140
+
+function customerSetupDraftKey(userId: string) {
+  return `drape:customer-setup-draft:v${CUSTOMER_SETUP_DRAFT_VERSION}:${userId}`
+}
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true)
@@ -126,7 +134,7 @@ function customerSetupSaveMessage(error: unknown) {
 
 export default function CustomerSetupScreen() {
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, signOut, switchRole } = useAuth()
   const keyboard = useKeyboardState()
   const { compact: actionDockCompact } = useDrapeCapsuleNavMotion()
   const actionDockScroll = useDrapeCapsuleNavScroll()
@@ -172,32 +180,80 @@ export default function CustomerSetupScreen() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [focusedTextField, setFocusedTextField] = useState<string | null>(null)
+  const [leavingSetup, setLeavingSetup] = useState(false)
+  const [draftHydrated, setDraftHydrated] = useState(false)
   const latestPhoneRef = useRef(phone)
   const phoneAvailabilityRequestRef = useRef(0)
   const verifiedPhoneRef = useRef(verifiedPhone)
   const phoneOtpAfterVerifyRef = useRef<'save' | null>(null)
 
+  const handleSignOut = useCallback(async () => {
+    if (leavingSetup) return
+    setLeavingSetup(true)
+    try {
+      await signOut()
+    } catch {
+      Alert.alert('Could not sign out', 'Please try again in a moment.')
+    } finally {
+      setLeavingSetup(false)
+    }
+  }, [leavingSetup, signOut])
+
+  const handleUseTailorInstead = useCallback(async () => {
+    if (leavingSetup) return
+    setLeavingSetup(true)
+    try {
+      const result = await switchRole('TAILOR')
+      if (result.error) {
+        Alert.alert('Could not switch modes', result.error)
+        return
+      }
+      resetTo(router, '/(tailor)/profile/setup')
+    } finally {
+      setLeavingSetup(false)
+    }
+  }, [leavingSetup, router, switchRole])
+
+  const leaveSetup = useCallback(() => {
+    if (saving || leavingSetup) return
+    Alert.alert(
+      'Leave customer setup?',
+      'You can return later. Choose another Drapeon mode or switch accounts now.',
+      [
+        { text: 'Stay here', style: 'cancel' },
+        { text: 'Use tailor instead', onPress: () => { void handleUseTailorInstead() } },
+        { text: 'Sign out', onPress: () => { void handleSignOut() } },
+      ]
+    )
+  }, [handleSignOut, handleUseTailorInstead, leavingSetup, saving])
+
+  useContextualBackHandler(leaveSetup)
+
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
 
-    void fetchCurrencyPreferenceContext().then((resolved) => {
+    void Promise.all([
+      fetchCurrencyPreferenceContext(),
+      supabase
+        .from('customer_profiles')
+        .select('display_name, phone, unit_preference, garment_context, measurements, avatar_url')
+        .eq('user_id', user.id)
+        .maybeSingle(),
+      supabase
+        .from('users')
+        .select('default_currency, currency_source, region_code')
+        .eq('id', user.id)
+        .maybeSingle(),
+      AsyncStorage.getItem(customerSetupDraftKey(user.id)),
+    ]).then(([resolved, profileResult, currencyResult, storedDraft]) => {
       if (cancelled) return
       setDefaultCurrency(resolved.currency)
       setCurrencySource(resolved.source)
       setRegionCode(resolved.regionCode)
-    })
 
-    supabase
-      .from('customer_profiles')
-      .select('display_name, phone, unit_preference, garment_context, measurements, avatar_url')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (cancelled) return
-        if (error || !data) return
-
-        const row = data as CustomerSetupProfileRow
+      if (!profileResult.error && profileResult.data) {
+        const row = profileResult.data as CustomerSetupProfileRow
         const measurements = row.measurements ?? {}
         const nextDisplayName = row.display_name ?? oauthName
         const nextPhone = row.phone ?? oauthPhone
@@ -221,18 +277,10 @@ export default function CustomerSetupScreen() {
         if (typeof row.avatar_url === 'string' && row.avatar_url.trim().length > 0) {
           setAvatarUrl(row.avatar_url.trim())
         }
-      })
+      }
 
-    supabase
-      .from('users')
-      .select('default_currency, currency_source, region_code')
-      .eq('id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (cancelled) return
-        if (error || !data) return
-
-        const row = data as UserCurrencyRow
+      if (!currencyResult.error && currencyResult.data) {
+        const row = currencyResult.data as UserCurrencyRow
         const nextCurrency =
           typeof row.default_currency === 'string'
             ? SUPPORTED_CURRENCIES.find((item) => item.code === row.default_currency)
@@ -247,12 +295,59 @@ export default function CustomerSetupScreen() {
         if (typeof row.region_code === 'string' && row.region_code.trim().length > 0) {
           setRegionCode(row.region_code.trim().toUpperCase())
         }
-      })
+      }
+
+      if (storedDraft) {
+        const draft = JSON.parse(storedDraft) as Record<string, unknown>
+        if (draft.version === CUSTOMER_SETUP_DRAFT_VERSION) {
+          if (typeof draft.displayName === 'string') setDisplayName(draft.displayName)
+          if (typeof draft.phone === 'string') setPhone(draft.phone)
+          if (draft.unit === 'in' || draft.unit === 'cm') setUnit(draft.unit)
+          const nextGarmentContext = normalizeGarmentContext(draft.garmentContext)
+          if (nextGarmentContext) setGarmentContext(nextGarmentContext)
+          if (typeof draft.defaultCurrency === 'string' && SUPPORTED_CURRENCIES.some((item) => item.code === draft.defaultCurrency)) {
+            setDefaultCurrency(draft.defaultCurrency as CurrencyCode)
+          }
+          if (typeof draft.currencySource === 'string') setCurrencySource(draft.currencySource as typeof currencySource)
+          if (typeof draft.regionCode === 'string') setRegionCode(draft.regionCode)
+          if (typeof draft.avatarUrl === 'string' || draft.avatarUrl === null) setAvatarUrl(draft.avatarUrl)
+        }
+      }
+    }).catch((error) => {
+      Sentry.captureException(error, { extra: { context: 'customer_setup_draft_restore', userId: user.id } })
+    }).finally(() => {
+      if (!cancelled) setDraftHydrated(true)
+    })
 
     return () => {
       cancelled = true
     }
   }, [user?.id, oauthName, oauthPhone])
+
+  useEffect(() => {
+    if (!user?.id || !draftHydrated) return
+    const timer = setTimeout(() => {
+      const draft = {
+        version: CUSTOMER_SETUP_DRAFT_VERSION,
+        updatedAt: new Date().toISOString(),
+        displayName,
+        phone,
+        unit,
+        garmentContext,
+        defaultCurrency,
+        currencySource,
+        regionCode,
+        avatarUrl,
+      }
+      void AsyncStorage.setItem(customerSetupDraftKey(user.id), JSON.stringify(draft)).catch((error) => {
+        Sentry.captureException(error, { extra: { context: 'customer_setup_draft_save', userId: user.id } })
+      })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [
+    avatarUrl, currencySource, defaultCurrency, displayName, draftHydrated,
+    garmentContext, phone, regionCode, unit, user?.id,
+  ])
 
   function handleAvatarPress() {
     Alert.alert('Profile photo', 'Take a photo now or choose one from your library.', [
@@ -617,10 +712,25 @@ export default function CustomerSetupScreen() {
       garment_context: garmentContext,
       unit,
     })
+    if (user?.id) {
+      await AsyncStorage.removeItem(customerSetupDraftKey(user.id)).catch((draftError) => {
+        Sentry.captureException(draftError, {
+          extra: { context: 'customer_setup_draft_clear', userId: user.id },
+        })
+      })
+    }
     resetTo(router, { pathname: '/(auth)/onboarding', params: { role: 'CUSTOMER', userId: user?.id ?? '' } })
   }
 
   const editingLayoutActive = keyboard.visible || focusedTextField !== null
+  const customerSetupBlockingNote = validateDisplayName(displayName)
+    ? 'Add a valid display name to continue.'
+    : phoneValidationMessage(phone)
+      ? 'Add a valid international phone number to continue.'
+      : !garmentContext
+        ? 'Choose what you typically order to continue.'
+        : ''
+  const customerSetupBlocked = customerSetupBlockingNote.length > 0
   const scrollBottomPadding =
     DRAPE_FLOATING_ACTION_DOCK_CLEARANCE + (editingLayoutActive ? Spacing.lg : Spacing.xxxl)
 
@@ -644,7 +754,12 @@ export default function CustomerSetupScreen() {
         style={styles.keyboardAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView
+        <View style={styles.header}>
+          <AuthBackButton onPress={leaveSetup} />
+          <Text style={styles.headerLabel}>Customer setup</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <KeyboardAwareScrollView
           ref={scrollRef}
           style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
@@ -722,6 +837,8 @@ export default function CustomerSetupScreen() {
                   error={nameError}
                   required
                   autoCapitalize="words"
+                  textContentType="name"
+                  autoComplete="name"
                   hint="This is shown to tailors on your orders."
                 />
               </View>
@@ -840,10 +957,45 @@ export default function CustomerSetupScreen() {
               </TouchableOpacity>
             </View>
 
-            {saveError && !editingLayoutActive ? <Text style={styles.saveError}>{saveError}</Text> : null}
-            {validationNotice ? <Text style={styles.saveError}>{validationNotice}</Text> : null}
+            {saveError && !editingLayoutActive ? (
+              <Text style={styles.saveError} accessibilityRole="alert">{saveError}</Text>
+            ) : null}
+            {validationNotice ? (
+              <Text style={styles.validationNotice} accessibilityLiveRegion="polite">{validationNotice}</Text>
+            ) : null}
+            {customerSetupBlockingNote ? (
+              <Text style={styles.actionBlockingNote} accessibilityLiveRegion="polite">
+                {customerSetupBlockingNote}
+              </Text>
+            ) : null}
+
+            {!editingLayoutActive ? (
+              <View style={styles.setupExitLinks}>
+                <TouchableOpacity
+                  onPress={() => { void handleUseTailorInstead() }}
+                  disabled={saving || leavingSetup}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.modeSwitchText}>Use Drapeon as a tailor instead</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { void handleSignOut() }}
+                  disabled={saving || leavingSetup}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.signOutText}>Sign out or switch account</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => router.push('/(customer)/profile/delete-account')}
+                  disabled={saving || leavingSetup}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.deleteAccountText}>Delete this account</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
 
         <DrapeFloatingActionDock
           compactWidth={76}
@@ -854,7 +1006,7 @@ export default function CustomerSetupScreen() {
           {actionDockCompact || editingLayoutActive ? (
             <DrapeIconButton
               icon="arrow-right"
-              accessibilityLabel="Continue to Drapeon"
+              accessibilityLabel="Save customer setup and continue"
               tone="primary"
               style={styles.actionDockIcon}
               onPress={() => { void save() }}
@@ -863,12 +1015,14 @@ export default function CustomerSetupScreen() {
                 uploadingAvatar ||
                 phoneAvailabilityChecking ||
                 phoneOtpSending ||
-                phoneOtpVerifying
+                phoneOtpVerifying ||
+                customerSetupBlocked
               }
             />
           ) : (
             <DrapeCapsuleButton
-              label="Continue to Drapeon"
+              label="Save and continue"
+              accessibilityLabel="Save customer setup and continue"
               icon="arrow-right"
               style={styles.actionDockButton}
               onPress={() => { void save() }}
@@ -878,7 +1032,8 @@ export default function CustomerSetupScreen() {
                 uploadingAvatar ||
                 phoneAvailabilityChecking ||
                 phoneOtpSending ||
-                phoneOtpVerifying
+                phoneOtpVerifying ||
+                customerSetupBlocked
               }
             />
           )}
@@ -977,7 +1132,7 @@ function PhoneOtpModal({
             <View style={styles.otpIcon}>
               <Feather name="shield" size={18} color={Colors.needleGreen} />
             </View>
-            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityLabel="Close phone verification">
+            <TouchableOpacity style={styles.otpClose} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close phone verification">
               <Feather name="x" size={20} color={Colors.midGrey} />
             </TouchableOpacity>
           </View>
@@ -995,10 +1150,11 @@ function PhoneOtpModal({
             autoComplete="sms-otp"
             maxLength={6}
             style={[styles.otpInput, !!error && styles.otpInputError]}
+            accessibilityLabel="Phone verification code"
             editable={!verifying}
             autoFocus
           />
-          {!!error && <Text style={styles.otpError}>{error}</Text>}
+          {!!error && <Text style={styles.otpError} accessibilityRole="alert">{error}</Text>}
           <View style={styles.otpActions}>
             <Button
               label="Verify code"
@@ -1024,6 +1180,19 @@ function PhoneOtpModal({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
+  header: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.xl,
+  },
+  headerLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+  },
+  headerSpacer: { width: 40 },
   otpOverlay: {
     flex: 1,
     justifyContent: 'center',
@@ -1348,5 +1517,37 @@ const styles = StyleSheet.create({
     color: Colors.error,
     marginBottom: Spacing.sm,
     textAlign: 'center',
+  },
+  validationNotice: {
+    color: Colors.needleGreenDark,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  actionBlockingNote: {
+    color: Colors.inkLight,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  setupExitLinks: {
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingTop: Spacing.sm,
+  },
+  modeSwitchText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  signOutText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
+  deleteAccountText: {
+    fontSize: FontSize.sm,
+    color: Colors.error,
+    fontWeight: FontWeight.medium,
   },
 })

@@ -1,5 +1,7 @@
 # Drape Internal Control Plane
 
+> This document records the original control-plane foundation. The canonical post-submission redesign is [Drapeon Ops Control Plane — Post-Submission Rebuild](./drapeon-ops-control-plane-post-submission-rebuild.md).
+
 This document defines the internal operating system for Drape. The public website remains a marketing and intake surface. The control plane is the protected internal web app where Drape resolves trust, support, dispatch, payout, verification, deletion, and workflow issues with auditability.
 
 ## Goals
