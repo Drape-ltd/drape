@@ -13,7 +13,9 @@ export const metadata: Metadata = buildMetadata({
   path: '/explore',
 })
 
-type ExplorePageProps = { searchParams: Promise<{ q?: string; mode?: string }> }
+type ExplorePageProps = { searchParams: Promise<{ q?: string; mode?: string; page?: string }> }
+
+const EXPLORE_PAGE_SIZE = 20
 
 function MakerCard({ tailor, priority = false }: { tailor: PublicTailor; priority?: boolean }) {
   const image = tailor.portfolioPhotos[0] ?? tailor.avatarUrl
@@ -35,9 +37,14 @@ function MakerCard({ tailor, priority = false }: { tailor: PublicTailor; priorit
 
 export default async function ExplorePage({ searchParams }: ExplorePageProps): Promise<React.JSX.Element> {
   const params = await searchParams
-  const query = params.q?.trim().toLowerCase() ?? ''
+  const rawQuery = params.q?.trim().slice(0, 80) ?? ''
+  const query = rawQuery.toLowerCase()
   const mode = params.mode === 'custom' || params.mode === 'ready-made' ? params.mode : 'all'
-  const tailors = await getApprovedPublicTailors()
+  const requestedPage = Number.parseInt(params.page ?? '1', 10)
+  const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1
+  const pageRows = await getApprovedPublicTailors(EXPLORE_PAGE_SIZE + 1, (page - 1) * EXPLORE_PAGE_SIZE, rawQuery)
+  const hasNextPage = pageRows.length > EXPLORE_PAGE_SIZE
+  const tailors = pageRows.slice(0, EXPLORE_PAGE_SIZE)
   const filtered = tailors.filter((tailor) => {
     const text = [tailor.displayName, tailor.businessName, tailor.location].join(' ').toLowerCase()
     if (query && !text.includes(query)) return false
@@ -50,6 +57,14 @@ export default async function ExplorePage({ searchParams }: ExplorePageProps): P
     { value: 'custom', label: 'Custom orders', icon: Shirt, count: tailors.filter((tailor) => tailor.acceptsCustomOrders).length },
     { value: 'ready-made', label: 'Ready-made', icon: ShoppingBag, count: tailors.filter((tailor) => tailor.supportsReadyMade).length },
   ] as const
+  const pageHref = (nextPage: number) => {
+    const nextParams = new URLSearchParams()
+    if (rawQuery) nextParams.set('q', rawQuery)
+    if (mode !== 'all') nextParams.set('mode', mode)
+    if (nextPage > 1) nextParams.set('page', String(nextPage))
+    const suffix = nextParams.toString()
+    return `${suffix ? `/explore?${suffix}` : '/explore'}` as Route
+  }
 
   return (
     <main className="min-h-screen bg-[#f4f0e8] text-ink">
@@ -92,7 +107,7 @@ export default async function ExplorePage({ searchParams }: ExplorePageProps): P
         <div className="min-w-0">
           <div className="mb-6 flex items-center justify-between gap-4">
             <p className="text-sm font-medium">{query ? `${filtered.length} result${filtered.length === 1 ? '' : 's'}` : 'Available now'}</p>
-            <p className="text-xs text-ink/48">{tailors.length} approved maker{tailors.length === 1 ? '' : 's'}</p>
+            <p className="text-xs text-ink/48">Page {page}</p>
           </div>
         {filtered.length === 0 ? (
           <div className="grid min-h-72 place-items-center rounded-[16px] border border-ink/8 bg-[#faf8f3] px-6 text-center">
@@ -103,6 +118,12 @@ export default async function ExplorePage({ searchParams }: ExplorePageProps): P
             {filtered.map((tailor, index) => <MakerCard key={tailor.id} tailor={tailor} priority={index < 3} />)}
           </div>
         )}
+        {page > 1 || hasNextPage ? (
+          <nav className="mt-10 flex items-center justify-between border-t border-ink/10 pt-5" aria-label="Explore pages">
+            {page > 1 ? <Link href={pageHref(page - 1)} className="inline-flex h-9 items-center rounded-full border border-ink/15 px-4 text-xs font-semibold hover:bg-white/60">Previous</Link> : <span />}
+            {hasNextPage ? <Link href={pageHref(page + 1)} className="inline-flex h-9 items-center gap-2 rounded-full bg-ink px-4 text-xs font-semibold text-white hover:bg-ink/90">More makers <ArrowRight aria-hidden="true" size={14} /></Link> : null}
+          </nav>
+        ) : null}
         </div>
       </section>
 

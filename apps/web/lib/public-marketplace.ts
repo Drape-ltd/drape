@@ -226,9 +226,18 @@ function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
   }
 }
 
-async function readApprovedPublicTailors(): Promise<PublicTailor[]> {
-  return cachedPublicRead('approved-tailors-v4', 60, async () => {
-    const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({ action: 'explore-tailors', limit: 40 })
+async function readApprovedPublicTailors(limit = 40, offset = 0, query = ''): Promise<PublicTailor[]> {
+  const safeLimit = Math.max(1, Math.min(40, Math.trunc(limit)))
+  const safeOffset = Math.max(0, Math.trunc(offset))
+  const safeQuery = query.trim().slice(0, 80)
+  const cacheKey = `approved-tailors-v5:${safeLimit}:${safeOffset}:${encodeURIComponent(safeQuery)}`
+  return cachedPublicRead(cacheKey, 60, async () => {
+    const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({
+      action: 'explore-tailors',
+      limit: safeLimit,
+      offset: safeOffset,
+      ...(safeQuery ? { query: safeQuery } : {}),
+    })
     if (!rows) throw new PublicReadGatewayError('Public tailor list response did not contain data.')
     return rows.flatMap((row) => {
       const tailor = mapGatewayTailor(row)
