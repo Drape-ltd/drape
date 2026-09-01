@@ -14,6 +14,7 @@ import {
   TextInput,
   RefreshControl,
   BackHandler,
+  AppState,
   type StyleProp,
   type ImageStyle,
   type ViewStyle,
@@ -1682,12 +1683,10 @@ export default function OrderTrackingScreen() {
     }, [])
   )
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (!id || !user?.id) return
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
-    const pollTimer = setInterval(() => {
-      scheduleSilentRefresh()
-    }, ORDER_DETAIL_POLL_INTERVAL_MS)
+    let pollTimer: ReturnType<typeof setInterval> | null = null
 
     const scheduleSilentRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
@@ -1695,6 +1694,25 @@ export default function OrderTrackingScreen() {
         void fetchOrder({ silent: true })
       }, 250)
     }
+
+    const startPolling = () => {
+      if (pollTimer || AppState.currentState !== 'active') return
+      pollTimer = setInterval(scheduleSilentRefresh, ORDER_DETAIL_POLL_INTERVAL_MS)
+    }
+    const stopPolling = () => {
+      if (!pollTimer) return
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        scheduleSilentRefresh()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    })
+    startPolling()
 
     const channel = supabase
       .channel(`customer-order-detail:${id}`)
@@ -1742,10 +1760,11 @@ export default function OrderTrackingScreen() {
 
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
-      clearInterval(pollTimer)
+      stopPolling()
+      appStateSubscription.remove()
       void supabase.removeChannel(channel)
     }
-  }, [fetchOrder, id, user?.id])
+  }, [fetchOrder, id, user?.id]))
 
   async function markHandoffIssueResolved() {
     if (!handoffIssue || resolvingHandoffIssue) return
@@ -7442,12 +7461,27 @@ function QuoteReviewScreen({
       const refresh = () => {
         void Promise.all([onActionRef.current(), fetchOpenRevision()])
       }
-      refresh()
-      const poll = setInterval(refresh, 15_000)
+      let poll: ReturnType<typeof setInterval> | null = null
+      const startPolling = () => {
+        if (poll || AppState.currentState !== 'active') return
+        refresh()
+        poll = setInterval(refresh, 60_000)
+      }
+      const stopPolling = () => {
+        if (!poll) return
+        clearInterval(poll)
+        poll = null
+      }
+      const appStateSubscription = AppState.addEventListener('change', (state) => {
+        if (state === 'active') startPolling()
+        else stopPolling()
+      })
+      startPolling()
 
       return () => {
         backSubscription.remove()
-        clearInterval(poll)
+        stopPolling()
+        appStateSubscription.remove()
       }
     }, [fetchOpenRevision, goBack]),
   )

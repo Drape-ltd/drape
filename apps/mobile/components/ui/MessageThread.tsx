@@ -73,6 +73,7 @@ import {
 import {
   ALLOWED_IMAGE_CONTENT_TYPES,
   ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_CACHE_CONTROL_SECONDS,
   MEDIA_LIMITS_BYTES,
   MEDIA_LIMITS_SECONDS,
   OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
@@ -1180,14 +1181,22 @@ export function MessageThread({
   useEffect(() => {
     if (!CHAT_ORDER_ACTIONS_ENABLED || orderKind !== 'CUSTOM') return undefined
 
-    const initialLoad = setTimeout(() => {
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+    const startPolling = () => {
+      if (pollTimer || AppState.currentState !== 'active') return
       void fetchOrderConversationState()
-    }, 0)
-    const pollTimer = setInterval(() => {
-      void fetchOrderConversationState()
-    }, 15_000)
+      pollTimer = setInterval(() => {
+        void fetchOrderConversationState()
+      }, 60_000)
+    }
+    const stopPolling = () => {
+      if (!pollTimer) return
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
     const appStateSub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') void fetchOrderConversationState()
+      if (nextState === 'active') startPolling()
+      else stopPolling()
     })
     const channel = supabase
       .channel(`order-conversation:${orderId}`)
@@ -1208,9 +1217,10 @@ export function MessageThread({
       )
       .subscribe()
 
+    startPolling()
+
     return () => {
-      clearTimeout(initialLoad)
-      clearInterval(pollTimer)
+      stopPolling()
       appStateSub.remove()
       void supabase.removeChannel(channel)
     }
@@ -1483,7 +1493,7 @@ export function MessageThread({
           })
           const { error: uploadError } = await supabase.storage
             .from('message-media')
-            .upload(filename, payload.data, { contentType })
+            .upload(filename, payload.data, { contentType, cacheControl: MEDIA_CACHE_CONTROL_SECONDS.private })
           if (uploadError) throw uploadError
 
           const { error: insertError } = await invokeFunction('message-action', {
@@ -1638,7 +1648,7 @@ export function MessageThread({
         Alert.alert('Recording too large', 'Voice notes must be under 25 MB.')
         return
       }
-      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/mp4' })
+      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/mp4', cacheControl: MEDIA_CACHE_CONTROL_SECONDS.private })
       if (uploadError) throw uploadError
 
       const { error: insertError } = await invokeFunction('message-action', {

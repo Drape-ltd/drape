@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
+  Alert, AppState, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
   type ImageStyle, type StyleProp, type ViewStyle,
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
@@ -1468,9 +1468,10 @@ export default function TailorOrderDetailScreen() {
     }, [fetchOrder]),
   )
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (!id || !userId) return
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
 
     const scheduleSilentRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
@@ -1479,7 +1480,24 @@ export default function TailorOrderDetailScreen() {
       }, 250)
     }
 
-    const pollTimer = setInterval(scheduleSilentRefresh, ORDER_DETAIL_POLL_INTERVAL_MS)
+    const startPolling = () => {
+      if (pollTimer || AppState.currentState !== 'active') return
+      pollTimer = setInterval(scheduleSilentRefresh, ORDER_DETAIL_POLL_INTERVAL_MS)
+    }
+    const stopPolling = () => {
+      if (!pollTimer) return
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        scheduleSilentRefresh()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    })
+    startPolling()
     const channel = supabase
       .channel(`tailor-order-detail:${id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` }, scheduleSilentRefresh)
@@ -1492,10 +1510,11 @@ export default function TailorOrderDetailScreen() {
 
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
-      clearInterval(pollTimer)
+      stopPolling()
+      appStateSubscription.remove()
       void supabase.removeChannel(channel)
     }
-  }, [fetchOrder, id, userId])
+  }, [fetchOrder, id, userId]))
 
   useEffect(() => {
     if (!order || !isTerminalOrderStage(order.stage)) return

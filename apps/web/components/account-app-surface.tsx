@@ -208,6 +208,7 @@ import {
   ALLOWED_VIDEO_CONTENT_TYPES,
   MEDIA_LIMITS_BYTES,
   MEDIA_LIMITS_SECONDS,
+  MEDIA_CACHE_CONTROL_SECONDS,
   OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE,
   VIDEO_DURATION_LIMIT_MESSAGE,
   isVideoMediaUrl,
@@ -218,6 +219,7 @@ import type { BriefDossierRow, BriefDossierSection } from '@drape/shared/order-b
 import { createClient } from '../lib/supabase'
 import { safeEntityName, safeUserText } from '../lib/safe-display'
 import { signOutWebSession } from '../lib/web-auth-session'
+import { WEB_ACCOUNT_CACHE_INVALIDATE_EVENT } from '../lib/web-account-cache-events'
 import { registerWebPushSubscription } from '../lib/web-push-client'
 import { useSessionTimeout } from '../hooks/use-session-timeout'
 import { AccountContextProvider, useAccountContext, type AccountContextValue } from './account-context'
@@ -3848,6 +3850,7 @@ async function uploadPublicFileWithLocation(bucket: string, pathPrefix: string, 
   const filePath = `${pathPrefix}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
   const { error } = await supabase.storage.from(bucket).upload(filePath, file, {
     contentType: file.type || 'application/octet-stream',
+    cacheControl: MEDIA_CACHE_CONTROL_SECONDS.publicImmutable,
     upsert: false,
   })
   if (error) throw new Error('The media could not upload. Try a smaller file.')
@@ -3860,6 +3863,7 @@ async function uploadPrivateFile(bucket: string, pathPrefix: string, file: File)
   const filePath = `${pathPrefix}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
   const { error } = await supabase.storage.from(bucket).upload(filePath, file, {
     contentType: file.type || 'application/octet-stream',
+    cacheControl: MEDIA_CACHE_CONTROL_SECONDS.private,
     upsert: false,
   })
   if (error) throw new Error('The media could not upload. Try a smaller file.')
@@ -20026,12 +20030,15 @@ function IdentityHandoffCard({
       )
       .subscribe()
 
-    const interval = window.setInterval(() => {
-      void checkLatestStatus()
-    }, 5000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void checkLatestStatus()
+    }
+    const interval = window.setInterval(refreshWhenVisible, 30_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
       window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
       void supabase.removeChannel(channel)
     }
   }, [checkLatestStatus, onRefresh, pending, session, userId, verified])
@@ -21527,6 +21534,15 @@ export function AccountAppSurface({
   tailorId?: string
   itemId?: string
 }): React.JSX.Element {
+  useEffect(() => {
+    const clearAccountCaches = () => {
+      _shellCache.clear()
+      _lastKnownSession = null
+    }
+    window.addEventListener(WEB_ACCOUNT_CACHE_INVALIDATE_EVENT, clearAccountCaches)
+    return () => window.removeEventListener(WEB_ACCOUNT_CACHE_INVALIDATE_EVENT, clearAccountCaches)
+  }, [])
+
   const [cachedSnapshot] = useState(readCachedShellSnapshot)
   const [session, setSession] = useState<Session | null>(cachedSnapshot?.session ?? null)
   const [data, setData] = useState<AccountBaseData>(cachedSnapshot ? accountDataFromShell(cachedSnapshot.shellData) : emptyData)

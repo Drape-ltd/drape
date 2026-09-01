@@ -13,6 +13,7 @@ import {
   webOnboardingFromUser,
 } from '../lib/account-bootstrap'
 import { signOutWebSession } from '../lib/web-auth-session'
+import { invalidateWebAccountCaches } from '../lib/web-account-cache-events'
 import { GettingStartedCard } from './getting-started-card'
 import { StatusChip } from './ui/status-chip'
 
@@ -608,6 +609,7 @@ export function AccountDashboard(): React.JSX.Element {
         .eq('id', session.user.id)
     }
     const { data } = await supabase.auth.refreshSession()
+    invalidateWebAccountCaches('role-change')
     setSession(data.session)
     setSavingRole(null)
   }

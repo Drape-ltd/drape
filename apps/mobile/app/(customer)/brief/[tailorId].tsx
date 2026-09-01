@@ -92,6 +92,7 @@ import {
   FABRIC_SUBSTITUTION_OPTIONS,
   MEDIA_LIMITS_BYTES,
   MEDIA_LIMITS_SECONDS,
+  MEDIA_CACHE_CONTROL_SECONDS,
   ORDER_CANCELLATION_ACK_COPY,
   ORDER_CANCELLATION_POLICY_ROWS,
   customOrderDefaultDeadline,
@@ -1410,7 +1411,7 @@ export default function OrderBriefScreen() {
     const path = createBriefMediaPath(user?.id, 'fabric', extension)
     const { error: uploadError } = await supabase.storage
       .from('order-photos')
-      .upload(path, payload.data, { contentType })
+      .upload(path, payload.data, { contentType, cacheControl: MEDIA_CACHE_CONTROL_SECONDS.publicImmutable })
     if (uploadError) throw uploadError
     return supabase.storage.from('order-photos').getPublicUrl(path).data.publicUrl
   }

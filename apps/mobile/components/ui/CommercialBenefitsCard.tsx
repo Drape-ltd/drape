@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { Alert, AppState, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { readFunctionErrorMessage } from '@/lib/function-errors'
@@ -41,11 +42,37 @@ export function CommercialBenefitsCard({ orderId, currency, variant = 'card', in
     await onChangedRef.current?.(nextReservation)
     return nextReservation
   }, [orderId])
-  useEffect(() => { void refresh() }, [refresh])
-  useEffect(() => {
-    const interval = setInterval(() => { void refresh() }, 15_000)
-    return () => clearInterval(interval)
-  }, [refresh])
+  useFocusEffect(useCallback(() => {
+    let interval: ReturnType<typeof setInterval> | null = null
+    const startPolling = () => {
+      if (interval || AppState.currentState !== 'active') return
+      void refresh()
+      interval = setInterval(() => { void refresh() }, 60_000)
+    }
+    const stopPolling = () => {
+      if (!interval) return
+      clearInterval(interval)
+      interval = null
+    }
+    const channel = supabase
+      .channel(`commercial-benefit-reservation:${orderId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'commercial_benefit_reservations', filter: `order_id=eq.${orderId}` },
+        () => { if (AppState.currentState === 'active') void refresh() },
+      )
+      .subscribe()
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') startPolling()
+      else stopPolling()
+    })
+    startPolling()
+    return () => {
+      stopPolling()
+      appStateSubscription.remove()
+      void supabase.removeChannel(channel)
+    }
+  }, [orderId, refresh]))
   useEffect(() => {
     void invokeFunction<{ grants?: Grant[] }>('commercial-benefit-action', { body: { action: 'list' } })
       .then(({ data, error }) => setGrants(error ? [] : data?.grants ?? []))

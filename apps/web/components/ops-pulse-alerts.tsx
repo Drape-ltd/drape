@@ -132,20 +132,20 @@ export function OpsPulseAlerts({
       }
     }
 
-    async function poll() {
+    async function poll(): Promise<boolean> {
       try {
         const response = await fetch('/ops/action?kind=pulse', {
           cache: 'no-store',
           credentials: 'same-origin',
           headers: { Accept: 'application/json' },
         })
-        if (!active) return
+        if (!active) return true
         if (!response.ok) {
           setStatus('Live Ops pulse could not refresh. Keep this page open and refresh if the session changed.')
-          return
+          return false
         }
         const pulse = (await response.json()) as OpsPulseResponse
-        if (!pulse.enabled) return
+        if (!pulse.enabled) return true
 
         const nextOpenCount = Number(pulse.openCount || 0)
         const nextCriticalCount = Number(pulse.criticalCount || 0)
@@ -162,7 +162,7 @@ export function OpsPulseAlerts({
           initializedFromServerRef.current = false
           if (nextFingerprint) window.sessionStorage.setItem('drapeon:ops:pulse:fingerprint', nextFingerprint)
           if (nextLatestKey) window.sessionStorage.setItem('drapeon:ops:pulse:latest-critical', nextLatestKey)
-          return
+          return true
         }
 
         const hasNewCritical = Boolean(nextLatestKey && nextLatestKey !== previousLatestKey)
@@ -176,17 +176,41 @@ export function OpsPulseAlerts({
           setStatus('Ops issue state changed. Updating the dashboard...')
           reloadTimer = window.setTimeout(() => router.refresh(), 400)
         }
+        return true
       } catch {
         if (active) setStatus('Live Ops pulse is temporarily offline. The dashboard still shows the last loaded state.')
+        return false
       }
     }
 
-    const firstPoll = window.setTimeout(() => { void poll() }, 2500)
-    const interval = window.setInterval(() => { void poll() }, 15000)
+    let pollTimer: number | null = null
+    let failureCount = 0
+    const schedulePoll = (delay: number) => {
+      if (!active) return
+      if (pollTimer) window.clearTimeout(pollTimer)
+      pollTimer = window.setTimeout(async () => {
+        if (document.visibilityState !== 'visible') return
+        try {
+          const succeeded = await poll()
+          failureCount = succeeded ? 0 : failureCount + 1
+        } finally {
+          schedulePoll(Math.min(120_000, 15_000 * (2 ** failureCount)))
+        }
+      }, delay)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') schedulePoll(0)
+      else if (pollTimer) {
+        window.clearTimeout(pollTimer)
+        pollTimer = null
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    schedulePoll(2500)
     return () => {
       active = false
-      window.clearTimeout(firstPoll)
-      window.clearInterval(interval)
+      if (pollTimer) window.clearTimeout(pollTimer)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       if (reloadTimer) window.clearTimeout(reloadTimer)
     }
   }, [initialFingerprint, router, workflowHref])

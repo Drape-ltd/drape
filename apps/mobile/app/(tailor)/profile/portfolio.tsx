@@ -39,6 +39,7 @@ import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_CACHE_CONTROL_SECONDS,
   MEDIA_LIMITS_BYTES,
   MEDIA_LIMITS_SECONDS,
   VIDEO_DURATION_LIMIT_MESSAGE,
@@ -353,7 +354,7 @@ export default function PortfolioScreen() {
       const filename = `portfolio/${userId}/videos/${new Date().getTime()}.${extension}`
       const { error: uploadError } = await supabase.storage
         .from('portfolio-photos')
-        .upload(filename, payload.data, { contentType })
+        .upload(filename, payload.data, { contentType, cacheControl: MEDIA_CACHE_CONTROL_SECONDS.publicImmutable })
       if (uploadError) throw uploadError
 
       const { data: publicUrlData } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)

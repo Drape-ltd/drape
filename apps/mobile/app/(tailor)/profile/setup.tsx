@@ -111,6 +111,7 @@ import {
 import type { AccountCurrencyCode } from '@drape/shared'
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
+  MEDIA_CACHE_CONTROL_SECONDS,
   MEDIA_LIMITS_BYTES,
   MEDIA_LIMITS_SECONDS,
   VIDEO_DURATION_LIMIT_MESSAGE,
@@ -1675,7 +1676,7 @@ export default function TailorSetupScreen() {
       })
       const { error: videoError } = await supabase.storage
         .from('portfolio-photos')
-        .upload(filename, payload.data, { contentType })
+        .upload(filename, payload.data, { contentType, cacheControl: MEDIA_CACHE_CONTROL_SECONDS.publicImmutable })
       if (videoError) throw videoError
       const { data } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
       return { type: 'video', url: data.publicUrl }

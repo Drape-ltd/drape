@@ -85,9 +85,9 @@ export async function fetchReadGateway<T>(
     }
 
     const payload = data as { ok?: boolean; data?: unknown; message?: string } | null
-    if (!payload?.ok) {
+    if (!payload?.ok || !Object.prototype.hasOwnProperty.call(payload, 'data')) {
       if (cached) return cached.data as T
-      throw new Error(payload?.message ?? 'Could not load this data right now.')
+      throw new Error(payload?.message ?? 'Browse data returned an incomplete response.')
     }
 
     if (ttlMs > 0) {

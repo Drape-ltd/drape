@@ -2,6 +2,7 @@
 
 import { createClient } from './supabase'
 import { clearWebSessionScope } from './web-session-scope'
+import { invalidateWebAccountCaches } from './web-account-cache-events'
 
 export type WebSignOutReason = 'manual' | 'session-scope' | 'timeout'
 export type WebSignOutScope = 'global' | 'local' | 'others'
@@ -61,6 +62,7 @@ function clearAccessibleCookies() {
 export function clearBrowserAuthState() {
   if (typeof window === 'undefined') return
 
+  invalidateWebAccountCaches('sign-out')
   clearWebSessionScope()
   clearAccessibleCookies()
 

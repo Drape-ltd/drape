@@ -76,6 +76,19 @@ type RegionalCacheStorage = {
 }
 
 const publicReadInFlight = new Map<string, Promise<unknown>>()
+const publicLastKnownGood = new Map<string, { value: unknown; storedAt: number }>()
+const PUBLIC_LAST_KNOWN_GOOD_MAX_AGE_MS = 15 * 60_000
+
+class PublicReadGatewayError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PublicReadGatewayError'
+  }
+}
+
+function publicCacheKind(key: string) {
+  return key.startsWith('approved-tailor-v2:') ? 'tailor-profile' : 'tailor-list'
+}
 
 function getRegionalCacheStorage() {
   return (globalThis as typeof globalThis & { caches?: RegionalCacheStorage }).caches
@@ -90,10 +103,14 @@ async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () =
   try {
     regionalCache = await cacheStorage.open('drapeon-public-data-v1')
     const cachedResponse = await regionalCache.match(cacheKey)
-    if (cachedResponse) return await cachedResponse.json() as T
+    if (cachedResponse) {
+      const value = await cachedResponse.json() as T
+      publicLastKnownGood.set(key, { value, storedAt: Date.now() })
+      return value
+    }
   } catch (error) {
     console.warn('[public-marketplace] Regional cache read failed; using the gateway.', {
-      key,
+      cacheKind: publicCacheKind(key),
       message: error instanceof Error ? error.message : String(error),
     })
   }
@@ -101,7 +118,12 @@ async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () =
   const existingRead = publicReadInFlight.get(key) as Promise<T> | undefined
   if (existingRead) return existingRead
 
+  console.info('[public-marketplace] Regional cache miss; loading public data.', {
+    cacheKind: publicCacheKind(key),
+  })
+
   const pendingRead = loader().then(async (value) => {
+    publicLastKnownGood.set(key, { value, storedAt: Date.now() })
     if (regionalCache) {
       try {
         await regionalCache.put(
@@ -115,12 +137,22 @@ async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () =
         )
       } catch (error) {
         console.warn('[public-marketplace] Regional cache write failed; returning fresh data.', {
-          key,
+          cacheKind: publicCacheKind(key),
           message: error instanceof Error ? error.message : String(error),
         })
       }
     }
     return value
+  }).catch((error) => {
+    const fallback = publicLastKnownGood.get(key)
+    if (fallback && Date.now() - fallback.storedAt <= PUBLIC_LAST_KNOWN_GOOD_MAX_AGE_MS) {
+      console.warn('[public-marketplace] Public gateway failed; returning bounded last-known-good data.', {
+        cacheKind: publicCacheKind(key),
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return fallback.value as T
+    }
+    throw error
   }).finally(() => {
     publicReadInFlight.delete(key)
   })
@@ -132,7 +164,9 @@ async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () =
 async function invokePublicReadGateway<T>(body: Record<string, unknown>): Promise<T | null> {
   const url = getSupabaseUrl()
   const key = getSupabasePublishableKey()
-  if (!url || !key) return null
+  if (!url || !key) {
+    throw new PublicReadGatewayError('Public read gateway configuration is unavailable.')
+  }
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15_000)
@@ -148,13 +182,10 @@ async function invokePublicReadGateway<T>(body: Record<string, unknown>): Promis
       signal: controller.signal,
     })
     const payload = await response.json().catch(() => null) as { ok?: boolean; data?: T; message?: string } | null
-    if (!response.ok || !payload?.ok) {
-      console.error('[public-marketplace] Public read gateway failed.', {
-        action: body.action,
-        status: response.status,
-        message: payload?.message ?? 'Invalid gateway response',
-      })
-      return null
+    if (!response.ok || !payload?.ok || !Object.prototype.hasOwnProperty.call(payload, 'data')) {
+      throw new PublicReadGatewayError(
+        `Public read gateway returned ${response.status}: ${payload?.message ?? 'Invalid gateway response'}`,
+      )
     }
     return payload.data ?? null
   } catch (error) {
@@ -162,7 +193,7 @@ async function invokePublicReadGateway<T>(body: Record<string, unknown>): Promis
       action: body.action,
       message: error instanceof Error ? error.message : String(error),
     })
-    return null
+    throw error instanceof Error ? error : new PublicReadGatewayError(String(error))
   } finally {
     clearTimeout(timeout)
   }
@@ -198,7 +229,8 @@ function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
 async function readApprovedPublicTailors(): Promise<PublicTailor[]> {
   return cachedPublicRead('approved-tailors-v4', 60, async () => {
     const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({ action: 'explore-tailors', limit: 40 })
-    return (rows ?? []).flatMap((row) => {
+    if (!rows) throw new PublicReadGatewayError('Public tailor list response did not contain data.')
+    return rows.flatMap((row) => {
       const tailor = mapGatewayTailor(row)
       return tailor ? [tailor] : []
     })

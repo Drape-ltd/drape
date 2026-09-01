@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { validateMediaUpload, type MediaPurpose } from '@drape/shared/media-policy'
+import { MEDIA_CACHE_CONTROL_SECONDS, validateMediaUpload, type MediaPurpose } from '@drape/shared/media-policy'
 
 type PublicStorageUploadOptions = {
   bucket: string
@@ -69,6 +69,7 @@ export async function uploadPublicStorageImage(options: PublicStorageUploadOptio
     .from(options.bucket)
     .upload(options.path, payload.data, {
       contentType: options.contentType,
+      cacheControl: MEDIA_CACHE_CONTROL_SECONDS.publicImmutable,
       upsert: options.upsert ?? false,
     })
 
@@ -86,6 +87,7 @@ export async function uploadPrivateStorageImage(options: PublicStorageUploadOpti
   })
   const { error } = await supabase.storage.from(options.bucket).upload(options.path, payload.data, {
     contentType: options.contentType,
+    cacheControl: MEDIA_CACHE_CONTROL_SECONDS.private,
     upsert: options.upsert ?? false,
   })
   if (error) throw error

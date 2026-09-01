@@ -17,6 +17,14 @@ export const MEDIA_LIMITS_SECONDS = {
   reviewVideo: 30,
 } as const
 
+// Supabase Storage upload `cacheControl` values are max-age seconds. Public
+// marketplace objects use immutable paths; private objects remain revalidated
+// behind signed URLs and storage authorization.
+export const MEDIA_CACHE_CONTROL_SECONDS = {
+  publicImmutable: '31536000',
+  private: '0',
+} as const
+
 export const VIDEO_DURATION_LIMIT_MESSAGE =
   'Videos must be 30 seconds or less to maintain optimal streaming quality.'
 export const OPERATIONAL_VIDEO_DURATION_LIMIT_MESSAGE =
