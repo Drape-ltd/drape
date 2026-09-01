@@ -11,7 +11,7 @@ function clean(value: string | null, fallback: string, maxLength: number) {
 
 export function GET(request: NextRequest) {
   const title = clean(request.nextUrl.searchParams.get('title'), 'Made for you, wherever you are.', 86)
-  const description = clean(request.nextUrl.searchParams.get('description'), 'Discover approved makers and keep every detail of the work in one place.', 180)
+  const description = clean(request.nextUrl.searchParams.get('description'), 'Discover approved tailors and keep every detail of the work in one place.', 180)
   const label = clean(request.nextUrl.searchParams.get('label'), 'Drapeon marketplace', 42)
 
   return new ImageResponse(
@@ -37,7 +37,7 @@ export function GET(request: NextRequest) {
             <div style={{ display: 'flex', position: 'absolute', width: '230px', height: '230px', border: '1px solid rgba(244,240,232,0.10)', borderRadius: '50%', right: '-70px', top: '-35px' }} />
             <div style={{ display: 'flex', fontSize: 15, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.18em', color: 'rgba(244,240,232,0.56)' }}>One connected experience</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '17px' }}>
-              {['Approved makers', 'Clear project context', 'Visible progress'].map((item, index) => (
+              {['Approved tailors', 'Clear project context', 'Visible progress'].map((item, index) => (
                 <div key={item} style={{ display: 'flex', alignItems: 'center', gap: '13px', borderTop: '1px solid rgba(244,240,232,0.14)', paddingTop: '17px', fontSize: 18, color: 'rgba(244,240,232,0.82)' }}>
                   <div style={{ display: 'flex', color: 'rgba(244,240,232,0.42)', fontSize: 13 }}>0{index + 1}</div>{item}
                 </div>

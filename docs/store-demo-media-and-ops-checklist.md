@@ -47,7 +47,7 @@ Create or seed:
 
 Each public demo tailor needs:
 
-- Real avatar or intentional initials fallback.
+- Real avatar, intentional initials fallback, or a garment-led portfolio cover.
 - 4+ portfolio photos.
 - At least one ready-made listing where relevant.
 - Clear specialty tags, city/country, price range, availability, and fulfillment options.

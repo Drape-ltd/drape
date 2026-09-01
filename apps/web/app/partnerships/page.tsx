@@ -32,7 +32,7 @@ export default function PartnershipsPage(): React.JSX.Element {
           description="Discovery, trust, fit, and fulfillment are the seams where thoughtful partnerships can improve the product."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <MarketingCard title="Tailor ecosystem" body="Partnerships that help strong makers grow on Drapeon without weakening trust or clarity." />
+          <MarketingCard title="Tailor ecosystem" body="Partnerships that help skilled tailors grow on Drapeon without weakening trust or clarity." />
           <MarketingCard title="Operational tools" body="Verification, logistics, and workflow partnerships that make the order loop cleaner." />
           <MarketingCard title="Brand alignment" body="The best partnerships feel additive to the product vision, not like random distribution grabs." />
         </div>

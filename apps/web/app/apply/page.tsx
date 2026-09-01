@@ -30,11 +30,11 @@ export default function ApplyPage(): React.JSX.Element {
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/58">Tailor applications</p>
               <h1 className="mt-5 max-w-2xl text-4xl leading-[0.98] text-white sm:text-6xl">Your work deserves the right context.</h1>
-              <p className="mt-5 max-w-xl text-sm leading-7 text-white/70 sm:text-base">Show us what you make, where you work, and the portfolio that represents you best. Every public maker is reviewed before joining the marketplace.</p>
+              <p className="mt-5 max-w-xl text-sm leading-7 text-white/70 sm:text-base">Show us what you make, where you work, and the portfolio that represents you best. Every public tailor is reviewed before joining the marketplace.</p>
             </div>
             <div className="mt-9 flex flex-wrap gap-3">
               <Link href="#application" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-ink transition-colors hover:bg-bone">Start application <ArrowRight aria-hidden="true" size={15} /></Link>
-              <Link href="/explore" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/24 bg-white/6 px-5 text-sm font-semibold text-white transition-colors hover:bg-white/12">Explore makers <ExternalLink aria-hidden="true" size={14} /></Link>
+              <Link href="/explore" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/24 bg-white/6 px-5 text-sm font-semibold text-white transition-colors hover:bg-white/12">Explore tailors <ExternalLink aria-hidden="true" size={14} /></Link>
             </div>
           </div>
           <div className="group relative min-h-[360px] overflow-hidden bg-[#0f1814] lg:min-h-[560px]">
@@ -73,7 +73,7 @@ export default function ApplyPage(): React.JSX.Element {
 
       <section className="mx-auto max-w-[92rem] px-5 pb-6 sm:px-8">
         <div className="flex flex-col gap-5 rounded-[14px] border border-ink/8 bg-[#e7dfd0] px-6 py-7 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div><p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle">Here as a customer?</p><h2 className="mt-2 text-2xl">Browse approved makers before creating an account.</h2></div>
+          <div><p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle">Here as a customer?</p><h2 className="mt-2 text-2xl">Browse approved tailors before creating an account.</h2></div>
           <Link href="/explore" className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 self-start rounded-full bg-ink px-4 text-xs font-semibold text-white transition-colors hover:bg-needle sm:self-auto">Explore Drapeon <ArrowRight aria-hidden="true" size={14} /></Link>
         </div>
       </section>

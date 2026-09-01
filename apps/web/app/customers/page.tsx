@@ -138,7 +138,7 @@ export default function CustomersPage(): React.JSX.Element {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Customer account</p>
               <h2 className="mt-3 text-3xl text-white sm:text-4xl">Start when you are ready.</h2>
               <p className="mt-3 text-sm leading-7 text-white/62">
-                Browse approved makers first, then create an account when you want to save, message, or order.
+                Browse approved tailors first, then create an account when you want to save, message, or order.
               </p>
             </div>
             <div className="flex shrink-0 flex-col gap-3">

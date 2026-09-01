@@ -24,7 +24,7 @@ export default function SignInPage(): React.JSX.Element {
           <div className="relative hidden min-h-[42rem] overflow-hidden rounded-[8px] bg-forest lg:block">
             <Image
               src="/editorial/drapeon-finishing-detail-v1.png"
-              alt="A maker finishing a garment by hand"
+              alt="A tailor finishing a garment by hand"
               fill
               priority
               sizes="(min-width: 1024px) 50vw, 0px"

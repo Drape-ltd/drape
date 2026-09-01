@@ -196,9 +196,9 @@ const STEP_TITLES = [
   'Review',
 ]
 const STEP_SUBS = [
-  'Tell the seller exactly what you want to make, what it is for, and when you need it by.',
-  'Show visual references so the seller can understand your taste, shape, and finishing direction faster.',
-  'Share the fit context your maker needs to quote accurately and make the garment feel right on your body.',
+  'Tell the tailor exactly what you want to make, what it is for, and when you need it by.',
+  'Show visual references so the tailor can understand your taste, shape, and finishing direction faster.',
+  'Share the fit context your tailor needs to quote accurately and make the garment feel right on your body.',
   'Choose who provides fabric and set the approval checkpoint before cutting begins.',
   'Choose how the finished garment gets to you and keep delivery details structured.',
   'Check every detail before sending. You can jump back to edit any section.',

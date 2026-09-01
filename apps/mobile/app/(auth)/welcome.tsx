@@ -55,7 +55,7 @@ export default function WelcomeScreen() {
         <Text style={styles.wordmark}>Drapeon</Text>
         <View style={styles.hero}>
           <Text style={styles.tagline}>Your tailor.{`\n`}Anywhere in the world.</Text>
-          <Text style={styles.sub}>Discover makers. Order when you’re ready.</Text>
+          <Text style={styles.sub}>Discover tailors. Order when you’re ready.</Text>
         </View>
 
         <View style={styles.actions}>

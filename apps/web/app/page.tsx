@@ -31,13 +31,13 @@ export default function Home(): React.JSX.Element {
           <div className="relative z-10 flex min-h-[570px] items-end px-6 pb-9 pt-24 sm:px-10 sm:pb-12 lg:min-h-[670px] lg:px-16 lg:pb-14">
             <div className="max-w-3xl text-white">
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/68 sm:text-xs">Craft, fit, and every decision in one place</p>
-              <h1 className="mt-5 text-[clamp(3.4rem,8vw,7.6rem)] leading-[0.84] tracking-[-0.045em] text-white">From idea<br />to every stitch.</h1>
+              <h1 className="mt-5 text-[clamp(3.4rem,8vw,7.6rem)] leading-[0.84] tracking-[-0.045em] text-white">From idea<br />to garment.</h1>
               <p className="mt-7 max-w-xl text-base leading-7 text-white/76 sm:text-lg sm:leading-8">A clearer way to commission, shape, and follow clothing made for you.</p>
               <div className="mt-8 flex max-w-2xl flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <Link href="/explore" className="group inline-flex min-h-12 items-center gap-3 rounded-full bg-white py-1.5 pl-5 pr-1.5 text-sm font-semibold text-ink shadow-[0_14px_36px_rgba(0,0,0,0.18)] transition duration-300 hover:bg-bone hover:shadow-[0_18px_44px_rgba(0,0,0,0.23)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white" data-analytics-event="primary_cta_click" data-analytics-label="Homepage explore marketplace">
                     <span className="relative flex size-3.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-needle opacity-40 motion-reduce:animate-none" /><span className="relative inline-flex size-3.5 rounded-full bg-needle" /></span>
-                    Explore makers
+                    Explore tailors
                     <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-needle text-white transition-transform duration-300 group-hover:translate-x-0.5"><ArrowRight aria-hidden="true" size={15} /></span>
                   </Link>
                 </div>
@@ -84,7 +84,7 @@ export default function Home(): React.JSX.Element {
           <div className="grid gap-5">
             <article className="flex flex-col justify-between rounded-[16px] bg-[#e7dfd0] p-7 sm:p-10">
               <div className="flex items-center justify-between"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle">Built around the work</p><Scissors aria-hidden="true" size={20} className="text-needle" /></div>
-              <div className="mt-10 sm:mt-12"><h2 className="text-3xl leading-[1.02] sm:text-4xl">Context before volume.</h2><p className="mt-4 max-w-md text-sm leading-6 text-ink/62">Drapeon is designed around the relationship between a customer, a maker, and the piece taking shape.</p></div>
+              <div className="mt-10 sm:mt-12"><h2 className="text-3xl leading-[1.02] sm:text-4xl">Context before volume.</h2><p className="mt-4 max-w-md text-sm leading-6 text-ink/62">Drapeon is designed around the relationship between a customer, a tailor, and the piece taking shape.</p></div>
             </article>
             <article className="group relative min-h-[360px] overflow-hidden rounded-[16px] bg-ink sm:min-h-[440px]">
               <Image src="/editorial/drapeon-finishing-detail-v1.png" alt="A finished green seam beside brass shears and ivory thread" fill sizes="(min-width: 1024px) 44vw, 100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />

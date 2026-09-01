@@ -45,7 +45,7 @@ export default async function PublicTailorPage({ params }: TailorPageProps): Pro
           </div>
 
           <aside className="max-w-xl">
-            <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-needle"><ShieldCheck aria-hidden="true" size={14} /> Approved maker</p>
+            <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-needle"><ShieldCheck aria-hidden="true" size={14} /> Approved tailor</p>
             <h1 className="mt-4 text-4xl leading-none sm:text-5xl">{tailor.displayName}</h1>
             {tailor.location ? <p className="mt-4 flex items-center gap-2 text-sm text-ink/54"><MapPin aria-hidden="true" size={15} /> {tailor.location}</p> : null}
             {tailor.bio ? <p className="mt-5 max-w-lg text-sm leading-7 text-ink/66 sm:text-base">{tailor.bio}</p> : null}

@@ -131,6 +131,7 @@
       "displayName": "Common Thread Works",
       "location": "New York, USA",
       "currency": "USD",
+      "omitAvatar": true,
       "specialtyTags": ["Adaptive clothing", "Upcycling", "Alterations"],
       "bio": "Inclusive adaptations and one-of-one reconstruction focused on comfort, access, and personal expression.",
       "avatarUrl": "https://media.example/common-thread/avatar.jpg",

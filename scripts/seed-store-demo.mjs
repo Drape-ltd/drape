@@ -46,11 +46,14 @@ function parseManifest(path) {
   if (parsed.assetRoot) {
     for (const tailor of parsed.tailors ?? []) {
       const assetKey = tailor.assetKey ?? tailor.key
-      tailor.avatarPath = `${parsed.assetRoot}/identity/${assetKey}-founder-v1.png`
       tailor.portfolioPaths = Array.from(
         { length: 6 },
         (_, index) => `${parsed.assetRoot}/portfolio/${assetKey}/${String(index + 1).padStart(2, '0')}.png`,
       )
+      tailor.avatarPath = tailor.omitAvatar
+        ? null
+        : `${parsed.assetRoot}/identity/${assetKey}-founder-v1.png`
+      if (tailor.omitAvatar) tailor.avatarUrl = null
     }
   }
   if (!Array.isArray(parsed.tailors) || parsed.tailors.length < 8) {
@@ -65,7 +68,7 @@ function parseManifest(path) {
     if (!Array.isArray(portfolioMedia) || portfolioMedia.length < 6) {
       throw new Error(`${tailor.key} needs at least 6 portfolioPaths or portfolioUrls for store screenshots.`)
     }
-    if (!tailor.avatarPath && !tailor.avatarUrl) {
+    if (!tailor.omitAvatar && !tailor.avatarPath && !tailor.avatarUrl) {
       throw new Error(`${tailor.key} needs avatarPath or avatarUrl.`)
     }
   }
