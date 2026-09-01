@@ -1,4 +1,4 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 name: "Customer brief — fit notes child flow returns to measurements step"
 env:
   DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"

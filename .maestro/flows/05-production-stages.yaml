@@ -1,4 +1,4 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 name: "Tailor — advances through production stages to shipped"
 env:
   DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"

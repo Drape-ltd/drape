@@ -1,4 +1,4 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 name: "Tailor — sign up and complete profile setup"
 ---
 

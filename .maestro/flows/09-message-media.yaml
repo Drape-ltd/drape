@@ -1,4 +1,4 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 name: "Messages — media mosaic, paging, and per-item reply"
 env:
   DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"

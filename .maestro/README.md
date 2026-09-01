@@ -18,29 +18,30 @@ Set these before running flows (or export them in CI):
 export DRAPE_TEST_CUSTOMER_EMAIL=e2e-customer@drape.test
 export DRAPE_TEST_TAILOR_EMAIL=e2e-tailor@drape.test
 export DRAPE_TEST_PASSWORD=Drape2025!
+export DRAPE_TEST_APP_ID=com.drape.app
 export E2E_SUPABASE_URL=https://your-project-ref.supabase.co
 export E2E_SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
 ## Test accounts
 
-Seed the two test accounts and fixture orders before running the stateful flows:
+The auth/session smoke flow uses a scoped QA account and does not require a
+database reset.
 
-```bash
-pnpm --filter @drape/db seed:e2e
-```
-
-That script:
-1. creates the customer and tailor auth users
-2. creates a live tailor profile
-3. seeds measurements for the customer
-4. creates fixture orders for the later flows
+> **Safety:** Do not run `pnpm --filter @drape/db seed:e2e` against shared
+> development or production. The current seed script clears broad fixture
+> tables and is only suitable for an isolated, disposable Supabase project.
+> Stateful order flows require an isolated seeded project until that script is
+> replaced with a scoped fixture writer.
 
 ## Running
 
 ```bash
-# Run all flows (against iOS Simulator)
-source .maestro/env.sh && maestro test .maestro/flows/
+# Run all flows against Android
+source .maestro/env.sh && maestro test -e DRAPE_TEST_APP_ID=com.drape.app .maestro/flows/
+
+# Run against the installed iOS development client
+source .maestro/env.sh && maestro test -e DRAPE_TEST_APP_ID=co.drapeon.app .maestro/flows/
 
 # Run a seeded flow directly
 source .maestro/env.sh && maestro test .maestro/flows/04-brief-to-quote.yaml
@@ -52,7 +53,7 @@ maestro test .maestro/flows/
 maestro test .maestro/flows/01-customer-signup.yaml
 
 # Run with a specific device
-maestro test --device <UDID> .maestro/flows/
+maestro test --device <UDID> -e DRAPE_TEST_APP_ID=co.drapeon.app .maestro/flows/
 ```
 
 ## Flows

@@ -1,4 +1,4 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 # Simulates backgrounding the app and bringing it back to the foreground.
 # Used to verify session persistence.
 ---

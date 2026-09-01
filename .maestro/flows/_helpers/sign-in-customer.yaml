@@ -1,13 +1,21 @@
 # Reusable: sign in as test customer from Welcome or Sign In screen.
 ---
-- tapOn: "Sign in"
+- tapOn: "Continue with email"
+- extendedWaitUntil:
+    visible:
+      id: "email-input"
+    timeout: 10000
 - tapOn:
     id: "email-input"
-- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- eraseText
+- setClipboard: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- pasteText
 - tapOn:
     id: "password-input"
-- inputText: "${DRAPE_TEST_PASSWORD}"
-- tapOn: "Sign in"
+- eraseText
+- setClipboard: "${DRAPE_TEST_PASSWORD}"
+- pasteText
+- pressKey: Enter
 - extendedWaitUntil:
-    visible: "Discover tailors"
+    visible: "Find your tailor"
     timeout: 8000

@@ -3,8 +3,9 @@
 # Install Maestro CLI:
 #   curl -Ls "https://get.maestro.mobile.dev" | bash
 #
-# Run all flows against iOS Simulator:
-#   maestro test .maestro/flows/
+# DRAPE_TEST_APP_ID selects the installed client:
+#   Android dev: com.drape.app
+#   iOS native:  co.drapeon.app
 #
 # Run a single flow:
 #   maestro test .maestro/flows/01-customer-signup.yaml
@@ -14,4 +15,4 @@
 #   DRAPE_TEST_TAILOR_EMAIL     — seed test tailor email
 #   DRAPE_TEST_PASSWORD         — shared test password
 
-appId: com.drape.app   # matches app.json / eas.json bundle ID
+appId: ${DRAPE_TEST_APP_ID}

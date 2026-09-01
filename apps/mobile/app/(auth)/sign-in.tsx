@@ -232,6 +232,7 @@ export default function SignInScreen() {
 
             <Button
               label="Sign in"
+              testID="sign-in-submit"
               onPress={handleSignIn}
               loading={loading}
               disabled={!email || !password || !!emailError}

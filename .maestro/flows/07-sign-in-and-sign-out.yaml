@@ -1,49 +1,92 @@
-appId: com.drape.app
+appId: ${DRAPE_TEST_APP_ID}
 name: "Auth — sign in, verify session persists after background, sign out"
 env:
-  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_CUSTOMER_EMAIL: "stripe.qa.customer@drapeon.co"
   DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
-  DRAPE_TEST_PASSWORD: "Drape2025!"
+  DRAPE_TEST_PASSWORD: "DrapeStripeQA2026"
 ---
 
 - launchApp:
     clearState: true
+    clearKeychain: true
+
+# A cleared Expo development client forgets its Metro host. Release clients skip
+# this conditional step and continue directly to the app.
+- runFlow:
+    when:
+      visible: "http://localhost:8081"
+    commands:
+      - tapOn: "http://localhost:8081"
+
+# Expo shows this education sheet once after installing a fresh development
+# client. It is absent from preview and production clients.
+- runFlow:
+    when:
+      visible: "This is the developer menu.*"
+    commands:
+      - tapOn: "Continue"
+
+- runFlow:
+    when:
+      visible: "Close"
+    commands:
+      - tapOn: "Close"
 
 # ── Sign in ───────────────────────────────────────────────────────────────────
 - extendedWaitUntil:
-    visible: "Sign in"
-    timeout: 8000
-- tapOn: "Sign in"
+    visible: "Continue with email"
+    timeout: 60000
+- tapOn: "Continue with email"
+- extendedWaitUntil:
+    visible:
+      id: "email-input"
+    timeout: 10000
 - tapOn:
     id: "email-input"
-- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- eraseText
+- setClipboard: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- pasteText
 - tapOn:
     id: "password-input"
-- inputText: "${DRAPE_TEST_PASSWORD}"
-- tapOn: "Sign in"
+- eraseText
+- setClipboard: "${DRAPE_TEST_PASSWORD}"
+- pasteText
+- pressKey: Enter
 
 - extendedWaitUntil:
-    visible: "Tailors for you"
-    timeout: 8000
+    visible: "Save Password\\?|Find your tailor"
+    timeout: 30000
+
+- runFlow:
+    when:
+      visible: "Save Password?"
+    commands:
+      - tapOn: "Not Now"
+
+- extendedWaitUntil:
+    visible: "Find your tailor"
+    timeout: 60000
 
 # ── Background and re-open — session should persist ───────────────────────────
 - runFlow:
     file: _helpers/background-and-reopen.yaml
 
 - extendedWaitUntil:
-    visible: "Tailors for you"
-    timeout: 5000
+    visible: "Find your tailor"
+    timeout: 60000
 
 # ── Sign out ──────────────────────────────────────────────────────────────────
 - tapOn:
     id: "tab-profile"
 - scroll
 - tapOn: "Sign out"
-- tapOn: "Sign out"
+- tapOn:
+    text: "Sign out"
+    index: 1
 
 - extendedWaitUntil:
-    visible: "drape"
-    timeout: 5000
+    visible: "Continue with email"
+    timeout: 10000
 
 # Should not be able to reach protected screens without auth
-- assertNotVisible: "Tailors for you"
+- assertNotVisible: "Find your tailor"
