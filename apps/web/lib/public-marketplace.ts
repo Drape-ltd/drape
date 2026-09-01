@@ -1,4 +1,4 @@
-import { unstable_cache } from 'next/cache'
+import { cache } from 'react'
 import { getSupabasePublishableKey, getSupabaseUrl } from './supabase-config'
 
 export type PublicTailor = {
@@ -64,6 +64,69 @@ function safeMediaUrls(values: string[] | null | undefined) {
       return false
     }
   }))).slice(0, 40)
+}
+
+type RegionalCache = {
+  match(request: Request): Promise<Response | undefined>
+  put(request: Request, response: Response): Promise<void>
+}
+
+type RegionalCacheStorage = {
+  open(name: string): Promise<RegionalCache>
+}
+
+const publicReadInFlight = new Map<string, Promise<unknown>>()
+
+function getRegionalCacheStorage() {
+  return (globalThis as typeof globalThis & { caches?: RegionalCacheStorage }).caches
+}
+
+async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () => Promise<T>): Promise<T> {
+  const cacheStorage = getRegionalCacheStorage()
+  if (!cacheStorage) return loader()
+
+  let regionalCache: RegionalCache | null = null
+  const cacheKey = new Request(`https://drapeon.co/__drape-public-data-cache/${encodeURIComponent(key)}`)
+  try {
+    regionalCache = await cacheStorage.open('drapeon-public-data-v1')
+    const cachedResponse = await regionalCache.match(cacheKey)
+    if (cachedResponse) return await cachedResponse.json() as T
+  } catch (error) {
+    console.warn('[public-marketplace] Regional cache read failed; using the gateway.', {
+      key,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  const existingRead = publicReadInFlight.get(key) as Promise<T> | undefined
+  if (existingRead) return existingRead
+
+  const pendingRead = loader().then(async (value) => {
+    if (regionalCache) {
+      try {
+        await regionalCache.put(
+          cacheKey,
+          new Response(JSON.stringify(value), {
+            headers: {
+              'Cache-Control': `public, max-age=${ttlSeconds}`,
+              'Content-Type': 'application/json',
+            },
+          }),
+        )
+      } catch (error) {
+        console.warn('[public-marketplace] Regional cache write failed; returning fresh data.', {
+          key,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+    return value
+  }).finally(() => {
+    publicReadInFlight.delete(key)
+  })
+
+  publicReadInFlight.set(key, pendingRead)
+  return pendingRead
 }
 
 async function invokePublicReadGateway<T>(body: Record<string, unknown>): Promise<T | null> {
@@ -133,40 +196,45 @@ function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
 }
 
 async function readApprovedPublicTailors(): Promise<PublicTailor[]> {
-  const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({ action: 'explore-tailors', limit: 40 })
-  return (rows ?? []).flatMap((row) => {
-    const tailor = mapGatewayTailor(row)
-    return tailor ? [tailor] : []
+  return cachedPublicRead('approved-tailors-v4', 60, async () => {
+    const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({ action: 'explore-tailors', limit: 40 })
+    return (rows ?? []).flatMap((row) => {
+      const tailor = mapGatewayTailor(row)
+      return tailor ? [tailor] : []
+    })
   })
 }
 
-export const getApprovedPublicTailors = unstable_cache(readApprovedPublicTailors, ['approved-public-tailors-v2'], {
-  revalidate: 60,
-  tags: ['public-tailors'],
-})
+export const getApprovedPublicTailors = cache(readApprovedPublicTailors)
 
-export async function getApprovedPublicTailor(profileId: string) {
+async function readApprovedPublicTailor(profileId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(profileId)) return null
-  const data = await invokePublicReadGateway<PublicTailorProfileGateway>({ action: 'tailor-profile', tailorId: profileId })
-  const profile = data?.profile
-  if (!profile?.id || !profile.displayName) return null
-  const portfolioPhotos = safeMediaUrls(profile.portfolioPhotos)
-  const portfolioVideos = safeMediaUrls(profile.portfolioVideos)
-  const avatarUrl = safeMediaUrls(profile.avatarUrl ? [profile.avatarUrl] : [])[0] ?? null
-  if (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl) return null
-  return {
-    id: profile.id,
-    displayName: safeText(profile.displayName),
-    businessName: null,
-    bio: safeText(profile.bio) || null,
-    location: safeText(profile.location) || null,
-    specialties: (profile.specialtyTags ?? []).map((tag) => safeText(tag)).filter(Boolean).slice(0, 6),
-    availability: safeText(profile.availability) || null,
-    acceptsCustomOrders: profile.supportsCustomOrders === true && profile.acceptsCustomOrdersNow === true,
-    supportsReadyMade: profile.supportsReadyMade === true,
-    portfolioPhotos,
-    portfolioVideos,
-    coverVideoUrl: portfolioVideos[0] ?? null,
-    avatarUrl,
-  }
+  return cachedPublicRead(`approved-tailor-v2:${profileId}`, 60, async () => {
+    const data = await invokePublicReadGateway<PublicTailorProfileGateway>({ action: 'tailor-profile', tailorId: profileId })
+    const profile = data?.profile
+    if (!profile?.id || !profile.displayName) return null
+    const portfolioPhotos = safeMediaUrls(profile.portfolioPhotos)
+    const portfolioVideos = safeMediaUrls(profile.portfolioVideos)
+    const avatarUrl = safeMediaUrls(profile.avatarUrl ? [profile.avatarUrl] : [])[0] ?? null
+    if (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl) return null
+    return {
+      id: profile.id,
+      displayName: safeText(profile.displayName),
+      businessName: null,
+      bio: safeText(profile.bio) || null,
+      location: safeText(profile.location) || null,
+      specialties: (profile.specialtyTags ?? []).map((tag) => safeText(tag)).filter(Boolean).slice(0, 6),
+      availability: safeText(profile.availability) || null,
+      acceptsCustomOrders: profile.supportsCustomOrders === true && profile.acceptsCustomOrdersNow === true,
+      supportsReadyMade: profile.supportsReadyMade === true,
+      portfolioPhotos,
+      portfolioVideos,
+      coverVideoUrl: portfolioVideos[0] ?? null,
+      avatarUrl,
+    }
+  })
 }
+
+// React cache deduplicates generateMetadata + page reads during one render;
+// Cloudflare's regional Cache API protects Supabase across requests in a region.
+export const getApprovedPublicTailor = cache(readApprovedPublicTailor)

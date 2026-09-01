@@ -11875,10 +11875,15 @@ function CommercialBenefitControl({
         .then((result) => setGrants(result.grants ?? []))
         .catch(() => setGrants([]))
     }, 0)
-    const interval = window.setInterval(() => { void refresh() }, 15_000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    const interval = window.setInterval(refreshWhenVisible, 60_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
     return () => {
       window.clearTimeout(initialRefresh)
       window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
   }, [refresh])
 
@@ -21819,11 +21824,14 @@ export function AccountAppSurface({
     }
 
     channel.subscribe()
-    const poll = window.setInterval(scheduleReviewRefresh, 15000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') scheduleReviewRefresh()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
-      window.clearInterval(poll)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
       void supabase.removeChannel(channel)
     }
   }, [session?.user.id])
