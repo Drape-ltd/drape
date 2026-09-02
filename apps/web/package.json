@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.32.1",
   "scripts": {
     "dev": "next dev",
-    "build": "NEXT_DIST_DIR=.next-build next build",
+    "build": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-build} next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

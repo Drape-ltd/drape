@@ -179,6 +179,9 @@ function runOpenNext(openNextMode) {
   const childEnv = { ...process.env }
 
   if (mode === 'deploy') {
+    // OpenNext reads Next's canonical output directory. Local `pnpm build`
+    // continues to use `.next-build` so it cannot churn a live dev server.
+    childEnv.NEXT_DIST_DIR = '.next'
     for (const [key, value] of Object.entries(readWranglerVars())) {
       if (typeof value === 'string') {
         childEnv[key] = value
