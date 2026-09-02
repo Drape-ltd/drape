@@ -409,7 +409,7 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
 }
 
 async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
-  const [profileRes, reviewsRes, portfolioRes] = await Promise.allSettled([
+  const [profileRes, reviewsRes, portfolioRes, mediaAssetsRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
       .select('id, user_id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, accepts_custom_orders_now, shop_paused, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, consultation_mode, consultation_requirement, consultation_fee_amount, consultation_currency, consultation_duration_minutes, consultation_call_type, consultation_fee_creditable')
@@ -428,9 +428,20 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       .limit(10),
     supabase
       .from('portfolio_items')
-      .select('image_url, sort_order')
+      .select('id, image_url, sort_order')
       .eq('tailor_profile_id', tailorId)
       .order('sort_order', { ascending: true }),
+    supabase
+      .from('media_assets')
+      .select('id, media_kind, public_url, poster_url, width, height, focal_x, focal_y, alt_text, is_primary, portfolio_position, created_at')
+      .eq('tailor_profile_id', tailorId)
+      .eq('purpose', 'PORTFOLIO')
+      .eq('status', 'ACTIVE')
+      .eq('availability_state', 'AVAILABLE')
+      .in('moderation_status', ['APPROVED', 'AUTO_ALLOWED'])
+      .order('is_primary', { ascending: false })
+      .order('portfolio_position', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true }),
   ])
 
   if (profileRes.status === 'rejected' || profileRes.value.error) {
@@ -445,6 +456,9 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
     : []
   const portfolioData = portfolioRes.status === 'fulfilled' && !portfolioRes.value.error
     ? ((portfolioRes.value.data ?? []) as Array<Record<string, unknown>>)
+    : []
+  const mediaAssetsData = mediaAssetsRes.status === 'fulfilled' && !mediaAssetsRes.value.error
+    ? ((mediaAssetsRes.value.data ?? []) as Array<Record<string, unknown>>)
     : []
 
   const portfolioPhotosFromItems = portfolioData
@@ -462,6 +476,71 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
   const safePortfolioPhotosFromItems = portfolioPhotosFromItems.filter((url) => !blockedProfileMedia.has(url))
   const safeProfilePortfolioPhotos = profilePortfolioPhotos.filter((url) => !blockedProfileMedia.has(url))
   const safeProfilePortfolioVideos = profilePortfolioVideos.filter((url) => !blockedProfileMedia.has(url))
+  const legacyMedia = [
+    ...safePortfolioPhotosFromItems.map((url, index) => {
+      const row = portfolioData.find((candidate) => asString(candidate.image_url) === url)
+      return {
+        id: asString(row?.id) ?? `legacy-portfolio-image-${tailorId}-${index}`,
+        kind: 'IMAGE',
+        url,
+        posterUrl: null,
+        width: null,
+        height: null,
+        focalX: 0.5,
+        focalY: 0.5,
+        altText: null,
+        isPrimary: index === 0,
+        position: index,
+      }
+    }),
+    ...safeProfilePortfolioPhotos
+      .filter((url) => !safePortfolioPhotosFromItems.includes(url))
+      .map((url, index) => ({
+        id: `legacy-profile-image-${tailorId}-${index}`,
+        kind: 'IMAGE',
+        url,
+        posterUrl: null,
+        width: null,
+        height: null,
+        focalX: 0.5,
+        focalY: 0.5,
+        altText: null,
+        isPrimary: safePortfolioPhotosFromItems.length === 0 && index === 0,
+        position: safePortfolioPhotosFromItems.length + index,
+      })),
+    ...safeProfilePortfolioVideos.map((url, index) => ({
+      id: `legacy-profile-video-${tailorId}-${index}`,
+      kind: 'VIDEO',
+      url,
+      posterUrl: null,
+      width: null,
+      height: null,
+      focalX: 0.5,
+      focalY: 0.5,
+      altText: null,
+      isPrimary: safePortfolioPhotosFromItems.length === 0 && safeProfilePortfolioPhotos.length === 0 && index === 0,
+      position: safePortfolioPhotosFromItems.length + safeProfilePortfolioPhotos.length + index,
+    })),
+  ]
+  const canonicalMedia = mediaAssetsData.flatMap((row, index) => {
+    const url = asString(row.public_url)
+    const kind = asString(row.media_kind)
+    if (!url || blockedProfileMedia.has(url) || (kind !== 'IMAGE' && kind !== 'VIDEO')) return []
+    const posterUrl = asString(row.poster_url)
+    return [{
+      id: asString(row.id) ?? `portfolio-media-${tailorId}-${index}`,
+      kind,
+      url,
+      posterUrl: posterUrl && !blockedProfileMedia.has(posterUrl) ? posterUrl : null,
+      width: typeof row.width === 'number' ? row.width : null,
+      height: typeof row.height === 'number' ? row.height : null,
+      focalX: typeof row.focal_x === 'number' ? row.focal_x : 0.5,
+      focalY: typeof row.focal_y === 'number' ? row.focal_y : 0.5,
+      altText: asString(row.alt_text),
+      isPrimary: row.is_primary === true,
+      position: typeof row.portfolio_position === 'number' ? row.portfolio_position : index,
+    }]
+  })
   const reviewerAvatarUrls = reviewsData
     .map((row) => {
       const orderRow = firstJoinedRow(row.orders as Record<string, unknown> | Record<string, unknown>[] | null)
@@ -502,6 +581,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
         ...safeProfilePortfolioPhotos,
       ])),
       portfolioVideos: safeProfilePortfolioVideos,
+      media: canonicalMedia.length > 0 ? canonicalMedia : legacyMedia,
       supportsCustomOrders: profileRow.supports_custom_orders !== false,
       supportsReadyMade: profileRow.supports_ready_made === true,
       pickupAvailable: profileRow.pickup_available === true,

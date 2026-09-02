@@ -7,6 +7,8 @@ node_modules
 # Build outputs
 dist
 .next
+apps/web/test-results/
+apps/web/playwright-report/
 .expo
 out
 build
@@ -63,6 +65,7 @@ apps/mobile/android/app/google-services.json
 google-service-account.json
 apps/mobile/google-service-account.json
 web-build/
+apps/web/.next-build/
 android/
 ios/
 !packages/drape-vision/android/

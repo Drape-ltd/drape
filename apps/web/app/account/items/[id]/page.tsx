@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../../components/account-app-surface'
+import { ItemDetailWorkspace } from '../../../../features/account/shop/item-detail-workspace'
 import { buildMetadata } from '../../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Ready-made item',
-  description: 'Review a Drapeon ready-made item, size guidance, stock, fulfillment, and payment state.',
+  description:
+    'Review a Drapeon ready-made item, size guidance, stock, fulfillment, and payment state.',
   path: '/account/items',
 })
 
@@ -14,5 +15,5 @@ export default async function AccountItemDetailPage({
   params: Promise<{ id: string }>
 }): Promise<React.JSX.Element> {
   const { id } = await params
-  return <AccountAppSurface surface="item-detail" itemId={id} />
+  return <ItemDetailWorkspace itemId={id} />
 }

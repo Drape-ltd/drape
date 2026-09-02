@@ -254,6 +254,19 @@ const BodySchema = z.discriminatedUnion('action', [
     photoUrls: z.array(z.string().url()).max(12).default([]),
     videoUrls: z.array(z.string().url()).max(4).default([]),
   }),
+  z.object({
+    action: z.literal('get-media-presentation'),
+  }),
+  z.object({
+    action: z.literal('update-media-presentation'),
+    mediaAssetId: z.string().uuid(),
+    focalX: z.number().min(0).max(1),
+    focalY: z.number().min(0).max(1),
+    altText: z.string().trim().max(500).optional().nullable(),
+    posterTimestampMs: z.number().int().nonnegative().optional().nullable(),
+    portfolioPosition: z.number().int().nonnegative().optional().nullable(),
+    isPrimary: z.boolean().default(false),
+  }),
 ])
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -296,6 +309,92 @@ Deno.serve(async (req) => {
     if (profileLookupError) {
       log('error', FN, 'profile.lookup_failed', { actor_id: caller.id, error: profileLookupError.message })
       return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
+    }
+
+    if (body.action === 'get-media-presentation') {
+      if (!existingProfile?.id) {
+        return jsonResponse({ error: 'Complete your tailor profile before managing portfolio media.' }, 404, cors)
+      }
+
+      const { data: media, error } = await supabase
+        .from('media_assets')
+        .select('id, media_kind, public_url, poster_url, width, height, focal_x, focal_y, alt_text, is_primary, portfolio_position, status, moderation_status, processing_state, availability_state, created_at')
+        .eq('owner_user_id', caller.id)
+        .eq('tailor_profile_id', existingProfile.id)
+        .eq('purpose', 'PORTFOLIO')
+        .eq('status', 'ACTIVE')
+        .order('is_primary', { ascending: false })
+        .order('portfolio_position', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: true })
+
+      if (error) {
+        log('error', FN, 'media_presentation.lookup_failed', { actor_id: caller.id, error: error.message })
+        return jsonResponse({ error: 'We could not load your portfolio presentation settings right now.' }, 500, cors)
+      }
+
+      return jsonResponse({
+        media: (media ?? []).map((item: Record<string, unknown>, index: number) => ({
+          id: item.id,
+          kind: item.media_kind === 'VIDEO' ? 'VIDEO' : 'IMAGE',
+          url: item.public_url,
+          posterUrl: item.poster_url ?? null,
+          width: item.width ?? null,
+          height: item.height ?? null,
+          focalX: item.focal_x ?? 0.5,
+          focalY: item.focal_y ?? 0.5,
+          altText: item.alt_text ?? null,
+          isPrimary: item.is_primary === true,
+          position: item.portfolio_position ?? index,
+          status: item.status,
+          moderationStatus: item.moderation_status,
+          processingState: item.processing_state,
+          availabilityState: item.availability_state,
+        })),
+      }, 200, cors)
+    }
+
+    if (body.action === 'update-media-presentation') {
+      if (!existingProfile?.id) {
+        return jsonResponse({ error: 'Complete your tailor profile before managing portfolio media.' }, 404, cors)
+      }
+
+      const { data: ownedAsset, error: ownershipError } = await supabase
+        .from('media_assets')
+        .select('id')
+        .eq('id', body.mediaAssetId)
+        .eq('owner_user_id', caller.id)
+        .eq('tailor_profile_id', existingProfile.id)
+        .eq('purpose', 'PORTFOLIO')
+        .eq('status', 'ACTIVE')
+        .maybeSingle()
+
+      if (ownershipError || !ownedAsset) {
+        return jsonResponse({ error: 'That portfolio asset is unavailable or does not belong to this account.' }, 404, cors)
+      }
+
+      const { data: media, error } = await supabase.rpc('set_media_asset_presentation', {
+        p_media_asset_id: body.mediaAssetId,
+        p_focal_x: body.focalX,
+        p_focal_y: body.focalY,
+        p_alt_text: body.altText ?? null,
+        p_poster_timestamp_ms: body.posterTimestampMs ?? null,
+        p_portfolio_position: body.portfolioPosition ?? null,
+        p_is_primary: body.isPrimary,
+      })
+
+      if (error || !media) {
+        log('error', FN, 'media_presentation.update_failed', { actor_id: caller.id, error: error?.message ?? 'empty response' })
+        return jsonResponse({ error: 'We could not save those presentation settings right now.' }, 400, cors)
+      }
+
+      await audit(supabase, {
+        event: 'tailor_profile.media_presentation_updated',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        payload: { function: FN, tailor_profile_id: existingProfile.id, media_asset_id: body.mediaAssetId },
+      })
+
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     if (body.action === 'update-operational-status') {

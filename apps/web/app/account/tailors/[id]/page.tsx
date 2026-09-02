@@ -1,12 +1,4 @@
-import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../../components/account-app-surface'
-import { buildMetadata } from '../../../../lib/metadata'
-
-export const metadata: Metadata = buildMetadata({
-  title: 'Tailor profile',
-  description: 'Review a Drapeon tailor profile, portfolio, ready-made pieces, and order handoff.',
-  path: '/account/tailors',
-})
+import { redirect } from 'next/navigation'
 
 export default async function AccountTailorDetailPage({
   params,
@@ -14,5 +6,5 @@ export default async function AccountTailorDetailPage({
   params: Promise<{ id: string }>
 }): Promise<React.JSX.Element> {
   const { id } = await params
-  return <AccountAppSurface surface="tailor-detail" tailorId={id} />
+  redirect(`/tailors/${encodeURIComponent(id)}`)
 }

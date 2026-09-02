@@ -42,6 +42,7 @@
     "./form-foundation": "./src/form-foundation.ts",
     "./conversation-event-presentation": "./src/conversation-event-presentation.ts",
     "./date-time": "./src/date-time.ts",
+    "./presentation": "./src/presentation.ts",
     "./message-translation": "./src/message-translation.ts",
     "./commercial-contracts": "./src/commercial-contracts.ts",
     "./commercial-pricing": "./src/commercial-pricing.ts",

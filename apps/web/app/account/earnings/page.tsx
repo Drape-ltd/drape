@@ -1,5 +1,5 @@
-import { AccountAppSurface } from '../../../components/account-app-surface'
+import { EarningsWorkspace } from '../../../features/account/earnings/earnings-workspace'
 
 export default function AccountEarningsPage(): React.JSX.Element {
-  return <AccountAppSurface surface="earnings" />
+  return <EarningsWorkspace />
 }

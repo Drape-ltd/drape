@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
 import type { Session } from '@supabase/supabase-js'
-import { formatDatabaseEnumLabel, formatOrderPaymentPhase } from '@drape/shared'
+import {
+  formatDatabaseEnumLabel,
+  formatDate,
+  formatMoney,
+  formatOrderPaymentPhase,
+  formatRelative,
+} from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import { safeEntityName, safeUserText } from '../lib/safe-display'
 import { OpenAppButton } from './open-app-button'
@@ -178,44 +184,6 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 
 function cleanLabel(value: string | null | undefined, fallback: string) {
   return formatDatabaseEnumLabel(value, fallback)
-}
-
-function formatMoney(amountMinor: number | null | undefined, currency: string | null | undefined) {
-  if (typeof amountMinor !== 'number') return 'Quote pending'
-  const normalizedCurrency = currency || 'USD'
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: normalizedCurrency,
-  }).format(amountMinor / 100)
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(date)
-}
-
-function formatRelative(value: string | null | undefined) {
-  if (!value) return 'Recently'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Recently'
-  const deltaMs = date.getTime() - Date.now()
-  const deltaMinutes = Math.round(deltaMs / 60_000)
-  const absMinutes = Math.abs(deltaMinutes)
-  const formatter = new Intl.RelativeTimeFormat('en-US', { numeric: 'auto' })
-
-  if (absMinutes < 60) return formatter.format(deltaMinutes, 'minute')
-  const deltaHours = Math.round(deltaMinutes / 60)
-  if (Math.abs(deltaHours) < 24) return formatter.format(deltaHours, 'hour')
-  const deltaDays = Math.round(deltaHours / 24)
-  if (Math.abs(deltaDays) < 30) return formatter.format(deltaDays, 'day')
-
-  return formatDate(value) ?? 'Recently'
 }
 
 function orderTitle(order: DashboardOrder) {

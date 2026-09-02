@@ -1,5 +1,5 @@
-import { AccountAppSurface } from '../../../components/account-app-surface'
+import { ProfileWorkspace } from '../../../features/account/profile/profile-workspace'
 
 export default function AccountProfilePage(): React.JSX.Element {
-  return <AccountAppSurface surface="profile" />
+  return <ProfileWorkspace />
 }

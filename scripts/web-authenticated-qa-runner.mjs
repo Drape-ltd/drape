@@ -11,18 +11,23 @@ const outDir = process.env.WEB_QA_OUT_DIR ?? '/private/tmp/drape-web-qa'
 const password = process.env.WEB_QA_PASSWORD ?? 'DrapeonWebQA2026!'
 const fastAuth = process.env.WEB_QA_FAST_AUTH === '1'
 const enableMutations = process.env.WEB_QA_ENABLE_MUTATIONS === '1'
+const enableAppendOnlyProofs = process.env.WEB_QA_ENABLE_APPEND_ONLY_PROOFS === '1'
 const enableEmailSmoke = process.env.WEB_QA_ENABLE_EMAILS === '1'
 const publicOnly = process.env.WEB_QA_PUBLIC_ONLY === '1'
+const flowFilter = process.env.WEB_QA_FLOW_FILTER?.trim().toLowerCase() ?? ''
 const allowProdWaitlistMutation = process.env.WEB_QA_ALLOW_PROD_WAITLIST_MUTATION === '1'
 const enableOpsQa = process.env.WEB_QA_ENABLE_OPS_QA !== '0'
 const enableOpsProviderMutations = process.env.WEB_QA_ENABLE_OPS_PROVIDER_MUTATIONS === '1'
 const enableOpsRbacMatrix = process.env.WEB_QA_ENABLE_OPS_RBAC_MATRIX !== '0'
 const spawnOpsRbacRoleServers = process.env.WEB_QA_SPAWN_OPS_RBAC_SERVERS === '1'
 const stamp = Date.now()
+const qaMarketplaceMediaUrl =
+  'https://images.unsplash.com/photo-1594938298603-c8148c4dae35?auto=format&fit=crop&w=1200&q=80'
 const uiEmail = `web.qa.${stamp}@drapeon.co`
 const fallbackEmail = `web.qa.auth.${stamp}@drapeon.co`
 const tailorEmail = `web.qa.tailor.${stamp}@drapeon.co`
-const publicWaitlistEmail = process.env.WEB_QA_WAITLIST_EMAIL ?? `prod.waitlist.qa.runner.${stamp}@drapeon.co`
+const publicWaitlistEmail =
+  process.env.WEB_QA_WAITLIST_EMAIL ?? `prod.waitlist.qa.runner.${stamp}@drapeon.co`
 const phone = `+1555${String(stamp).slice(-7)}`
 
 const accountPaths = [
@@ -147,26 +152,34 @@ const env = {
   ...process.env,
 }
 const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL ?? env.SUPABASE_URL
-const anonKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  ?? env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  ?? env.SUPABASE_ANON_KEY
+const anonKey =
+  env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  env.SUPABASE_ANON_KEY
 const serviceRoleKey = env.STORE_DEMO_SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY
 const opsToken = process.env.WEB_QA_OPS_TOKEN ?? env.OPS_DASHBOARD_TOKEN ?? ''
-const opsBootstrapRole = normalizeOpsRole(process.env.WEB_QA_OPS_ROLE ?? env.OPS_DASHBOARD_BOOTSTRAP_ROLE)
+const opsBootstrapRole = normalizeOpsRole(
+  process.env.WEB_QA_OPS_ROLE ?? env.OPS_DASHBOARD_BOOTSTRAP_ROLE
+)
 const opsRbacRoles = parseOpsRoleList(process.env.WEB_QA_OPS_RBAC_ROLES)
 const opsRbacRoleBaseUrls = parseOpsRoleBaseUrls(process.env.WEB_QA_OPS_RBAC_ROLE_URLS)
-const stripeQaSecretKey = process.env.WEB_QA_STRIPE_SECRET_KEY
-  ?? env.WEB_QA_STRIPE_SECRET_KEY
-  ?? env.STRIPE_SECRET_KEY_SANDBOX
-  ?? env.STRIPE_SECRET_KEY
-  ?? ''
-const stripeQaDestinationAccountId = process.env.WEB_QA_STRIPE_CONNECT_ACCOUNT_ID
-  ?? env.WEB_QA_STRIPE_CONNECT_ACCOUNT_ID
-  ?? ''
+const stripeQaSecretKey =
+  process.env.WEB_QA_STRIPE_SECRET_KEY ??
+  env.WEB_QA_STRIPE_SECRET_KEY ??
+  env.STRIPE_SECRET_KEY_SANDBOX ??
+  env.STRIPE_SECRET_KEY ??
+  ''
+const stripeQaDestinationAccountId =
+  process.env.WEB_QA_STRIPE_CONNECT_ACCOUNT_ID ?? env.WEB_QA_STRIPE_CONNECT_ACCOUNT_ID ?? ''
 const opsProviderMutationMode = resolveOpsProviderMutationMode()
 
 function slug(value) {
-  return value.replace(/^\//u, 'account').replace(/[^\w-]+/gu, '-').replace(/^-|-$/gu, '') || 'account'
+  return (
+    value
+      .replace(/^\//u, 'account')
+      .replace(/[^\w-]+/gu, '-')
+      .replace(/^-|-$/gu, '') || 'account'
+  )
 }
 
 function normalizeOpsRole(value) {
@@ -287,7 +300,9 @@ function redirectSearch(result) {
 
 function assertOpsRedirect(result, key, expectedValues = []) {
   if (![302, 303, 307, 308].includes(result.status)) {
-    throw new Error(`${result.label} did not redirect from /ops/action: ${result.status} ${result.body}`)
+    throw new Error(
+      `${result.label} did not redirect from /ops/action: ${result.status} ${result.body}`
+    )
   }
   const params = redirectSearch(result)
   const actual = params.get(key)
@@ -295,7 +310,9 @@ function assertOpsRedirect(result, key, expectedValues = []) {
     throw new Error(`${result.label} redirect did not include ${key}: ${result.location}`)
   }
   if (expectedValues.length > 0 && !expectedValues.includes(actual)) {
-    throw new Error(`${result.label} expected ${key}=${expectedValues.join('/')} but got ${actual}: ${result.location}`)
+    throw new Error(
+      `${result.label} expected ${key}=${expectedValues.join('/')} but got ${actual}: ${result.location}`
+    )
   }
   return {
     redirectStatus: result.status,
@@ -306,7 +323,9 @@ function assertOpsRedirect(result, key, expectedValues = []) {
 
 function assertOpsRedirectOutcome(result, expected) {
   if (![302, 303, 307, 308].includes(result.status)) {
-    throw new Error(`${result.label} did not redirect from /ops/action: ${result.status} ${result.body}`)
+    throw new Error(
+      `${result.label} did not redirect from /ops/action: ${result.status} ${result.body}`
+    )
   }
   const params = redirectSearch(result)
   const notice = params.get('notice')
@@ -316,7 +335,9 @@ function assertOpsRedirectOutcome(result, expected) {
     (error && (expected.error ?? []).includes(error))
 
   if (!matched) {
-    throw new Error(`${result.label} redirected with unexpected outcome notice=${notice ?? 'null'} error=${error ?? 'null'}: ${result.location}`)
+    throw new Error(
+      `${result.label} redirected with unexpected outcome notice=${notice ?? 'null'} error=${error ?? 'null'}: ${result.location}`
+    )
   }
 
   return {
@@ -385,7 +406,9 @@ async function startOpsRoleServer(role, index) {
   const ready = await waitForHttpReady(targetBaseUrl)
   if (!ready.ready) {
     child.kill('SIGTERM')
-    throw new Error(`Ops RBAC ${role} server did not become ready on ${targetBaseUrl}: ${ready.error}. ${logs.join('').slice(-1600)}`)
+    throw new Error(
+      `Ops RBAC ${role} server did not become ready on ${targetBaseUrl}: ${ready.error}. ${logs.join('').slice(-1600)}`
+    )
   }
 
   return {
@@ -418,7 +441,9 @@ async function fetchJson(url, options, label) {
     // Keep raw body for diagnostics.
   }
   if (!response.ok) {
-    throw new Error(`${label} failed (${response.status}): ${typeof body === 'string' ? body : JSON.stringify(body)}`)
+    throw new Error(
+      `${label} failed (${response.status}): ${typeof body === 'string' ? body : JSON.stringify(body)}`
+    )
   }
   return body
 }
@@ -436,7 +461,7 @@ async function upsertRest(table, body, onConflict) {
       },
       body: JSON.stringify(body),
     },
-    `Upsert ${table}`,
+    `Upsert ${table}`
   )
 }
 
@@ -456,7 +481,7 @@ async function insertRest(table, body, label) {
       },
       body: JSON.stringify(body),
     },
-    label,
+    label
   )
 }
 
@@ -476,7 +501,7 @@ async function patchRest(table, query, body, label) {
       },
       body: JSON.stringify(body),
     },
-    label,
+    label
   )
 }
 
@@ -493,7 +518,7 @@ async function selectRest(table, query, label) {
         authorization: `Bearer ${serviceRoleKey}`,
       },
     },
-    label,
+    label
   )
 }
 
@@ -511,7 +536,7 @@ async function deleteRest(table, query, label) {
         prefer: 'return=minimal',
       },
     },
-    label,
+    label
   )
 }
 
@@ -530,13 +555,13 @@ async function rpcRest(functionName, body, label) {
       },
       body: JSON.stringify(body),
     },
-    label,
+    label
   )
 }
 
 async function selectFirstRest(table, query, label) {
   const rows = await selectRest(table, query, label)
-  return Array.isArray(rows) ? rows[0] ?? null : null
+  return Array.isArray(rows) ? (rows[0] ?? null) : null
 }
 
 function rememberFixtureId(fixture, key, id) {
@@ -546,7 +571,8 @@ function rememberFixtureId(fixture, key, id) {
 }
 
 async function invokeEdgeFunction(functionName, accessToken, body, label) {
-  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase URL or anon key for Edge Function smoke.')
+  if (!supabaseUrl || !anonKey)
+    throw new Error('Missing Supabase URL or anon key for Edge Function smoke.')
   if (!accessToken) throw new Error('Missing authenticated access token for Edge Function smoke.')
   return fetchJson(
     `${supabaseUrl}/functions/v1/${functionName}`,
@@ -559,12 +585,13 @@ async function invokeEdgeFunction(functionName, accessToken, body, label) {
       },
       body: JSON.stringify(body),
     },
-    label,
+    label
   )
 }
 
 async function invokeEdgeFunctionRaw(functionName, accessToken, body) {
-  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase URL or anon key for Edge Function smoke.')
+  if (!supabaseUrl || !anonKey)
+    throw new Error('Missing Supabase URL or anon key for Edge Function smoke.')
   const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
     method: 'POST',
     headers: {
@@ -586,43 +613,59 @@ async function invokeEdgeFunctionRaw(functionName, accessToken, body) {
 }
 
 function responseSummary(result) {
-  const body = result?.body && typeof result.body === 'object' && !Array.isArray(result.body)
-    ? result.body
-    : {}
+  const body =
+    result?.body && typeof result.body === 'object' && !Array.isArray(result.body)
+      ? result.body
+      : {}
   return {
     httpStatus: result?.status ?? null,
-    code: typeof body.code === 'string' ? body.code : typeof body.error === 'string' ? body.error : null,
+    code:
+      typeof body.code === 'string'
+        ? body.code
+        : typeof body.error === 'string'
+          ? body.error
+          : null,
     reason: typeof body.reason === 'string' ? body.reason : null,
     field: typeof body.field === 'string' ? body.field : null,
-    message: typeof body.message === 'string'
-      ? body.message
-      : typeof body.error === 'string'
-        ? body.error
-        : typeof result?.body === 'string'
-          ? result.body.slice(0, 240)
-          : null,
+    message:
+      typeof body.message === 'string'
+        ? body.message
+        : typeof body.error === 'string'
+          ? body.error
+          : typeof result?.body === 'string'
+            ? result.body.slice(0, 240)
+            : null,
   }
 }
 
 function assertExpectedRejection(result, { statuses = [400], codes = [], textIncludes = [] } = {}) {
   if (result.ok) throw new Error(`Expected rejection, got ${result.status}`)
   if (statuses.length > 0 && !statuses.includes(result.status)) {
-    throw new Error(`Expected status ${statuses.join('/')} rejection, got ${result.status}: ${JSON.stringify(result.body)}`)
+    throw new Error(
+      `Expected status ${statuses.join('/')} rejection, got ${result.status}: ${JSON.stringify(result.body)}`
+    )
   }
   const summary = responseSummary(result)
-  if (codes.length > 0 && !codes.some((code) => [summary.code, summary.reason, summary.field].includes(code))) {
+  if (
+    codes.length > 0 &&
+    !codes.some((code) => [summary.code, summary.reason, summary.field].includes(code))
+  ) {
     throw new Error(`Expected rejection code ${codes.join('/')} got ${JSON.stringify(summary)}`)
   }
   const haystack = JSON.stringify(result.body ?? '')
   if (textIncludes.length > 0 && !textIncludes.some((text) => haystack.includes(text))) {
-    throw new Error(`Expected rejection text ${textIncludes.join('/')} got ${haystack.slice(0, 400)}`)
+    throw new Error(
+      `Expected rejection text ${textIncludes.join('/')} got ${haystack.slice(0, 400)}`
+    )
   }
   return summary
 }
 
 function assertQaFixtureAllowed() {
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-    throw new Error('Missing Supabase URL, anon key, or service role key for disposable QA fixtures.')
+    throw new Error(
+      'Missing Supabase URL, anon key, or service role key for disposable QA fixtures.'
+    )
   }
   if (new URL(supabaseUrl).hostname.startsWith('wkfsrunetmgjdtcurmoj')) {
     throw new Error('Refusing to create disposable QA fixtures on the production Supabase project.')
@@ -650,7 +693,7 @@ async function createConfirmedAuthUser(email, displayName, role) {
         },
       }),
     },
-    `Create confirmed ${role.toLowerCase()} auth user`,
+    `Create confirmed ${role.toLowerCase()} auth user`
   )
   const userId = created?.id
   if (!userId) throw new Error('Supabase did not return an auth user id.')
@@ -670,7 +713,24 @@ async function deleteAuthUser(userId) {
         authorization: `Bearer ${serviceRoleKey}`,
       },
     },
-    'Delete disposable auth user',
+    'Delete disposable auth user'
+  )
+}
+
+async function getAuthUser(userId) {
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Missing Supabase URL or service role key for auth verification.')
+  }
+  return fetchJson(
+    `${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    {
+      method: 'GET',
+      headers: {
+        apikey: serviceRoleKey,
+        authorization: `Bearer ${serviceRoleKey}`,
+      },
+    },
+    'Load disposable auth user'
   )
 }
 
@@ -678,30 +738,38 @@ async function createConfirmedCustomer(email) {
   const { userId } = await createConfirmedAuthUser(email, 'Web QA Customer', 'CUSTOMER', phone)
 
   const now = new Date().toISOString()
-  await upsertRest('users', {
-    id: userId,
-    email,
-    display_name: 'Web QA Customer',
-    role: 'CUSTOMER',
-    default_currency: 'USD',
-    currency_source: 'USER_SELECTED',
-    region_code: 'US',
-    currency_confirmed_at: now,
-    updated_at: now,
-  }, 'id')
-
-  await upsertRest('customer_profiles', {
-    user_id: userId,
-    display_name: 'Web QA Customer',
-    unit_preference: 'in',
-    garment_context: 'MENSWEAR',
-    measurements: {
-      unit: 'in',
-      garmentContext: 'MENSWEAR',
-      fitFlags: [],
+  await upsertRest(
+    'users',
+    {
+      id: userId,
+      email,
+      display_name: 'Web QA Customer',
+      role: 'CUSTOMER',
+      default_currency: 'GBP',
+      currency_source: 'USER_SELECTED',
+      region_code: 'GB',
+      currency_confirmed_at: now,
+      updated_at: now,
     },
-    updated_at: now,
-  }, 'user_id')
+    'id'
+  )
+
+  await upsertRest(
+    'customer_profiles',
+    {
+      user_id: userId,
+      display_name: 'Web QA Customer',
+      unit_preference: 'in',
+      garment_context: 'MENSWEAR',
+      measurements: {
+        unit: 'in',
+        garmentContext: 'MENSWEAR',
+        fitFlags: [],
+      },
+      updated_at: now,
+    },
+    'user_id'
+  )
 
   return { email, userId }
 }
@@ -715,6 +783,7 @@ async function createDisposableQaFixtures() {
     tailorAccessToken: null,
     tailorProfileId: null,
     sellerItemId: null,
+    mediaAssetIds: [],
     portfolioItemIds: [],
     orderIds: [],
     readyMadeReservations: [],
@@ -728,111 +797,172 @@ async function createDisposableQaFixtures() {
   }
 
   try {
-    const { userId: tailorUserId } = await createConfirmedAuthUser(tailorEmail, 'Web QA Tailor', 'TAILOR')
+    const { userId: tailorUserId } = await createConfirmedAuthUser(
+      tailorEmail,
+      'Web QA Tailor',
+      'TAILOR'
+    )
     fixture.tailorUserId = tailorUserId
     const now = new Date().toISOString()
 
-    await upsertRest('users', {
-      id: tailorUserId,
-      email: tailorEmail,
-      display_name: 'Web QA Tailor',
-      role: 'TAILOR',
-      default_currency: 'USD',
-      currency_source: 'USER_SELECTED',
-      region_code: 'US',
-      currency_confirmed_at: now,
-      updated_at: now,
-    }, 'id')
+    await upsertRest(
+      'users',
+      {
+        id: tailorUserId,
+        email: tailorEmail,
+        display_name: 'Web QA Tailor',
+        role: 'TAILOR',
+        default_currency: 'GBP',
+        currency_source: 'USER_SELECTED',
+        region_code: 'GB',
+        currency_confirmed_at: now,
+        updated_at: now,
+      },
+      'id'
+    )
 
-    const profileRows = await upsertRest('tailor_profiles', {
-      user_id: tailorUserId,
-      display_name: 'Web QA Tailor',
-      business_name: `Web QA Tailor ${String(stamp).slice(-6)}`,
-      bio: 'Disposable web authenticated QA tailor fixture.',
-      location: 'Chicago, IL',
-      languages: ['English'],
-      specialty_tags: ['QA fixture', 'Alterations'],
-      price_range_min: 5000,
-      price_range_max: 25000,
-      currency: 'USD',
-      payout_currency: 'USD',
-      payout_provider: 'STRIPE',
-      payout_account_type: 'STRIPE_CONNECT',
-      payout_account_verified: true,
-      payout_reverification_required: false,
-      stripe_account_id: 'acct_web_qa_fixture',
-      stripe_connect_account_id: 'acct_web_qa_fixture',
-      tier: 'VERIFIED',
-      availability: 'OPEN',
-      is_verified: true,
-      is_live: true,
-      supports_custom_orders: true,
-      supports_ready_made: true,
-      pickup_available: true,
-      delivery_available: true,
-      shipping_available: true,
-      delivery_fee: 1200,
-      shipping_fee: 1800,
-      portfolio_photo_urls: [],
-      portfolio_video_urls: [],
-      avatar_url: 'https://drapeon.co/logo.png',
-      trust_verification_video_path: `verification-video/${tailorUserId}/challenge_profile-work-payments_${stamp}.mp4`,
-      trust_verification_challenge_id: 'profile-work-payments',
-      trust_verification_challenge_text: 'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
-      id_verification_method: 'CHALLENGE_VIDEO',
-      id_verification_status: 'VERIFIED',
-      profile_completed: true,
-      updated_at: now,
-    }, 'user_id')
+    const profileRows = await upsertRest(
+      'tailor_profiles',
+      {
+        user_id: tailorUserId,
+        display_name: 'Web QA Tailor',
+        business_name: `Web QA Tailor ${String(stamp).slice(-6)}`,
+        bio: 'Disposable web authenticated QA tailor fixture.',
+        location: 'London, United Kingdom',
+        languages: ['English'],
+        specialty_tags: ['QA fixture', 'Alterations'],
+        price_range_min: 5000,
+        price_range_max: 25000,
+        currency: 'GBP',
+        payout_currency: 'GBP',
+        payout_provider: 'STRIPE',
+        payout_account_type: 'STRIPE_CONNECT',
+        payout_account_verified: true,
+        payout_reverification_required: false,
+        stripe_account_id: 'acct_web_qa_fixture',
+        stripe_connect_account_id: 'acct_web_qa_fixture',
+        tier: 'VERIFIED',
+        availability: 'OPEN',
+        is_verified: true,
+        is_live: true,
+        supports_custom_orders: true,
+        supports_ready_made: true,
+        pickup_available: true,
+        delivery_available: true,
+        shipping_available: true,
+        delivery_fee: 1200,
+        shipping_fee: 1800,
+        portfolio_photo_urls: [],
+        portfolio_video_urls: [],
+        avatar_url: qaMarketplaceMediaUrl,
+        trust_verification_video_path: `verification-video/${tailorUserId}/challenge_profile-work-payments_${stamp}.mp4`,
+        trust_verification_challenge_id: 'profile-work-payments',
+        trust_verification_challenge_text:
+          'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
+        id_verification_method: 'CHALLENGE_VIDEO',
+        id_verification_status: 'VERIFIED',
+        profile_completed: true,
+        updated_at: now,
+      },
+      'user_id'
+    )
 
     const tailorProfileId = Array.isArray(profileRows) ? profileRows[0]?.id : null
     if (!tailorProfileId) throw new Error('Disposable tailor profile was not created.')
     fixture.tailorProfileId = tailorProfileId
 
-    const portfolioRows = await insertRest('portfolio_items', {
-      tailor_profile_id: tailorProfileId,
-      image_url: 'https://drapeon.co/logo.png',
-      title: 'Web QA portfolio proof',
-      description: 'Disposable portfolio proof for trust verification QA.',
-      category: null,
-      sort_order: 0,
-    }, 'Insert disposable portfolio proof')
+    const portfolioRows = await insertRest(
+      'portfolio_items',
+      {
+        tailor_profile_id: tailorProfileId,
+        image_url: qaMarketplaceMediaUrl,
+        title: 'Web QA portfolio proof',
+        description: 'Disposable portfolio proof for trust verification QA.',
+        category: null,
+        sort_order: 0,
+      },
+      'Insert disposable portfolio proof'
+    )
     const portfolioItemId = Array.isArray(portfolioRows) ? portfolioRows[0]?.id : null
     if (!portfolioItemId) throw new Error('Disposable portfolio proof was not created.')
     rememberFixtureId(fixture, 'portfolioItemIds', portfolioItemId)
+    const mediaRows = await insertRest(
+      'media_assets',
+      {
+        bucket_id: 'portfolio-photos',
+        object_path: `qa/web/${tailorUserId}/portfolio-proof.png`,
+        owner_user_id: tailorUserId,
+        tailor_profile_id: tailorProfileId,
+        purpose: 'PORTFOLIO',
+        mime_type: 'image/png',
+        public_url: qaMarketplaceMediaUrl,
+        media_kind: 'IMAGE',
+        status: 'ACTIVE',
+        moderation_status: 'APPROVED',
+        focal_x: 0.5,
+        focal_y: 0.5,
+        alt_text: 'Disposable web QA portfolio proof',
+        portfolio_position: 0,
+        is_primary: true,
+        processing_state: 'READY',
+        availability_state: 'AVAILABLE',
+        metadata: { webQaFixture: true, stamp },
+      },
+      'Insert disposable media presentation proof'
+    )
+    const mediaAssetId = Array.isArray(mediaRows) ? mediaRows[0]?.id : null
+    if (!mediaAssetId) throw new Error('Disposable media presentation proof was not created.')
+    rememberFixtureId(fixture, 'mediaAssetIds', mediaAssetId)
     await patchRest(
       'tailor_profiles',
       `id=eq.${encodeURIComponent(tailorProfileId)}`,
-      { portfolio_photo_urls: ['https://drapeon.co/logo.png'] },
-      'Seed disposable verification portfolio summary',
+      { portfolio_photo_urls: [qaMarketplaceMediaUrl] },
+      'Seed disposable verification portfolio summary'
     )
 
-    await upsertRest('tailor_pickup_details', {
-      user_id: tailorUserId,
-      pickup_address: '123 QA Studio Ave, Chicago, IL',
-      pickup_instructions: 'Disposable QA pickup fixture.',
-      updated_at: now,
-    }, 'user_id')
+    await upsertRest(
+      'tailor_pickup_details',
+      {
+        user_id: tailorUserId,
+        pickup_address: '12 QA Studio Lane, London SW1A 1AA, United Kingdom',
+        pickup_address_line1: '12 QA Studio Lane',
+        pickup_city: 'London',
+        pickup_region: 'England',
+        pickup_postal_code: 'SW1A 1AA',
+        pickup_country_code: 'GB',
+        pickup_location_verification_source: 'WEB_QA',
+        pickup_location_verification_reference: `web-qa-${stamp}`,
+        pickup_location_verified_at: now,
+        pickup_instructions: 'Disposable QA pickup fixture.',
+        updated_at: now,
+      },
+      'user_id'
+    )
 
-    const itemRows = await insertRest('seller_items', {
-      tailor_profile_id: tailorProfileId,
-      title: `Web QA Ready-made ${String(stamp).slice(-6)}`,
-      description: 'Disposable ready-made item used by the authenticated web QA runner.',
-      category: 'Kaftan',
-      sizes: ['M'],
-      size_inventory: { M: 3 },
-      price_amount: 8900,
-      currency: 'USD',
-      photo_urls: [],
-      is_ready_made: true,
-      is_live: true,
-      stock_status: 'IN_STOCK',
-      inventory_quantity: 3,
-      pickup_available: true,
-      delivery_available: true,
-      shipping_available: true,
-      updated_at: now,
-    }, 'Insert disposable seller item')
+    const itemRows = await insertRest(
+      'seller_items',
+      {
+        tailor_profile_id: tailorProfileId,
+        title: `Web QA Ready-made ${String(stamp).slice(-6)}`,
+        description: 'Disposable ready-made item used by the authenticated web QA runner.',
+        category: 'Kaftan',
+        sizes: ['M'],
+        size_inventory: { M: 3 },
+        size_guide: { M: { chest: 40, waist: 34, hip: 40, length: 44, unit: 'in' } },
+        price_amount: 8900,
+        currency: 'GBP',
+        photo_urls: [qaMarketplaceMediaUrl],
+        is_ready_made: true,
+        is_live: true,
+        stock_status: 'IN_STOCK',
+        inventory_quantity: 3,
+        pickup_available: true,
+        delivery_available: true,
+        shipping_available: true,
+        updated_at: now,
+      },
+      'Insert disposable seller item'
+    )
 
     const sellerItemId = Array.isArray(itemRows) ? itemRows[0]?.id : null
     if (!sellerItemId) throw new Error('Disposable seller item was not created.')
@@ -858,64 +988,79 @@ async function createDisposableVerificationTailor(fixture, decisionLabel) {
   const { userId } = await createConfirmedAuthUser(email, displayName, 'TAILOR')
   const now = new Date().toISOString()
 
-  await upsertRest('users', {
-    id: userId,
-    email,
-    phone: fixturePhone,
-    display_name: displayName,
-    role: 'TAILOR',
-    default_currency: 'USD',
-    currency_source: 'USER_SELECTED',
-    region_code: 'US',
-    currency_confirmed_at: now,
-    updated_at: now,
-  }, 'id')
+  await upsertRest(
+    'users',
+    {
+      id: userId,
+      email,
+      phone: fixturePhone,
+      display_name: displayName,
+      role: 'TAILOR',
+      default_currency: 'USD',
+      currency_source: 'USER_SELECTED',
+      region_code: 'US',
+      currency_confirmed_at: now,
+      updated_at: now,
+    },
+    'id'
+  )
 
-  const profileRows = await upsertRest('tailor_profiles', {
-    user_id: userId,
-    display_name: displayName,
-    business_name: `${displayName} Studio`,
-    bio: 'Disposable pending trust-review fixture.',
-    location: 'Chicago, IL',
-    languages: ['English'],
-    specialty_tags: ['Alterations'],
-    price_range_min: 5000,
-    price_range_max: 25000,
-    currency: 'USD',
-    tier: 'VERIFIED',
-    availability: 'OPEN',
-    is_verified: false,
-    is_live: false,
-    supports_custom_orders: true,
-    supports_ready_made: false,
-    pickup_available: true,
-    delivery_available: false,
-    shipping_available: false,
-    portfolio_photo_urls: ['https://drapeon.co/logo.png'],
-    portfolio_video_urls: [],
-    avatar_url: 'https://drapeon.co/logo.png',
-    trust_verification_video_path: `verification-video/${userId}/challenge_profile-work-payments_${stamp}.mp4`,
-    trust_verification_challenge_id: 'profile-work-payments',
-    trust_verification_challenge_text: 'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
-    id_verification_method: 'CHALLENGE_VIDEO',
-    id_verification_status: 'PENDING',
-    profile_completed: true,
-    updated_at: now,
-  }, 'user_id')
+  const profileRows = await upsertRest(
+    'tailor_profiles',
+    {
+      user_id: userId,
+      display_name: displayName,
+      business_name: `${displayName} Studio`,
+      bio: 'Disposable pending trust-review fixture.',
+      location: 'Chicago, IL',
+      languages: ['English'],
+      specialty_tags: ['Alterations'],
+      price_range_min: 5000,
+      price_range_max: 25000,
+      currency: 'USD',
+      tier: 'VERIFIED',
+      availability: 'OPEN',
+      is_verified: false,
+      is_live: false,
+      supports_custom_orders: true,
+      supports_ready_made: false,
+      pickup_available: true,
+      delivery_available: false,
+      shipping_available: false,
+      portfolio_photo_urls: [qaMarketplaceMediaUrl],
+      portfolio_video_urls: [],
+      avatar_url: qaMarketplaceMediaUrl,
+      trust_verification_video_path: `verification-video/${userId}/challenge_profile-work-payments_${stamp}.mp4`,
+      trust_verification_challenge_id: 'profile-work-payments',
+      trust_verification_challenge_text:
+        'Say your name, confirm this profile and work are yours, then turn your head gently to the right and back.',
+      id_verification_method: 'CHALLENGE_VIDEO',
+      id_verification_status: 'PENDING',
+      profile_completed: true,
+      updated_at: now,
+    },
+    'user_id'
+  )
 
   const profileId = Array.isArray(profileRows) ? profileRows[0]?.id : null
-  if (!profileId) throw new Error(`Disposable ${decisionLabel} verification profile was not created.`)
+  if (!profileId)
+    throw new Error(`Disposable ${decisionLabel} verification profile was not created.`)
 
-  const portfolioRows = await insertRest('portfolio_items', {
-    tailor_profile_id: profileId,
-    image_url: 'https://drapeon.co/logo.png',
-    title: `${displayName} portfolio proof`,
-    description: 'Disposable portfolio proof for trust verification QA.',
-    category: null,
-    sort_order: 0,
-  }, `Insert disposable ${decisionLabel} verification portfolio proof`)
+  const portfolioRows = await insertRest(
+    'portfolio_items',
+    {
+      tailor_profile_id: profileId,
+      image_url: qaMarketplaceMediaUrl,
+      title: `${displayName} portfolio proof`,
+      description: 'Disposable portfolio proof for trust verification QA.',
+      category: null,
+      sort_order: 0,
+    },
+    `Insert disposable ${decisionLabel} verification portfolio proof`
+  )
   const portfolioItemId = Array.isArray(portfolioRows) ? portfolioRows[0]?.id : null
-  if (!portfolioItemId) throw new Error(`Disposable ${decisionLabel} verification portfolio proof was not created.`)
+  if (!portfolioItemId)
+    throw new Error(`Disposable ${decisionLabel} verification portfolio proof was not created.`)
 
   rememberFixtureId(fixture, 'portfolioItemIds', portfolioItemId)
   fixture.verificationTailors.push({ userId, profileId, email })
@@ -934,7 +1079,8 @@ function buildCustomBriefPreflightPayload(tailorProfileId, overrides = {}) {
     garmentType: 'Agbada',
     garmentTypeOther: null,
     genderPresentation: 'Unisex',
-    description: 'Authenticated web QA preflight for a custom agbada with a relaxed silhouette, deep green fabric, and event-ready finishing. This should validate without creating an order.',
+    description:
+      'Authenticated web QA preflight for a custom agbada with a relaxed silhouette, deep green fabric, and event-ready finishing. This should validate without creating an order.',
     occasion: 'QA event',
     deadline: future,
     referencePhotos: [],
@@ -945,9 +1091,13 @@ function buildCustomBriefPreflightPayload(tailorProfileId, overrides = {}) {
     fitNote: 'Please confirm measurements before quoting this QA dry run.',
     bodyNote: 'Please confirm measurements before quoting this QA dry run.',
     fabricSource: 'TAILOR_SOURCES',
+    fabricSubstitutionPreference: 'ASK_BEFORE_SUBSTITUTING',
     fabricDescription: 'Medium-weight cotton blend in deep green with a smooth finish.',
-    fabricBudgetAmount: null,
-    fabricBudgetCurrency: null,
+    fabricBudgetAmount: 12000,
+    fabricBudgetCurrency: 'USD',
+    fabricReferenceMedia: [],
+    fabricReferenceMediaCount: 0,
+    fabricReferenceLinks: ['https://www.pinterest.com/pin/987654321/'],
     fabricSourcingDeadlineDays: 5,
     supportMeta: {
       source: 'web-authenticated-qa-runner',
@@ -958,7 +1108,10 @@ function buildCustomBriefPreflightPayload(tailorProfileId, overrides = {}) {
         relationship: 'BUYER',
         selectedAt: new Date().toISOString(),
       },
-      measurementFallback: { requiredBeforeQuote: true, note: 'Please confirm measurements before quoting this QA dry run.' },
+      measurementFallback: {
+        requiredBeforeQuote: true,
+        note: 'Please confirm measurements before quoting this QA dry run.',
+      },
       fabricPolicy: { approvalRequiredForTailorSourcing: true },
     },
     deliveryMethod: 'LOCAL_COLLECTION',
@@ -980,28 +1133,33 @@ async function createDisposableCustomOrder(fixture, customerUserId, stage, overr
   if (!fixture?.tailorUserId || !fixture?.tailorProfileId) {
     throw new Error('Disposable tailor fixture is not available.')
   }
-  if (!customerUserId) throw new Error('Customer user id is not available for disposable order creation.')
+  if (!customerUserId)
+    throw new Error('Customer user id is not available for disposable order creation.')
 
   const now = new Date().toISOString()
-  const rows = await insertRest('orders', {
-    customer_id: customerUserId,
-    tailor_profile_id: fixture.tailorProfileId,
-    tailor_id: fixture.tailorUserId,
-    reference: qaReference('QA-CUSTOM'),
-    order_kind: 'CUSTOM',
-    garment_type: 'QA kaftan',
-    garment_description: 'Disposable QA custom order.',
-    occasion: 'QA smoke',
-    fabric_source: 'TAILOR_SOURCES',
-    delivery_method: 'LOCAL_COLLECTION',
-    currency: 'USD',
-    quoted_currency: 'USD',
-    stage,
-    stage_updated_at: now,
-    special_note: '{"webQaFixture":true}',
-    deadline: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
-    ...overrides,
-  }, `Insert disposable custom order ${stage}`)
+  const rows = await insertRest(
+    'orders',
+    {
+      customer_id: customerUserId,
+      tailor_profile_id: fixture.tailorProfileId,
+      tailor_id: fixture.tailorUserId,
+      reference: qaReference('QA-CUSTOM'),
+      order_kind: 'CUSTOM',
+      garment_type: 'QA kaftan',
+      garment_description: 'Disposable QA custom order.',
+      occasion: 'QA smoke',
+      fabric_source: 'TAILOR_SOURCES',
+      delivery_method: 'LOCAL_COLLECTION',
+      currency: 'GBP',
+      quoted_currency: 'GBP',
+      stage,
+      stage_updated_at: now,
+      special_note: '{"webQaFixture":true}',
+      deadline: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
+      ...overrides,
+    },
+    `Insert disposable custom order ${stage}`
+  )
 
   const order = Array.isArray(rows) ? rows[0] : null
   if (!order?.id) throw new Error(`Disposable ${stage} order was not created.`)
@@ -1010,21 +1168,25 @@ async function createDisposableCustomOrder(fixture, customerUserId, stage, overr
 }
 
 async function createDisposableOpsIssue(fixture, overrides = {}) {
-  const rows = await insertRest('ops_issues', {
-    issue_type: 'SYSTEM_ALERT',
-    severity: 'LOW',
-    status: 'OPEN',
-    source: 'web-authenticated-qa-runner',
-    actor_id: 'web-authenticated-qa-runner',
-    actor_role: 'SYSTEM',
-    title: `Web QA ops issue ${stamp}`,
-    description: 'Disposable workflow issue created by the web authenticated QA runner.',
-    recommended_action: 'Verify ops action handling, then let cleanup remove this fixture.',
-    dedupe_key: `web-authenticated-qa-runner:${stamp}:${randomUUID()}`,
-    metadata: { webQaFixture: true, stamp },
-    last_seen_at: new Date().toISOString(),
-    ...overrides,
-  }, 'Insert disposable ops issue')
+  const rows = await insertRest(
+    'ops_issues',
+    {
+      issue_type: 'SYSTEM_ALERT',
+      severity: 'LOW',
+      status: 'OPEN',
+      source: 'web-authenticated-qa-runner',
+      actor_id: 'web-authenticated-qa-runner',
+      actor_role: 'SYSTEM',
+      title: `Web QA ops issue ${stamp}`,
+      description: 'Disposable workflow issue created by the web authenticated QA runner.',
+      recommended_action: 'Verify ops action handling, then let cleanup remove this fixture.',
+      dedupe_key: `web-authenticated-qa-runner:${stamp}:${randomUUID()}`,
+      metadata: { webQaFixture: true, stamp },
+      last_seen_at: new Date().toISOString(),
+      ...overrides,
+    },
+    'Insert disposable ops issue'
+  )
 
   const issue = Array.isArray(rows) ? rows[0] : null
   if (!issue?.id) throw new Error('Disposable ops issue was not created.')
@@ -1033,14 +1195,18 @@ async function createDisposableOpsIssue(fixture, overrides = {}) {
 }
 
 async function createDisposableContactBypassLog(fixture, userId) {
-  const rows = await insertRest('contact_bypass_logs', {
-    id: randomUUID(),
-    user_id: userId,
-    surface: 'web-authenticated-qa-runner',
-    content: 'Call me at +15555550123 from this disposable QA log.',
-    attempt: 1,
-    reviewed: false,
-  }, 'Insert disposable contact bypass log')
+  const rows = await insertRest(
+    'contact_bypass_logs',
+    {
+      id: randomUUID(),
+      user_id: userId,
+      surface: 'web-authenticated-qa-runner',
+      content: 'Call me at +15555550123 from this disposable QA log.',
+      attempt: 1,
+      reviewed: false,
+    },
+    'Insert disposable contact bypass log'
+  )
 
   const log = Array.isArray(rows) ? rows[0] : null
   if (!log?.id) throw new Error('Disposable contact bypass log was not created.')
@@ -1049,18 +1215,22 @@ async function createDisposableContactBypassLog(fixture, userId) {
 }
 
 async function createDisposableTailorApplication(fixture) {
-  const rows = await insertRest('tailor_applications', {
-    business_name: `Web QA Application ${stamp}`,
-    display_name: 'Web QA Applicant',
-    email: `web.qa.application.${stamp}.${randomUUID().slice(0, 8)}@drapeon.co`,
-    location: 'Chicago, IL',
-    specialty: 'QA tailoring',
-    portfolio_url: 'https://example.com/web-qa-portfolio',
-    instagram_url: null,
-    notes: 'Disposable tailor application for ops QA.',
-    source: 'WEB_QA',
-    status: 'PENDING',
-  }, 'Insert disposable tailor application')
+  const rows = await insertRest(
+    'tailor_applications',
+    {
+      business_name: `Web QA Application ${stamp}`,
+      display_name: 'Web QA Applicant',
+      email: `web.qa.application.${stamp}.${randomUUID().slice(0, 8)}@drapeon.co`,
+      location: 'Chicago, IL',
+      specialty: 'QA tailoring',
+      portfolio_url: 'https://example.com/web-qa-portfolio',
+      instagram_url: null,
+      notes: 'Disposable tailor application for ops QA.',
+      source: 'WEB_QA',
+      status: 'PENDING',
+    },
+    'Insert disposable tailor application'
+  )
 
   const application = Array.isArray(rows) ? rows[0] : null
   if (!application?.id) throw new Error('Disposable tailor application was not created.')
@@ -1069,14 +1239,18 @@ async function createDisposableTailorApplication(fixture) {
 }
 
 async function createDisposableDeletionRequest(fixture, userId, email) {
-  const rows = await insertRest('account_deletion_requests', {
-    user_id: userId,
-    email,
-    role: 'TAILOR',
-    status: 'PENDING',
-    reason: 'Disposable account deletion request for ops QA.',
-    metadata: { webQaFixture: true, stamp },
-  }, 'Insert disposable account deletion request')
+  const rows = await insertRest(
+    'account_deletion_requests',
+    {
+      user_id: userId,
+      email,
+      role: 'TAILOR',
+      status: 'PENDING',
+      reason: 'Disposable account deletion request for ops QA.',
+      metadata: { webQaFixture: true, stamp },
+    },
+    'Insert disposable account deletion request'
+  )
 
   const request = Array.isArray(rows) ? rows[0] : null
   if (!request?.id) throw new Error('Disposable account deletion request was not created.')
@@ -1085,22 +1259,31 @@ async function createDisposableDeletionRequest(fixture, userId, email) {
 }
 
 async function createDisposableReview(fixture, customerUserId) {
-  const order = await createDisposableCustomOrder(disposableQaFromFixture(fixture), customerUserId, 'COMPLETE', {
-    quoted_amount: 12500,
-    total_amount: 12500,
-    subtotal_amount: 12500,
-  })
-  const rows = await insertRest('reviews', {
-    order_id: order.id,
-    tailor_profile_id: fixture.tailorProfileId,
-    tailor_id: fixture.tailorUserId,
-    rating: 4,
-    body: 'Disposable held review for ops QA.',
-    reviewer_name: 'Web QA Customer',
-    flagged: true,
-    published_at: null,
-    tags: ['QA'],
-  }, 'Insert disposable review')
+  const order = await createDisposableCustomOrder(
+    disposableQaFromFixture(fixture),
+    customerUserId,
+    'COMPLETE',
+    {
+      quoted_amount: 12500,
+      total_amount: 12500,
+      subtotal_amount: 12500,
+    }
+  )
+  const rows = await insertRest(
+    'reviews',
+    {
+      order_id: order.id,
+      tailor_profile_id: fixture.tailorProfileId,
+      tailor_id: fixture.tailorUserId,
+      rating: 4,
+      body: 'Disposable held review for ops QA.',
+      reviewer_name: 'Web QA Customer',
+      flagged: true,
+      published_at: null,
+      tags: ['QA'],
+    },
+    'Insert disposable review'
+  )
 
   const review = Array.isArray(rows) ? rows[0] : null
   if (!review?.id) throw new Error('Disposable review was not created.')
@@ -1118,15 +1301,19 @@ async function createDisposableDispute(fixture, customerUserId, status = 'OPEN')
     subtotal_amount: 12500,
   })
   const now = new Date().toISOString()
-  const rows = await insertRest('disputes', {
-    order_id: order.id,
-    customer_id: customerUserId,
-    reason: 'QA_DISPUTE',
-    description: 'Disposable dispute created by the web authenticated QA runner.',
-    evidence_urls: [],
-    status,
-    updated_at: now,
-  }, 'Insert disposable dispute')
+  const rows = await insertRest(
+    'disputes',
+    {
+      order_id: order.id,
+      customer_id: customerUserId,
+      reason: 'QA_DISPUTE',
+      description: 'Disposable dispute created by the web authenticated QA runner.',
+      evidence_urls: [],
+      status,
+      updated_at: now,
+    },
+    'Insert disposable dispute'
+  )
 
   const dispute = Array.isArray(rows) ? rows[0] : null
   if (!dispute?.id) throw new Error('Disposable dispute was not created.')
@@ -1135,21 +1322,25 @@ async function createDisposableDispute(fixture, customerUserId, status = 'OPEN')
 
 async function createDisposableOrderPayment(fixture, orderId, overrides = {}) {
   const now = new Date().toISOString()
-  const rows = await insertRest('order_payments', {
-    order_id: orderId,
-    phase: 'INITIAL_ORDER',
-    provider: 'PAYSTACK',
-    currency: 'NGN',
-    amount: 12500,
-    status: 'SUCCEEDED',
-    idempotency_key: qaReference('QA-PAYMENT'),
-    provider_payment_id: `web-qa-payment-${stamp}-${randomUUID().slice(0, 8)}`,
-    provider_checkout_url: null,
-    provider_response: { webQaFixture: true, stamp },
-    refunded_amount: 0,
-    confirmed_at: now,
-    ...overrides,
-  }, 'Insert disposable order payment')
+  const rows = await insertRest(
+    'order_payments',
+    {
+      order_id: orderId,
+      phase: 'INITIAL_ORDER',
+      provider: 'PAYSTACK',
+      currency: 'NGN',
+      amount: 12500,
+      status: 'SUCCEEDED',
+      idempotency_key: qaReference('QA-PAYMENT'),
+      provider_payment_id: `web-qa-payment-${stamp}-${randomUUID().slice(0, 8)}`,
+      provider_checkout_url: null,
+      provider_response: { webQaFixture: true, stamp },
+      refunded_amount: 0,
+      confirmed_at: now,
+      ...overrides,
+    },
+    'Insert disposable order payment'
+  )
 
   const payment = Array.isArray(rows) ? rows[0] : null
   if (!payment?.id) throw new Error('Disposable order payment was not created.')
@@ -1158,7 +1349,9 @@ async function createDisposableOrderPayment(fixture, orderId, overrides = {}) {
 
 async function createStripeTestPaymentIntent(amount, currency, description) {
   if (!isStripeTestKey(stripeQaSecretKey)) {
-    throw new Error('WEB_QA_STRIPE_SECRET_KEY/STRIPE_SECRET_KEY_SANDBOX must be a sk_test_ key for provider mutation QA.')
+    throw new Error(
+      'WEB_QA_STRIPE_SECRET_KEY/STRIPE_SECRET_KEY_SANDBOX must be a sk_test_ key for provider mutation QA.'
+    )
   }
 
   const body = new URLSearchParams()
@@ -1184,13 +1377,19 @@ async function createStripeTestPaymentIntent(amount, currency, description) {
 
   const payload = await response.json().catch(() => null)
   if (!response.ok || payload?.status !== 'succeeded' || typeof payload?.id !== 'string') {
-    throw new Error(`Stripe test PaymentIntent did not succeed: ${response.status} ${JSON.stringify(payload).slice(0, 500)}`)
+    throw new Error(
+      `Stripe test PaymentIntent did not succeed: ${response.status} ${JSON.stringify(payload).slice(0, 500)}`
+    )
   }
 
   return payload
 }
 
-async function createDisposableRefundOrder(fixture, customerUserId, { providerBacked = false } = {}) {
+async function createDisposableRefundOrder(
+  fixture,
+  customerUserId,
+  { providerBacked = false } = {}
+) {
   const order = await createDisposableCustomOrder(fixture, customerUserId, 'COMPLETE', {
     quoted_amount: 12500,
     total_amount: 12500,
@@ -1202,7 +1401,11 @@ async function createDisposableRefundOrder(fixture, customerUserId, { providerBa
   })
   let providerPaymentId = null
   if (providerBacked) {
-    const intent = await createStripeTestPaymentIntent(12500, 'USD', `Drape web QA refundable order ${order.reference}`)
+    const intent = await createStripeTestPaymentIntent(
+      12500,
+      'USD',
+      `Drape web QA refundable order ${order.reference}`
+    )
     providerPaymentId = intent.id
     rememberFixtureId(fixture, 'providerPaymentIds', intent.id)
   }
@@ -1216,7 +1419,11 @@ async function createDisposableRefundOrder(fixture, customerUserId, { providerBa
   return { order, payment, providerPaymentId }
 }
 
-async function createDisposablePayoutReadyOrder(fixture, customerUserId, { providerBacked = false, mismatch = false, stage = 'COMPLETE' } = {}) {
+async function createDisposablePayoutReadyOrder(
+  fixture,
+  customerUserId,
+  { providerBacked = false, mismatch = false, stage = 'COMPLETE' } = {}
+) {
   const confirmedAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
   const currency = providerBacked ? 'USD' : 'NGN'
   const provider = providerBacked ? 'STRIPE' : 'PAYSTACK'
@@ -1228,7 +1435,9 @@ async function createDisposablePayoutReadyOrder(fixture, customerUserId, { provi
     source_amount: 12500,
     tailor_payout_currency_locked: mismatch ? 'USD' : currency,
     tailor_payout_provider_locked: mismatch ? 'STRIPE' : provider,
-    tailor_stripe_connect_account_id_locked: providerBacked ? stripeQaDestinationAccountId.trim() : null,
+    tailor_stripe_connect_account_id_locked: providerBacked
+      ? stripeQaDestinationAccountId.trim()
+      : null,
     tailor_paystack_recipient_code_locked: null,
     escrow_released: false,
     handoff_completed_at: confirmedAt,
@@ -1239,16 +1448,15 @@ async function createDisposablePayoutReadyOrder(fixture, customerUserId, { provi
     provider,
     currency,
     amount: 12500,
-    provider_payment_id: providerBacked ? `web-qa-settled-${stamp}-${randomUUID().slice(0, 8)}` : `web-qa-paystack-${stamp}-${randomUUID().slice(0, 8)}`,
+    provider_payment_id: providerBacked
+      ? `web-qa-settled-${stamp}-${randomUUID().slice(0, 8)}`
+      : `web-qa-paystack-${stamp}-${randomUUID().slice(0, 8)}`,
   })
   return { order, payment }
 }
 
 async function createDisposableMaterialAdvance(fixture, customerUserId, options = {}) {
-  const {
-    paid = false,
-    providerBacked = false,
-  } = options
+  const { paid = false, providerBacked = false } = options
   const currency = providerBacked ? 'USD' : 'NGN'
   const order = await createDisposableCustomOrder(fixture, customerUserId, 'SOURCING', {
     quoted_amount: 12500,
@@ -1266,26 +1474,32 @@ async function createDisposableMaterialAdvance(fixture, customerUserId, options 
       provider: providerBacked ? 'STRIPE' : 'PAYSTACK',
       currency,
       amount: 2500,
-      provider_payment_id: providerBacked ? `web-qa-material-${stamp}-${randomUUID().slice(0, 8)}` : `web-qa-material-paystack-${stamp}-${randomUUID().slice(0, 8)}`,
+      provider_payment_id: providerBacked
+        ? `web-qa-material-${stamp}-${randomUUID().slice(0, 8)}`
+        : `web-qa-material-paystack-${stamp}-${randomUUID().slice(0, 8)}`,
     })
   }
-  const rows = await insertRest('order_material_advances', {
-    order_id: order.id,
-    customer_id: customerUserId,
-    tailor_id: fixture.tailorUserId,
-    requested_by: fixture.tailorUserId,
-    title: 'Web QA material advance',
-    description: 'Disposable material advance fixture used by the ops QA runner.',
-    amount: 2500,
-    currency,
-    status: paid ? 'OPS_REVIEW' : 'REQUESTED',
-    release_status: paid ? 'OPS_REVIEW' : 'NOT_REQUESTED',
-    payment_provider: paid ? (providerBacked ? 'STRIPE' : 'PAYSTACK') : null,
-    provider_payment_id: paid ? payment?.provider_payment_id ?? null : null,
-    payment_id: paid ? payment?.id ?? null : null,
-    paid_at: paid ? new Date().toISOString() : null,
-    release_requested_at: paid ? new Date().toISOString() : null,
-  }, 'Insert disposable material advance')
+  const rows = await insertRest(
+    'order_material_advances',
+    {
+      order_id: order.id,
+      customer_id: customerUserId,
+      tailor_id: fixture.tailorUserId,
+      requested_by: fixture.tailorUserId,
+      title: 'Web QA material advance',
+      description: 'Disposable material advance fixture used by the ops QA runner.',
+      amount: 2500,
+      currency,
+      status: paid ? 'OPS_REVIEW' : 'REQUESTED',
+      release_status: paid ? 'OPS_REVIEW' : 'NOT_REQUESTED',
+      payment_provider: paid ? (providerBacked ? 'STRIPE' : 'PAYSTACK') : null,
+      provider_payment_id: paid ? (payment?.provider_payment_id ?? null) : null,
+      payment_id: paid ? (payment?.id ?? null) : null,
+      paid_at: paid ? new Date().toISOString() : null,
+      release_requested_at: paid ? new Date().toISOString() : null,
+    },
+    'Insert disposable material advance'
+  )
 
   const advance = Array.isArray(rows) ? rows[0] : null
   if (!advance?.id) throw new Error('Disposable material advance was not created.')
@@ -1306,11 +1520,17 @@ async function cleanupDisposableQaFixtures(fixture) {
   }
 
   for (const reservation of fixture.readyMadeReservations ?? []) {
-    await attempt(`release inventory ${reservation.orderId}`, () => rpcRest('release_seller_item_inventory', {
-      target_item_id: reservation.sellerItemId,
-      released_quantity: reservation.quantity,
-      released_size: reservation.size,
-    }, 'Release disposable ready-made inventory'))
+    await attempt(`release inventory ${reservation.orderId}`, () =>
+      rpcRest(
+        'release_seller_item_inventory',
+        {
+          target_item_id: reservation.sellerItemId,
+          released_quantity: reservation.quantity,
+          released_size: reservation.size,
+        },
+        'Release disposable ready-made inventory'
+      )
+    )
   }
 
   const orderIds = [...new Set(fixture.orderIds ?? [])]
@@ -1330,67 +1550,154 @@ async function cleanupDisposableQaFixtures(fixture) {
       'disputes',
       'audit_logs',
     ]) {
-      await attempt(`delete ${table}`, () => deleteRest(table, orderFilter, `Delete disposable ${table}`))
+      await attempt(`delete ${table}`, () =>
+        deleteRest(table, orderFilter, `Delete disposable ${table}`)
+      )
     }
-    await attempt('delete order-linked ops issues', () => deleteRest('ops_issues', `order_id=in.(${orderIds.join(',')})`, 'Delete disposable order-linked ops issues'))
-    await attempt('delete orders', () => deleteRest('orders', `id=in.(${orderIds.join(',')})`, 'Delete disposable orders'))
+    await attempt('delete order-linked ops issues', () =>
+      deleteRest(
+        'ops_issues',
+        `order_id=in.(${orderIds.join(',')})`,
+        'Delete disposable order-linked ops issues'
+      )
+    )
+    await attempt('delete orders', () =>
+      deleteRest('orders', `id=in.(${orderIds.join(',')})`, 'Delete disposable orders')
+    )
   }
 
   const materialAdvanceIds = [...new Set(fixture.materialAdvanceIds ?? [])]
   if (materialAdvanceIds.length > 0) {
-    await attempt('delete material advance ops issues', () => deleteRest('ops_issues', `related_entity_id=in.(${materialAdvanceIds.join(',')})`, 'Delete disposable material advance ops issues'))
-    await attempt('delete material advances', () => deleteRest('order_material_advances', `id=in.(${materialAdvanceIds.join(',')})`, 'Delete disposable material advances'))
+    await attempt('delete material advance ops issues', () =>
+      deleteRest(
+        'ops_issues',
+        `related_entity_id=in.(${materialAdvanceIds.join(',')})`,
+        'Delete disposable material advance ops issues'
+      )
+    )
+    await attempt('delete material advances', () =>
+      deleteRest(
+        'order_material_advances',
+        `id=in.(${materialAdvanceIds.join(',')})`,
+        'Delete disposable material advances'
+      )
+    )
   }
 
   const opsIssueIds = [...new Set(fixture.opsIssueIds ?? [])]
   if (opsIssueIds.length > 0) {
-    await attempt('delete ops issues', () => deleteRest('ops_issues', `id=in.(${opsIssueIds.join(',')})`, 'Delete disposable ops issues'))
+    await attempt('delete ops issues', () =>
+      deleteRest('ops_issues', `id=in.(${opsIssueIds.join(',')})`, 'Delete disposable ops issues')
+    )
   }
 
   const contactBypassLogIds = [...new Set(fixture.contactBypassLogIds ?? [])]
   if (contactBypassLogIds.length > 0) {
-    await attempt('delete contact bypass logs', () => deleteRest('contact_bypass_logs', `id=in.(${contactBypassLogIds.join(',')})`, 'Delete disposable contact bypass logs'))
+    await attempt('delete contact bypass logs', () =>
+      deleteRest(
+        'contact_bypass_logs',
+        `id=in.(${contactBypassLogIds.join(',')})`,
+        'Delete disposable contact bypass logs'
+      )
+    )
   }
 
   const deletionRequestIds = [...new Set(fixture.deletionRequestIds ?? [])]
   if (deletionRequestIds.length > 0) {
-    await attempt('delete account deletion requests', () => deleteRest('account_deletion_requests', `id=in.(${deletionRequestIds.join(',')})`, 'Delete disposable account deletion requests'))
+    await attempt('delete account deletion requests', () =>
+      deleteRest(
+        'account_deletion_requests',
+        `id=in.(${deletionRequestIds.join(',')})`,
+        'Delete disposable account deletion requests'
+      )
+    )
   }
 
   const tailorApplicationIds = [...new Set(fixture.tailorApplicationIds ?? [])]
   if (tailorApplicationIds.length > 0) {
-    await attempt('delete tailor applications', () => deleteRest('tailor_applications', `id=in.(${tailorApplicationIds.join(',')})`, 'Delete disposable tailor applications'))
+    await attempt('delete tailor applications', () =>
+      deleteRest(
+        'tailor_applications',
+        `id=in.(${tailorApplicationIds.join(',')})`,
+        'Delete disposable tailor applications'
+      )
+    )
   }
 
   if (fixture.sellerItemId) {
-    await attempt('delete seller item', () => deleteRest('seller_items', `id=eq.${fixture.sellerItemId}`, 'Delete disposable seller item'))
+    await attempt('delete seller item', () =>
+      deleteRest('seller_items', `id=eq.${fixture.sellerItemId}`, 'Delete disposable seller item')
+    )
   }
   const portfolioItemIds = [...new Set(fixture.portfolioItemIds ?? [])]
   if (portfolioItemIds.length > 0) {
-    await attempt('delete portfolio items', () => deleteRest('portfolio_items', `id=in.(${portfolioItemIds.join(',')})`, 'Delete disposable portfolio items'))
+    await attempt('delete portfolio items', () =>
+      deleteRest(
+        'portfolio_items',
+        `id=in.(${portfolioItemIds.join(',')})`,
+        'Delete disposable portfolio items'
+      )
+    )
+  }
+  const mediaAssetIds = [...new Set(fixture.mediaAssetIds ?? [])]
+  if (mediaAssetIds.length > 0) {
+    await attempt('delete media assets', () =>
+      deleteRest(
+        'media_assets',
+        `id=in.(${mediaAssetIds.join(',')})`,
+        'Delete disposable media assets'
+      )
+    )
   }
   if (fixture.tailorUserId) {
-    await attempt('delete pickup details', () => deleteRest('tailor_pickup_details', `user_id=eq.${fixture.tailorUserId}`, 'Delete disposable pickup details'))
+    await attempt('delete pickup details', () =>
+      deleteRest(
+        'tailor_pickup_details',
+        `user_id=eq.${fixture.tailorUserId}`,
+        'Delete disposable pickup details'
+      )
+    )
   }
   for (const verificationTailor of fixture.verificationTailors ?? []) {
-    await attempt(
-      `delete verification profile ${verificationTailor.profileId}`,
-      () => deleteRest('tailor_profiles', `id=eq.${verificationTailor.profileId}`, 'Delete disposable verification profile'),
+    await attempt(`delete verification profile ${verificationTailor.profileId}`, () =>
+      deleteRest(
+        'tailor_profiles',
+        `id=eq.${verificationTailor.profileId}`,
+        'Delete disposable verification profile'
+      )
     )
-    await attempt(
-      `delete verification public user ${verificationTailor.userId}`,
-      () => deleteRest('users', `id=eq.${verificationTailor.userId}`, 'Delete disposable verification public user'),
+    await attempt(`delete verification public user ${verificationTailor.userId}`, () =>
+      deleteRest(
+        'users',
+        `id=eq.${verificationTailor.userId}`,
+        'Delete disposable verification public user'
+      )
     )
-    await attempt(
-      `delete verification auth user ${verificationTailor.userId}`,
-      () => deleteAuthUser(verificationTailor.userId),
+    await attempt(`delete verification auth user ${verificationTailor.userId}`, () =>
+      deleteAuthUser(verificationTailor.userId)
     )
   }
   if (fixture.tailorProfileId) {
-    await attempt('delete tailor profile', () => deleteRest('tailor_profiles', `id=eq.${fixture.tailorProfileId}`, 'Delete disposable tailor profile'))
+    await attempt('deactivate tailor profile', () =>
+      patchRest(
+        'tailor_profiles',
+        `id=eq.${fixture.tailorProfileId}`,
+        { is_live: false, accepts_custom_orders_now: false, shop_paused: true },
+        'Deactivate disposable tailor profile'
+      )
+    )
+    await attempt('delete tailor profile', () =>
+      deleteRest(
+        'tailor_profiles',
+        `id=eq.${fixture.tailorProfileId}`,
+        'Delete disposable tailor profile'
+      )
+    )
   }
   if (fixture.tailorUserId) {
-    await attempt('delete public user', () => deleteRest('users', `id=eq.${fixture.tailorUserId}`, 'Delete disposable public user'))
+    await attempt('delete public user', () =>
+      deleteRest('users', `id=eq.${fixture.tailorUserId}`, 'Delete disposable public user')
+    )
     await attempt('delete auth user', () => deleteAuthUser(fixture.tailorUserId))
   }
 
@@ -1410,9 +1717,13 @@ async function verifyPasswordSession(email) {
         },
         body: JSON.stringify({ email, password }),
       },
-      'Password session check',
+      'Password session check'
     )
-    return { ok: Boolean(body?.access_token), userId: body?.user?.id ?? null, accessToken: body?.access_token ?? null }
+    return {
+      ok: Boolean(body?.access_token),
+      userId: body?.user?.id ?? null,
+      accessToken: body?.access_token ?? null,
+    }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -1421,11 +1732,15 @@ async function verifyPasswordSession(email) {
 async function browserAuthState(page) {
   return page.evaluate(() => ({
     url: window.location.href,
-    localStorageKeys: Object.keys(window.localStorage).filter((key) => key.includes('supabase') || key.includes('auth') || key.startsWith('sb-')),
+    localStorageKeys: Object.keys(window.localStorage).filter(
+      (key) => key.includes('supabase') || key.includes('auth') || key.startsWith('sb-')
+    ),
     cookies: document.cookie
       .split(';')
       .map((entry) => entry.trim().split('=')[0])
-      .filter((name) => name.includes('supabase') || name.includes('auth') || name.startsWith('sb-')),
+      .filter(
+        (name) => name.includes('supabase') || name.includes('auth') || name.startsWith('sb-')
+      ),
   }))
 }
 
@@ -1542,7 +1857,8 @@ async function runPublicOnlyQa() {
       type: 'waitlist-submit',
       skipped: true,
       ok: true,
-      reason: 'Set WEB_QA_ALLOW_PROD_WAITLIST_MUTATION=1 to create a real disposable waitlist smoke row.',
+      reason:
+        'Set WEB_QA_ALLOW_PROD_WAITLIST_MUTATION=1 to create a real disposable waitlist smoke row.',
     })
   }
 
@@ -1579,10 +1895,14 @@ async function main() {
   let disposableQaCleanup = null
 
   page.on('console', (message) => {
-    if (['error', 'warning'].includes(message.type())) events.push({ type: message.type(), text: message.text() })
+    if (['error', 'warning'].includes(message.type()))
+      events.push({ type: message.type(), text: message.text() })
   })
   page.on('requestfailed', (request) => {
-    events.push({ type: 'requestfailed', text: `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}` })
+    events.push({
+      type: 'requestfailed',
+      text: `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
+    })
   })
   page.on('response', async (response) => {
     const status = response.status()
@@ -1600,7 +1920,19 @@ async function main() {
   page.on('pageerror', (error) => events.push({ type: 'pageerror', text: error.message }))
 
   async function screenshotFor(targetPage, name) {
-    await targetPage.screenshot({ path: path.join(outDir, `${name}.png`), fullPage: false })
+    try {
+      await targetPage.screenshot({
+        path: path.join(outDir, `${name}.png`),
+        fullPage: false,
+        animations: 'disabled',
+        timeout: 15_000,
+      })
+    } catch (error) {
+      events.push({
+        type: 'screenshot-error',
+        text: `${name}: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
   }
 
   async function screenshot(name) {
@@ -1611,12 +1943,26 @@ async function main() {
     await targetPage.goto(`${baseUrl}/sign-in`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await targetPage.waitForSelector('input[type="email"]', { timeout: 8_000 }).catch(() => null)
-      if (await targetPage.locator('input[type="email"]').count().catch(() => 0)) break
+      if (
+        await targetPage
+          .locator('input[type="email"]')
+          .count()
+          .catch(() => 0)
+      )
+        break
       await targetPage.reload({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null)
     }
-    if (!(await targetPage.locator('input[type="email"]').count().catch(() => 0))) {
+    if (
+      !(await targetPage
+        .locator('input[type="email"]')
+        .count()
+        .catch(() => 0))
+    ) {
       await screenshotFor(targetPage, `${screenshotName}-missing-form`)
-      const body = await targetPage.locator('body').innerText().catch(() => '')
+      const body = await targetPage
+        .locator('body')
+        .innerText()
+        .catch(() => '')
       throw new Error(`Sign-in form was not visible at ${targetPage.url()}: ${body.slice(0, 240)}`)
     }
     await targetPage.waitForTimeout(3_000)
@@ -1634,6 +1980,10 @@ async function main() {
   }
 
   async function runFlow(name, fn) {
+    if (flowFilter && !name.toLowerCase().includes(flowFilter)) {
+      recordFlow(name, 'skipped', { reason: `WEB_QA_FLOW_FILTER=${flowFilter}` })
+      return
+    }
     try {
       const details = await fn()
       recordFlow(name, 'passed', details ?? {})
@@ -1647,18 +1997,26 @@ async function main() {
   }
 
   async function waitForWorkspaceReady(targetPage = page) {
-    await targetPage.waitForFunction(() => !document.body.innerText.includes('Loading your Drapeon workspace'), null, { timeout: 10_000 }).catch(() => null)
-    await targetPage.waitForTimeout(1_000)
+    await targetPage
+      .locator('[data-account-workspace-ready="true"]')
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .catch(() => null)
+    await targetPage.waitForTimeout(250)
   }
 
   async function runOpsActionQaSuite(customerUserId) {
     await runFlow('ops action auth boundary', async () => {
       const checked = []
       for (const kind of OPS_ACTION_KINDS) {
-        const result = await postLocalForm('/ops/action', {
-          kind,
-          redirectTo: '/ops?view=overview',
-        }, null, `Ops locked boundary ${kind}`)
+        const result = await postLocalForm(
+          '/ops/action',
+          {
+            kind,
+            redirectTo: '/ops?view=overview',
+          },
+          null,
+          `Ops locked boundary ${kind}`
+        )
         const redirect = assertOpsRedirect(result, 'error', ['locked'])
         checked.push({ kind, error: redirect.error })
       }
@@ -1669,7 +2027,7 @@ async function main() {
       guardedSkip(
         'ops action authenticated suite',
         'WEB_QA_ENABLE_OPS_QA=0 disabled ops action QA.',
-        'Run without WEB_QA_ENABLE_OPS_QA=0 to exercise the ops control-plane action suite.',
+        'Run without WEB_QA_ENABLE_OPS_QA=0 to exercise the ops control-plane action suite.'
       )
       return
     }
@@ -1679,30 +2037,42 @@ async function main() {
       guardedSkip(
         'ops action authenticated suite',
         `Ops bootstrap token is ${status}; the app requires a non-placeholder token of at least 32 characters.`,
-        'Start the web dev server with a strong OPS_DASHBOARD_TOKEN and run the runner with the same token, or pass WEB_QA_OPS_TOKEN.',
+        'Start the web dev server with a strong OPS_DASHBOARD_TOKEN and run the runner with the same token, or pass WEB_QA_OPS_TOKEN.'
       )
       return
     }
 
-    if (!disposableQa?.tailorUserId || !disposableQa.tailorProfileId || !disposableQa.sellerItemId || !customerUserId) {
+    if (
+      !disposableQa?.tailorUserId ||
+      !disposableQa.tailorProfileId ||
+      !disposableQa.sellerItemId ||
+      !customerUserId
+    ) {
       guardedSkip(
         'ops action authenticated suite',
         'Disposable customer/tailor fixtures were not available.',
-        'Run against a non-production Supabase project with service-role credentials so ops QA can create and clean fixtures.',
+        'Run against a non-production Supabase project with service-role credentials so ops QA can create and clean fixtures.'
       )
       return
     }
 
     let opsCookie = null
     const opsStartedAt = new Date(Date.now() - 5_000).toISOString()
-    const allowedForRole = new Set(OPS_ROLE_ACTION_ACCESS[opsBootstrapRole] ?? OPS_ROLE_ACTION_ACCESS.admin)
+    const allowedForRole = new Set(
+      OPS_ROLE_ACTION_ACCESS[opsBootstrapRole] ?? OPS_ROLE_ACTION_ACCESS.admin
+    )
 
     async function postOpsAction(kind, fields, label) {
-      return postLocalForm('/ops/action', {
-        redirectTo: '/ops?view=overview',
-        kind,
-        ...fields,
-      }, opsCookie, label)
+      return postLocalForm(
+        '/ops/action',
+        {
+          redirectTo: '/ops?view=overview',
+          kind,
+          ...fields,
+        },
+        opsCookie,
+        label
+      )
     }
 
     async function requireLatestAudit(event, { orderId = null } = {}) {
@@ -1714,8 +2084,13 @@ async function main() {
         'limit=1',
       ]
       if (orderId) filters.splice(2, 0, `order_id=eq.${encodeURIComponent(orderId)}`)
-      const audit = await selectFirstRest('audit_logs', filters.join('&'), `Select latest audit log ${event}`)
-      if (!audit?.id) throw new Error(`Expected audit log ${event}${orderId ? ` for order ${orderId}` : ''}.`)
+      const audit = await selectFirstRest(
+        'audit_logs',
+        filters.join('&'),
+        `Select latest audit log ${event}`
+      )
+      if (!audit?.id)
+        throw new Error(`Expected audit log ${event}${orderId ? ` for order ${orderId}` : ''}.`)
       return audit
     }
 
@@ -1723,7 +2098,7 @@ async function main() {
       const audit = await selectFirstRest(
         'ops_audit_logs',
         `select=id,issue_id,action_taken,performed_role,reason,created_at&issue_id=eq.${encodeURIComponent(issueId)}&action_taken=eq.${encodeURIComponent(actionTaken)}&order=created_at.desc&limit=1`,
-        `Select ops audit ${actionTaken}`,
+        `Select ops audit ${actionTaken}`
       )
       if (!audit?.id) throw new Error(`Expected ops audit ${actionTaken} for issue ${issueId}.`)
       return audit
@@ -1733,7 +2108,7 @@ async function main() {
       const issue = await selectFirstRest(
         'ops_issues',
         `select=id,issue_type,status,order_id,related_entity_id,metadata,created_at&${filters}&order=created_at.desc&limit=1`,
-        label,
+        label
       )
       if (!issue?.id) throw new Error(`Expected ops issue for ${label}.`)
       return issue
@@ -1743,7 +2118,7 @@ async function main() {
       const payout = await selectFirstRest(
         'payouts',
         `select=id,status,blocked_reason,provider,provider_payout_id,provider_response,source_payment_id,amount,currency&order_id=eq.${encodeURIComponent(orderId)}&order=processed_at.desc&limit=1`,
-        'Select latest disposable payout',
+        'Select latest disposable payout'
       )
       if (!payout?.id) throw new Error(`Expected payout row for order ${orderId}.`)
       return payout
@@ -1764,7 +2139,7 @@ async function main() {
           stripe_connect_account_id: stripeQaDestinationAccountId.trim(),
           updated_at: new Date().toISOString(),
         },
-        'Prepare disposable Stripe payout profile',
+        'Prepare disposable Stripe payout profile'
       )
       return true
     }
@@ -1774,7 +2149,7 @@ async function main() {
         guardedSkip(
           name,
           `Current ops role ${opsBootstrapRole} does not allow ${kind}.`,
-          `Run this suite with OPS_DASHBOARD_BOOTSTRAP_ROLE=admin, or run a dedicated ${opsBootstrapRole} RBAC pass expecting forbidden redirects.`,
+          `Run this suite with OPS_DASHBOARD_BOOTSTRAP_ROLE=admin, or run a dedicated ${opsBootstrapRole} RBAC pass expecting forbidden redirects.`
         )
         return
       }
@@ -1782,10 +2157,15 @@ async function main() {
     }
 
     await runFlow('ops action login/unlock', async () => {
-      const result = await postLocalForm('/ops/login', {
-        token: opsToken,
-        redirectTo: '/ops',
-      }, null, 'Ops dashboard login')
+      const result = await postLocalForm(
+        '/ops/login',
+        {
+          token: opsToken,
+          redirectTo: '/ops',
+        },
+        null,
+        'Ops dashboard login'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['ops-unlocked'])
       opsCookie = result.setCookie ? result.setCookie.split(';')[0] : opsCookieForToken(opsToken)
       if (!opsCookie) throw new Error('Ops login did not produce a cookie.')
@@ -1796,7 +2176,7 @@ async function main() {
       guardedSkip(
         'ops action authenticated matrix',
         'Ops login did not complete, so authenticated action checks cannot run.',
-        'Fix the ops bootstrap token/dev-server env mismatch and rerun the QA runner.',
+        'Fix the ops bootstrap token/dev-server env mismatch and rerun the QA runner.'
       )
       return
     }
@@ -1813,9 +2193,10 @@ async function main() {
         role: opsBootstrapRole,
         forbiddenChecks: checked.length,
         checked,
-        note: checked.length === 0
-          ? 'Current role allows every action; rerun with OPS_DASHBOARD_BOOTSTRAP_ROLE=engineering, finance, trust, ops, or customer_success for denial checks.'
-          : null,
+        note:
+          checked.length === 0
+            ? 'Current role allows every action; rerun with OPS_DASHBOARD_BOOTSTRAP_ROLE=engineering, finance, trust, ops, or customer_success for denial checks.'
+            : null,
       }
     })
 
@@ -1852,10 +2233,16 @@ async function main() {
         const denied = OPS_ACTION_KINDS.filter((kind) => !allowed.has(kind))
         const checked = []
         for (const kind of denied) {
-          const result = await postLocalFormToBase(targetBaseUrl, '/ops/action', {
-            redirectTo: '/ops?view=overview',
-            kind,
-          }, targetCookie, `Ops RBAC ${role} forbids ${kind}`)
+          const result = await postLocalFormToBase(
+            targetBaseUrl,
+            '/ops/action',
+            {
+              redirectTo: '/ops?view=overview',
+              kind,
+            },
+            targetCookie,
+            `Ops RBAC ${role} forbids ${kind}`
+          )
           const redirect = assertOpsRedirect(result, 'error', ['forbidden'])
           checked.push({ kind, error: redirect.error })
         }
@@ -1878,53 +2265,100 @@ async function main() {
       return assertOpsRedirect(result, 'error', ['forbidden'])
     })
 
-    await runAllowedOpsAction('seller-item-visibility', 'ops action: seller item visibility', async () => {
-      const result = await postOpsAction('seller-item-visibility', {
-        itemId: disposableQa.sellerItemId,
-        visibilityAction: 'HIDE',
-        note: 'Web QA hide ready-made listing.',
-      }, 'Ops seller item hide')
-      const redirect = assertOpsRedirect(result, 'notice', ['seller-item-hidden'])
-      const item = await selectFirstRest(
-        'seller_items',
-        `select=id,is_live,stock_status&id=eq.${encodeURIComponent(disposableQa.sellerItemId)}`,
-        'Select seller item after ops visibility action',
-      )
-      if (item?.is_live !== false || item?.stock_status !== 'HIDDEN') {
-        throw new Error(`Seller item was not hidden: ${JSON.stringify(item)}`)
+    await runAllowedOpsAction(
+      'seller-item-visibility',
+      'ops action: seller item visibility',
+      async () => {
+        const result = await postOpsAction(
+          'seller-item-visibility',
+          {
+            itemId: disposableQa.sellerItemId,
+            visibilityAction: 'HIDE',
+            note: 'Web QA hide ready-made listing.',
+          },
+          'Ops seller item hide'
+        )
+        const redirect = assertOpsRedirect(result, 'notice', ['seller-item-hidden'])
+        const item = await selectFirstRest(
+          'seller_items',
+          `select=id,is_live,stock_status&id=eq.${encodeURIComponent(disposableQa.sellerItemId)}`,
+          'Select seller item after ops visibility action'
+        )
+        if (item?.is_live !== false || item?.stock_status !== 'HIDDEN') {
+          throw new Error(`Seller item was not hidden: ${JSON.stringify(item)}`)
+        }
+        const audit = await requireLatestAudit('ops.seller_item_visibility_updated')
+        return {
+          ...redirect,
+          itemId: item.id,
+          isLive: item.is_live,
+          stockStatus: item.stock_status,
+          auditId: audit.id,
+        }
       }
-      const audit = await requireLatestAudit('ops.seller_item_visibility_updated')
-      return { ...redirect, itemId: item.id, isLive: item.is_live, stockStatus: item.stock_status, auditId: audit.id }
-    })
+    )
 
     await runAllowedOpsAction('dispute-status', 'ops action: dispute status', async () => {
       const { dispute } = await createDisposableDispute(disposableQa, customerUserId, 'OPEN')
-      const result = await postOpsAction('dispute-status', {
-        disputeId: dispute.id,
-        status: 'UNDER_REVIEW',
-      }, 'Ops dispute status')
+      const result = await postOpsAction(
+        'dispute-status',
+        {
+          disputeId: dispute.id,
+          status: 'UNDER_REVIEW',
+        },
+        'Ops dispute status'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['dispute-saved'])
-      const updated = await selectFirstRest('disputes', `select=id,status&id=eq.${encodeURIComponent(dispute.id)}`, 'Select dispute status')
-      if (updated?.status !== 'UNDER_REVIEW') throw new Error(`Dispute status did not update: ${JSON.stringify(updated)}`)
+      const updated = await selectFirstRest(
+        'disputes',
+        `select=id,status&id=eq.${encodeURIComponent(dispute.id)}`,
+        'Select dispute status'
+      )
+      if (updated?.status !== 'UNDER_REVIEW')
+        throw new Error(`Dispute status did not update: ${JSON.stringify(updated)}`)
       const audit = await requireLatestAudit('ops.dispute_status_updated')
       return { ...redirect, disputeId: dispute.id, status: updated.status, auditId: audit.id }
     })
 
     await runAllowedOpsAction('dispute-resolution', 'ops action: dispute resolution', async () => {
       const { dispute, order } = await createDisposableDispute(disposableQa, customerUserId, 'OPEN')
-      const result = await postOpsAction('dispute-resolution', {
-        disputeId: dispute.id,
-        outcome: 'RELEASE',
-        resolution: 'Web QA resolved in tailor favor.',
-      }, 'Ops dispute resolution')
+      const result = await postOpsAction(
+        'dispute-resolution',
+        {
+          disputeId: dispute.id,
+          outcome: 'RELEASE',
+          resolution: 'Web QA resolved in tailor favor.',
+        },
+        'Ops dispute resolution'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['dispute-resolved'])
-      const updatedDispute = await selectFirstRest('disputes', `select=id,status,resolution&id=eq.${encodeURIComponent(dispute.id)}`, 'Select resolved dispute')
-      const updatedOrder = await selectFirstRest('orders', `select=id,stage,escrow_released&id=eq.${encodeURIComponent(order.id)}`, 'Select dispute order')
-      if (updatedDispute?.status !== 'RESOLVED_RELEASED' || updatedOrder?.stage !== 'COMPLETE' || updatedOrder?.escrow_released !== true) {
-        throw new Error(`Dispute resolution state mismatch: ${JSON.stringify({ updatedDispute, updatedOrder })}`)
+      const updatedDispute = await selectFirstRest(
+        'disputes',
+        `select=id,status,resolution&id=eq.${encodeURIComponent(dispute.id)}`,
+        'Select resolved dispute'
+      )
+      const updatedOrder = await selectFirstRest(
+        'orders',
+        `select=id,stage,escrow_released&id=eq.${encodeURIComponent(order.id)}`,
+        'Select dispute order'
+      )
+      if (
+        updatedDispute?.status !== 'RESOLVED_RELEASED' ||
+        updatedOrder?.stage !== 'COMPLETE' ||
+        updatedOrder?.escrow_released !== true
+      ) {
+        throw new Error(
+          `Dispute resolution state mismatch: ${JSON.stringify({ updatedDispute, updatedOrder })}`
+        )
       }
       const audit = await requireLatestAudit('ops.dispute_resolved', { orderId: order.id })
-      return { ...redirect, disputeId: dispute.id, orderId: order.id, stage: updatedOrder.stage, auditId: audit.id }
+      return {
+        ...redirect,
+        disputeId: dispute.id,
+        orderId: order.id,
+        stage: updatedOrder.stage,
+        auditId: audit.id,
+      }
     })
 
     await runAllowedOpsAction('bypass-review', 'ops action: bypass review', async () => {
@@ -1935,19 +2369,39 @@ async function main() {
         related_entity_id: log.id,
         title: `Web QA contact bypass ${stamp}`,
       })
-      const result = await postOpsAction('bypass-review', {
-        logId: log.id,
-        reviewed: 'true',
-      }, 'Ops bypass review')
+      const result = await postOpsAction(
+        'bypass-review',
+        {
+          logId: log.id,
+          reviewed: 'true',
+        },
+        'Ops bypass review'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['bypass-saved'])
-      const updatedLog = await selectFirstRest('contact_bypass_logs', `select=id,reviewed,reviewed_at&id=eq.${encodeURIComponent(log.id)}`, 'Select bypass log')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,resolved_at&id=eq.${encodeURIComponent(issue.id)}`, 'Select bypass issue')
+      const updatedLog = await selectFirstRest(
+        'contact_bypass_logs',
+        `select=id,reviewed,reviewed_at&id=eq.${encodeURIComponent(log.id)}`,
+        'Select bypass log'
+      )
+      const updatedIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status,resolved_at&id=eq.${encodeURIComponent(issue.id)}`,
+        'Select bypass issue'
+      )
       if (updatedLog?.reviewed !== true || updatedIssue?.status !== 'RESOLVED') {
-        throw new Error(`Bypass review state mismatch: ${JSON.stringify({ updatedLog, updatedIssue })}`)
+        throw new Error(
+          `Bypass review state mismatch: ${JSON.stringify({ updatedLog, updatedIssue })}`
+        )
       }
       const audit = await requireLatestAudit('ops.contact_bypass_review_updated')
       const issueAudit = await requireIssueAudit(issue.id, 'CONTACT_BYPASS_REVIEWED')
-      return { ...redirect, logId: log.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
+      return {
+        ...redirect,
+        logId: log.id,
+        issueId: issue.id,
+        auditId: audit.id,
+        issueAuditId: issueAudit.id,
+      }
     })
 
     await runAllowedOpsAction('application-status', 'ops action: application status', async () => {
@@ -1958,122 +2412,190 @@ async function main() {
         related_entity_id: application.id,
         title: `Web QA tailor application ${stamp}`,
       })
-      const result = await postOpsAction('application-status', {
-        applicationId: application.id,
-        status: 'CONTACTED',
-      }, 'Ops application status')
+      const result = await postOpsAction(
+        'application-status',
+        {
+          applicationId: application.id,
+          status: 'CONTACTED',
+        },
+        'Ops application status'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['application-saved'])
-      const updatedApplication = await selectFirstRest('tailor_applications', `select=id,status&id=eq.${encodeURIComponent(application.id)}`, 'Select application')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status&id=eq.${encodeURIComponent(issue.id)}`, 'Select application issue')
+      const updatedApplication = await selectFirstRest(
+        'tailor_applications',
+        `select=id,status&id=eq.${encodeURIComponent(application.id)}`,
+        'Select application'
+      )
+      const updatedIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status&id=eq.${encodeURIComponent(issue.id)}`,
+        'Select application issue'
+      )
       if (updatedApplication?.status !== 'CONTACTED' || updatedIssue?.status !== 'IN_REVIEW') {
-        throw new Error(`Application status mismatch: ${JSON.stringify({ updatedApplication, updatedIssue })}`)
+        throw new Error(
+          `Application status mismatch: ${JSON.stringify({ updatedApplication, updatedIssue })}`
+        )
       }
       const audit = await requireLatestAudit('ops.tailor_application_status_updated')
       const issueAudit = await requireIssueAudit(issue.id, 'TAILOR_APPLICATION_STATUS_UPDATED')
-      return { ...redirect, applicationId: application.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
-    })
-
-    await runAllowedOpsAction('verification-decision', 'ops action: verification approval and rejection', async () => {
-      const approvalFixture = await createDisposableVerificationTailor(disposableQa, 'approval')
-      const approvalIssue = await createDisposableOpsIssue(disposableQa, {
-        issue_type: 'TAILOR_VERIFICATION',
-        user_id: approvalFixture.userId,
-        tailor_profile_id: approvalFixture.profileId,
-        title: `Web QA tailor verification approval ${stamp}`,
-      })
-
-      const approvalResult = await postOpsAction('verification-decision', {
-        tailorUserId: approvalFixture.userId,
-        decision: 'APPROVE',
-      }, 'Ops verification approval')
-      const approvalRedirect = assertOpsRedirect(approvalResult, 'notice', ['verification-approved'])
-      const approvedProfile = await selectFirstRest(
-        'tailor_profiles',
-        `select=id,id_verification_status,is_live,is_verified&id=eq.${encodeURIComponent(approvalFixture.profileId)}`,
-        'Select approved verification profile',
-      )
-      const resolvedApprovalIssue = await selectFirstRest(
-        'ops_issues',
-        `select=id,status,resolved_at&id=eq.${encodeURIComponent(approvalIssue.id)}`,
-        'Select approved verification issue',
-      )
-      if (
-        approvedProfile?.id_verification_status !== 'VERIFIED' ||
-        approvedProfile?.is_live !== true ||
-        approvedProfile?.is_verified !== true ||
-        resolvedApprovalIssue?.status !== 'RESOLVED' ||
-        !resolvedApprovalIssue?.resolved_at
-      ) {
-        throw new Error(`Verification approval state mismatch: ${JSON.stringify({ approvedProfile, resolvedApprovalIssue })}`)
-      }
-      const approvalIssueAudit = await requireIssueAudit(approvalIssue.id, 'VERIFICATION_APPROVED')
-      const approvalDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
-      const approvalPayload = approvalDecisionAudit.payload && typeof approvalDecisionAudit.payload === 'object'
-        ? approvalDecisionAudit.payload
-        : {}
-      if (
-        approvalPayload.decision !== 'APPROVE' ||
-        approvalPayload.email_sent !== true ||
-        !['SENT', 'SKIPPED', 'ERROR'].includes(approvalPayload.push_status)
-      ) {
-        throw new Error(`Verification approval side effects were not recorded: ${JSON.stringify(approvalPayload)}`)
-      }
-
-      const rejectionFixture = await createDisposableVerificationTailor(disposableQa, 'rejection')
-      const rejectionIssue = await createDisposableOpsIssue(disposableQa, {
-        issue_type: 'TAILOR_VERIFICATION',
-        user_id: rejectionFixture.userId,
-        tailor_profile_id: rejectionFixture.profileId,
-        title: `Web QA tailor verification rejection ${stamp}`,
-      })
-      const rejectionResult = await postOpsAction('verification-decision', {
-        tailorUserId: rejectionFixture.userId,
-        decision: 'REJECT',
-        reason: 'The disposable challenge video did not include the requested movement.',
-      }, 'Ops verification rejection')
-      const rejectionRedirect = assertOpsRedirect(rejectionResult, 'notice', ['verification-rejected'])
-      const profile = await selectFirstRest('tailor_profiles', `select=id,id_verification_status,is_live&id=eq.${encodeURIComponent(rejectionFixture.profileId)}`, 'Select verification profile')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,resolved_at&id=eq.${encodeURIComponent(rejectionIssue.id)}`, 'Select verification issue')
-      if (profile?.id_verification_status !== 'REJECTED' || profile?.is_live !== false || updatedIssue?.status !== 'RESOLVED') {
-        throw new Error(`Verification decision mismatch: ${JSON.stringify({ profile, updatedIssue })}`)
-      }
-      const rejectionIssueAudit = await requireIssueAudit(rejectionIssue.id, 'VERIFICATION_REJECTED')
-      const rejectionDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
-      const rejectionPayload = rejectionDecisionAudit.payload && typeof rejectionDecisionAudit.payload === 'object'
-        ? rejectionDecisionAudit.payload
-        : {}
-      if (
-        rejectionPayload.decision !== 'REJECT' ||
-        rejectionPayload.email_sent !== true ||
-        !['SENT', 'SKIPPED', 'ERROR'].includes(rejectionPayload.push_status)
-      ) {
-        throw new Error(`Verification rejection side effects were not recorded: ${JSON.stringify(rejectionPayload)}`)
-      }
-
       return {
-        approval: {
-          ...approvalRedirect,
-          profileId: approvedProfile.id,
-          issueId: approvalIssue.id,
-          issueAuditId: approvalIssueAudit.id,
-          decisionAuditId: approvalDecisionAudit.id,
-          emailSent: approvalPayload.email_sent,
-          pushStatus: approvalPayload.push_status,
-        },
-        rejection: {
-          ...rejectionRedirect,
-          profileId: profile.id,
-          issueId: rejectionIssue.id,
-          issueAuditId: rejectionIssueAudit.id,
-          decisionAuditId: rejectionDecisionAudit.id,
-          emailSent: rejectionPayload.email_sent,
-          pushStatus: rejectionPayload.push_status,
-        },
+        ...redirect,
+        applicationId: application.id,
+        issueId: issue.id,
+        auditId: audit.id,
+        issueAuditId: issueAudit.id,
       }
     })
+
+    await runAllowedOpsAction(
+      'verification-decision',
+      'ops action: verification approval and rejection',
+      async () => {
+        const approvalFixture = await createDisposableVerificationTailor(disposableQa, 'approval')
+        const approvalIssue = await createDisposableOpsIssue(disposableQa, {
+          issue_type: 'TAILOR_VERIFICATION',
+          user_id: approvalFixture.userId,
+          tailor_profile_id: approvalFixture.profileId,
+          title: `Web QA tailor verification approval ${stamp}`,
+        })
+
+        const approvalResult = await postOpsAction(
+          'verification-decision',
+          {
+            tailorUserId: approvalFixture.userId,
+            decision: 'APPROVE',
+          },
+          'Ops verification approval'
+        )
+        const approvalRedirect = assertOpsRedirect(approvalResult, 'notice', [
+          'verification-approved',
+        ])
+        const approvedProfile = await selectFirstRest(
+          'tailor_profiles',
+          `select=id,id_verification_status,is_live,is_verified&id=eq.${encodeURIComponent(approvalFixture.profileId)}`,
+          'Select approved verification profile'
+        )
+        const resolvedApprovalIssue = await selectFirstRest(
+          'ops_issues',
+          `select=id,status,resolved_at&id=eq.${encodeURIComponent(approvalIssue.id)}`,
+          'Select approved verification issue'
+        )
+        if (
+          approvedProfile?.id_verification_status !== 'VERIFIED' ||
+          approvedProfile?.is_live !== true ||
+          approvedProfile?.is_verified !== true ||
+          resolvedApprovalIssue?.status !== 'RESOLVED' ||
+          !resolvedApprovalIssue?.resolved_at
+        ) {
+          throw new Error(
+            `Verification approval state mismatch: ${JSON.stringify({ approvedProfile, resolvedApprovalIssue })}`
+          )
+        }
+        const approvalIssueAudit = await requireIssueAudit(
+          approvalIssue.id,
+          'VERIFICATION_APPROVED'
+        )
+        const approvalDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
+        const approvalPayload =
+          approvalDecisionAudit.payload && typeof approvalDecisionAudit.payload === 'object'
+            ? approvalDecisionAudit.payload
+            : {}
+        if (
+          approvalPayload.decision !== 'APPROVE' ||
+          approvalPayload.email_sent !== true ||
+          !['SENT', 'SKIPPED', 'ERROR'].includes(approvalPayload.push_status)
+        ) {
+          throw new Error(
+            `Verification approval side effects were not recorded: ${JSON.stringify(approvalPayload)}`
+          )
+        }
+
+        const rejectionFixture = await createDisposableVerificationTailor(disposableQa, 'rejection')
+        const rejectionIssue = await createDisposableOpsIssue(disposableQa, {
+          issue_type: 'TAILOR_VERIFICATION',
+          user_id: rejectionFixture.userId,
+          tailor_profile_id: rejectionFixture.profileId,
+          title: `Web QA tailor verification rejection ${stamp}`,
+        })
+        const rejectionResult = await postOpsAction(
+          'verification-decision',
+          {
+            tailorUserId: rejectionFixture.userId,
+            decision: 'REJECT',
+            reason: 'The disposable challenge video did not include the requested movement.',
+          },
+          'Ops verification rejection'
+        )
+        const rejectionRedirect = assertOpsRedirect(rejectionResult, 'notice', [
+          'verification-rejected',
+        ])
+        const profile = await selectFirstRest(
+          'tailor_profiles',
+          `select=id,id_verification_status,is_live&id=eq.${encodeURIComponent(rejectionFixture.profileId)}`,
+          'Select verification profile'
+        )
+        const updatedIssue = await selectFirstRest(
+          'ops_issues',
+          `select=id,status,resolved_at&id=eq.${encodeURIComponent(rejectionIssue.id)}`,
+          'Select verification issue'
+        )
+        if (
+          profile?.id_verification_status !== 'REJECTED' ||
+          profile?.is_live !== false ||
+          updatedIssue?.status !== 'RESOLVED'
+        ) {
+          throw new Error(
+            `Verification decision mismatch: ${JSON.stringify({ profile, updatedIssue })}`
+          )
+        }
+        const rejectionIssueAudit = await requireIssueAudit(
+          rejectionIssue.id,
+          'VERIFICATION_REJECTED'
+        )
+        const rejectionDecisionAudit = await requireLatestAudit('ops.verification_decision_logged')
+        const rejectionPayload =
+          rejectionDecisionAudit.payload && typeof rejectionDecisionAudit.payload === 'object'
+            ? rejectionDecisionAudit.payload
+            : {}
+        if (
+          rejectionPayload.decision !== 'REJECT' ||
+          rejectionPayload.email_sent !== true ||
+          !['SENT', 'SKIPPED', 'ERROR'].includes(rejectionPayload.push_status)
+        ) {
+          throw new Error(
+            `Verification rejection side effects were not recorded: ${JSON.stringify(rejectionPayload)}`
+          )
+        }
+
+        return {
+          approval: {
+            ...approvalRedirect,
+            profileId: approvedProfile.id,
+            issueId: approvalIssue.id,
+            issueAuditId: approvalIssueAudit.id,
+            decisionAuditId: approvalDecisionAudit.id,
+            emailSent: approvalPayload.email_sent,
+            pushStatus: approvalPayload.push_status,
+          },
+          rejection: {
+            ...rejectionRedirect,
+            profileId: profile.id,
+            issueId: rejectionIssue.id,
+            issueAuditId: rejectionIssueAudit.id,
+            decisionAuditId: rejectionDecisionAudit.id,
+            emailSent: rejectionPayload.email_sent,
+            pushStatus: rejectionPayload.push_status,
+          },
+        }
+      }
+    )
 
     await runAllowedOpsAction('deletion-status', 'ops action: deletion status', async () => {
-      const request = await createDisposableDeletionRequest(disposableQa, disposableQa.tailorUserId, disposableQa.tailorEmail)
+      const request = await createDisposableDeletionRequest(
+        disposableQa,
+        disposableQa.tailorUserId,
+        disposableQa.tailorEmail
+      )
       const issue = await createDisposableOpsIssue(disposableQa, {
         issue_type: 'ACCOUNT_DELETION_REQUEST',
         related_entity_type: 'account_deletion_request',
@@ -2081,19 +2603,43 @@ async function main() {
         user_id: disposableQa.tailorUserId,
         title: `Web QA account deletion ${stamp}`,
       })
-      const result = await postOpsAction('deletion-status', {
-        deletionRequestId: request.id,
-        status: 'ACKNOWLEDGED',
-      }, 'Ops deletion status')
+      const result = await postOpsAction(
+        'deletion-status',
+        {
+          deletionRequestId: request.id,
+          status: 'ACKNOWLEDGED',
+        },
+        'Ops deletion status'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['deletion-saved'])
-      const updatedRequest = await selectFirstRest('account_deletion_requests', `select=id,status,acknowledged_at&id=eq.${encodeURIComponent(request.id)}`, 'Select deletion request')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status&id=eq.${encodeURIComponent(issue.id)}`, 'Select deletion issue')
-      if (updatedRequest?.status !== 'ACKNOWLEDGED' || !updatedRequest?.acknowledged_at || updatedIssue?.status !== 'IN_REVIEW') {
-        throw new Error(`Deletion status mismatch: ${JSON.stringify({ updatedRequest, updatedIssue })}`)
+      const updatedRequest = await selectFirstRest(
+        'account_deletion_requests',
+        `select=id,status,acknowledged_at&id=eq.${encodeURIComponent(request.id)}`,
+        'Select deletion request'
+      )
+      const updatedIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status&id=eq.${encodeURIComponent(issue.id)}`,
+        'Select deletion issue'
+      )
+      if (
+        updatedRequest?.status !== 'ACKNOWLEDGED' ||
+        !updatedRequest?.acknowledged_at ||
+        updatedIssue?.status !== 'IN_REVIEW'
+      ) {
+        throw new Error(
+          `Deletion status mismatch: ${JSON.stringify({ updatedRequest, updatedIssue })}`
+        )
       }
       const audit = await requireLatestAudit('ops.account_deletion_status_updated')
       const issueAudit = await requireIssueAudit(issue.id, 'ACCOUNT_DELETION_STATUS_UPDATED')
-      return { ...redirect, deletionRequestId: request.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
+      return {
+        ...redirect,
+        deletionRequestId: request.id,
+        issueId: issue.id,
+        auditId: audit.id,
+        issueAuditId: issueAudit.id,
+      }
     })
 
     await runAllowedOpsAction('review-visibility', 'ops action: review visibility', async () => {
@@ -2104,191 +2650,340 @@ async function main() {
         related_entity_id: review.id,
         title: `Web QA review moderation ${stamp}`,
       })
-      const result = await postOpsAction('review-visibility', {
-        reviewId: review.id,
-        visibility: 'PUBLISH',
-      }, 'Ops review visibility')
+      const result = await postOpsAction(
+        'review-visibility',
+        {
+          reviewId: review.id,
+          visibility: 'PUBLISH',
+        },
+        'Ops review visibility'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['review-published'])
-      const updatedReview = await selectFirstRest('reviews', `select=id,published_at,flagged&id=eq.${encodeURIComponent(review.id)}`, 'Select review visibility')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status&id=eq.${encodeURIComponent(issue.id)}`, 'Select review issue')
-      if (!updatedReview?.published_at || updatedReview?.flagged !== false || updatedIssue?.status !== 'RESOLVED') {
-        throw new Error(`Review visibility mismatch: ${JSON.stringify({ updatedReview, updatedIssue })}`)
+      const updatedReview = await selectFirstRest(
+        'reviews',
+        `select=id,published_at,flagged&id=eq.${encodeURIComponent(review.id)}`,
+        'Select review visibility'
+      )
+      const updatedIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status&id=eq.${encodeURIComponent(issue.id)}`,
+        'Select review issue'
+      )
+      if (
+        !updatedReview?.published_at ||
+        updatedReview?.flagged !== false ||
+        updatedIssue?.status !== 'RESOLVED'
+      ) {
+        throw new Error(
+          `Review visibility mismatch: ${JSON.stringify({ updatedReview, updatedIssue })}`
+        )
       }
       const audit = await requireLatestAudit('ops.review_visibility_updated')
       const issueAudit = await requireIssueAudit(issue.id, 'REVIEW_PUBLISHED')
-      return { ...redirect, reviewId: review.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
+      return {
+        ...redirect,
+        reviewId: review.id,
+        issueId: issue.id,
+        auditId: audit.id,
+        issueAuditId: issueAudit.id,
+      }
     })
 
-    await runAllowedOpsAction('conversation-access', 'ops action: conversation access', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, customerUserId, 'CONFIRMED')
-      const result = await postOpsAction('conversation-access', {
-        orderId: order.id,
-        accessAction: 'BLOCK',
-        reason: 'Web QA conversation safety check.',
-      }, 'Ops conversation access')
-      const redirect = assertOpsRedirect(result, 'notice', ['conversation-blocked'])
-      const audit = await requireLatestAudit('conversation.blocked', { orderId: order.id })
-      return { ...redirect, orderId: order.id, auditId: audit.id }
-    })
+    await runAllowedOpsAction(
+      'conversation-access',
+      'ops action: conversation access',
+      async () => {
+        const order = await createDisposableCustomOrder(disposableQa, customerUserId, 'CONFIRMED')
+        const result = await postOpsAction(
+          'conversation-access',
+          {
+            orderId: order.id,
+            accessAction: 'BLOCK',
+            reason: 'Web QA conversation safety check.',
+          },
+          'Ops conversation access'
+        )
+        const redirect = assertOpsRedirect(result, 'notice', ['conversation-blocked'])
+        const audit = await requireLatestAudit('conversation.blocked', { orderId: order.id })
+        return { ...redirect, orderId: order.id, auditId: audit.id }
+      }
+    )
 
     await runAllowedOpsAction('dispatch-stage', 'ops action: dispatch stage', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, customerUserId, 'READY_FOR_DRAPE_DISPATCH', {
-        delivery_method: 'SHIPPING',
-        delivery_address: '123 QA Dispatch Ave, Chicago, IL',
-        recipient_name: 'Web QA Recipient',
-        recipient_phone: '+15555550199',
-        quoted_amount: 12500,
-        total_amount: 14300,
-        subtotal_amount: 12500,
-        shipping_amount: 1800,
-      })
-      const result = await postOpsAction('dispatch-stage', {
-        orderId: order.id,
-        targetStage: 'SHIPPED',
-        provider: 'Web QA Courier',
-        reference: `WEB-QA-REF-${stamp}`,
-        contactName: 'QA Dispatcher',
-        contactPhone: '+15555550198',
-        trackingNumber: `WEBQA${String(stamp).slice(-8)}`,
-        serviceLevel: 'STANDARD',
-        note: 'Web QA dispatch stage update.',
-      }, 'Ops dispatch stage')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        customerUserId,
+        'READY_FOR_DRAPE_DISPATCH',
+        {
+          delivery_method: 'SHIPPING',
+          delivery_address: '123 QA Dispatch Ave, Chicago, IL',
+          recipient_name: 'Web QA Recipient',
+          recipient_phone: '+15555550199',
+          quoted_amount: 12500,
+          total_amount: 14300,
+          subtotal_amount: 12500,
+          shipping_amount: 1800,
+        }
+      )
+      const result = await postOpsAction(
+        'dispatch-stage',
+        {
+          orderId: order.id,
+          targetStage: 'SHIPPED',
+          provider: 'Web QA Courier',
+          reference: `WEB-QA-REF-${stamp}`,
+          contactName: 'QA Dispatcher',
+          contactPhone: '+15555550198',
+          trackingNumber: `WEBQA${String(stamp).slice(-8)}`,
+          serviceLevel: 'STANDARD',
+          note: 'Web QA dispatch stage update.',
+        },
+        'Ops dispatch stage'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['dispatch-saved'])
-      const updatedOrder = await selectFirstRest('orders', `select=id,stage,fulfillment_provider,fulfillment_reference,tracking_number,carrier&id=eq.${encodeURIComponent(order.id)}`, 'Select dispatch order')
-      if (updatedOrder?.stage !== 'SHIPPED' || !updatedOrder?.tracking_number || updatedOrder?.fulfillment_provider !== 'Web QA Courier') {
+      const updatedOrder = await selectFirstRest(
+        'orders',
+        `select=id,stage,fulfillment_provider,fulfillment_reference,tracking_number,carrier&id=eq.${encodeURIComponent(order.id)}`,
+        'Select dispatch order'
+      )
+      if (
+        updatedOrder?.stage !== 'SHIPPED' ||
+        !updatedOrder?.tracking_number ||
+        updatedOrder?.fulfillment_provider !== 'Web QA Courier'
+      ) {
         throw new Error(`Dispatch state mismatch: ${JSON.stringify(updatedOrder)}`)
       }
       const audit = await requireLatestAudit('ops.dispatch_stage_updated', { orderId: order.id })
-      return { ...redirect, orderId: order.id, stage: updatedOrder.stage, trackingNumber: updatedOrder.tracking_number, auditId: audit.id }
-    })
-
-    await runAllowedOpsAction('order-review-resolution', 'ops action: order review resolution', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, customerUserId, 'IN_DISPUTE', {
-        special_note: JSON.stringify({
-          cancellationReview: {
-            status: 'OPEN',
-            requestedFromStage: 'CONFIRMED',
-          },
-        }),
-        quoted_amount: 12500,
-        total_amount: 12500,
-        subtotal_amount: 12500,
-      })
-      const issue = await createDisposableOpsIssue(disposableQa, {
-        issue_type: 'ORDER_REVIEW',
-        order_id: order.id,
-        dedupe_key: `order-review:cancellation:${order.id}`,
-        title: `Web QA order review ${stamp}`,
-      })
-      const result = await postOpsAction('order-review-resolution', {
+      return {
+        ...redirect,
         orderId: order.id,
-        reviewType: 'CANCELLATION',
-        outcome: 'CONTINUE',
-        resolution: 'Web QA continues the order after review.',
-      }, 'Ops order review resolution')
-      const redirect = assertOpsRedirect(result, 'notice', ['order-review-continued'])
-      const updatedOrder = await selectFirstRest('orders', `select=id,stage,special_note&id=eq.${encodeURIComponent(order.id)}`, 'Select order review order')
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,resolved_at&id=eq.${encodeURIComponent(issue.id)}`, 'Select order review issue')
-      if (updatedOrder?.stage !== 'CONFIRMED' || updatedIssue?.status !== 'RESOLVED') {
-        throw new Error(`Order review state mismatch: ${JSON.stringify({ updatedOrder, updatedIssue })}`)
+        stage: updatedOrder.stage,
+        trackingNumber: updatedOrder.tracking_number,
+        auditId: audit.id,
       }
-      const audit = await requireLatestAudit('ops.order_review_resolved', { orderId: order.id })
-      const issueAudit = await requireIssueAudit(issue.id, 'ORDER_REVIEW_RESOLVED')
-      return { ...redirect, orderId: order.id, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
     })
 
-    await runAllowedOpsAction('order-partial-refund', 'ops action: partial refund fixture', async () => {
-      const providerBacked = opsProviderMutationMode === 'stripe-test-provider'
-      const { order, payment } = await createDisposableRefundOrder(disposableQa, customerUserId, { providerBacked })
-      const issue = await createDisposableOpsIssue(disposableQa, {
-        issue_type: 'SYSTEM_ALERT',
-        order_id: order.id,
-        related_entity_type: 'order',
-        related_entity_id: order.id,
-        title: `Web QA partial refund ${stamp}`,
-      })
-      const result = await postOpsAction('order-partial-refund', {
-        issueId: issue.id,
-        orderId: order.id,
-        amount: '12.00',
-        maxRefundableAmount: '12500',
-        note: 'Web QA disposable partial refund.',
-      }, 'Ops partial refund fixture')
-
-      if (providerBacked) {
-        const redirect = assertOpsRedirect(result, 'notice', ['partial-refund-issued'])
-        const updatedOrder = await selectFirstRest('orders', `select=id,stage&id=eq.${encodeURIComponent(order.id)}`, 'Select partial refund order')
-        const updatedPayment = await selectFirstRest('order_payments', `select=id,status,refunded_amount&id=eq.${encodeURIComponent(payment.id)}`, 'Select partial refund payment')
-        const updatedIssue = await selectFirstRest('ops_issues', `select=id,status&id=eq.${encodeURIComponent(issue.id)}`, 'Select partial refund issue')
-        if (updatedOrder?.stage !== 'PARTIALLY_REFUNDED' || updatedPayment?.status !== 'PARTIAL_REFUND' || updatedPayment?.refunded_amount !== 1200 || updatedIssue?.status !== 'RESOLVED') {
-          throw new Error(`Partial refund provider mutation mismatch: ${JSON.stringify({ updatedOrder, updatedPayment, updatedIssue })}`)
+    await runAllowedOpsAction(
+      'order-review-resolution',
+      'ops action: order review resolution',
+      async () => {
+        const order = await createDisposableCustomOrder(
+          disposableQa,
+          customerUserId,
+          'IN_DISPUTE',
+          {
+            special_note: JSON.stringify({
+              cancellationReview: {
+                status: 'OPEN',
+                requestedFromStage: 'CONFIRMED',
+              },
+            }),
+            quoted_amount: 12500,
+            total_amount: 12500,
+            subtotal_amount: 12500,
+          }
+        )
+        const issue = await createDisposableOpsIssue(disposableQa, {
+          issue_type: 'ORDER_REVIEW',
+          order_id: order.id,
+          dedupe_key: `order-review:cancellation:${order.id}`,
+          title: `Web QA order review ${stamp}`,
+        })
+        const result = await postOpsAction(
+          'order-review-resolution',
+          {
+            orderId: order.id,
+            reviewType: 'CANCELLATION',
+            outcome: 'CONTINUE',
+            resolution: 'Web QA continues the order after review.',
+          },
+          'Ops order review resolution'
+        )
+        const redirect = assertOpsRedirect(result, 'notice', ['order-review-continued'])
+        const updatedOrder = await selectFirstRest(
+          'orders',
+          `select=id,stage,special_note&id=eq.${encodeURIComponent(order.id)}`,
+          'Select order review order'
+        )
+        const updatedIssue = await selectFirstRest(
+          'ops_issues',
+          `select=id,status,resolved_at&id=eq.${encodeURIComponent(issue.id)}`,
+          'Select order review issue'
+        )
+        if (updatedOrder?.stage !== 'CONFIRMED' || updatedIssue?.status !== 'RESOLVED') {
+          throw new Error(
+            `Order review state mismatch: ${JSON.stringify({ updatedOrder, updatedIssue })}`
+          )
         }
-        const audit = await requireLatestAudit('ops.order_partial_refund_issued', { orderId: order.id })
-        const paymentAudit = await requireLatestAudit('payment.partial_refund_executed', { orderId: order.id })
-        const issueAudit = await requireIssueAudit(issue.id, 'ORDER_PARTIAL_REFUND_ISSUED')
+        const audit = await requireLatestAudit('ops.order_review_resolved', { orderId: order.id })
+        const issueAudit = await requireIssueAudit(issue.id, 'ORDER_REVIEW_RESOLVED')
+        return {
+          ...redirect,
+          orderId: order.id,
+          issueId: issue.id,
+          auditId: audit.id,
+          issueAuditId: issueAudit.id,
+        }
+      }
+    )
+
+    await runAllowedOpsAction(
+      'order-partial-refund',
+      'ops action: partial refund fixture',
+      async () => {
+        const providerBacked = opsProviderMutationMode === 'stripe-test-provider'
+        const { order, payment } = await createDisposableRefundOrder(disposableQa, customerUserId, {
+          providerBacked,
+        })
+        const issue = await createDisposableOpsIssue(disposableQa, {
+          issue_type: 'SYSTEM_ALERT',
+          order_id: order.id,
+          related_entity_type: 'order',
+          related_entity_id: order.id,
+          title: `Web QA partial refund ${stamp}`,
+        })
+        const result = await postOpsAction(
+          'order-partial-refund',
+          {
+            issueId: issue.id,
+            orderId: order.id,
+            amount: '12.00',
+            maxRefundableAmount: '12500',
+            note: 'Web QA disposable partial refund.',
+          },
+          'Ops partial refund fixture'
+        )
+
+        if (providerBacked) {
+          const redirect = assertOpsRedirect(result, 'notice', ['partial-refund-issued'])
+          const updatedOrder = await selectFirstRest(
+            'orders',
+            `select=id,stage&id=eq.${encodeURIComponent(order.id)}`,
+            'Select partial refund order'
+          )
+          const updatedPayment = await selectFirstRest(
+            'order_payments',
+            `select=id,status,refunded_amount&id=eq.${encodeURIComponent(payment.id)}`,
+            'Select partial refund payment'
+          )
+          const updatedIssue = await selectFirstRest(
+            'ops_issues',
+            `select=id,status&id=eq.${encodeURIComponent(issue.id)}`,
+            'Select partial refund issue'
+          )
+          if (
+            updatedOrder?.stage !== 'PARTIALLY_REFUNDED' ||
+            updatedPayment?.status !== 'PARTIAL_REFUND' ||
+            updatedPayment?.refunded_amount !== 1200 ||
+            updatedIssue?.status !== 'RESOLVED'
+          ) {
+            throw new Error(
+              `Partial refund provider mutation mismatch: ${JSON.stringify({ updatedOrder, updatedPayment, updatedIssue })}`
+            )
+          }
+          const audit = await requireLatestAudit('ops.order_partial_refund_issued', {
+            orderId: order.id,
+          })
+          const paymentAudit = await requireLatestAudit('payment.partial_refund_executed', {
+            orderId: order.id,
+          })
+          const issueAudit = await requireIssueAudit(issue.id, 'ORDER_PARTIAL_REFUND_ISSUED')
+          return {
+            ...redirect,
+            mode: opsProviderMutationMode,
+            orderId: order.id,
+            paymentId: payment.id,
+            auditId: audit.id,
+            paymentAuditId: paymentAudit.id,
+            issueAuditId: issueAudit.id,
+          }
+        }
+
+        const redirect = assertOpsRedirect(result, 'error', ['refund-failed'])
+        const updatedOrder = await selectFirstRest(
+          'orders',
+          `select=id,stage&id=eq.${encodeURIComponent(order.id)}`,
+          'Select failed partial refund order'
+        )
+        const failureIssue = await requireLatestOpsIssue(
+          `issue_type=eq.REFUND_FAILED&order_id=eq.${encodeURIComponent(order.id)}`,
+          'partial refund failure issue'
+        )
+        if (updatedOrder?.stage !== 'COMPLETE' || failureIssue.status !== 'OPEN') {
+          throw new Error(
+            `Partial refund guarded failure state mismatch: ${JSON.stringify({ updatedOrder, failureIssue })}`
+          )
+        }
+        const audit = await requireLatestAudit('ops.order_partial_refund_failed', {
+          orderId: order.id,
+        })
         return {
           ...redirect,
           mode: opsProviderMutationMode,
           orderId: order.id,
           paymentId: payment.id,
+          failureIssueId: failureIssue.id,
           auditId: audit.id,
-          paymentAuditId: paymentAudit.id,
-          issueAuditId: issueAudit.id,
         }
       }
-
-      const redirect = assertOpsRedirect(result, 'error', ['refund-failed'])
-      const updatedOrder = await selectFirstRest('orders', `select=id,stage&id=eq.${encodeURIComponent(order.id)}`, 'Select failed partial refund order')
-      const failureIssue = await requireLatestOpsIssue(
-        `issue_type=eq.REFUND_FAILED&order_id=eq.${encodeURIComponent(order.id)}`,
-        'partial refund failure issue',
-      )
-      if (updatedOrder?.stage !== 'COMPLETE' || failureIssue.status !== 'OPEN') {
-        throw new Error(`Partial refund guarded failure state mismatch: ${JSON.stringify({ updatedOrder, failureIssue })}`)
-      }
-      const audit = await requireLatestAudit('ops.order_partial_refund_failed', { orderId: order.id })
-      return {
-        ...redirect,
-        mode: opsProviderMutationMode,
-        orderId: order.id,
-        paymentId: payment.id,
-        failureIssueId: failureIssue.id,
-        auditId: audit.id,
-      }
-    })
+    )
 
     await runAllowedOpsAction('payout-release', 'ops action: payout release fixture', async () => {
       const providerBacked = await prepareStripeProviderBackedPayoutProfile()
-      const { order } = await createDisposablePayoutReadyOrder(disposableQa, customerUserId, { providerBacked })
-      const result = await postOpsAction('payout-release', {
-        orderId: order.id,
-      }, 'Ops payout release fixture')
+      const { order } = await createDisposablePayoutReadyOrder(disposableQa, customerUserId, {
+        providerBacked,
+      })
+      const result = await postOpsAction(
+        'payout-release',
+        {
+          orderId: order.id,
+        },
+        'Ops payout release fixture'
+      )
       const redirect = assertOpsRedirectOutcome(result, {
         notice: ['payout-release-triggered'],
         error: ['payout-release-failed'],
       })
       const payout = await requireLatestPayout(order.id)
-      const updatedOrder = await selectFirstRest('orders', `select=id,escrow_released,escrow_released_at&id=eq.${encodeURIComponent(order.id)}`, 'Select payout release order')
+      const updatedOrder = await selectFirstRest(
+        'orders',
+        `select=id,escrow_released,escrow_released_at&id=eq.${encodeURIComponent(order.id)}`,
+        'Select payout release order'
+      )
 
       if (providerBacked) {
         if (!['PROCESSING', 'PAID', 'FAILED'].includes(payout.status)) {
-          throw new Error(`Provider-backed payout did not reach provider execution state: ${JSON.stringify(payout)}`)
+          throw new Error(
+            `Provider-backed payout did not reach provider execution state: ${JSON.stringify(payout)}`
+          )
         }
         if (payout.status !== 'FAILED' && updatedOrder?.escrow_released !== true) {
-          throw new Error(`Provider-backed payout did not release escrow after non-failed payout: ${JSON.stringify({ payout, updatedOrder })}`)
+          throw new Error(
+            `Provider-backed payout did not release escrow after non-failed payout: ${JSON.stringify({ payout, updatedOrder })}`
+          )
         }
-      } else if (payout.status !== 'BLOCKED' || payout.blocked_reason !== 'PAYOUT_ACCOUNT_MISSING') {
+      } else if (
+        payout.status !== 'BLOCKED' ||
+        payout.blocked_reason !== 'PAYOUT_ACCOUNT_MISSING'
+      ) {
         throw new Error(`Blocked payout fixture mismatch: ${JSON.stringify(payout)}`)
       }
 
       const routeAudit = redirect.notice
         ? await requireLatestAudit('ops.payout_release_triggered', { orderId: order.id })
         : await requireLatestAudit('ops.payout_release_failed', { orderId: order.id })
-      const edgeAudit = payout.status === 'BLOCKED'
-        ? await requireLatestOpsIssue(`issue_type=eq.PAYOUT_BLOCKED&order_id=eq.${encodeURIComponent(order.id)}`, 'blocked payout issue')
-        : payout.status === 'FAILED'
-          ? await requireLatestOpsIssue(`issue_type=eq.PAYOUT_FAILED&order_id=eq.${encodeURIComponent(order.id)}`, 'failed payout issue')
-          : await requireLatestAudit('payout.released', { orderId: order.id })
+      const edgeAudit =
+        payout.status === 'BLOCKED'
+          ? await requireLatestOpsIssue(
+              `issue_type=eq.PAYOUT_BLOCKED&order_id=eq.${encodeURIComponent(order.id)}`,
+              'blocked payout issue'
+            )
+          : payout.status === 'FAILED'
+            ? await requireLatestOpsIssue(
+                `issue_type=eq.PAYOUT_FAILED&order_id=eq.${encodeURIComponent(order.id)}`,
+                'failed payout issue'
+              )
+            : await requireLatestAudit('payout.released', { orderId: order.id })
       return {
         ...redirect,
         mode: opsProviderMutationMode,
@@ -2301,168 +2996,251 @@ async function main() {
       }
     })
 
-    await runAllowedOpsAction('material-advance-release', 'ops action: material advance release fixture', async () => {
-      const providerBacked = await prepareStripeProviderBackedPayoutProfile()
-      const { advance, order } = await createDisposableMaterialAdvance(disposableQa, customerUserId, {
-        paid: true,
-        providerBacked,
-      })
-      const result = await postOpsAction('material-advance-release', {
-        advanceId: advance.id,
-        note: 'Web QA material advance release fixture.',
-      }, 'Ops material advance release')
-      const redirect = assertOpsRedirectOutcome(result, {
-        notice: ['material-advance-release-triggered'],
-        error: ['material-advance-release-failed'],
-      })
-      const updatedAdvance = await selectFirstRest('order_material_advances', `select=id,status,release_status,release_blocked_reason,provider_release_id&id=eq.${encodeURIComponent(advance.id)}`, 'Select material advance')
+    await runAllowedOpsAction(
+      'material-advance-release',
+      'ops action: material advance release fixture',
+      async () => {
+        const providerBacked = await prepareStripeProviderBackedPayoutProfile()
+        const { advance, order } = await createDisposableMaterialAdvance(
+          disposableQa,
+          customerUserId,
+          {
+            paid: true,
+            providerBacked,
+          }
+        )
+        const result = await postOpsAction(
+          'material-advance-release',
+          {
+            advanceId: advance.id,
+            note: 'Web QA material advance release fixture.',
+          },
+          'Ops material advance release'
+        )
+        const redirect = assertOpsRedirectOutcome(result, {
+          notice: ['material-advance-release-triggered'],
+          error: ['material-advance-release-failed'],
+        })
+        const updatedAdvance = await selectFirstRest(
+          'order_material_advances',
+          `select=id,status,release_status,release_blocked_reason,provider_release_id&id=eq.${encodeURIComponent(advance.id)}`,
+          'Select material advance'
+        )
 
-      if (providerBacked) {
-        if (!['BLOCKED', 'RELEASED'].includes(updatedAdvance?.status)) {
-          throw new Error(`Provider-backed material advance state mismatch: ${JSON.stringify(updatedAdvance)}`)
+        if (providerBacked) {
+          if (!['BLOCKED', 'RELEASED'].includes(updatedAdvance?.status)) {
+            throw new Error(
+              `Provider-backed material advance state mismatch: ${JSON.stringify(updatedAdvance)}`
+            )
+          }
+        } else if (
+          updatedAdvance?.status !== 'BLOCKED' ||
+          updatedAdvance?.release_status !== 'BLOCKED' ||
+          updatedAdvance?.release_blocked_reason !== 'PAYOUT_DESTINATION_MISSING'
+        ) {
+          throw new Error(
+            `Blocked material advance fixture mismatch: ${JSON.stringify(updatedAdvance)}`
+          )
         }
-      } else if (updatedAdvance?.status !== 'BLOCKED' || updatedAdvance?.release_status !== 'BLOCKED' || updatedAdvance?.release_blocked_reason !== 'PAYOUT_DESTINATION_MISSING') {
-        throw new Error(`Blocked material advance fixture mismatch: ${JSON.stringify(updatedAdvance)}`)
-      }
 
-      const evidence = updatedAdvance.status === 'RELEASED'
-        ? await requireLatestAudit('material_advance.released', { orderId: order.id })
-        : await requireLatestOpsIssue(`related_entity_id=eq.${encodeURIComponent(advance.id)}`, 'material advance release issue')
-      const routeAudit = redirect.notice
-        ? await requireLatestAudit('ops.material_advance_release_triggered')
-        : await requireLatestAudit('ops.material_advance_release_failed')
+        const evidence =
+          updatedAdvance.status === 'RELEASED'
+            ? await requireLatestAudit('material_advance.released', { orderId: order.id })
+            : await requireLatestOpsIssue(
+                `related_entity_id=eq.${encodeURIComponent(advance.id)}`,
+                'material advance release issue'
+              )
+        const routeAudit = redirect.notice
+          ? await requireLatestAudit('ops.material_advance_release_triggered')
+          : await requireLatestAudit('ops.material_advance_release_failed')
 
-      if (!['BLOCKED', 'RELEASED'].includes(updatedAdvance?.status)) {
-        throw new Error(`Unexpected material advance state: ${JSON.stringify(updatedAdvance)}`)
+        if (!['BLOCKED', 'RELEASED'].includes(updatedAdvance?.status)) {
+          throw new Error(`Unexpected material advance state: ${JSON.stringify(updatedAdvance)}`)
+        }
+        return {
+          ...redirect,
+          mode: opsProviderMutationMode,
+          advanceId: advance.id,
+          orderId: order.id,
+          status: updatedAdvance?.status ?? null,
+          releaseStatus: updatedAdvance?.release_status ?? null,
+          routeAuditId: routeAudit.id,
+          evidenceId: evidence.id,
+        }
       }
-      return {
-        ...redirect,
-        mode: opsProviderMutationMode,
-        advanceId: advance.id,
-        orderId: order.id,
-        status: updatedAdvance?.status ?? null,
-        releaseStatus: updatedAdvance?.release_status ?? null,
-        routeAuditId: routeAudit.id,
-        evidenceId: evidence.id,
-      }
-    })
+    )
 
-    await runAllowedOpsAction('payout-block-resolution', 'ops action: payout block resolution fixture', async () => {
-      const providerBacked = await prepareStripeProviderBackedPayoutProfile()
-      const { order } = await createDisposablePayoutReadyOrder(disposableQa, customerUserId, {
-        providerBacked,
-        stage: 'DELIVERED',
-      })
-      const issue = await createDisposableOpsIssue(disposableQa, {
-        issue_type: 'PAYOUT_BLOCKED',
-        severity: 'HIGH',
-        order_id: order.id,
-        related_entity_type: 'order',
-        related_entity_id: order.id,
-        title: `Web QA payout block ${stamp}`,
-        description: 'Disposable payout block issue for ops QA resolution.',
-        recommended_action: 'Apply a disposable payout resolution and verify audit state.',
-        dedupe_key: `web-qa-payout-block:${order.id}`,
-      })
-      const result = await postOpsAction('payout-block-resolution', {
-        issueId: issue.id,
-        orderId: order.id,
-        resolutionMode: 'ORIGINAL_CURRENCY',
-        note: 'Web QA applies payout block resolution.',
-      }, 'Ops payout block resolution fixture')
-      const redirect = assertOpsRedirectOutcome(result, {
-        notice: ['payout-resolution-applied'],
-        error: ['payout-release-failed'],
-      })
-      const updatedOrder = await selectFirstRest(
-        'orders',
-        `select=id,ops_payout_resolution_mode,ops_payout_override_currency,ops_payout_override_provider,ops_payout_override_amount,escrow_released&id=eq.${encodeURIComponent(order.id)}`,
-        'Select payout block resolution order',
-      )
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status&id=eq.${encodeURIComponent(issue.id)}`, 'Select payout block issue')
-      const payout = await requireLatestPayout(order.id)
-      const expectedIssueStatus = redirect.notice ? 'RESOLVED' : 'OPEN'
-      if (updatedOrder?.ops_payout_resolution_mode !== 'ORIGINAL_CURRENCY' || updatedIssue?.status !== expectedIssueStatus) {
-        throw new Error(`Payout block resolution state mismatch: ${JSON.stringify({ updatedOrder, updatedIssue, payout })}`)
+    await runAllowedOpsAction(
+      'payout-block-resolution',
+      'ops action: payout block resolution fixture',
+      async () => {
+        const providerBacked = await prepareStripeProviderBackedPayoutProfile()
+        const { order } = await createDisposablePayoutReadyOrder(disposableQa, customerUserId, {
+          providerBacked,
+          stage: 'DELIVERED',
+        })
+        const issue = await createDisposableOpsIssue(disposableQa, {
+          issue_type: 'PAYOUT_BLOCKED',
+          severity: 'HIGH',
+          order_id: order.id,
+          related_entity_type: 'order',
+          related_entity_id: order.id,
+          title: `Web QA payout block ${stamp}`,
+          description: 'Disposable payout block issue for ops QA resolution.',
+          recommended_action: 'Apply a disposable payout resolution and verify audit state.',
+          dedupe_key: `web-qa-payout-block:${order.id}`,
+        })
+        const result = await postOpsAction(
+          'payout-block-resolution',
+          {
+            issueId: issue.id,
+            orderId: order.id,
+            resolutionMode: 'ORIGINAL_CURRENCY',
+            note: 'Web QA applies payout block resolution.',
+          },
+          'Ops payout block resolution fixture'
+        )
+        const redirect = assertOpsRedirectOutcome(result, {
+          notice: ['payout-resolution-applied'],
+          error: ['payout-release-failed'],
+        })
+        const updatedOrder = await selectFirstRest(
+          'orders',
+          `select=id,ops_payout_resolution_mode,ops_payout_override_currency,ops_payout_override_provider,ops_payout_override_amount,escrow_released&id=eq.${encodeURIComponent(order.id)}`,
+          'Select payout block resolution order'
+        )
+        const updatedIssue = await selectFirstRest(
+          'ops_issues',
+          `select=id,status&id=eq.${encodeURIComponent(issue.id)}`,
+          'Select payout block issue'
+        )
+        const payout = await requireLatestPayout(order.id)
+        const expectedIssueStatus = redirect.notice ? 'RESOLVED' : 'OPEN'
+        if (
+          updatedOrder?.ops_payout_resolution_mode !== 'ORIGINAL_CURRENCY' ||
+          updatedIssue?.status !== expectedIssueStatus
+        ) {
+          throw new Error(
+            `Payout block resolution state mismatch: ${JSON.stringify({ updatedOrder, updatedIssue, payout })}`
+          )
+        }
+        if (
+          !providerBacked &&
+          (payout.status !== 'BLOCKED' || payout.blocked_reason !== 'PAYOUT_ACCOUNT_MISSING')
+        ) {
+          throw new Error(
+            `Payout block fixture should block before provider: ${JSON.stringify(payout)}`
+          )
+        }
+        if (providerBacked && !['PROCESSING', 'PAID', 'FAILED'].includes(payout.status)) {
+          throw new Error(
+            `Provider-backed payout block resolution did not reach provider execution state: ${JSON.stringify(payout)}`
+          )
+        }
+        const audit = redirect.notice
+          ? await requireLatestAudit('ops.payout_block_resolution_applied', { orderId: order.id })
+          : await requireLatestAudit('ops.payout_block_resolution_failed', { orderId: order.id })
+        const issueEvidence = redirect.notice
+          ? await requireIssueAudit(issue.id, 'PAYOUT_BLOCK_RESOLUTION_APPLIED')
+          : await requireLatestOpsIssue(
+              `issue_type=eq.PAYOUT_BLOCKED&order_id=eq.${encodeURIComponent(order.id)}`,
+              'payout block failure issue'
+            )
+        return {
+          ...redirect,
+          mode: opsProviderMutationMode,
+          orderId: order.id,
+          issueId: issue.id,
+          payoutId: payout.id,
+          payoutStatus: payout.status,
+          blockedReason: payout.blocked_reason ?? null,
+          auditId: audit.id,
+          issueAuditId: redirect.notice ? issueEvidence.id : null,
+          failureIssueId: redirect.error ? issueEvidence.id : null,
+        }
       }
-      if (!providerBacked && (payout.status !== 'BLOCKED' || payout.blocked_reason !== 'PAYOUT_ACCOUNT_MISSING')) {
-        throw new Error(`Payout block fixture should block before provider: ${JSON.stringify(payout)}`)
-      }
-      if (providerBacked && !['PROCESSING', 'PAID', 'FAILED'].includes(payout.status)) {
-        throw new Error(`Provider-backed payout block resolution did not reach provider execution state: ${JSON.stringify(payout)}`)
-      }
-      const audit = redirect.notice
-        ? await requireLatestAudit('ops.payout_block_resolution_applied', { orderId: order.id })
-        : await requireLatestAudit('ops.payout_block_resolution_failed', { orderId: order.id })
-      const issueEvidence = redirect.notice
-        ? await requireIssueAudit(issue.id, 'PAYOUT_BLOCK_RESOLUTION_APPLIED')
-        : await requireLatestOpsIssue(`issue_type=eq.PAYOUT_BLOCKED&order_id=eq.${encodeURIComponent(order.id)}`, 'payout block failure issue')
-      return {
-        ...redirect,
-        mode: opsProviderMutationMode,
-        orderId: order.id,
-        issueId: issue.id,
-        payoutId: payout.id,
-        payoutStatus: payout.status,
-        blockedReason: payout.blocked_reason ?? null,
-        auditId: audit.id,
-        issueAuditId: redirect.notice ? issueEvidence.id : null,
-        failureIssueId: redirect.error ? issueEvidence.id : null,
-      }
-    })
+    )
 
     await runAllowedOpsAction('ops-issue-status', 'ops action: issue status', async () => {
       const issue = await createDisposableOpsIssue(disposableQa, {
         issue_type: 'SYSTEM_ALERT',
         title: `Web QA issue status ${stamp}`,
       })
-      const result = await postOpsAction('ops-issue-status', {
-        issueId: issue.id,
-        status: 'IN_REVIEW',
-        note: 'Web QA issue triage.',
-      }, 'Ops issue status')
+      const result = await postOpsAction(
+        'ops-issue-status',
+        {
+          issueId: issue.id,
+          status: 'IN_REVIEW',
+          note: 'Web QA issue triage.',
+        },
+        'Ops issue status'
+      )
       const redirect = assertOpsRedirect(result, 'notice', ['workflow-issue-saved'])
-      const updatedIssue = await selectFirstRest('ops_issues', `select=id,status,assigned_to&id=eq.${encodeURIComponent(issue.id)}`, 'Select workflow issue')
-      if (updatedIssue?.status !== 'IN_REVIEW') throw new Error(`Workflow issue did not update: ${JSON.stringify(updatedIssue)}`)
+      const updatedIssue = await selectFirstRest(
+        'ops_issues',
+        `select=id,status,assigned_to&id=eq.${encodeURIComponent(issue.id)}`,
+        'Select workflow issue'
+      )
+      if (updatedIssue?.status !== 'IN_REVIEW')
+        throw new Error(`Workflow issue did not update: ${JSON.stringify(updatedIssue)}`)
       const audit = await requireLatestAudit('ops.workflow_issue_status_updated')
       const issueAudit = await requireIssueAudit(issue.id, 'ISSUE_STATUS_UPDATED')
-      return { ...redirect, issueId: issue.id, status: updatedIssue.status, auditId: audit.id, issueAuditId: issueAudit.id }
+      return {
+        ...redirect,
+        issueId: issue.id,
+        status: updatedIssue.status,
+        auditId: audit.id,
+        issueAuditId: issueAudit.id,
+      }
     })
 
-    await runAllowedOpsAction('manual-issue-create', 'ops action: manual issue create', async () => {
-      const title = `Web QA manual issue ${stamp} ${randomUUID().slice(0, 8)}`
-      const result = await postOpsAction('manual-issue-create', {
-        issueType: 'SYSTEM_ALERT',
-        severity: 'LOW',
-        title,
-        description: 'Disposable manual issue created by the web ops QA runner.',
-        recommendedAction: 'Confirm the issue was created, audited, and then cleaned by the runner.',
-        note: 'Web QA manual issue note.',
-      }, 'Ops manual issue create')
-      const redirect = assertOpsRedirect(result, 'notice', ['manual-issue-created'])
-      const issue = await selectFirstRest(
-        'ops_issues',
-        `select=id,status,title,issue_type&title=eq.${encodeURIComponent(title)}&order=created_at.desc&limit=1`,
-        'Select manual ops issue',
-      )
-      if (!issue?.id || issue.status !== 'OPEN') throw new Error(`Manual ops issue was not created: ${JSON.stringify(issue)}`)
-      rememberFixtureId(disposableQa, 'opsIssueIds', issue.id)
-      const audit = await requireLatestAudit('ops.manual_issue_created')
-      const issueAudit = await requireIssueAudit(issue.id, 'ISSUE_CREATED_MANUAL')
-      return { ...redirect, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
-    })
+    await runAllowedOpsAction(
+      'manual-issue-create',
+      'ops action: manual issue create',
+      async () => {
+        const title = `Web QA manual issue ${stamp} ${randomUUID().slice(0, 8)}`
+        const result = await postOpsAction(
+          'manual-issue-create',
+          {
+            issueType: 'SYSTEM_ALERT',
+            severity: 'LOW',
+            title,
+            description: 'Disposable manual issue created by the web ops QA runner.',
+            recommendedAction:
+              'Confirm the issue was created, audited, and then cleaned by the runner.',
+            note: 'Web QA manual issue note.',
+          },
+          'Ops manual issue create'
+        )
+        const redirect = assertOpsRedirect(result, 'notice', ['manual-issue-created'])
+        const issue = await selectFirstRest(
+          'ops_issues',
+          `select=id,status,title,issue_type&title=eq.${encodeURIComponent(title)}&order=created_at.desc&limit=1`,
+          'Select manual ops issue'
+        )
+        if (!issue?.id || issue.status !== 'OPEN')
+          throw new Error(`Manual ops issue was not created: ${JSON.stringify(issue)}`)
+        rememberFixtureId(disposableQa, 'opsIssueIds', issue.id)
+        const audit = await requireLatestAudit('ops.manual_issue_created')
+        const issueAudit = await requireIssueAudit(issue.id, 'ISSUE_CREATED_MANUAL')
+        return { ...redirect, issueId: issue.id, auditId: audit.id, issueAuditId: issueAudit.id }
+      }
+    )
 
     if (!enableOpsRbacMatrix) {
       guardedSkip(
         'ops action RBAC non-admin denial matrix',
         'WEB_QA_ENABLE_OPS_RBAC_MATRIX=0 disabled the non-admin RBAC matrix.',
-        'Run without WEB_QA_ENABLE_OPS_RBAC_MATRIX=0 to verify every non-admin denial redirect.',
+        'Run without WEB_QA_ENABLE_OPS_RBAC_MATRIX=0 to verify every non-admin denial redirect.'
       )
-    } else if (!spawnOpsRbacRoleServers && !opsRbacRoles.some((role) => role === opsBootstrapRole || opsRbacRoleBaseUrls.has(role))) {
+    } else if (
+      !spawnOpsRbacRoleServers &&
+      !opsRbacRoles.some((role) => role === opsBootstrapRole || opsRbacRoleBaseUrls.has(role))
+    ) {
       guardedSkip(
         'ops action RBAC non-admin denial matrix',
         'No non-admin role server was available for denial checks.',
-        'Set WEB_QA_SPAWN_OPS_RBAC_SERVERS=1, run the app once per OPS_DASHBOARD_BOOTSTRAP_ROLE and pass WEB_QA_OPS_RBAC_ROLE_URLS, or run the QA runner against a non-admin bootstrap role.',
+        'Set WEB_QA_SPAWN_OPS_RBAC_SERVERS=1, run the app once per OPS_DASHBOARD_BOOTSTRAP_ROLE and pass WEB_QA_OPS_RBAC_ROLE_URLS, or run the QA runner against a non-admin bootstrap role.'
       )
     } else {
       await runFlow('ops action RBAC non-admin denial matrix', async () => {
@@ -2474,7 +3252,9 @@ async function main() {
         const checkedRoles = results.filter((result) => result.status === 'checked')
         const skippedRoles = results.filter((result) => result.status === 'skipped')
         if (checkedRoles.length === 0) {
-          throw new Error('No non-admin Ops roles were checked. Enable spawned role servers or provide role base URLs.')
+          throw new Error(
+            'No non-admin Ops roles were checked. Enable spawned role servers or provide role base URLs.'
+          )
         }
 
         return {
@@ -2489,6 +3269,7 @@ async function main() {
   }
 
   let accountEmail = uiEmail
+  let accountUserId = null
   let creationMode = 'ui-sign-up'
 
   let signupAuthenticated = false
@@ -2507,8 +3288,12 @@ async function main() {
       await page.waitForTimeout(3_000)
       await screenshot('authenticated-sign-up-result')
 
-      const afterSignupText = await page.locator('body').innerText().catch(() => '')
-      signupAuthenticated = page.url().includes('/account/dashboard') || afterSignupText.includes('Dashboard')
+      const afterSignupText = await page
+        .locator('body')
+        .innerText()
+        .catch(() => '')
+      signupAuthenticated =
+        page.url().includes('/account/dashboard') || afterSignupText.includes('Dashboard')
     } catch (error) {
       events.push({
         type: 'signup-fallback',
@@ -2521,6 +3306,7 @@ async function main() {
     creationMode = 'admin-confirmed-fallback'
     const fallback = await createConfirmedCustomer(fallbackEmail)
     accountEmail = fallback.email
+    accountUserId = fallback.userId
     const passwordSessionCheck = await verifyPasswordSession(accountEmail)
     await signInWithPassword(page, accountEmail, password, 'authenticated-sign-in')
     await page.waitForURL(/\/account\/dashboard/u, { timeout: 12_000 }).catch(() => null)
@@ -2536,28 +3322,53 @@ async function main() {
           error: passwordSessionCheck.error ?? null,
         },
         afterSignInUrl: page.url(),
-        afterSignInHeading: await page.locator('h1').first().innerText().catch(() => null),
-        afterSignInText: (await page.locator('body').innerText().catch(() => '')).slice(0, 600),
+        afterSignInHeading: await page
+          .locator('h1')
+          .first()
+          .innerText()
+          .catch(() => null),
+        afterSignInText: (
+          await page
+            .locator('body')
+            .innerText()
+            .catch(() => '')
+        ).slice(0, 600),
         browserAuthState: await browserAuthState(page),
       }),
     })
   }
 
   for (const accountPath of accountPaths) {
-    const response = await page.goto(`${baseUrl}${accountPath}`, { waitUntil: 'domcontentloaded', timeout: 12_000 }).catch((error) => {
-      routeResults.push({ path: accountPath, error: error instanceof Error ? error.message : String(error) })
-      return null
-    })
+    const response = await page
+      .goto(`${baseUrl}${accountPath}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+      .catch((error) => {
+        routeResults.push({
+          path: accountPath,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return null
+      })
     await waitForWorkspaceReady()
     await screenshot(`authenticated-${slug(accountPath)}`)
-    const body = await page.locator('body').innerText().catch(() => '')
+    const body = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     routeResults.push({
       path: accountPath,
       status: response?.status() ?? null,
       url: page.url(),
-      h1: await page.locator('h1').first().innerText().catch(() => null),
-      signedInWall: body.includes('Sign in to Drapeon') || body.includes('Sign in to continue') || page.url().includes('/sign-in'),
-      hasEmptyState: body.includes('No ') || body.includes('not loaded') || body.includes('will appear'),
+      h1: await page
+        .locator('h1')
+        .first()
+        .innerText()
+        .catch(() => null),
+      signedInWall:
+        body.includes('Sign in to Drapeon') ||
+        body.includes('Sign in to continue') ||
+        page.url().includes('/sign-in'),
+      hasEmptyState:
+        body.includes('No ') || body.includes('not loaded') || body.includes('will appear'),
     })
   }
 
@@ -2566,12 +3377,19 @@ async function main() {
     const guestPage = await guestContext.newPage()
     guestPage.setDefaultTimeout(8_000)
     try {
-      await guestPage.goto(`${baseUrl}/account/orders`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+      await guestPage.goto(`${baseUrl}/account/orders`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
       await waitForWorkspaceReady(guestPage)
-      const body = await guestPage.locator('body').innerText().catch(() => '')
-      const blocked = guestPage.url().includes('/sign-in')
-        || body.includes('Sign in to Drapeon')
-        || body.includes('Sign in to continue')
+      const body = await guestPage
+        .locator('body')
+        .innerText()
+        .catch(() => '')
+      const blocked =
+        guestPage.url().includes('/sign-in') ||
+        body.includes('Sign in to Drapeon') ||
+        body.includes('Sign in to continue')
       if (!blocked) throw new Error(`Guest reached protected route: ${guestPage.url()}`)
       await screenshotFor(guestPage, 'negative-unauthenticated-account-wall')
       return { blocked: true, url: guestPage.url() }
@@ -2585,17 +3403,28 @@ async function main() {
     const invalidPage = await invalidContext.newPage()
     invalidPage.setDefaultTimeout(8_000)
     try {
-      await invalidPage.goto(`${baseUrl}/sign-in`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+      await invalidPage.goto(`${baseUrl}/sign-in`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
       await invalidPage.waitForSelector('input[type="email"]', { timeout: 8_000 })
       await invalidPage.waitForTimeout(3_000)
       await invalidPage.locator('input[type="email"]').fill(`invalid.${stamp}@drapeon.co`)
       await invalidPage.locator('input[type="password"]').fill('not-the-password')
       await invalidPage.getByRole('button', { name: /^Sign in$/i }).click()
       await invalidPage.waitForTimeout(1_500)
-      const body = await invalidPage.locator('body').innerText().catch(() => '')
-      const stayedOut = !invalidPage.url().includes('/account/')
-        && (await invalidPage.locator('input[type="password"]').count().catch(() => 0)) > 0
-      if (!stayedOut) throw new Error(`Invalid credentials appeared to authenticate: ${invalidPage.url()}`)
+      const body = await invalidPage
+        .locator('body')
+        .innerText()
+        .catch(() => '')
+      const stayedOut =
+        !invalidPage.url().includes('/account/') &&
+        (await invalidPage
+          .locator('input[type="password"]')
+          .count()
+          .catch(() => 0)) > 0
+      if (!stayedOut)
+        throw new Error(`Invalid credentials appeared to authenticate: ${invalidPage.url()}`)
       await screenshotFor(invalidPage, 'negative-invalid-sign-in')
       return { rejected: true, url: invalidPage.url(), bodySample: body.slice(0, 240) }
     } finally {
@@ -2604,6 +3433,7 @@ async function main() {
   })
 
   const postAuthSessionCheck = await verifyPasswordSession(accountEmail)
+  accountUserId ??= postAuthSessionCheck.userId ?? null
   const accessToken = postAuthSessionCheck.accessToken ?? null
   events.push({
     type: 'auth-token-check',
@@ -2633,19 +3463,27 @@ async function main() {
   }
 
   let fixtureTailor = disposableQa?.tailorProfileId
-    ? { id: disposableQa.tailorProfileId, display_name: 'Web QA Tailor', business_name: 'Web QA Tailor' }
+    ? {
+        id: disposableQa.tailorProfileId,
+        display_name: 'Web QA Tailor',
+        business_name: 'Web QA Tailor',
+      }
     : null
   let fixtureReadyMadeItem = disposableQa?.sellerItemId
-    ? { id: disposableQa.sellerItemId, title: 'Web QA Ready-made', tailor_profile_id: disposableQa.tailorProfileId }
+    ? {
+        id: disposableQa.sellerItemId,
+        title: 'Web QA Ready-made',
+        tailor_profile_id: disposableQa.tailorProfileId,
+      }
     : null
   if (!fixtureTailor?.id) {
     try {
       const tailors = await selectRest(
         'tailor_profiles',
         'select=id,display_name,business_name,supports_custom_orders,is_live&supports_custom_orders=eq.true&is_live=eq.true&limit=1',
-        'Select custom tailor fixture',
+        'Select custom tailor fixture'
       )
-      fixtureTailor = Array.isArray(tailors) ? tailors[0] ?? null : null
+      fixtureTailor = Array.isArray(tailors) ? (tailors[0] ?? null) : null
     } catch (error) {
       events.push({
         type: 'fixture-lookup',
@@ -2658,9 +3496,9 @@ async function main() {
       const items = await selectRest(
         'seller_items',
         'select=id,title,tailor_profile_id,is_live,stock_status&is_live=eq.true&limit=1',
-        'Select ready-made item fixture',
+        'Select ready-made item fixture'
       )
-      fixtureReadyMadeItem = Array.isArray(items) ? items[0] ?? null : null
+      fixtureReadyMadeItem = Array.isArray(items) ? (items[0] ?? null) : null
     } catch (error) {
       events.push({
         type: 'fixture-lookup',
@@ -2670,22 +3508,34 @@ async function main() {
   }
 
   await runFlow('explore search/filter', async () => {
-    await page.goto(`${baseUrl}/account/explore`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+    await page.goto(`${baseUrl}/account/explore`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
     await waitForWorkspaceReady()
-    await page.locator('input[placeholder^="Search by tailor"]').fill('qa')
+    await page.locator('input[name="q"], input[placeholder^="Search by tailor"]').first().fill('qa')
     const customOnly = page.locator('label', { hasText: 'Custom orders only' }).first()
     if (await customOnly.count()) await customOnly.click()
     await page.waitForTimeout(700)
     await screenshot('flow-explore-search-filter')
     return {
       url: page.url(),
-      bodySample: (await page.locator('body').innerText().catch(() => '')).slice(0, 300),
+      bodySample: (
+        await page
+          .locator('body')
+          .innerText()
+          .catch(() => '')
+      ).slice(0, 300),
     }
   })
 
   await runFlow('negative: measurements contact leak blocked', async () => {
-    await page.goto(`${baseUrl}/account/measurements`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+    await page.goto(`${baseUrl}/account/measurements`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
     await waitForWorkspaceReady()
+    await page.getByRole('button', { name: /^Add measurements$/i }).click()
     await page.getByLabel('Profile name').fill('Call +15555550123')
     const decimalInputs = page.locator('input[inputmode="decimal"]')
     const values = ['70', '38', '32', '39']
@@ -2693,9 +3543,21 @@ async function main() {
       await decimalInputs.nth(index).fill(values[index])
     }
     await page.getByRole('button', { name: /^Save profile$/i }).click()
-    await page.waitForFunction(() => document.body.innerText.includes("Measurement profile names can't include contact details."), null, { timeout: 8_000 }).catch(() => null)
+    await page
+      .waitForFunction(
+        () =>
+          document.body.innerText.includes(
+            "Measurement profile names can't include contact details."
+          ),
+        null,
+        { timeout: 8_000 }
+      )
+      .catch(() => null)
     await screenshot('negative-measurements-contact-leak')
-    const text = await page.locator('body').innerText().catch(() => '')
+    const text = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     if (!text.includes("Measurement profile names can't include contact details.")) {
       throw new Error('Measurement contact-leak validation copy did not appear.')
     }
@@ -2703,8 +3565,12 @@ async function main() {
   })
 
   await runFlow('measurements editor save', async () => {
-    await page.goto(`${baseUrl}/account/measurements`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+    await page.goto(`${baseUrl}/account/measurements`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
     await waitForWorkspaceReady()
+    await page.getByRole('button', { name: /^Add measurements$/i }).click()
     await page.getByLabel('Profile name').fill('QA fit profile')
     const decimalInputs = page.locator('input[inputmode="decimal"]')
     const values = ['70', '38', '32', '39']
@@ -2712,25 +3578,107 @@ async function main() {
       await decimalInputs.nth(index).fill(values[index])
     }
     await page.getByRole('button', { name: /^Save profile$/i }).click()
-    await page.waitForFunction(() => document.body.innerText.includes('Measurement profile saved') || document.body.innerText.includes('Measurements could not save'), null, { timeout: 12_000 }).catch(() => null)
+    await page
+      .waitForFunction(
+        () =>
+          document.body.innerText.includes('Measurement profile saved') ||
+          document.body.innerText.includes('Measurements could not save'),
+        null,
+        { timeout: 12_000 }
+      )
+      .catch(() => null)
     await screenshot('flow-measurements-editor-save')
-    const text = await page.locator('body').innerText().catch(() => '')
-    if (!text.includes('Measurement profile saved')) throw new Error('Measurement save success copy did not appear.')
+    const text = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
+    if (!text.includes('Measurement profile saved'))
+      throw new Error('Measurement save success copy did not appear.')
     return { saved: true }
   })
 
   await runFlow('settings notification mutation', async () => {
-    await page.goto(`${baseUrl}/account/settings`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+    await page.goto(`${baseUrl}/account/settings`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
     await waitForWorkspaceReady()
-    const platformUpdates = page.locator('label', { hasText: 'Platform updates' }).first()
-    if (!(await platformUpdates.count())) throw new Error('Platform updates preference was not visible.')
-    await platformUpdates.click()
-    await page.getByRole('button', { name: /^Save preferences$/i }).click()
-    await page.waitForFunction(() => document.body.innerText.includes('Notification preferences saved') || document.body.innerText.includes('Preferences could not save'), null, { timeout: 12_000 }).catch(() => null)
+    const productUpdates = page.getByRole('switch', { name: 'Product updates: Email' })
+    await productUpdates.waitFor({ state: 'visible', timeout: 15_000 })
+    await productUpdates.click()
+    await page
+      .waitForFunction(
+        () =>
+          document.body.innerText.includes('Communication choice saved.') ||
+          document.body.innerText.includes('previous choices are unchanged'),
+        null,
+        { timeout: 12_000 }
+      )
+      .catch(() => null)
     await screenshot('flow-settings-notification-prefs')
-    const text = await page.locator('body').innerText().catch(() => '')
-    if (!text.includes('Notification preferences saved')) throw new Error('Notification preference save success copy did not appear.')
+    const text = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
+    if (!text.includes('Communication choice saved.'))
+      throw new Error('Communication preference save success copy did not appear.')
     return { saved: true }
+  })
+
+  await runFlow('settings phone validation and recovery', async () => {
+    await page.goto(`${baseUrl}/account/settings`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 12_000,
+    })
+    await waitForWorkspaceReady()
+    const editPhone = page.getByRole('button', { name: /^(Change|Add) phone number/i })
+    await editPhone.waitFor({ state: 'visible', timeout: 15_000 })
+    await editPhone.click()
+    const phoneInput = page.getByLabel('Account phone number')
+    await phoneInput.fill('123')
+    await page.getByRole('button', { name: 'Save phone' }).click()
+    const validation = page.getByText('Enter a valid phone number.', { exact: true })
+    await validation.waitFor({ state: 'visible', timeout: 8_000 })
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await editPhone.waitFor({ state: 'visible', timeout: 8_000 })
+    await editPhone.click()
+    const phoneSettings = page.getByRole('group', { name: 'Phone number settings' })
+    const nextPhone = `+1202555${String(stamp).slice(-4)}`
+    await phoneInput.fill(nextPhone)
+    await phoneSettings.locator('input[autocomplete="current-password"]').fill(password)
+    await phoneSettings.getByRole('button', { name: 'Save phone' }).click()
+    try {
+      await page
+        .getByText('Phone number updated securely.', { exact: true })
+        .waitFor({ state: 'visible', timeout: 15_000 })
+    } catch {
+      await screenshot('flow-settings-phone-mutation-failed')
+      const body = await page
+        .locator('body')
+        .innerText()
+        .catch(() => '')
+      throw new Error(`Phone mutation receipt did not appear. Settings state: ${body.slice(-1400)}`)
+    }
+    const refreshedSession = await page.evaluate(async () => {
+      const response = await fetch('/api/public-env.js')
+      return { ok: response.ok }
+    })
+    await screenshot('flow-settings-phone-validation-recovery')
+    if (!postAuthSessionCheck.userId)
+      throw new Error('Authenticated user id is unavailable for phone persistence verification.')
+    const persistedPhone =
+      (await getAuthUser(postAuthSessionCheck.userId))?.user_metadata?.phone ?? null
+    if (persistedPhone !== nextPhone)
+      throw new Error(
+        `Phone metadata did not persist. Expected ${nextPhone}, received ${persistedPhone}.`
+      )
+    return {
+      invalidBlocked: true,
+      cancelRecovered: true,
+      mutationSaved: true,
+      sessionEndpointOk: refreshedSession.ok,
+      persistedPhone,
+    }
   })
 
   await runFlow('web push readiness smoke', async () => {
@@ -2738,15 +3686,18 @@ async function main() {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(10_000),
     })
-    if (!configResponse.ok) throw new Error(`Web push config failed with HTTP ${configResponse.status}.`)
+    if (!configResponse.ok)
+      throw new Error(`Web push config failed with HTTP ${configResponse.status}.`)
     const config = await configResponse.json()
     const workerResponse = await fetch(`${baseUrl}/web-push-sw.js`, {
       headers: { Accept: 'application/javascript,text/javascript,*/*' },
       signal: AbortSignal.timeout(10_000),
     })
-    if (!workerResponse.ok) throw new Error(`Web push service worker failed with HTTP ${workerResponse.status}.`)
+    if (!workerResponse.ok)
+      throw new Error(`Web push service worker failed with HTTP ${workerResponse.status}.`)
     const workerSource = await workerResponse.text()
-    if (!workerSource.includes('showNotification')) throw new Error('Web push service worker does not show notifications.')
+    if (!workerSource.includes('showNotification'))
+      throw new Error('Web push service worker does not show notifications.')
     return {
       configured: Boolean(config.enabled && config.publicKey),
       publicKeyLength: typeof config.publicKey === 'string' ? config.publicKey.length : 0,
@@ -2756,19 +3707,46 @@ async function main() {
 
   if (fixtureTailor?.id) {
     await runFlow('custom brief preflight', async () => {
-      await page.goto(`${baseUrl}/account/brief/${fixtureTailor.id}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+      await page.goto(`${baseUrl}/account/brief/${fixtureTailor.id}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
       await waitForWorkspaceReady()
+      const garmentSelect = page.getByLabel('Garment')
+      await garmentSelect.waitFor({ state: 'visible', timeout: 12_000 })
+      const garmentPresentation = await garmentSelect.evaluate((select) => ({
+        value: select.value,
+        placeholder: select.options[0]?.textContent?.trim() ?? null,
+        groups: Array.from(select.querySelectorAll('optgroup')).map((group) => group.label),
+      }))
+      if (garmentPresentation.value !== '')
+        throw new Error(`Custom brief preselected a garment: ${garmentPresentation.value}`)
+      if (garmentPresentation.placeholder !== 'Select a garment')
+        throw new Error('Custom brief garment placeholder is missing.')
+      for (const expectedGroup of [
+        'West African and diaspora',
+        'South Asian',
+        'Western and formal',
+        'Modest and MENA',
+      ]) {
+        if (!garmentPresentation.groups.includes(expectedGroup))
+          throw new Error(`Custom brief is missing the ${expectedGroup} garment group.`)
+      }
       await screenshot('flow-custom-brief-route')
       const result = await invokeEdgeFunction(
         'custom-order-action',
         accessToken,
         buildCustomBriefPreflightPayload(fixtureTailor.id),
-        'Custom brief preflight',
+        'Custom brief preflight'
       )
-      return { ok: Boolean(result?.ok), tailorId: fixtureTailor.id }
+      return { ok: Boolean(result?.ok), tailorId: fixtureTailor.id, garmentPresentation }
     })
   } else {
-    guardedSkip('custom brief preflight', 'No live custom tailor fixture was available.', 'Seed a live tailor that supports custom orders for web authenticated QA.')
+    guardedSkip(
+      'custom brief preflight',
+      'No live custom tailor fixture was available.',
+      'Seed a live tailor that supports custom orders for web authenticated QA.'
+    )
   }
 
   if (disposableQa?.tailorEmail) {
@@ -2777,24 +3755,139 @@ async function main() {
       const tailorPage = await tailorContext.newPage()
       tailorPage.setDefaultTimeout(8_000)
       try {
-        await signInWithPassword(tailorPage, disposableQa.tailorEmail, password, 'tailor-role-sign-in')
+        await signInWithPassword(
+          tailorPage,
+          disposableQa.tailorEmail,
+          password,
+          'tailor-role-sign-in'
+        )
         await tailorPage.waitForURL(/\/account/u, { timeout: 12_000 }).catch(() => null)
         await waitForWorkspaceReady(tailorPage)
 
         const tailorRouteResults = []
-        for (const tailorPath of ['/account/work', '/account/tailor', '/account/profile', '/account/earnings', '/account/payout']) {
-          const response = await tailorPage.goto(`${baseUrl}${tailorPath}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+        for (const tailorPath of [
+          '/account/work',
+          '/account/tailor',
+          '/account/profile',
+          '/account/shop',
+          '/account/earnings',
+          '/account/payout',
+        ]) {
+          const response = await tailorPage.goto(`${baseUrl}${tailorPath}`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 12_000,
+          })
           await waitForWorkspaceReady(tailorPage)
+          if (tailorPath === '/account/work') {
+            await tailorPage
+              .locator('[data-route-content-ready="true"]')
+              .waitFor({ state: 'visible', timeout: 12_000 })
+          }
           await screenshotFor(tailorPage, `tailor-role-${slug(tailorPath)}`)
-          const body = await tailorPage.locator('body').innerText().catch(() => '')
+          const body = await tailorPage
+            .locator('body')
+            .innerText()
+            .catch(() => '')
+          if (
+            tailorPath === '/account/work' &&
+            (body.includes('Loading your work queue') || body.includes('Work queue unavailable'))
+          ) {
+            throw new Error(`Tailor work route did not reach a ready state: ${body.slice(0, 300)}`)
+          }
+          if (tailorPath === '/account/shop') {
+            const catalogueHeading = tailorPage.getByRole('heading', { name: 'Add a piece' })
+            await catalogueHeading.waitFor({ state: 'visible', timeout: 12_000 })
+            const listing = tailorPage.getByRole('heading', {
+              name: new RegExp(`Web QA Ready-made`, 'i'),
+            })
+            if (!(await listing.count())) {
+              throw new Error('Tailor catalogue did not render the authoritative seeded listing.')
+            }
+            if (!(await tailorPage.getByLabel('Title').count())) {
+              throw new Error('Tailor catalogue editor did not expose labelled listing fields.')
+            }
+          }
+          if (tailorPath === '/account/earnings') {
+            await tailorPage
+              .getByRole('heading', { name: 'Payout history' })
+              .waitFor({ state: 'visible', timeout: 12_000 })
+            if (!(await tailorPage.getByRole('link', { name: 'Review payout setup' }).count())) {
+              throw new Error('Earnings did not expose its contextual payout setup route.')
+            }
+            if (!(await tailorPage.getByLabel('Earnings status').count())) {
+              throw new Error('Earnings filters were not accessible by label.')
+            }
+          }
+          if (tailorPath === '/account/payout') {
+            await tailorPage
+              .getByRole('heading', { name: 'Where earnings are sent' })
+              .waitFor({ state: 'visible', timeout: 12_000 })
+            if (!(await tailorPage.getByLabel('Payout currency').count())) {
+              throw new Error('Payout provider setup did not expose its currency field.')
+            }
+            if (!(await tailorPage.getByText('Your current destination stays active').count())) {
+              const statusCopy = await tailorPage.locator('body').innerText()
+              if (!statusCopy.toLowerCase().includes('current destination')) {
+                throw new Error('Payout did not explain current-destination continuity.')
+              }
+            }
+          }
           tailorRouteResults.push({
             path: tailorPath,
             status: response?.status() ?? null,
-            signedInWall: body.includes('Sign in to Drapeon') || tailorPage.url().includes('/sign-in'),
-            h1: await tailorPage.locator('h1').first().innerText().catch(() => null),
+            signedInWall:
+              body.includes('Sign in to Drapeon') || tailorPage.url().includes('/sign-in'),
+            h1: await tailorPage
+              .locator('h1')
+              .first()
+              .innerText()
+              .catch(() => null),
           })
         }
-        return { tailorEmail: disposableQa.tailorEmail, routes: tailorRouteResults }
+        await tailorPage.goto(`${baseUrl}/account/profile`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 12_000,
+        })
+        await waitForWorkspaceReady(tailorPage)
+        const presentationHeading = tailorPage.getByRole('heading', { name: 'Media presentation' })
+        await presentationHeading.waitFor({ state: 'visible', timeout: 12_000 })
+        await tailorPage.getByLabel('Horizontal focus').waitFor({ state: 'visible', timeout: 30_000 })
+        await tailorPage.getByLabel('Horizontal focus').fill('0.35')
+        await tailorPage.getByLabel('Vertical focus').fill('0.4')
+        await tailorPage
+          .getByLabel('Image description')
+          .fill('QA garment detail with visible stitching')
+        await tailorPage.getByRole('button', { name: /^Save presentation$/i }).click()
+        await tailorPage.waitForFunction(
+          () =>
+            document.body.innerText.includes(
+              'Presentation saved across Explore and your public profile.'
+            ),
+          null,
+          { timeout: 12_000 }
+        )
+        await screenshotFor(tailorPage, 'tailor-role-media-presentation')
+        const mediaState = await invokeEdgeFunction(
+          'tailor-profile-action',
+          disposableQa.tailorAccessToken,
+          {
+            action: 'get-media-presentation',
+          },
+          'Read saved media presentation'
+        )
+        const savedMedia = Array.isArray(mediaState?.media) ? mediaState.media[0] : null
+        if (
+          !savedMedia ||
+          Number(savedMedia.focalX) !== 0.35 ||
+          Number(savedMedia.focalY) !== 0.4
+        ) {
+          throw new Error(`Media presentation did not persist: ${JSON.stringify(savedMedia)}`)
+        }
+        return {
+          tailorEmail: disposableQa.tailorEmail,
+          routes: tailorRouteResults,
+          mediaPresentation: savedMedia,
+        }
       } finally {
         await tailorContext.close()
       }
@@ -2803,15 +3896,18 @@ async function main() {
     guardedSkip(
       'tailor-role actor coverage',
       'Disposable tailor fixture setup was not available.',
-      'Run against a non-production Supabase project with service-role credentials so the runner can create and clean a tailor fixture.',
+      'Run against a non-production Supabase project with service-role credentials so the runner can create and clean a tailor fixture.'
     )
   }
 
   if (fixtureTailor?.id) {
     await runFlow('tailor detail save/unsave', async () => {
-      await page.goto(`${baseUrl}/account/tailors/${fixtureTailor.id}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
-      await waitForWorkspaceReady()
-      const saveButton = page.getByRole('button', { name: /^(Save tailor|Remove from saved)$/i })
+      await page.goto(`${baseUrl}/account/tailors/${fixtureTailor.id}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
+      const saveButton = page.getByRole('button', { name: /^(Save tailor|Saved)$/i })
+      await saveButton.waitFor({ state: 'visible', timeout: 15_000 })
       const firstLabel = await saveButton.innerText()
       await saveButton.click()
       await page.waitForTimeout(1_200)
@@ -2822,29 +3918,116 @@ async function main() {
       return { tailorId: fixtureTailor.id, firstLabel, secondLabel }
     })
   } else {
-    guardedSkip('tailor detail save/unsave', 'No live tailor fixture was available.', 'Seed a live tailor profile for save/unsave QA.')
+    guardedSkip(
+      'tailor detail save/unsave',
+      'No live tailor fixture was available.',
+      'Seed a live tailor profile for save/unsave QA.'
+    )
   }
 
   if (fixtureReadyMadeItem?.id) {
-    await runFlow('shop item detail', async () => {
-      const response = await page.goto(`${baseUrl}/account/items/${fixtureReadyMadeItem.id}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+    await runFlow('marketplace browse and filtering', async () => {
+      await page.goto(`${baseUrl}/account/shop`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
       await waitForWorkspaceReady()
-      await screenshot('flow-shop-item-detail')
-      return { itemId: fixtureReadyMadeItem.id, httpStatus: response?.status() ?? null }
+      const marketplace = page.getByRole('region', { name: 'Marketplace pieces' })
+      await marketplace.waitFor({ state: 'visible', timeout: 15_000 })
+      const itemLink = marketplace.locator(`a[href="/account/items/${fixtureReadyMadeItem.id}"]`)
+      await itemLink.waitFor({ state: 'visible', timeout: 10_000 })
+      const search = page.getByRole('textbox', { name: 'Search pieces' })
+      await search.fill(fixtureReadyMadeItem.title || 'QA')
+      await page.waitForTimeout(300)
+      const filteredVisible = await itemLink.isVisible()
+      await screenshot('flow-marketplace-browse-filtered')
+      await search.fill('definitely-no-marketplace-match-qa')
+      await page.getByText('No matching pieces.').waitFor({ state: 'visible', timeout: 5_000 })
+      await page.getByRole('button', { name: 'Clear filters' }).click()
+      await itemLink.waitFor({ state: 'visible', timeout: 5_000 })
+      return { itemId: fixtureReadyMadeItem.id, filteredVisible, restoredAfterClear: true }
+    })
+    await runFlow('shop item detail', async () => {
+      const response = await page.goto(`${baseUrl}/account/items/${fixtureReadyMadeItem.id}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
+      await waitForWorkspaceReady()
+      const titleVisible = await page
+        .getByText(fixtureReadyMadeItem.title || 'Web QA Ready-made', { exact: false })
+        .first()
+        .isVisible()
+      const imageVisible = await page
+        .locator('main img')
+        .count()
+        .catch(() => 0)
+      const checkoutVisible = await page
+        .getByRole('heading', { name: 'Checkout', exact: true })
+        .isVisible()
+      const inquiryVisible = await page.getByRole('button', { name: 'Ask tailor' }).isVisible()
+      if (!titleVisible || !checkoutVisible || !inquiryVisible)
+        throw new Error('Item detail did not expose media, checkout and inquiry context.')
+      const mediaBox = await page.getByTestId('item-media-panel').boundingBox()
+      const checkoutBox = await page
+        .getByRole('heading', { name: 'Checkout', exact: true })
+        .boundingBox()
+      const desktopTwoColumn = Boolean(
+        mediaBox && checkoutBox && checkoutBox.x > mediaBox.x + mediaBox.width * 0.7
+      )
+      if (!desktopTwoColumn)
+        throw new Error(
+          `Item detail did not use a compact desktop split: ${JSON.stringify({ mediaBox, checkoutBox })}`
+        )
+      await screenshot('flow-shop-item-detail-desktop')
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 12_000 })
+      await waitForWorkspaceReady()
+      const mobileMediaBox = await page.getByTestId('item-media-panel').boundingBox()
+      const mobileCheckoutBox = await page
+        .getByRole('heading', { name: 'Checkout', exact: true })
+        .boundingBox()
+      const mobileStacked = Boolean(
+        mobileMediaBox &&
+        mobileCheckoutBox &&
+        mobileCheckoutBox.y > mobileMediaBox.y + mobileMediaBox.height
+      )
+      if (!mobileStacked)
+        throw new Error(
+          `Item detail did not stack safely on mobile: ${JSON.stringify({ mobileMediaBox, mobileCheckoutBox })}`
+        )
+      await screenshot('flow-shop-item-detail-mobile')
+      await page.setViewportSize({ width: 1440, height: 1200 })
+      return {
+        itemId: fixtureReadyMadeItem.id,
+        httpStatus: response?.status() ?? null,
+        titleVisible,
+        imageVisible: imageVisible > 0,
+        checkoutVisible,
+        inquiryVisible,
+        desktopTwoColumn,
+        mobileStacked,
+      }
     })
   } else {
-    guardedSkip('shop item detail', 'No live ready-made item fixture was available.', 'Seed a live ready-made item for item-detail QA.')
+    guardedSkip(
+      'shop item detail',
+      'No live ready-made item fixture was available.',
+      'Seed a live ready-made item for item-detail QA.'
+    )
   }
 
   await runFlow('public tailor application validation', async () => {
     await page.goto(`${baseUrl}/apply`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
     const submitButton = page.getByRole('button', { name: /Submit application/i })
     if (!(await submitButton.count())) throw new Error('Submit application button was not visible.')
-    const disabled = await submitButton.first().isDisabled().catch(() => false)
+    const disabled = await submitButton
+      .first()
+      .isDisabled()
+      .catch(() => false)
     if (!disabled) await submitButton.first().click()
     await page.waitForTimeout(800)
     await screenshot('flow-public-tailor-application-validation')
-    const body = await page.locator('body').innerText().catch(() => '')
+    const body = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     return {
       validationVisible: body.includes('portfolio') || body.includes('application'),
       submitDisabled: disabled,
@@ -2853,9 +4036,16 @@ async function main() {
 
   if (enableEmailSmoke) {
     await runFlow('password reset/magic-link smoke', async () => {
-      await page.goto(`${baseUrl}/account/recovery`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+      await page.goto(`${baseUrl}/account/recovery`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
       await page.locator('input[type="email"]').fill(accountEmail)
-      await page.getByRole('button').filter({ hasText: /Send|Continue|Reset/i }).first().click()
+      await page
+        .getByRole('button')
+        .filter({ hasText: /Send|Continue|Reset/i })
+        .first()
+        .click()
       await page.waitForTimeout(1_500)
       await screenshot('flow-password-reset-magic-link')
       return { emailSmokeEnabled: true }
@@ -2864,29 +4054,48 @@ async function main() {
     guardedSkip(
       'password reset/magic-link smoke',
       'WEB_QA_ENABLE_EMAILS is not set; sending auth emails is disabled by default.',
-      'Run with WEB_QA_ENABLE_EMAILS=1 against a non-production email sink to exercise this path.',
+      'Run with WEB_QA_ENABLE_EMAILS=1 against a non-production email sink to exercise this path.'
     )
   }
 
   let readyMadeCheckoutOrderId = null
   if (disposableQa?.sellerItemId && accessToken) {
     await runFlow('ready-made checkout/create path', async () => {
-      const preview = await invokeEdgeFunction('ready-made-order-action', accessToken, {
-        action: 'preview-checkout',
-        sellerItemId: disposableQa.sellerItemId,
-        size: 'M',
-        quantity: 1,
-        fulfillment: 'PICKUP',
-      }, 'Ready-made checkout preview')
+      const preview = await invokeEdgeFunction(
+        'ready-made-order-action',
+        accessToken,
+        {
+          action: 'preview-checkout',
+          sellerItemId: disposableQa.sellerItemId,
+          size: 'M',
+          quantity: 1,
+          fulfillment: 'PICKUP',
+        },
+        'Ready-made checkout preview'
+      )
 
-      const checkout = await invokeEdgeFunction('ready-made-order-action', accessToken, {
-        action: 'create-checkout',
-        sellerItemId: disposableQa.sellerItemId,
-        size: 'M',
-        quantity: 1,
-        fulfillment: 'PICKUP',
-        cancellationPolicyAcknowledged: true,
-      }, 'Ready-made checkout create')
+      if (!enableAppendOnlyProofs) {
+        return {
+          previewOk: Boolean(preview?.ok),
+          durableCheckoutSkipped: true,
+          reason: 'Append-only fulfillment history is disabled for routine QA.',
+        }
+      }
+
+      const checkout = await invokeEdgeFunction(
+        'ready-made-order-action',
+        accessToken,
+        {
+          action: 'create-checkout',
+          sellerItemId: disposableQa.sellerItemId,
+          size: 'M',
+          quantity: 1,
+          fulfillment: 'PICKUP',
+          cancellationPolicyAcknowledged: true,
+          fitGuidanceAcknowledged: true,
+        },
+        'Ready-made checkout create'
+      )
 
       readyMadeCheckoutOrderId = checkout?.orderId ?? null
       if (readyMadeCheckoutOrderId) {
@@ -2897,6 +4106,30 @@ async function main() {
           quantity: 1,
           size: 'M',
         })
+        await page.goto(
+          `${baseUrl}/account/checkout/${encodeURIComponent(readyMadeCheckoutOrderId)}`,
+          { waitUntil: 'domcontentloaded', timeout: 12_000 }
+        )
+        await waitForWorkspaceReady()
+        await page
+          .locator('[data-route-content-ready="true"]')
+          .waitFor({ state: 'visible', timeout: 12_000 })
+        const lockedCheckoutVisible = await page
+          .getByText('Locked checkout', { exact: true })
+          .isVisible()
+        const orderReferenceVisible = await page
+          .getByText('Order reference', { exact: true })
+          .isVisible()
+        const paymentActionVisible = await page
+          .getByRole('button', { name: /Continue securely|Retry payment|Tax update needed/i })
+          .isVisible()
+          .catch(() => false)
+        await screenshot('authenticated-checkout-seeded-order')
+        if (!lockedCheckoutVisible || !orderReferenceVisible || !paymentActionVisible) {
+          throw new Error(
+            `Route-owned checkout did not render its locked order state: ${JSON.stringify({ lockedCheckoutVisible, orderReferenceVisible, paymentActionVisible })}`
+          )
+        }
       }
 
       return {
@@ -2904,13 +4137,106 @@ async function main() {
         checkoutOk: Boolean(checkout?.ok),
         orderId: readyMadeCheckoutOrderId,
         existing: checkout?.existing === true,
+        routeRendered: Boolean(readyMadeCheckoutOrderId),
       }
     })
   } else {
     guardedSkip(
       'ready-made checkout/create path',
       'Disposable seller item or customer access token was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
+    )
+  }
+
+  if (disposableQa && postAuthSessionCheck.userId) {
+    await runFlow('order detail route context', async () => {
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED',
+        {
+          quoted_amount: 12500,
+          total_amount: 12500,
+        }
+      )
+      await page.goto(`${baseUrl}/account/orders/${encodeURIComponent(order.id)}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
+      await waitForWorkspaceReady()
+      await page
+        .locator('[data-route-content-ready="true"]')
+        .waitFor({ state: 'visible', timeout: 12_000 })
+      const briefVisible = await page.getByText('Order brief', { exact: true }).isVisible()
+      const historyVisible = await page.getByText('Production history', { exact: true }).isVisible()
+      const conversationVisible = await page
+        .getByRole('link', { name: 'Open conversation', exact: true })
+        .isVisible()
+      await screenshot('authenticated-order-detail-context')
+      if (!briefVisible || !historyVisible || !conversationVisible) {
+        throw new Error(
+          `Route-owned order detail is incomplete: ${JSON.stringify({ briefVisible, historyVisible, conversationVisible })}`
+        )
+      }
+      return { orderId: order.id, briefVisible, historyVisible, conversationVisible }
+    })
+
+    await runFlow('checkout route locked state', async () => {
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'PAYMENT_PENDING',
+        {
+          quoted_amount: 12500,
+          subtotal_amount: 12500,
+          total_amount: 15000,
+          tax_amount: 2500,
+          tax_region: 'GB',
+          tax_rate_bps: 2000,
+          tax_fallback: false,
+        }
+      )
+      await page.goto(`${baseUrl}/account/checkout/${encodeURIComponent(order.id)}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
+      await waitForWorkspaceReady()
+      await page
+        .locator('[data-route-content-ready="true"]')
+        .waitFor({ state: 'visible', timeout: 12_000 })
+      const lockedCheckoutVisible = await page
+        .getByText('Locked checkout', { exact: true })
+        .isVisible()
+      const orderReferenceVisible = await page
+        .getByText('Order reference', { exact: true })
+        .isVisible()
+      const paymentActionVisible = await page
+        .getByRole('button', { name: /Continue securely|Retry payment|Tax update needed/i })
+        .isVisible()
+        .catch(() => false)
+      await screenshot('authenticated-checkout-locked-state')
+      if (!lockedCheckoutVisible || !orderReferenceVisible || !paymentActionVisible) {
+        throw new Error(
+          `Route-owned checkout did not render its locked order state: ${JSON.stringify({ lockedCheckoutVisible, orderReferenceVisible, paymentActionVisible })}`
+        )
+      }
+      return {
+        orderId: order.id,
+        lockedCheckoutVisible,
+        orderReferenceVisible,
+        paymentActionVisible,
+      }
+    })
+  } else {
+    guardedSkip(
+      'order detail route context',
+      'Disposable tailor fixture or customer id was not available.',
+      'Run against the development Supabase project with service-role fixture access.'
+    )
+    guardedSkip(
+      'checkout route locked state',
+      'Disposable tailor fixture or customer id was not available.',
+      'Run against the development Supabase project with service-role fixture access.'
     )
   }
 
@@ -2920,15 +4246,21 @@ async function main() {
         return {
           dryRun: true,
           orderId: readyMadeCheckoutOrderId,
-          reason: 'WEB_QA_ENABLE_MUTATIONS is not set, so provider-side payment initialization was intentionally not invoked.',
+          reason:
+            'WEB_QA_ENABLE_MUTATIONS is not set, so provider-side payment initialization was intentionally not invoked.',
           todo: 'Run with WEB_QA_ENABLE_MUTATIONS=1 against provider test credentials to call payment-action prepare-payment.',
         }
       }
 
-      const payment = await invokeEdgeFunction('payment-action', accessToken, {
-        action: 'prepare-payment',
-        orderId: readyMadeCheckoutOrderId,
-      }, 'Payment initiation')
+      const payment = await invokeEdgeFunction(
+        'payment-action',
+        accessToken,
+        {
+          action: 'prepare-payment',
+          orderId: readyMadeCheckoutOrderId,
+        },
+        'Payment initiation'
+      )
       return {
         dryRun: false,
         orderId: readyMadeCheckoutOrderId,
@@ -2943,72 +4275,147 @@ async function main() {
     guardedSkip(
       'payment initiation',
       'No disposable payable checkout order was created.',
-      'Fix ready-made checkout fixture creation before exercising payment initiation.',
+      'Fix ready-made checkout fixture creation before exercising payment initiation.'
     )
   }
 
   if (disposableQa && accessToken && postAuthSessionCheck.userId) {
     await runFlow('message send/photo path', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
-      const textMessage = await invokeEdgeFunction('message-action', accessToken, {
-        action: 'send-message',
-        orderId: order.id,
-        type: 'TEXT',
-        body: 'Authenticated web QA disposable message inside the protected order thread.',
-      }, 'Message text send')
-      const photoMessage = await invokeEdgeFunction('message-action', accessToken, {
-        action: 'send-message',
-        orderId: order.id,
-        type: 'PHOTO',
-        photoUrl: 'https://example.com/drape-web-qa-photo.jpg',
-      }, 'Message photo send')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
+      const textMessage = await invokeEdgeFunction(
+        'message-action',
+        accessToken,
+        {
+          action: 'send-message',
+          orderId: order.id,
+          type: 'TEXT',
+          body: 'Authenticated web QA disposable message inside the protected order thread.',
+        },
+        'Message text send'
+      )
+      const photoMessage = await invokeEdgeFunction(
+        'message-action',
+        accessToken,
+        {
+          action: 'send-message',
+          orderId: order.id,
+          type: 'PHOTO',
+          photoUrl: qaMarketplaceMediaUrl,
+        },
+        'Message photo send'
+      )
+      await page.goto(`${baseUrl}/account/messages?orderId=${encodeURIComponent(order.id)}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12_000,
+      })
+      await waitForWorkspaceReady()
+      await page
+        .locator('[data-route-content-ready="true"]')
+        .waitFor({ state: 'visible', timeout: 12_000 })
+      await page
+        .getByText('Authenticated web QA disposable message inside the protected order thread.', {
+          exact: true,
+        })
+        .waitFor({ state: 'visible', timeout: 12_000 })
+      const composerVisible = await page.getByLabel('Message').isVisible()
+      const orderLinkVisible = await page
+        .getByRole('link', { name: 'Order', exact: true })
+        .isVisible()
+      const imageVisible = await page
+        .getByAltText('Order conversation attachment')
+        .isVisible()
+        .catch(() => false)
+      await screenshot('authenticated-messages-seeded-thread')
       return {
         orderId: order.id,
         textOk: Boolean(textMessage?.ok),
         photoOk: Boolean(photoMessage?.ok),
+        renderedText: true,
+        imageVisible,
+        composerVisible,
+        orderLinkVisible,
       }
     })
 
     await runFlow('consultation request', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'PENDING_QUOTE')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'PENDING_QUOTE'
+      )
       const scheduledStartAt = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString()
-      const result = await invokeEdgeFunction('customer-order-action', accessToken, {
-        action: 'request-consultation',
-        orderId: order.id,
-        scheduledStartAt,
-        timezone: 'America/Chicago',
-        note: 'Disposable authenticated web QA consultation request.',
-      }, 'Customer consultation request')
+      const result = await invokeEdgeFunction(
+        'customer-order-action',
+        accessToken,
+        {
+          action: 'request-consultation',
+          orderId: order.id,
+          scheduledStartAt,
+          timezone: 'America/Chicago',
+          note: 'Disposable authenticated web QA consultation request.',
+        },
+        'Customer consultation request'
+      )
       return { orderId: order.id, ok: Boolean(result?.ok), scheduledStartAt }
     })
 
-    await runFlow('quote send', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'PENDING_QUOTE')
-      const completionDate = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString()
-      const result = await invokeEdgeFunction('tailor-order-action', disposableQa.tailorAccessToken, {
-        action: 'send-quote',
-        orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
-        orderId: order.id,
-        amount: 12500,
-        currency: 'USD',
-        completionDate,
-        note: 'Disposable authenticated web QA quote.',
-      }, 'Tailor quote send')
-      return { orderId: order.id, ok: Boolean(result?.ok), completionDate }
-    })
+    if (enableAppendOnlyProofs) {
+      await runFlow('quote send', async () => {
+        const order = await createDisposableCustomOrder(
+          disposableQa,
+          postAuthSessionCheck.userId,
+          'PENDING_QUOTE'
+        )
+        const completionDate = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString()
+        const result = await invokeEdgeFunction(
+          'tailor-order-action',
+          disposableQa.tailorAccessToken,
+          {
+            action: 'send-quote',
+            orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
+            orderId: order.id,
+            amount: 12500,
+            currency: 'GBP',
+            completionDate,
+            note: 'Disposable authenticated web QA quote.',
+          },
+          'Tailor quote send'
+        )
+        return { orderId: order.id, ok: Boolean(result?.ok), completionDate }
+      })
+    } else {
+      guardedSkip(
+        'quote send',
+        'Append-only commercial proof is disabled by default to avoid leaving synthetic ledger records.',
+        'Run once with WEB_QA_ENABLE_APPEND_ONLY_PROOFS=1 in development when fresh quote persistence evidence is required.'
+      )
+    }
 
     await runFlow('stage advance', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
       const proofUrl = `https://example.com/drape-web-qa-stage-proof-${stamp}-${order.id}.jpg`
-      const result = await invokeEdgeFunction('tailor-order-action', disposableQa.tailorAccessToken, {
-        action: 'advance-stage',
-        orderId: order.id,
-        targetStage: 'DESIGNING',
-        note: 'Disposable web QA stage advance into designing.',
-        photoUrl: proofUrl,
-        photoUrls: [proofUrl],
-        mediaFingerprints: [`web-qa-stage-${stamp}-${order.id}`],
-      }, 'Tailor stage advance')
+      const result = await invokeEdgeFunction(
+        'tailor-order-action',
+        disposableQa.tailorAccessToken,
+        {
+          action: 'advance-stage',
+          orderId: order.id,
+          targetStage: 'DESIGNING',
+          note: 'Disposable web QA stage advance into designing.',
+          photoUrl: proofUrl,
+          photoUrls: [proofUrl],
+          mediaFingerprints: [`web-qa-stage-${stamp}-${order.id}`],
+        },
+        'Tailor stage advance'
+      )
       return {
         orderId: order.id,
         ok: Boolean(result?.ok),
@@ -3019,22 +4426,22 @@ async function main() {
     guardedSkip(
       'message send/photo path',
       'Disposable tailor fixture, customer access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'consultation request',
       'Disposable tailor fixture, customer access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'quote send',
       'Disposable tailor fixture, customer access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'stage advance',
       'Disposable tailor fixture, customer access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
   }
 
@@ -3053,10 +4460,13 @@ async function main() {
               relationship: 'BUYER',
               selectedAt: new Date().toISOString(),
             },
-            measurementFallback: { requiredBeforeQuote: true, note: 'Please confirm measurements before quoting this QA dry run.' },
+            measurementFallback: {
+              requiredBeforeQuote: true,
+              note: 'Please confirm measurements before quoting this QA dry run.',
+            },
             fabricPolicy: { approvalRequiredForTailorSourcing: true },
           },
-        }),
+        })
       )
       return assertExpectedRejection(result, { statuses: [400], textIncludes: ['Contact details'] })
     })
@@ -3065,7 +4475,7 @@ async function main() {
       const result = await invokeEdgeFunctionRaw(
         'custom-order-action',
         null,
-        buildCustomBriefPreflightPayload(fixtureTailor.id),
+        buildCustomBriefPreflightPayload(fixtureTailor.id)
       )
       return assertExpectedRejection(result, { statuses: [401, 403], codes: ['UNAUTHORIZED'] })
     })
@@ -3073,12 +4483,12 @@ async function main() {
     guardedSkip(
       'negative: custom brief contact leak rejected',
       'No live custom tailor fixture or customer access token was available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: custom brief unauthenticated rejected',
       'No live custom tailor fixture was available.',
-      'Seed a live custom tailor fixture so the unauthenticated preflight rejection can be exercised.',
+      'Seed a live custom tailor fixture so the unauthenticated preflight rejection can be exercised.'
     )
   }
 
@@ -3091,7 +4501,10 @@ async function main() {
         quantity: 0,
         fulfillment: 'PICKUP',
       })
-      return assertExpectedRejection(result, { statuses: [400], textIncludes: ['Check the checkout details'] })
+      return assertExpectedRejection(result, {
+        statuses: [400],
+        textIncludes: ['Check the checkout details'],
+      })
     })
 
     await runFlow('negative: ready-made checkout policy required', async () => {
@@ -3102,19 +4515,23 @@ async function main() {
         quantity: 1,
         fulfillment: 'PICKUP',
         cancellationPolicyAcknowledged: false,
+        fitGuidanceAcknowledged: true,
       })
-      return assertExpectedRejection(result, { statuses: [400], textIncludes: ['cancellation policy'] })
+      return assertExpectedRejection(result, {
+        statuses: [400],
+        textIncludes: ['cancellation policy'],
+      })
     })
   } else {
     guardedSkip(
       'negative: ready-made invalid quantity rejected',
       'Disposable seller item or customer access token was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: ready-made checkout policy required',
       'Disposable seller item or customer access token was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
   }
 
@@ -3130,13 +4547,22 @@ async function main() {
     guardedSkip(
       'negative: payment invalid order rejected',
       'Customer access token was not available.',
-      'Sign in a disposable customer before exercising payment-action negative coverage.',
+      'Sign in a disposable customer before exercising payment-action negative coverage.'
     )
   }
 
-  if (disposableQa && accessToken && disposableQa.tailorAccessToken && postAuthSessionCheck.userId) {
+  if (
+    disposableQa &&
+    accessToken &&
+    disposableQa.tailorAccessToken &&
+    postAuthSessionCheck.userId
+  ) {
     await runFlow('negative: message empty text rejected', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
       const result = await invokeEdgeFunctionRaw('message-action', accessToken, {
         action: 'send-message',
         orderId: order.id,
@@ -3147,7 +4573,11 @@ async function main() {
     })
 
     await runFlow('negative: message photo url required', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
       const result = await invokeEdgeFunctionRaw('message-action', accessToken, {
         action: 'send-message',
         orderId: order.id,
@@ -3157,7 +4587,11 @@ async function main() {
     })
 
     await runFlow('negative: consultation invalid stage rejected', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
       const result = await invokeEdgeFunctionRaw('customer-order-action', accessToken, {
         action: 'request-consultation',
         orderId: order.id,
@@ -3165,36 +4599,59 @@ async function main() {
         timezone: 'America/Chicago',
         note: 'Disposable authenticated web QA invalid consultation request.',
       })
-      return assertExpectedRejection(result, { statuses: [400, 409], textIncludes: ['request-consultation', 'stage'] })
+      return assertExpectedRejection(result, {
+        statuses: [400, 409],
+        textIncludes: ['request-consultation', 'stage'],
+      })
     })
 
     await runFlow('negative: quote zero amount rejected', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'PENDING_QUOTE')
-      const result = await invokeEdgeFunctionRaw('tailor-order-action', disposableQa.tailorAccessToken, {
-        action: 'send-quote',
-        orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
-        orderId: order.id,
-        amount: 0,
-        currency: 'USD',
-        completionDate: new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString(),
-        note: 'Disposable authenticated web QA invalid quote.',
-      })
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'PENDING_QUOTE'
+      )
+      const result = await invokeEdgeFunctionRaw(
+        'tailor-order-action',
+        disposableQa.tailorAccessToken,
+        {
+          action: 'send-quote',
+          orderReview: { acknowledged: true, version: 'quote-order-review-2026-08-14-v1' },
+          orderId: order.id,
+          amount: 0,
+          currency: 'USD',
+          completionDate: new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString(),
+          note: 'Disposable authenticated web QA invalid quote.',
+        }
+      )
       return assertExpectedRejection(result, { statuses: [400], textIncludes: ['amount'] })
     })
 
     await runFlow('negative: stage advance missing proof rejected', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
-      const result = await invokeEdgeFunctionRaw('tailor-order-action', disposableQa.tailorAccessToken, {
-        action: 'advance-stage',
-        orderId: order.id,
-        targetStage: 'DESIGNING',
-        note: 'Disposable web QA missing proof stage advance.',
-      })
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
+      const result = await invokeEdgeFunctionRaw(
+        'tailor-order-action',
+        disposableQa.tailorAccessToken,
+        {
+          action: 'advance-stage',
+          orderId: order.id,
+          targetStage: 'DESIGNING',
+          note: 'Disposable web QA missing proof stage advance.',
+        }
+      )
       return assertExpectedRejection(result, { statuses: [409], codes: ['PHOTO_REQUIRED'] })
     })
 
     await runFlow('negative: customer cannot advance tailor stage', async () => {
-      const order = await createDisposableCustomOrder(disposableQa, postAuthSessionCheck.userId, 'CONFIRMED')
+      const order = await createDisposableCustomOrder(
+        disposableQa,
+        postAuthSessionCheck.userId,
+        'CONFIRMED'
+      )
       const proofUrl = `https://example.com/drape-web-qa-forbidden-stage-${stamp}-${order.id}.jpg`
       const result = await invokeEdgeFunctionRaw('tailor-order-action', accessToken, {
         action: 'advance-stage',
@@ -3211,39 +4668,50 @@ async function main() {
     guardedSkip(
       'negative: message empty text rejected',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: message photo url required',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: consultation invalid stage rejected',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: quote zero amount rejected',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: stage advance missing proof rejected',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
     guardedSkip(
       'negative: customer cannot advance tailor stage',
       'Disposable tailor fixture, customer access token, tailor access token, or customer id was not available.',
-      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.',
+      'Run against a non-production Supabase project with service-role credentials and a signed-in customer.'
     )
   }
 
   await page.goto(`${baseUrl}/account/support`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
   await waitForWorkspaceReady()
-  await page.waitForFunction(() => document.body.innerText.includes('Ask Drapeon for help') || document.body.innerText.includes('Sign in to continue'), null, { timeout: 12_000 }).catch(() => null)
-  const supportBefore = await page.locator('body').innerText().catch(() => '')
+  await page
+    .waitForFunction(
+      () =>
+        document.body.innerText.includes('Ask Drapeon for help') ||
+        document.body.innerText.includes('Sign in to continue'),
+      null,
+      { timeout: 12_000 }
+    )
+    .catch(() => null)
+  const supportBefore = await page
+    .locator('body')
+    .innerText()
+    .catch(() => '')
   let supportLeakBlocked = false
   let supportSubmitted = false
   let signedInHeaderOk = false
@@ -3251,30 +4719,57 @@ async function main() {
   if (supportBefore.includes('Ask Drapeon for help')) {
     await page.locator('select').first().selectOption('GENERAL')
     await page.locator('input[placeholder="Short subject"]').fill('QA web support')
-    await page.locator('textarea[placeholder^="Tell us what happened"]').fill('Call me at +15555550123 about this test')
+    await page
+      .locator('textarea[placeholder^="Tell us what happened"]')
+      .fill('Call me at +15555550123 about this test')
     await page.getByRole('button', { name: /Open support request/i }).click()
     await page.waitForTimeout(800)
-    const leakText = await page.locator('body').innerText().catch(() => '')
-    supportLeakBlocked = leakText.includes("Support requests can't include") || leakText.includes('Keep phone numbers')
+    const leakText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
+    supportLeakBlocked =
+      leakText.includes("Support requests can't include") || leakText.includes('Keep phone numbers')
     await screenshot('authenticated-support-contact-block')
 
-    await page.locator('textarea[placeholder^="Tell us what happened"]').fill('Launch web authenticated QA support request. No user action needed.')
+    await page
+      .locator('textarea[placeholder^="Tell us what happened"]')
+      .fill('Launch web authenticated QA support request. No user action needed.')
     await page.getByRole('button', { name: /Open support request/i }).click()
-    await page.waitForFunction(() => {
-      const text = document.body.innerText
-      return text.includes('Support request opened') || text.includes('Support could not open') || text.includes('Rate limit')
-    }, null, { timeout: 20_000 }).catch(() => null)
-    const submitText = await page.locator('body').innerText().catch(() => '')
+    await page
+      .waitForFunction(
+        () => {
+          const text = document.body.innerText
+          return (
+            text.includes('Support request opened') ||
+            text.includes('Support could not open') ||
+            text.includes('Rate limit')
+          )
+        },
+        null,
+        { timeout: 20_000 }
+      )
+      .catch(() => null)
+    const submitText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     supportSubmitted = submitText.includes('Support request opened')
 
     if (!supportSubmitted && accessToken) {
-      const supportFallback = await invokeEdgeFunction('account-support-action', accessToken, {
-        action: 'submit-support',
-        category: 'GENERAL',
-        orderId: null,
-        subject: 'QA web support fallback',
-        description: 'Launch web authenticated QA support request fallback for alternate localhost ports. No user action needed.',
-      }, 'Support request direct fallback')
+      const supportFallback = await invokeEdgeFunction(
+        'account-support-action',
+        accessToken,
+        {
+          action: 'submit-support',
+          category: 'GENERAL',
+          orderId: null,
+          subject: 'QA web support fallback',
+          description:
+            'Launch web authenticated QA support request fallback for alternate localhost ports. No user action needed.',
+        },
+        'Support request direct fallback'
+      )
       supportSubmitted = Boolean(supportFallback?.ok)
     }
 
@@ -3287,36 +4782,70 @@ async function main() {
       supportLeakBlocked,
       supportSubmitted,
       formVisible: supportBefore.includes('Ask Drapeon for help'),
-    },
+    }
   )
 
-  await page.goto(`${baseUrl}/account/dashboard`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
+  await page.goto(`${baseUrl}/account/dashboard`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 12_000,
+  })
   await waitForWorkspaceReady()
-  await page.waitForFunction(() => document.body.innerText.includes('Sign out') || document.body.innerText.includes('Sign in to continue'), null, { timeout: 12_000 }).catch(() => null)
-  const signedInPageText = await page.locator('body').innerText().catch(() => '')
+  await page
+    .waitForFunction(
+      () =>
+        document.body.innerText.includes('Sign out') ||
+        document.body.innerText.includes('Sign in to continue'),
+      null,
+      { timeout: 12_000 }
+    )
+    .catch(() => null)
+  const signedInPageText = await page
+    .locator('body')
+    .innerText()
+    .catch(() => '')
   signedInHeaderOk = signedInPageText.includes('Sign out')
   await screenshot('authenticated-header-signed-in')
 
   if (signedInHeaderOk) {
-    await page.getByRole('button', { name: /^Sign out$/i }).first().click()
+    await page
+      .getByRole('button', { name: /^Sign out$/i })
+      .first()
+      .click()
     await page.waitForTimeout(500)
-    const confirmSignOut = page.getByRole('button', { name: /^(Tap to confirm|Confirm sign out)$/i }).first()
+    const confirmSignOut = page
+      .getByRole('button', { name: /^(Tap to confirm|Confirm sign out)$/i })
+      .first()
     if (await confirmSignOut.count().catch(() => 0)) {
       await confirmSignOut.click()
     }
     await page.waitForURL(/\/sign-in/u, { timeout: 12_000 }).catch(() => null)
     await page.waitForTimeout(1_000)
-    await page.waitForFunction(() => document.body.innerText.includes('Sign in') && !document.body.innerText.includes('Sign out'), null, { timeout: 12_000 }).catch(() => null)
-    const signedOutPageText = await page.locator('body').innerText().catch(() => '')
+    await page
+      .waitForFunction(
+        () =>
+          document.body.innerText.includes('Sign in') &&
+          !document.body.innerText.includes('Sign out'),
+        null,
+        { timeout: 12_000 }
+      )
+      .catch(() => null)
+    const signedOutPageText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')
     signedOutHeaderOk =
       (page.url().includes('/sign-in') || signedOutPageText.includes('Sign in')) &&
       !signedOutPageText.includes('Sign out')
     await screenshot('authenticated-header-signed-out')
   }
-  recordFlow('header signed-in/out state', signedInHeaderOk && signedOutHeaderOk ? 'passed' : 'failed', {
-    signedInHeaderOk,
-    signedOutHeaderOk,
-  })
+  recordFlow(
+    'header signed-in/out state',
+    signedInHeaderOk && signedOutHeaderOk ? 'passed' : 'failed',
+    {
+      signedInHeaderOk,
+      signedOutHeaderOk,
+    }
+  )
 
   await runOpsActionQaSuite(postAuthSessionCheck.userId)
 
@@ -3329,6 +4858,21 @@ async function main() {
         errors: disposableQaCleanup.errors ?? [],
       }),
     })
+  }
+
+  if (accountUserId && creationMode === 'admin-confirmed-fallback') {
+    try {
+      await deleteAuthUser(accountUserId)
+      events.push({
+        type: 'disposable-customer-cleanup',
+        text: JSON.stringify({ userId: accountUserId, deleted: true }),
+      })
+    } catch (error) {
+      events.push({
+        type: 'disposable-customer-cleanup',
+        text: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   const report = {

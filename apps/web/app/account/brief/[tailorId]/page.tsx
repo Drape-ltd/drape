@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../../components/account-app-surface'
+import { BriefWorkspace } from '../../../../features/account/brief/brief-workspace'
 import { buildMetadata } from '../../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -14,5 +14,5 @@ export default async function AccountBriefPage({
   params: Promise<{ tailorId: string }>
 }): Promise<React.JSX.Element> {
   const { tailorId } = await params
-  return <AccountAppSurface surface="brief" tailorId={tailorId} />
+  return <BriefWorkspace tailorId={tailorId} />
 }

@@ -1,4 +1,5 @@
 import { cache } from 'react'
+import type { MarketplaceMedia } from '@drape/shared'
 import { getSupabasePublishableKey, getSupabaseUrl } from './supabase-config'
 
 export type PublicTailor = {
@@ -15,6 +16,27 @@ export type PublicTailor = {
   portfolioVideos: string[]
   coverVideoUrl: string | null
   avatarUrl: string | null
+  media: MarketplaceMedia[]
+  languages: string[]
+  averageRating: number
+  totalReviews: number
+  totalOrders: number
+  responseHours: number | null
+  currency: string | null
+  priceRangeMin: number | null
+  priceRangeMax: number | null
+  fulfillment: Array<'Pickup' | 'Local delivery' | 'Shipping'>
+  reviews: PublicTailorReview[]
+}
+
+export type PublicTailorReview = {
+  id: string
+  rating: number
+  body: string | null
+  tags: string[]
+  reviewerName: string
+  response: string | null
+  createdAt: string
 }
 
 type PublicTailorGatewayRow = {
@@ -31,6 +53,17 @@ type PublicTailorGatewayRow = {
   avatar_url: string | null
   explore_image_url?: string | null
   explore_video_url?: string | null
+  media?: MarketplaceMedia[] | null
+  avg_rating?: number | null
+  total_reviews?: number | null
+  total_orders?: number | null
+  avg_response_hours?: number | null
+  currency?: string | null
+  price_range_min?: number | null
+  price_range_max?: number | null
+  pickup_available?: boolean | null
+  delivery_available?: boolean | null
+  shipping_available?: boolean | null
 }
 
 type PublicTailorProfileGateway = {
@@ -47,7 +80,28 @@ type PublicTailorProfileGateway = {
     portfolioPhotos?: string[] | null
     portfolioVideos?: string[] | null
     avatarUrl?: string | null
+    media?: MarketplaceMedia[] | null
+    languages?: string[] | null
+    avgRating?: number | null
+    totalReviews?: number | null
+    totalOrders?: number | null
+    avgResponseHours?: number | null
+    currency?: string | null
+    priceRangeMin?: number | null
+    priceRangeMax?: number | null
+    pickupAvailable?: boolean | null
+    deliveryAvailable?: boolean | null
+    shippingAvailable?: boolean | null
   } | null
+  reviews?: Array<{
+    id?: string
+    rating?: number
+    body?: string | null
+    tags?: string[] | null
+    reviewerName?: string | null
+    response?: string | null
+    createdAt?: string | null
+  }> | null
 }
 
 function safeText(value: string | null | undefined, fallback = '') {
@@ -64,6 +118,62 @@ function safeMediaUrls(values: string[] | null | undefined) {
       return false
     }
   }))).slice(0, 40)
+}
+
+function safeMarketplaceMedia(values: MarketplaceMedia[] | null | undefined): MarketplaceMedia[] {
+  return (values ?? []).flatMap((item, index) => {
+    const url = safeMediaUrls([item?.url])[0]
+    if (!url || (item.kind !== 'IMAGE' && item.kind !== 'VIDEO')) return []
+    return [{
+      id: safeText(item.id, `legacy-${index}-${url}`),
+      kind: item.kind,
+      url,
+      posterUrl: safeMediaUrls(item.posterUrl ? [item.posterUrl] : [])[0] ?? null,
+      width: typeof item.width === 'number' && item.width > 0 ? item.width : null,
+      height: typeof item.height === 'number' && item.height > 0 ? item.height : null,
+      focalX: typeof item.focalX === 'number' ? Math.min(1, Math.max(0, item.focalX)) : 0.5,
+      focalY: typeof item.focalY === 'number' ? Math.min(1, Math.max(0, item.focalY)) : 0.5,
+      altText: safeText(item.altText) || null,
+      isPrimary: item.isPrimary === true,
+      position: typeof item.position === 'number' ? item.position : index,
+    }]
+  }).sort((left, right) => left.position - right.position)
+}
+
+function legacyMarketplaceMedia(photos: string[], videos: string[]): MarketplaceMedia[] {
+  return [...videos.map((url, index): MarketplaceMedia => ({
+    id: `legacy-video-${index}-${url}`,
+    kind: 'VIDEO',
+    url,
+    posterUrl: null,
+    width: null,
+    height: null,
+    focalX: 0.5,
+    focalY: 0.5,
+    altText: null,
+    isPrimary: index === 0,
+    position: index,
+  })), ...photos.map((url, index): MarketplaceMedia => ({
+    id: `legacy-image-${index}-${url}`,
+    kind: 'IMAGE',
+    url,
+    posterUrl: null,
+    width: null,
+    height: null,
+    focalX: 0.5,
+    focalY: 0.5,
+    altText: null,
+    isPrimary: videos.length === 0 && index === 0,
+    position: videos.length + index,
+  }))]
+}
+
+function fulfillmentLabels(input: { pickup?: boolean | null; delivery?: boolean | null; shipping?: boolean | null }) {
+  return [
+    input.pickup ? 'Pickup' as const : null,
+    input.delivery ? 'Local delivery' as const : null,
+    input.shipping ? 'Shipping' as const : null,
+  ].filter((value): value is 'Pickup' | 'Local delivery' | 'Shipping' => value !== null)
 }
 
 type RegionalCache = {
@@ -206,6 +316,7 @@ function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
   ])
   const avatarUrl = safeMediaUrls(row.avatar_url ? [row.avatar_url] : [])[0] ?? null
   const portfolioVideos = safeMediaUrls(row.portfolio_video_urls)
+  const media = safeMarketplaceMedia(row.media)
   const coverVideoUrl = safeMediaUrls(row.explore_video_url ? [row.explore_video_url] : [])[0] ?? portfolioVideos[0] ?? null
   const displayName = safeText(row.display_name)
   if (!displayName || (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl)) return null
@@ -223,6 +334,17 @@ function mapGatewayTailor(row: PublicTailorGatewayRow): PublicTailor | null {
     portfolioVideos,
     coverVideoUrl,
     avatarUrl,
+    media: media.length > 0 ? media : legacyMarketplaceMedia(portfolioPhotos, portfolioVideos),
+    languages: [],
+    averageRating: typeof row.avg_rating === 'number' ? row.avg_rating : 0,
+    totalReviews: typeof row.total_reviews === 'number' ? row.total_reviews : 0,
+    totalOrders: typeof row.total_orders === 'number' ? row.total_orders : 0,
+    responseHours: typeof row.avg_response_hours === 'number' ? row.avg_response_hours : null,
+    currency: safeText(row.currency) || null,
+    priceRangeMin: typeof row.price_range_min === 'number' ? row.price_range_min : null,
+    priceRangeMax: typeof row.price_range_max === 'number' ? row.price_range_max : null,
+    fulfillment: fulfillmentLabels({ pickup: row.pickup_available, delivery: row.delivery_available, shipping: row.shipping_available }),
+    reviews: [],
   }
 }
 
@@ -256,6 +378,7 @@ async function readApprovedPublicTailor(profileId: string) {
     if (!profile?.id || !profile.displayName) return null
     const portfolioPhotos = safeMediaUrls(profile.portfolioPhotos)
     const portfolioVideos = safeMediaUrls(profile.portfolioVideos)
+    const media = safeMarketplaceMedia(profile.media)
     const avatarUrl = safeMediaUrls(profile.avatarUrl ? [profile.avatarUrl] : [])[0] ?? null
     if (portfolioPhotos.length === 0 && portfolioVideos.length === 0 && !avatarUrl) return null
     return {
@@ -272,6 +395,25 @@ async function readApprovedPublicTailor(profileId: string) {
       portfolioVideos,
       coverVideoUrl: portfolioVideos[0] ?? null,
       avatarUrl,
+      media: media.length > 0 ? media : legacyMarketplaceMedia(portfolioPhotos, portfolioVideos),
+      languages: (profile.languages ?? []).map((language) => safeText(language)).filter(Boolean).slice(0, 12),
+      averageRating: typeof profile.avgRating === 'number' ? profile.avgRating : 0,
+      totalReviews: typeof profile.totalReviews === 'number' ? profile.totalReviews : 0,
+      totalOrders: typeof profile.totalOrders === 'number' ? profile.totalOrders : 0,
+      responseHours: typeof profile.avgResponseHours === 'number' ? profile.avgResponseHours : null,
+      currency: safeText(profile.currency) || null,
+      priceRangeMin: typeof profile.priceRangeMin === 'number' ? profile.priceRangeMin : null,
+      priceRangeMax: typeof profile.priceRangeMax === 'number' ? profile.priceRangeMax : null,
+      fulfillment: fulfillmentLabels({ pickup: profile.pickupAvailable, delivery: profile.deliveryAvailable, shipping: profile.shippingAvailable }),
+      reviews: (data?.reviews ?? []).map((review, index) => ({
+        id: safeText(review.id, `review-${index}`),
+        rating: typeof review.rating === 'number' ? Math.min(5, Math.max(0, review.rating)) : 0,
+        body: safeText(review.body) || null,
+        tags: (review.tags ?? []).map((tag) => safeText(tag)).filter(Boolean).slice(0, 8),
+        reviewerName: safeText(review.reviewerName, 'Customer'),
+        response: safeText(review.response) || null,
+        createdAt: safeText(review.createdAt),
+      })),
     }
   })
 }

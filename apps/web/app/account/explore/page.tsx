@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../components/account-app-surface'
+import { redirect } from 'next/navigation'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -8,6 +8,6 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/explore',
 })
 
-export default function AccountExplorePage(): React.JSX.Element {
-  return <AccountAppSurface surface="explore" />
+export default function AccountExplorePage(): never {
+  redirect('/explore')
 }

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../../components/account-app-surface'
+import { OrderDetailWorkspace } from '../../../../features/account/orders/order-detail-workspace'
 import { buildMetadata } from '../../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -14,5 +14,5 @@ export default async function AccountOrderDetailPage({
   params: Promise<{ id: string }>
 }): Promise<React.JSX.Element> {
   const { id } = await params
-  return <AccountAppSurface surface="order-detail" orderId={id} />
+  return <OrderDetailWorkspace orderId={id} />
 }

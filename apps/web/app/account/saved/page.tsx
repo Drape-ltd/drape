@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { AccountAppSurface } from '../../../components/account-app-surface'
+import { SavedWorkspace } from '../../../features/account/saved/saved-workspace'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -9,5 +9,5 @@ export const metadata: Metadata = buildMetadata({
 })
 
 export default function AccountSavedPage(): React.JSX.Element {
-  return <AccountAppSurface surface="saved" />
+  return <SavedWorkspace />
 }

@@ -2,11 +2,16 @@
 
 import Image from 'next/image'
 import { ChevronLeft, ChevronRight, Expand, Play, X } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type PublicPortfolioMedia = {
+  id: string
   source: string
+  posterSource: string | null
   kind: 'image' | 'video'
+  focalX: number
+  focalY: number
+  altText: string | null
 }
 
 type PublicPortfolioGalleryProps = {
@@ -16,7 +21,16 @@ type PublicPortfolioGalleryProps = {
 
 export function PublicPortfolioGallery({ items, makerName }: PublicPortfolioGalleryProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
-  const close = useCallback(() => setActiveIndex(null), [])
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const triggerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const openedFromIndexRef = useRef<number | null>(null)
+  const close = useCallback(() => {
+    setActiveIndex(null)
+    window.requestAnimationFrame(() => {
+      const triggerIndex = openedFromIndexRef.current
+      if (triggerIndex !== null) triggerRefs.current[triggerIndex]?.focus()
+    })
+  }, [])
   const showPrevious = useCallback(() => {
     setActiveIndex((current) => current === null ? null : (current - 1 + items.length) % items.length)
   }, [items.length])
@@ -34,6 +48,7 @@ export function PublicPortfolioGallery({ items, makerName }: PublicPortfolioGall
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', onKeyDown)
+    closeButtonRef.current?.focus()
     return () => {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', onKeyDown)
@@ -47,16 +62,20 @@ export function PublicPortfolioGallery({ items, makerName }: PublicPortfolioGall
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {items.map((item, index) => (
           <button
-            key={`${item.source}-${index}`}
+            key={item.id}
             type="button"
-            onClick={() => setActiveIndex(index)}
+            ref={(node) => { triggerRefs.current[index] = node }}
+            onClick={() => {
+              openedFromIndexRef.current = index
+              setActiveIndex(index)
+            }}
             className="group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-[10px] bg-[#e7dfd0] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle"
             aria-label={`Open ${makerName} portfolio ${item.kind} ${index + 1} of ${items.length}`}
           >
             {item.kind === 'video' ? (
-              <video src={item.source} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+              <video src={item.source} poster={item.posterSource ?? undefined} className="h-full w-full object-cover" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} muted playsInline preload="metadata" />
             ) : (
-              <Image src={item.source} alt={`${makerName} portfolio work ${index + 1}`} fill sizes="(min-width:1280px) 20vw,(min-width:640px) 33vw,50vw" className="object-cover transition duration-300 group-hover:scale-[1.015] motion-reduce:transition-none" unoptimized />
+              <Image src={item.source} alt={item.altText ?? `${makerName} portfolio work ${index + 1}`} fill sizes="(min-width:1280px) 20vw,(min-width:640px) 33vw,50vw" className="object-cover transition duration-300 group-hover:scale-[1.015] motion-reduce:transition-none" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} unoptimized />
             )}
             <span className="absolute bottom-2 right-2 inline-flex size-8 items-center justify-center rounded-full bg-black/68 text-white opacity-90 backdrop-blur-sm transition group-hover:bg-black/82">
               {item.kind === 'video' ? <Play aria-hidden="true" size={14} fill="currentColor" /> : <Expand aria-hidden="true" size={14} />}
@@ -67,7 +86,7 @@ export function PublicPortfolioGallery({ items, makerName }: PublicPortfolioGall
 
       {activeItem ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/92 p-4 sm:p-8" role="dialog" aria-modal="true" aria-label={`${makerName} portfolio viewer`}>
-          <button type="button" onClick={close} className="absolute right-4 top-4 z-10 inline-flex size-11 items-center justify-center rounded-full bg-white/12 text-white hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white" aria-label="Close portfolio viewer">
+          <button ref={closeButtonRef} type="button" onClick={close} className="absolute right-4 top-4 z-10 inline-flex size-11 items-center justify-center rounded-full bg-white/12 text-white hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white" aria-label="Close portfolio viewer">
             <X aria-hidden="true" size={21} />
           </button>
 
@@ -79,9 +98,9 @@ export function PublicPortfolioGallery({ items, makerName }: PublicPortfolioGall
 
           <div className="relative flex h-[84vh] w-full max-w-6xl items-center justify-center">
             {activeItem.kind === 'video' ? (
-              <video key={activeItem.source} src={activeItem.source} className="max-h-full max-w-full" controls autoPlay playsInline preload="metadata" />
+              <video key={activeItem.id} src={activeItem.source} poster={activeItem.posterSource ?? undefined} className="max-h-full max-w-full" controls autoPlay playsInline preload="metadata" />
             ) : (
-              <Image key={activeItem.source} src={activeItem.source} alt={`${makerName} portfolio work ${(activeIndex ?? 0) + 1}`} fill sizes="100vw" className="object-contain" unoptimized priority />
+              <Image key={activeItem.id} src={activeItem.source} alt={activeItem.altText ?? `${makerName} portfolio work ${(activeIndex ?? 0) + 1}`} fill sizes="100vw" className="object-contain" unoptimized priority />
             )}
           </div>
 

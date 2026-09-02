@@ -1,5 +1,5 @@
-import { AccountAppSurface } from '../../../components/account-app-surface'
+import { PayoutWorkspace } from '../../../features/account/payout/payout-workspace'
 
 export default function AccountPayoutPage(): React.JSX.Element {
-  return <AccountAppSurface surface="payout" />
+  return <PayoutWorkspace />
 }

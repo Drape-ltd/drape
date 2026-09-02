@@ -1,7 +1,7 @@
 import type { Metadata, Route } from 'next'
 import Image from 'next/image'
 import Link from 'next/link'
-import { ArrowRight, Scissors, Search, Shirt, ShoppingBag, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Scissors, Search, Shirt, ShoppingBag, ShieldCheck, Star } from 'lucide-react'
 import { PublicSiteHeader } from '../../components/public-site-header'
 import { SiteFooter } from '../../components/site-footer'
 import { buildMetadata } from '../../lib/metadata'
@@ -28,7 +28,10 @@ function TailorCard({ tailor, priority = false }: { tailor: PublicTailor; priori
         </div>
         <div className="pt-3">
           <h2 className="text-lg leading-none">{tailor.displayName}</h2>
-          {tailor.location ? <p className="mt-1.5 truncate text-xs text-ink/48">{tailor.location}</p> : null}
+          <div className="mt-1.5 flex min-w-0 items-center justify-between gap-2 text-xs text-ink/48">
+            {tailor.location ? <p className="truncate">{tailor.location}</p> : <span />}
+            {tailor.totalReviews > 0 ? <span className="flex shrink-0 items-center gap-1"><Star aria-hidden="true" size={11} fill="currentColor" /> {tailor.averageRating.toFixed(1)}</span> : null}
+          </div>
         </div>
       </Link>
     </article>
