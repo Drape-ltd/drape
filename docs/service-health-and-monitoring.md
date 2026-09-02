@@ -68,6 +68,12 @@ The readiness check verifies:
 
 It does not call Stripe, Paystack, or delivery-provider APIs. The first real provider operation remains the correct provider health signal.
 
+Until public launch, both DEV and PROD external observers request the explicit
+`beta` tier. This keeps absent live-only configuration, including ZIPTAX, visible
+in the readiness result without treating it as an outage during store review.
+Before public checkout opens, switch the PROD observer back to the default
+`launch` tier and require every launch gate to pass.
+
 ## Required Secret
 
 Set this in every deployed Supabase environment:

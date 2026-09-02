@@ -82,7 +82,7 @@ if (process.env.DRAPE_PROD_HEALTHCHECK_SECRET) {
   targets.push({
     id: "drape-prod-ready",
     name: "Drape PROD readiness",
-    url: "https://wkfsrunetmgjdtcurmoj.supabase.co/functions/v1/service-health?check=ready",
+    url: "https://wkfsrunetmgjdtcurmoj.supabase.co/functions/v1/service-health?check=ready&tier=beta",
     kind: "drape-ready",
     authorization: `Bearer ${process.env.DRAPE_PROD_HEALTHCHECK_SECRET}`,
   });
@@ -119,8 +119,18 @@ function normalize(target, body) {
     const failures = Object.entries(body?.checks ?? {})
       .filter(([, check]) => check?.status === "fail")
       .map(([name, check]) => `${name}: ${check?.message ?? "failed"}`);
+    const warnings = Object.entries(body?.checks ?? {})
+      .filter(([, check]) => check?.status === "warn")
+      .map(([name, check]) => `${name}: ${check?.message ?? "warning"}`);
     const ok = body?.ok === true && failures.length === 0;
-    return { ok, detail: ok ? "Ready" : compact(failures.join("; ") || body?.message || "Readiness failed") };
+    return {
+      ok,
+      detail: ok
+        ? warnings.length > 0
+          ? compact(`Ready with warnings: ${warnings.join("; ")}`)
+          : "Ready"
+        : compact(failures.join("; ") || body?.message || "Readiness failed"),
+    };
   }
 
   if (target.kind === "atlassian") {
