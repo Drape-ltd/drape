@@ -24,7 +24,7 @@ jobs:
       SLACK_CHANNEL_ID: C0BSXPAGVEX
     steps:
       - name: Check out monitor
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Find previous health state
         id: previous
@@ -43,7 +43,7 @@ jobs:
       - name: Restore previous health state
         if: ${{ steps.previous.outputs.run_id != '' }}
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: beta-service-health-state
           path: /tmp/previous-health
@@ -154,7 +154,7 @@ jobs:
 
       - name: Persist health state and notification outcome
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: beta-service-health-state
           path: /tmp/current-health
