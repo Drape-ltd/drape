@@ -97,10 +97,13 @@ Together they monitor:
 - Supabase, Daily, Paystack, Stripe, Cloudflare, Sentry, Expo, and Slack through
   their official public status APIs
 
-The observer fingerprints the active incident set. A new or changed incident
-opens one failed GitHub run and one Slack alert. An unchanged incident keeps the
-GitHub run failed without sending duplicate Slack messages. Recovery produces
-one recovery message. Each transition artifact records the safe Slack outcome,
+The observer fingerprints the active Drapeon incident set. A new or changed
+Drapeon-owned synthetic failure opens one failed GitHub run and one Slack alert.
+An unchanged incident stays visible in the report but exits successfully so it
+does not generate repeated GitHub failure email. Public provider status notices
+remain advisory context; Drapeon's own readiness and integration health decide
+whether the workflow fails. Recovery produces one recovery message. Each
+transition artifact records the safe Slack outcome,
 channel ID, message timestamp, and delivery time. GitHub remains the fallback
 when Slack itself is unavailable.
 

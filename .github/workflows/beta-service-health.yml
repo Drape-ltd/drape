@@ -134,7 +134,7 @@ jobs:
             fi
             echo "::warning title=Ongoing Drapeon service incident::$SUMMARY"
             echo "The same incident is still open; duplicate GitHub and Slack alerts were suppressed." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            exit 0
           fi
 
           if [[ "$CURRENT" == "fail" ]]; then

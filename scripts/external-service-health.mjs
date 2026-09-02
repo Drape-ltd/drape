@@ -171,15 +171,31 @@ function normalize(target, body) {
   return { ok: false, detail: "Unknown monitor type" };
 }
 
+function severityFor(target) {
+  return target.kind === "drape" || target.kind === "drape-ready"
+    ? "critical"
+    : "advisory";
+}
+
 async function fetchTarget(target) {
   const fixtureValue = fixture?.[target.id];
   if (fixtureValue) {
     const status = Number(fixtureValue.status ?? 200);
     if (status < 200 || status >= 300) {
-      return { ...target, ok: false, httpStatus: status, detail: `HTTP ${status}` };
+      const body = fixtureValue.body ?? fixtureValue;
+      const normalized = body && typeof body === "object"
+        ? normalize(target, body)
+        : { ok: false, detail: `HTTP ${status}` };
+      return {
+        ...target,
+        ...normalized,
+        ok: false,
+        severity: severityFor(target),
+        httpStatus: status,
+      };
     }
     const normalized = normalize(target, fixtureValue.body ?? fixtureValue);
-    return { ...target, ...normalized, httpStatus: status };
+    return { ...target, ...normalized, severity: severityFor(target), httpStatus: status };
   }
 
   let lastError;
@@ -203,12 +219,22 @@ async function fetchTarget(target) {
         body = null;
       }
       if (!response.ok) {
+        if (body && typeof body === "object") {
+          const normalized = normalize(target, body);
+          return {
+            ...target,
+            ...normalized,
+            ok: false,
+            severity: severityFor(target),
+            httpStatus: response.status,
+          };
+        }
         lastError = `HTTP ${response.status}`;
       } else if (!body) {
         lastError = "Non-JSON response";
       } else {
         const normalized = normalize(target, body);
-        return { ...target, ...normalized, httpStatus: response.status };
+        return { ...target, ...normalized, severity: severityFor(target), httpStatus: response.status };
       }
     } catch (error) {
       lastError = error?.name === "AbortError" ? "Timed out" : compact(error?.message || error);
@@ -216,27 +242,41 @@ async function fetchTarget(target) {
       clearTimeout(timeout);
     }
   }
-  return { ...target, ok: false, httpStatus: 0, detail: lastError || "Request failed" };
+  return {
+    ...target,
+    ok: false,
+    severity: severityFor(target),
+    httpStatus: 0,
+    detail: lastError || "Request failed",
+  };
 }
 
 const results = await Promise.all(targets.map(fetchTarget));
-const unhealthy = results
-  .filter((result) => !result.ok)
+const critical = results
+  .filter((result) => !result.ok && result.severity === "critical")
   .map((result) => ({ id: result.id, name: result.name, detail: result.detail, httpStatus: result.httpStatus }))
   .sort((a, b) => a.id.localeCompare(b.id));
-const state = unhealthy.length === 0 ? "ok" : "fail";
-const fingerprintSource = unhealthy.length === 0
+const advisories = results
+  .filter((result) => !result.ok && result.severity === "advisory")
+  .map((result) => ({ id: result.id, name: result.name, detail: result.detail, httpStatus: result.httpStatus }))
+  .sort((a, b) => a.id.localeCompare(b.id));
+const state = critical.length === 0 ? "ok" : "fail";
+const fingerprintSource = critical.length === 0
   ? "healthy"
-  : JSON.stringify(unhealthy.map(({ id, detail, httpStatus }) => ({ id, detail, httpStatus })));
+  : JSON.stringify(critical.map(({ id, detail, httpStatus }) => ({ id, detail, httpStatus })));
 const fingerprint = createHash("sha256").update(fingerprintSource).digest("hex").slice(0, 16);
 const summary = state === "ok"
-  ? `All ${results.length} monitored services are operational.`
-  : `${unhealthy.length} of ${results.length} monitored services need attention: ${unhealthy.map((item) => `${item.name} (${item.detail})`).join("; ")}`;
+  ? advisories.length === 0
+    ? `All ${results.length} monitored services are operational.`
+    : `Drapeon checks are healthy. ${advisories.length} provider advisory notice(s): ${advisories.map((item) => `${item.name} (${item.detail})`).join("; ")}`
+  : `${critical.length} Drapeon check(s) need attention: ${critical.map((item) => `${item.name} (${item.detail})`).join("; ")}`;
 const report = {
   checkedAt: new Date().toISOString(),
   state,
   fingerprint,
   summary: compact(summary, 1_500),
+  critical,
+  advisories,
   targets: results.map(({ authorization: _authorization, kind: _kind, ...result }) => result),
 };
 
