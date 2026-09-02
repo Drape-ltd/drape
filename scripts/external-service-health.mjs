@@ -82,7 +82,7 @@ if (process.env.DRAPE_PROD_HEALTHCHECK_SECRET) {
   targets.push({
     id: "drape-prod-ready",
     name: "Drape PROD readiness",
-    url: "https://wkfsrunetmgjdtcurmoj.supabase.co/functions/v1/service-health?check=ready&tier=beta",
+    url: "https://wkfsrunetmgjdtcurmoj.supabase.co/functions/v1/service-health?check=ready",
     kind: "drape-ready",
     authorization: `Bearer ${process.env.DRAPE_PROD_HEALTHCHECK_SECRET}`,
   });

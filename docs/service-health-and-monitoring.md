@@ -68,11 +68,9 @@ The readiness check verifies:
 
 It does not call Stripe, Paystack, or delivery-provider APIs. The first real provider operation remains the correct provider health signal.
 
-Until public launch, both DEV and PROD external observers request the explicit
-`beta` tier. This keeps absent live-only configuration, including ZIPTAX, visible
-in the readiness result without treating it as an outage during store review.
-Before public checkout opens, switch the PROD observer back to the default
-`launch` tier and require every launch gate to pass.
+The DEV observer requests the explicit `beta` tier. The PROD observer always
+uses the default strict `launch` tier so absent live-only configuration remains
+a release-blocking failure.
 
 ## Required Secret
 
