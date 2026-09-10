@@ -3,6 +3,7 @@ import { CONTACTS } from '@drape/shared'
 import { headers } from 'next/headers'
 import * as React from 'react'
 import { AuthLandingRedirect } from '../components/auth-landing-redirect'
+import { BrandEntrance } from '../components/brand-entrance'
 import { WebAnalytics } from '../components/web-analytics'
 import { WebSessionScopeGuard } from '../components/web-session-scope-guard'
 import { UiProvider } from '../components/ui/ui-provider'
@@ -156,6 +157,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <WebAnalytics />
         <WebSessionScopeGuard />
         <AuthLandingRedirect />
+        <BrandEntrance />
         <UiProvider>
           <div id="main-content" tabIndex={-1}>
             {children}

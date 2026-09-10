@@ -149,6 +149,300 @@
   will-change: opacity, transform;
 }
 
+@keyframes brand-entrance-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes brand-thread-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes product-carousel-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(-46%, 0, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+}
+
+.product-carousel-enter {
+  animation: product-carousel-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes vision-scan {
+  0%,
+  100% {
+    transform: translateY(-118px);
+    opacity: 0.42;
+  }
+  50% {
+    transform: translateY(118px);
+    opacity: 1;
+  }
+}
+
+.vision-scan-line {
+  animation: vision-scan 2.2s ease-in-out infinite;
+}
+
+.vision-corner {
+  position: absolute;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-color: #a6e8c7;
+}
+
+.vision-corner--tl {
+  left: 1.25rem;
+  top: 1.25rem;
+  border-left-width: 2px;
+  border-top-width: 2px;
+}
+
+.vision-corner--tr {
+  right: 1.25rem;
+  top: 1.25rem;
+  border-right-width: 2px;
+  border-top-width: 2px;
+}
+
+.vision-corner--bl {
+  bottom: 1.25rem;
+  left: 1.25rem;
+  border-bottom-width: 2px;
+  border-left-width: 2px;
+}
+
+.vision-corner--br {
+  right: 1.25rem;
+  bottom: 1.25rem;
+  border-right-width: 2px;
+  border-bottom-width: 2px;
+}
+
+@keyframes vision-hero-sweep {
+  0%,
+  8% {
+    left: 12%;
+    opacity: 0;
+  }
+  24% {
+    opacity: 0.8;
+  }
+  72% {
+    opacity: 0.8;
+  }
+  92%,
+  100% {
+    left: 88%;
+    opacity: 0;
+  }
+}
+
+@keyframes vision-orbit-one {
+  to {
+    transform: rotate(360deg) scaleX(0.74);
+  }
+}
+
+@keyframes vision-orbit-two {
+  to {
+    transform: rotate(-360deg) scaleY(0.68);
+  }
+}
+
+@keyframes vision-orbit-three {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+}
+
+.vision-hero__grid {
+  background-image: linear-gradient(rgba(166, 232, 199, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(166, 232, 199, 0.08) 1px, transparent 1px);
+  background-size: 2rem 2rem;
+  mask-image: radial-gradient(circle at center, black, transparent 72%);
+}
+
+.vision-hero__sweep {
+  animation: vision-hero-sweep 4.2s ease-in-out infinite;
+}
+
+.vision-orbit--one {
+  transform: rotate(18deg) scaleX(0.74);
+  animation: vision-orbit-one 16s linear infinite;
+}
+
+.vision-orbit--two {
+  transform: rotate(-24deg) scaleY(0.68);
+  animation: vision-orbit-two 12s linear infinite;
+}
+
+.vision-orbit--three {
+  animation: vision-orbit-three 3.2s ease-in-out infinite;
+}
+
+.vision-orbit--one::before,
+.vision-orbit--two::before {
+  content: '';
+  position: absolute;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #a6e8c7;
+  box-shadow: 0 0 18px rgba(166, 232, 199, 0.88);
+}
+
+.vision-orbit--one::before {
+  right: 8%;
+  top: 18%;
+}
+
+.vision-orbit--two::before {
+  bottom: 12%;
+  left: 18%;
+}
+
+.vision-marker {
+  position: absolute;
+  z-index: 10;
+  border: 1px solid rgba(166, 232, 199, 0.18);
+  border-radius: 999px;
+  background: rgba(8, 24, 16, 0.74);
+  padding: 0.35rem 0.6rem;
+  color: rgba(223, 255, 240, 0.76);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+}
+
+.vision-marker--shoulder {
+  left: -8%;
+  top: 26%;
+}
+
+.vision-marker--head {
+  left: 50%;
+  top: -2%;
+  transform: translateX(-50%);
+}
+
+.vision-marker--chest {
+  right: -8%;
+  top: 31%;
+}
+
+.vision-marker--waist {
+  right: -11%;
+  top: 50%;
+}
+
+.vision-marker--hip {
+  bottom: 25%;
+  left: -5%;
+}
+
+.vision-marker--sleeve {
+  left: -11%;
+  top: 49%;
+}
+
+.vision-marker--inseam {
+  right: -6%;
+  bottom: 10%;
+}
+
+.vision-height-rail {
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  left: -16%;
+  border-left: 1px solid rgba(166, 232, 199, 0.34);
+}
+
+.vision-height-rail::before,
+.vision-height-rail::after {
+  content: '';
+  position: absolute;
+  left: -0.2rem;
+  width: 0.4rem;
+  border-top: 1px solid rgba(166, 232, 199, 0.62);
+}
+
+.vision-height-rail::before {
+  top: 0;
+}
+
+.vision-height-rail::after {
+  bottom: 0;
+}
+
+.vision-height-rail span {
+  position: absolute;
+  top: 50%;
+  left: -0.8rem;
+  color: rgba(223, 255, 240, 0.52);
+  font-size: 0.48rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+.brand-entrance {
+  opacity: 1;
+  transition: opacity 300ms ease, visibility 300ms ease;
+}
+
+.brand-entrance--leaving {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.brand-entrance__grain {
+  background-image: radial-gradient(circle at 22% 18%, rgba(255, 255, 255, 0.09), transparent 32%), radial-gradient(circle at 78% 78%, rgba(2, 24, 16, 0.2), transparent 35%);
+}
+
+.brand-entrance__thread {
+  animation: brand-thread-draw 780ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: center;
+}
+
+.brand-entrance__mark {
+  animation: brand-entrance-rise 620ms 90ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.brand-entrance__word,
+.brand-entrance__sub {
+  animation: brand-entrance-rise 520ms 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.brand-entrance__sub {
+  animation-delay: 300ms;
+}
+
 /* Product detail uses a stable commerce layout. Keep this explicit rather
    than relying on generated arbitrary grid classes that can disappear during
    development recompilation. */

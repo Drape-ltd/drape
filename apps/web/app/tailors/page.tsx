@@ -3,18 +3,14 @@ import Image from 'next/image'
 import Link from 'next/link'
 import {
   ArrowRight,
-  Check,
-  Clock3,
-  MessageCircle,
-  Scissors,
   ShieldCheck,
-  Store,
   UserRoundCheck,
   Video,
   WalletCards,
 } from 'lucide-react'
 import { PublicSiteHeader } from '../../components/public-site-header'
 import { SiteFooter } from '../../components/site-footer'
+import { TailorSetupPreview } from '../../components/tailor-setup-preview'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -22,60 +18,6 @@ export const metadata: Metadata = buildMetadata({
   description: 'Build your Drapeon studio, meet serious customers, manage every order, and keep earnings and payout status in view.',
   path: '/tailors',
 })
-
-const setupSteps = [
-  {
-    number: '01',
-    title: 'Your identity',
-    body: 'Add your profile photo, base location, languages, and a clear introduction to your work.',
-  },
-  {
-    number: '02',
-    title: 'What you make',
-    body: 'Choose your business type, specialties, currency, typical price range, and how customers can order.',
-  },
-  {
-    number: '03',
-    title: 'Public proof',
-    body: 'Select real portfolio photos or short videos. Tailor shops and boutiques can also prepare ready-made work.',
-  },
-  {
-    number: '04',
-    title: 'Setup and verification',
-    body: 'Set availability, fulfilment, and consultation rules, then complete a private randomized trust video.',
-  },
-] as const
-
-const customerView = [
-  {
-    number: '01',
-    src: '/product/01-explore-tailors.jpg',
-    alt: 'Drapeon Explore showing verified independent tailors and active work',
-    title: 'Be found for the work you do',
-    body: 'Your location, specialties, portfolio, availability, and approved profile help the right customers find you.',
-  },
-  {
-    number: '02',
-    src: '/product/05-protected-quote.jpg',
-    alt: 'Drapeon protected quote showing construction, fabric allowance, tax, and timing',
-    title: 'Make the price clear',
-    body: 'Customers see the construction price, protected fabric allowance, timing, and what is included before paying.',
-  },
-  {
-    number: '03',
-    src: '/product/08-active-order.jpg',
-    alt: 'Drapeon active order showing its status, price, and next action',
-    title: 'Keep the next action visible',
-    body: 'The same order record keeps status, decisions, evidence, conversation, and handoff together.',
-  },
-] as const
-
-const workflowRows = [
-  ['New brief', 'Review the garment, references, fit, timing, and fulfilment before quoting.'],
-  ['Quote and consultation', 'Send a structured price or talk through the work first.'],
-  ['Production', 'Record approvals and move the order through agreed stages.'],
-  ['Handoff and earnings', 'Complete delivery or pickup and see what is pending for release.'],
-] as const
 
 const faqs = [
   {
@@ -155,102 +97,7 @@ export default function TailorsPage(): React.JSX.Element {
         </div>
       </section>
 
-      <section id="setup" className="public-section-editorial scroll-mt-8">
-        <div className="mx-auto max-w-[92rem] px-5 sm:px-8">
-          <div className="grid gap-9 lg:grid-cols-[0.78fr_1.22fr] lg:gap-16">
-            <div className="lg:sticky lg:top-8 lg:self-start">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-needle">Before you become public</p>
-              <h2 className="mt-4 max-w-xl text-4xl leading-[1.02] sm:text-6xl">Set up the studio customers will meet.</h2>
-              <p className="mt-5 max-w-lg text-base leading-7 text-ink/64">
-                The web onboarding follows the same Drapeon profile and business contract as the app. Four guided sections show what is complete and what still needs attention.
-              </p>
-              <Link href="/sign-up?role=TAILOR" className="mt-7 inline-flex min-h-11 items-center gap-2 rounded-full bg-ink px-5 text-sm font-semibold text-white transition hover:bg-needle">
-                Open the guided setup <ArrowRight aria-hidden="true" size={15} />
-              </Link>
-            </div>
-
-            <div className="grid sm:grid-cols-2">
-              {setupSteps.map((step, index) => (
-                <article key={step.number} className={`border-t border-ink/14 py-6 ${index % 2 === 0 ? 'sm:pr-7' : 'sm:border-l sm:pl-7'} ${index > 1 ? 'sm:mt-4' : ''}`}>
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-xs font-semibold text-needle/58">{step.number}</span>
-                    <Check aria-hidden="true" size={16} className="text-needle/42" />
-                  </div>
-                  <h3 className="mt-10 text-2xl text-ink">{step.title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-ink/60">{step.body}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-[#17211c] py-16 text-white sm:py-20 lg:py-24">
-        <div className="mx-auto max-w-[92rem] px-5 sm:px-8">
-          <div className="grid gap-7 border-b border-white/12 pb-9 lg:grid-cols-[0.9fr_1.1fr] lg:items-end lg:gap-16">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8cc5a8]">What your customer sees</p>
-              <h2 className="mt-4 max-w-3xl text-4xl leading-[1.02] text-white sm:text-6xl">Your professionalism stays visible.</h2>
-            </div>
-            <p className="max-w-xl text-base leading-7 text-white/64 lg:pb-1">
-              A polished profile is only the beginning. Drapeon keeps the brief, quote, status, and next action legible on both sides of the order.
-            </p>
-          </div>
-
-          <div className="-mx-5 mt-10 flex snap-x snap-mandatory gap-4 overflow-x-auto px-5 pb-4 sm:-mx-8 sm:px-8 lg:mx-0 lg:grid lg:grid-cols-3 lg:gap-5 lg:overflow-visible lg:px-0 lg:pb-0">
-            {customerView.map((story, index) => (
-              <article key={story.src} className={`w-[82vw] max-w-[390px] shrink-0 snap-center lg:w-auto lg:max-w-none ${index === 1 ? 'lg:translate-y-8' : ''}`}>
-                <div className="overflow-hidden rounded-[18px] border border-white/10 bg-[#f4f0e8] shadow-[0_26px_70px_rgba(0,0,0,0.28)]">
-                  <Image src={story.src} alt={story.alt} width={621} height={1344} sizes="(min-width:1024px) 30vw,82vw" className="h-auto w-full" />
-                </div>
-                <div className="grid grid-cols-[auto_1fr] gap-4 px-1 pt-5">
-                  <span className="pt-0.5 text-xs font-semibold text-[#8cc5a8]">{story.number}</span>
-                  <div>
-                    <h3 className="text-xl text-white">{story.title}</h3>
-                    <p className="mt-2 max-w-sm text-sm leading-6 text-white/58">{story.body}</p>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="public-section-editorial border-b border-ink/8 bg-[#faf8f3]">
-        <div className="mx-auto grid max-w-[92rem] gap-5 px-5 sm:px-8 lg:grid-cols-[1.06fr_0.94fr]">
-          <article className="group relative min-h-[570px] overflow-hidden rounded-[16px] bg-ink sm:min-h-[680px]">
-            <Image src="/editorial/drapeon-pattern-planning-v1.jpg" alt="Pattern pieces, chalk, measuring tape, and green cloth arranged for garment planning" fill sizes="(min-width:1024px) 54vw,100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />
-            <div className="absolute inset-0 bg-[linear-gradient(0deg,rgba(11,16,13,0.9)_0%,rgba(11,16,13,0.08)_64%)]" />
-            <div className="absolute bottom-0 left-0 max-w-2xl p-7 text-white sm:p-10">
-              <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-white/62"><Scissors aria-hidden="true" size={16} /> The craft remains yours</div>
-              <h2 className="mt-4 text-4xl leading-[1.02] text-white sm:text-6xl">The admin stops living everywhere else.</h2>
-              <p className="mt-5 max-w-lg text-sm leading-7 text-white/72">Briefs, consultation decisions, pricing, production evidence, messages, fulfilment, and earnings stay attached to the right order.</p>
-            </div>
-          </article>
-
-          <div className="rounded-[16px] bg-[#e7dfd0] p-7 sm:p-9">
-            <div className="flex items-center justify-between gap-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle">Your working system</p>
-              <Store aria-hidden="true" size={20} className="text-needle" />
-            </div>
-            <h2 className="mt-5 max-w-md text-3xl leading-[1.06] sm:text-4xl">One order record. Both sides in context.</h2>
-            <div className="mt-10">
-              {workflowRows.map(([title, body], index) => (
-                <div key={title} className="grid grid-cols-[auto_1fr] gap-4 border-t border-ink/14 py-5">
-                  <span className="pt-0.5 text-xs font-semibold text-needle/54">0{index + 1}</span>
-                  <div><h3 className="text-lg text-ink">{title}</h3><p className="mt-1.5 text-sm leading-6 text-ink/60">{body}</p></div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-3 border-t border-ink/14 pt-6 text-xs font-semibold text-ink/68 sm:grid-cols-4 lg:grid-cols-2">
-              <span className="flex items-center gap-2"><MessageCircle aria-hidden="true" size={15} className="text-needle" /> Messages</span>
-              <span className="flex items-center gap-2"><Clock3 aria-hidden="true" size={15} className="text-needle" /> Consultations</span>
-              <span className="flex items-center gap-2"><WalletCards aria-hidden="true" size={15} className="text-needle" /> Earnings</span>
-              <span className="flex items-center gap-2"><ShieldCheck aria-hidden="true" size={15} className="text-needle" /> Support</span>
-            </div>
-          </div>
-        </div>
-      </section>
+      <TailorSetupPreview />
 
       <section className="public-section-editorial">
         <div className="mx-auto grid max-w-[92rem] gap-10 px-5 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:gap-16">
