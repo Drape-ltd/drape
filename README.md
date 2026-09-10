@@ -365,7 +365,7 @@ wrangler secret put TERMII_SENDER_ID --name drape
 5. Build and deploy web to Cloudflare with production public env values. Wrangler currently needs Node 22+:
 
 ```bash
-PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH" \
+PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" \
 DRAPEON_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
 NEXT_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
 DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<prod-publishable-key> \
@@ -374,7 +374,7 @@ NEXT_PUBLIC_SITE_URL=https://drapeon.co \
 ALLOW_LOCAL_WEB_ENV_DEPLOY=1 \
 pnpm --filter @drape/web cf:build
 
-PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH" \
+PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" \
 DRAPEON_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
 NEXT_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
 DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<prod-publishable-key> \
