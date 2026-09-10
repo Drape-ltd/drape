@@ -109,11 +109,11 @@ Use `docs/store-screenshot-capture-plan.md` for the exact cross-platform shot or
 Production reviewer identities are seeded and isolated:
 
 - Apple review customer: `review.apple@drapeon.co`
+- Apple review tailor: `showcase.alder-rue@drapeon.co`
 - Google review customer: `review.google@drapeon.co`
 - deletion lifecycle fixture: `review.spare@drapeon.co` (not for store-console login)
-- counterpart tailor: `showcase.alder-rue@drapeon.co`
 
-The shared reviewer password is intentionally not committed. The local handoff is stored at `/private/tmp/drape-reviewer-credentials.txt` with owner-only permissions and must be copied into the two store consoles through the approved secret handoff.
+Reviewer passwords are intentionally not committed and are separate per account. The local handoff is stored at `/private/tmp/drape-app-review-credentials.txt` with owner-only permissions and must be copied into App Store Connect through the approved secret handoff.
 
 Also prepare:
 
@@ -124,13 +124,14 @@ Also prepare:
 
 Exact reviewer path:
 
-1. Sign in with the platform-specific reviewer account.
+1. Sign in with the Apple customer reviewer account.
 2. Open Explore and select **Alder & Rue**.
 3. Open the existing project with reference **DRPGBAT3D** to review the quote and contextual order state. Do not attempt payment.
 4. Open Notifications and select **Your review project has a quote**; it must open that same project.
 5. Open Profile → Settings → Privacy → Delete account to inspect the in-app deletion path. Do not delete the reusable Apple or Google account.
+6. Sign out, then sign in with the Apple tailor reviewer account from the review notes. It opens a completed, approved Tailor workspace with an existing shop item, portfolio, orders, messages, and earnings history; no onboarding, SMS, trust-review, or payout-provider action is required.
 
-The app is a two-sided tailoring marketplace. The supplied customer account demonstrates discovery, a custom brief, quote state, contextual communication, and privacy controls. The supplied tailor is a synthetic showcase fixture, not an operating merchant and not a live payout destination.
+The app is a two-sided tailoring marketplace. The supplied Customer and Tailor credentials are both required to review the complete product. The Customer demonstrates discovery, a custom brief, quote state, contextual communication, and privacy controls. The Tailor is a synthetic showcase fixture, not an operating merchant and not a live payout destination.
 
 ## Permissions Review
 

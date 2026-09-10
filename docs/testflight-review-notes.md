@@ -58,12 +58,13 @@ Drapeon is a two-sided tailoring marketplace:
 
 ### Tailor
 
-1. Sign up or sign in.
-2. Complete tailor setup.
-3. Open `Profile -> Account settings -> Trust & access`.
-4. Open `Profile -> Account settings -> Privacy`.
-5. Open `Profile -> Account settings -> Payments & payouts`.
-6. Open an active order and update a stage.
+1. Sign out of the Customer account, then sign in with the separate Tailor credentials provided in App Review Information.
+2. The account opens directly into a completed, approved Tailor workspace; do not create a new account or repeat onboarding.
+3. Open Orders to inspect the three seeded projects, then open the project matching reference `DRPGBAT3D`.
+4. Open Messages and Shop to inspect the existing conversation, portfolio, and live showcase item.
+5. Open `Profile -> Account settings -> Trust & access`.
+6. Open `Profile -> Account settings -> Privacy`.
+7. Open `Profile -> Account settings -> Payments & payouts`. The reviewer does not need to enter external payout-provider information.
 
 ## Weak-Network Behavior
 
@@ -80,9 +81,9 @@ Drapeon is a two-sided tailoring marketplace:
 ## Reviewer Identities
 
 - Apple review customer: `review.apple@drapeon.co`
+- Apple review tailor: `showcase.alder-rue@drapeon.co`
 - Google review customer: `review.google@drapeon.co`
-- Counterpart showcase tailor: `showcase.alder-rue@drapeon.co`
 
-The password is intentionally excluded from the repository. Copy it from the owner-only handoff at `/private/tmp/drape-reviewer-credentials.txt` directly into the store consoles.
+Passwords are intentionally excluded from the repository and differ between the two Apple accounts. Copy them from the owner-only handoff at `/private/tmp/drape-app-review-credentials.txt` directly into App Store Connect.
 
-The reviewer accounts have no Ops role and no live payment capability. The synthetic deletion account is not a store-console credential.
+The reviewer accounts have no Ops role and no live payment capability. The synthetic deletion account is not a store-console credential. Do not ask reviewers to sign up, complete SMS verification, submit a trust video, wait for staff approval, or configure a payout provider.

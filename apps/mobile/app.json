@@ -59,9 +59,9 @@
           "remote-notification",
           "voip"
         ],
-        "NSCameraUsageDescription": "Drapeon uses your camera for protected order calls, reference photos, portfolio videos, progress updates, and Drapeon Vision scans.",
-        "NSPhotoLibraryUsageDescription": "Drapeon accesses your photo library for order references and portfolio photos or videos.",
-        "NSMicrophoneUsageDescription": "Drapeon uses your microphone for protected order calls and voice note messages.",
+        "NSCameraUsageDescription": "Drapeon uses your camera when you choose to take garment reference photos, record portfolio or progress videos, join protected consultation calls, or capture clothing measurements with Drapeon Vision. For example, you can photograph fabric references for a custom order.",
+        "NSPhotoLibraryUsageDescription": "Drapeon accesses only the photos or videos you choose so you can add garment references, portfolio work, and order progress media. For example, you can select an inspiration photo for a custom brief.",
+        "NSMicrophoneUsageDescription": "Drapeon uses your microphone when you choose to record a voice note or join a protected consultation call. For example, you can talk through fit details with your tailor during a scheduled call.",
         "NSMotionUsageDescription": "Drapeon uses device motion to keep Drapeon Vision scans calibrated while you turn.",
         "NSFaceIDUsageDescription": "Drapeon uses Face ID to quickly and securely verify your identity when you return to the app."
       }
@@ -149,14 +149,14 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Drapeon uses your camera for photos and video."
+          "cameraPermission": "Drapeon uses your camera when you choose to take garment reference photos, record portfolio or progress videos, join protected consultation calls, or capture clothing measurements with Drapeon Vision. For example, you can photograph fabric references for a custom order."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Drapeon uses your photo library so you can upload portfolio photos, videos, and order references. Your media is only accessed when you choose to upload.",
-          "cameraPermission": "Drapeon uses your camera to take portfolio photos, videos, and order references."
+          "photosPermission": "Drapeon accesses only the photos or videos you choose so you can add garment references, portfolio work, and order progress media. For example, you can select an inspiration photo for a custom brief.",
+          "cameraPermission": "Drapeon uses your camera when you choose to take garment reference photos, record portfolio or progress videos, join protected consultation calls, or capture clothing measurements with Drapeon Vision. For example, you can photograph fabric references for a custom order."
         }
       ],
       [
@@ -178,7 +178,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "Drapeon uses your microphone to record voice note messages."
+          "microphonePermission": "Drapeon uses your microphone when you choose to record a voice note or join a protected consultation call. For example, you can talk through fit details with your tailor during a scheduled call."
         }
       ],
       "expo-apple-authentication",

@@ -115,6 +115,8 @@
 - Confirm reviewer notes and permission explanations are ready:
   - `docs/testflight-review-notes.md`
   - `docs/mobile-permissions-and-disclosure-audit.md`
+- Run `pnpm --dir apps/mobile verify:ios:privacy`. If archiving locally, run `pnpm --dir apps/mobile prebuild:ios:release` first and verify the generated `Info.plist`; never archive an older ignored `ios/` directory.
+- Audit both production App Review accounts with `node scripts/prepare-app-review-accounts.mjs --project-ref <production-ref>` and confirm the Customer and Tailor logins are both present in App Review Information.
 - Confirm submission metadata is assembled:
   - `docs/store-submission-pack.md`
 - Confirm there is one short rollback plan for:

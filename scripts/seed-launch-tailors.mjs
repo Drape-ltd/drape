@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 
-const DEFAULT_PASSWORD = process.env.LAUNCH_TAILOR_PASSWORD ?? 'DrapeLaunch2026!'
+const LAUNCH_TAILOR_PASSWORD = process.env.LAUNCH_TAILOR_PASSWORD?.trim() || null
+const ROTATE_EXISTING_PASSWORDS = process.argv.includes('--rotate-passwords')
 const NETWORK_TIMEOUT_MS = 60_000
 
 const TAILORS = [
@@ -254,13 +255,16 @@ async function findAuthUserByEmail(baseUrl, headers, email) {
 async function ensureAuthUser(baseUrl, headers, input) {
   const existing = await findAuthUserByEmail(baseUrl, headers, input.email)
   if (existing?.id) {
+    if (ROTATE_EXISTING_PASSWORDS && !input.password) {
+      throw new Error('Set a private LAUNCH_TAILOR_PASSWORD before using --rotate-passwords.')
+    }
     await fetchJson(
       `${baseUrl}/auth/v1/admin/users/${existing.id}`,
       {
         method: 'PUT',
         headers,
         body: JSON.stringify({
-          password: input.password ?? DEFAULT_PASSWORD,
+          ...(ROTATE_EXISTING_PASSWORDS ? { password: input.password } : {}),
           email_confirm: true,
           user_metadata: {
             role: input.role,
@@ -274,6 +278,12 @@ async function ensureAuthUser(baseUrl, headers, input) {
     return existing.id
   }
 
+  if (!input.password || input.password.length < 16) {
+    throw new Error(
+      `A private LAUNCH_TAILOR_PASSWORD of at least 16 characters is required to create ${input.email}.`,
+    )
+  }
+
   const created = await fetchJson(
     `${baseUrl}/auth/v1/admin/users`,
     {
@@ -281,7 +291,7 @@ async function ensureAuthUser(baseUrl, headers, input) {
       headers,
       body: JSON.stringify({
         email: input.email,
-        password: input.password ?? DEFAULT_PASSWORD,
+        password: input.password,
         email_confirm: true,
         user_metadata: {
           role: input.role,
@@ -356,6 +366,7 @@ for (const tailor of TAILORS) {
     email: tailor.email,
     role: 'TAILOR',
     displayName: tailor.displayName,
+    password: LAUNCH_TAILOR_PASSWORD,
   })
   const profileId = stableUuid(`launch-tailor-profile:${tailor.key}`)
   const portfolioUrls = []
@@ -473,9 +484,9 @@ for (const tailor of TAILORS) {
 
   loginRows.push({
     email: tailor.email,
-    password: DEFAULT_PASSWORD,
     profileId,
     displayName: tailor.displayName,
+    credentials: 'Owner-managed; never printed or committed.',
   })
 }
 

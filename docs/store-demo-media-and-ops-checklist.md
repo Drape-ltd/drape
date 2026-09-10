@@ -69,3 +69,4 @@ Start from `docs/store-demo-media.example.json`, replace every `example.com` URL
 - Twilio/SMS: add dev/prod secrets before claiming SMS coverage in store notes.
 - Daily/calls: confirm API key and fallback behavior before presenting calls as available in reviewer notes.
 - Store reviewer notes: prepare the exact customer/tailor demo credentials and explain Android Vision is manual fallback while iOS Vision is the supported scan surface for launch.
+- App Review accounts: run `node scripts/prepare-app-review-accounts.mjs --project-ref <production-ref>` first, then repeat with `--apply` only after the audit passes. Copy the owner-only handoff from `/private/tmp/drape-app-review-credentials.txt`; never commit reviewer passwords.

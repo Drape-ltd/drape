@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
-const DEFAULT_PASSWORD = process.env.STORE_DEMO_PASSWORD ?? 'DrapeLaunch2026!'
+const DEFAULT_PASSWORD = process.env.STORE_DEMO_PASSWORD?.trim() || null
 const MEDIA_PREFLIGHT_BYTES = 512 * 1024
 const IOS_INCOMPATIBLE_PNG_CHUNKS = new Set(['caBX', 'jumb'])
 
@@ -102,6 +102,13 @@ async function ensureAuthUser(baseUrl, headers, input) {
   const existing = await findAuthUserByEmail(baseUrl, headers, input.email)
   if (existing?.id) return existing.id
 
+  const password = input.password?.trim() || DEFAULT_PASSWORD
+  if (!password || password.length < 16) {
+    throw new Error(
+      `A password of at least 16 characters is required to create ${input.email}. Set it in the private manifest or STORE_DEMO_PASSWORD; no reviewer password is committed to this repository.`,
+    )
+  }
+
   const created = await fetchJson(
     `${baseUrl}/auth/v1/admin/users`,
     {
@@ -109,7 +116,7 @@ async function ensureAuthUser(baseUrl, headers, input) {
       headers,
       body: JSON.stringify({
         email: input.email,
-        password: input.password ?? DEFAULT_PASSWORD,
+        password,
         email_confirm: true,
         user_metadata: {
           role: input.role,
@@ -487,11 +494,13 @@ for (const [tailorIndex, tailor] of manifest.tailors.entries()) {
     payout_provider: tailor.payoutProvider ?? 'STRIPE',
     payout_account_type: tailor.payoutAccountType ?? 'STRIPE_CONNECT',
     payout_account_verified: tailor.payoutAccountVerified ?? true,
+    payout_reverification_required: false,
     stripe_connect_account_id: tailor.stripeConnectAccountId ?? `acct_demo_${tailor.key}`,
     tier: tailor.tier ?? 'VERIFIED',
     availability: tailor.availability ?? 'OPEN',
     is_verified: true,
     is_live: true,
+    profile_completed: true,
     avg_rating: tailor.avgRating ?? 0,
     total_reviews: tailor.totalReviews ?? 0,
     total_orders: tailor.totalOrders ?? 0,

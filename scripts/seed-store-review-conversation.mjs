@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 
 const ORDER_ID = 'bdbefdbf-4ee6-4343-b66e-3ada57d0ca2a'
-const CREDENTIALS_PATH = process.env.REVIEW_CREDENTIALS_PATH ?? '/private/tmp/drape-reviewer-credentials.txt'
+const CREDENTIALS_PATH = process.env.REVIEW_CREDENTIALS_PATH ?? '/private/tmp/drape-app-review-credentials.txt'
 const CUSTOMER_EMAIL = 'review.apple@drapeon.co'
 const TAILOR_EMAIL = 'showcase.alder-rue@drapeon.co'
 const dialogue = [
@@ -55,11 +55,15 @@ async function discoverProductionClient() {
 }
 
 const credentialText = readFileSync(CREDENTIALS_PATH, 'utf8')
-const password = credentialText.match(/^Password:\s*(.+)$/mu)?.[1]?.trim()
-if (!password) throw new Error(`Reviewer password unavailable in ${CREDENTIALS_PATH}.`)
+const passwords = new Map(
+  [...credentialText.matchAll(/^Email:\s*(.+)\nPassword:\s*(.+)$/gmu)]
+    .map((match) => [match[1]?.trim().toLowerCase(), match[2]?.trim()]),
+)
 
 const { base, anon } = await discoverProductionClient()
 async function signIn(email) {
+  const password = passwords.get(email.toLowerCase())
+  if (!password) throw new Error(`Reviewer password for ${email} is unavailable in ${CREDENTIALS_PATH}.`)
   const session = await responseJson(`${base}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: { apikey: anon, 'content-type': 'application/json' },

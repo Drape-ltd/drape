@@ -1,6 +1,6 @@
 # Mobile Permissions And Disclosure Audit
 
-Date: April 2, 2026
+Date: September 10, 2026
 
 ## Purpose
 
@@ -19,12 +19,14 @@ Used for:
 
 - customer reference photos
 - tailor progress photos
-- tailor portfolio/work uploads
+- tailor portfolio/work and trust-challenge videos
+- protected consultation calls
+- Drapeon Vision measurement capture
 
-Current copy in `app.json`:
+Release requirement:
 
-- iOS: `Drape uses your camera to upload reference photos and progress updates.`
-- Expo camera plugin: `Drape uses your camera for photos and video.`
+- `ios.infoPlist.NSCameraUsageDescription`, `expo-camera.cameraPermission`, and `expo-image-picker.cameraPermission` must contain the same specific, example-led copy.
+- `pnpm --dir apps/mobile verify:ios:privacy` must pass against a clean generated Info.plist before an iOS archive is accepted.
 
 ### Photo Library
 
@@ -34,21 +36,22 @@ Used for:
 - tailor portfolio images
 - other image uploads chosen by the user
 
-Current copy in `app.json`:
+Release requirement:
 
-- iOS: `Drape accesses your photo library for order references and portfolio photos.`
-- Expo image picker plugin copy is present and user-chosen upload scoped.
+- The copy explains that Drapeon accesses only media the user chooses and gives the custom-brief example.
+- The Expo image-picker override must exactly match the canonical iOS purpose string.
 
 ### Microphone
 
 Used for:
 
 - voice note messaging
+- protected consultation calls
 
-Current copy in `app.json`:
+Release requirement:
 
-- iOS: `Drape uses your microphone for voice note messages.`
-- Expo AV plugin copy is present.
+- The copy names both voice notes and scheduled consultation calls and includes an example.
+- The Expo AV override must exactly match the canonical iOS purpose string.
 
 ### Biometrics / Face ID / Fingerprint
 
@@ -100,14 +103,16 @@ Review before release:
 
 ## Reviewer / Submission Checks
 
+- run a clean iOS prebuild; never archive a stale ignored native project
+- inspect the generated archive/IPA Info.plist, not only `app.json`
 - confirm the iOS privacy manifest still matches the shipped SDK set
 - confirm App Store privacy answers match actual runtime behavior
 - confirm Play data safety answers match actual runtime behavior
 - confirm no dead permission prompts exist for flows the app no longer uses
 - confirm every permission can be explained in one sentence tied to a visible feature
 
-## Open Release Questions
+## Current Scope Decisions
 
-- whether location is needed at all in the first store build
-- whether any future call flow expands microphone/camera reviewer notes
-- whether screenshots and reviewer notes clearly show the deletion and privacy routes
+- Location remains an in-form service lookup and does not require continuous device-location permission.
+- Camera and microphone reviewer notes explicitly cover consultation calls in addition to media and Vision.
+- Screenshots and reviewer notes must show that privacy and account-deletion controls are reachable.

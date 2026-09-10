@@ -15,7 +15,7 @@ This capture does not authorize a release build, store upload, account deletion,
 - Android: `review.google@drapeon.co`
 - Featured tailor: **Alder & Rue**, London
 - Existing project: **DRPGBAT3D**
-- Credentials: owner-only handoff at `/private/tmp/drape-reviewer-credentials.txt`
+- Credentials: owner-only handoff at `/private/tmp/drape-app-review-credentials.txt`
 
 Before capture, confirm all eight showcase studios load and no images, biographies, tags, locations, prices, or availability states show placeholders or private test data.
 
