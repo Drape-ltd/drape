@@ -48,6 +48,18 @@ function recommendedStartAt(minLeadMinutes = 60) {
   return new Date(Math.ceil(minimumMs / intervalMs) * intervalMs).toISOString()
 }
 
+function inAppConsultationNotice(orderId: string, deduplicationKey: string) {
+  return {
+    category: 'MESSAGE' as const,
+    purpose: 'TRANSACTIONAL' as const,
+    severity: 'NOTICE' as const,
+    inApp: true,
+    destinationKey: 'ORDER_DETAIL',
+    destinationParams: { orderId },
+    deduplicationKey,
+  }
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -69,15 +81,40 @@ Deno.serve(async (req) => {
 
     const actorRole = order.customer_id === caller.id ? 'CUSTOMER' : order.tailor_id === caller.id ? 'TAILOR' : null
     if (!actorRole) return json({ code: 'FORBIDDEN', error: 'Only the customer or tailor can change this consultation.' }, 403, cors)
-    if (order.stage !== 'CONSULTATION') return json({ code: 'CONSULTATION_CLOSED', error: 'This order is no longer waiting for a consultation.' }, 409, cors)
+    const { data: attendanceReview } = await supabase
+      .from('consultation_attendance_reviews')
+      .select('booking_id, resolution_code, resolved_at')
+      .eq('order_id', order.id)
+      .eq('status', 'RESOLVED')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const makeupRequired = order.stage === 'PENDING_QUOTE' && attendanceReview?.resolution_code === 'RESCHEDULE_REQUIRED'
+    if (order.stage !== 'CONSULTATION' && !makeupRequired) {
+      return json({ code: 'CONSULTATION_CLOSED', error: 'This order is no longer waiting for a consultation.' }, 409, cors)
+    }
+    if (makeupRequired && input.action === 'request') {
+      const { data: usedMakeup } = await supabase.from('consultation_bookings')
+        .select('id')
+        .eq('order_id', order.id)
+        .eq('replaces_booking_id', attendanceReview.booking_id)
+        .in('status', ['CONFIRMED', 'COMPLETED', 'NO_SHOW', 'EXPIRED'])
+        .limit(1)
+        .maybeSingle()
+      if (usedMakeup?.id) {
+        return json({ code: 'CONSULTATION_RESCHEDULE_USED', error: 'The one make-up consultation has already been scheduled.' }, 409, cors)
+      }
+    }
 
     const { data: booking, error: bookingError } = await supabase
       .from('consultation_bookings')
-      .select('id, scheduled_start_at, scheduled_end_at, duration_minutes')
+      .select('id, status, scheduled_start_at, scheduled_end_at, tailor_id, customer_id, appointment_kind, call_type, proposer_role, reason_code, note, timezone, duration_minutes, version, policy_version, fee_mode, fee_amount, fee_currency, fee_creditable, payment_status, paid_at, cancellation_policy, attendance_policy, commercial_snapshot_locked_at, settlement_status, commercial_correlation_id')
       .eq('order_id', order.id)
-      .eq('status', 'CONFIRMED')
+      .eq(makeupRequired ? 'id' : 'status', makeupRequired ? attendanceReview.booking_id : 'CONFIRMED')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle()
-    if (bookingError || !booking) return json({ code: 'BOOKING_NOT_FOUND', error: 'The confirmed consultation time could not be found.' }, 409, cors)
+    if (bookingError || !booking) return json({ code: 'BOOKING_NOT_FOUND', error: 'The consultation time could not be found.' }, 409, cors)
 
     const orderEmailShape = {
       id: order.id,
@@ -151,6 +188,7 @@ Deno.serve(async (req) => {
             body: 'Review the replacement time and accept or decline it.',
             preferenceKey: 'messages',
             data: { orderId: order.id, target: 'order', destination: 'order' },
+            communication: inAppConsultationNotice(order.id, `consultation-reschedule-request:${requestRow.id}:${recipientId}`),
           },
         }),
         enqueueOrderEventEmailJob(supabase, {
@@ -209,13 +247,14 @@ Deno.serve(async (req) => {
       const recipientAudience = requestRow.requested_by_role === 'CUSTOMER' ? 'CUSTOMER' as const : 'TAILOR' as const
       const counterVersion = new Date().toISOString()
       await Promise.all([
-        enqueuePushJob(supabase, { userId: recipientId, source: FN, orderId: order.id, idempotencyKey: `consultation-reschedule-counter:${requestRow.id}:${counterVersion}`, priority: 15, notification: { title: 'Other consultation times suggested', body: 'Review the new options and choose a time that works.', preferenceKey: 'messages', data: { orderId: order.id, target: 'order', destination: 'order' } } }),
+        enqueuePushJob(supabase, { userId: recipientId, source: FN, orderId: order.id, idempotencyKey: `consultation-reschedule-counter:${requestRow.id}:${counterVersion}`, priority: 15, notification: { title: 'Other consultation times suggested', body: 'Review the new options and choose a time that works.', preferenceKey: 'messages', data: { orderId: order.id, target: 'order', destination: 'order' }, communication: inAppConsultationNotice(order.id, `consultation-reschedule-counter:${requestRow.id}:${counterVersion}:${recipientId}`) } }),
         enqueueOrderEventEmailJob(supabase, { order: orderEmailShape, recipientUserId: recipientId, audience: recipientAudience, subject: 'Choose a consultation time', headline: 'Other consultation times were suggested', body: 'Review the new options in Drapeon and choose the time that works.', ctaLabel: 'Choose a time', source: FN, idempotencyKey: `consultation-reschedule-counter:${requestRow.id}:${counterVersion}`, priority: 15 }),
       ])
       await audit(supabase, { event: 'consultation.reschedule_countered', actor_id: caller.id, actor_role: actorRole, order_id: order.id, payload: { request_id: requestRow.id, proposed_start_options: uniqueOptions } })
       return json({ ok: true, requestId: requestRow.id }, 200, cors)
     }
 
+    let replacementBookingId: string | null = null
     if (input.decision === 'ACCEPTED') {
       const offeredOptions = Array.isArray(requestRow.proposed_start_options) && requestRow.proposed_start_options.length > 0
         ? requestRow.proposed_start_options
@@ -235,16 +274,89 @@ Deno.serve(async (req) => {
         scheduledEndAt: selectedEndAt,
       })
       if (!availability.ok) return json({ code: availability.code, error: availability.error }, availability.status, cors)
-      const { error: moveError } = await supabase
-        .from('consultation_bookings')
-        .update({
+      if (makeupRequired) {
+        const now = new Date().toISOString()
+        const previousStatus = booking.status
+        if (previousStatus === 'CONFIRMED') {
+          const { error: closeError } = await supabase.from('consultation_bookings').update({
+            status: 'CANCELLED',
+            cancelled_at: now,
+            cancelled_by: caller.id,
+            cancellation_reason: 'Replaced after resolved attendance report',
+            settlement_status: 'NOT_REQUIRED',
+            settlement_outcome: 'RESCHEDULED',
+            updated_at: now,
+          }).eq('id', booking.id).eq('status', 'CONFIRMED')
+          if (closeError) return json({ code: 'CONSULTATION_RESCHEDULE_RACE', error: 'The consultation changed while you were responding. Refresh and try again.' }, 409, cors)
+        } else {
+          await supabase.from('consultation_bookings').update({
+            settlement_status: 'NOT_REQUIRED',
+            settlement_outcome: 'RESCHEDULED',
+            updated_at: now,
+          }).eq('id', booking.id)
+        }
+
+        const { data: replacement, error: replacementError } = await supabase.from('consultation_bookings').insert({
+          order_id: order.id,
+          tailor_id: booking.tailor_id,
+          customer_id: booking.customer_id,
           scheduled_start_at: selectedStartAt,
           scheduled_end_at: selectedEndAt,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', booking.id)
-        .eq('status', 'CONFIRMED')
-      if (moveError) return json({ code: 'CONSULTATION_SLOT_UNAVAILABLE', error: 'That time is no longer available. Propose another time.' }, 409, cors)
+          status: 'CONFIRMED',
+          source: 'ATTENDANCE_RESCHEDULE',
+          appointment_kind: booking.appointment_kind,
+          call_type: booking.call_type,
+          proposer_role: requestRow.requested_by_role,
+          reason_code: booking.reason_code,
+          note: booking.note,
+          timezone: booking.timezone,
+          duration_minutes: duration,
+          version: Math.max(Number(booking.version) || 1, 1) + 1,
+          replaces_booking_id: booking.id,
+          confirmed_at: now,
+          policy_version: booking.policy_version,
+          fee_mode: booking.fee_mode,
+          fee_amount: booking.fee_amount,
+          fee_currency: booking.fee_currency,
+          fee_creditable: booking.fee_creditable,
+          payment_status: booking.payment_status,
+          paid_at: booking.paid_at,
+          cancellation_policy: booking.cancellation_policy,
+          attendance_policy: booking.attendance_policy,
+          commercial_snapshot_locked_at: booking.commercial_snapshot_locked_at,
+          settlement_status: booking.fee_mode === 'PAID' && booking.payment_status === 'PAID' ? 'HELD' : 'NOT_REQUIRED',
+          earned_amount: 0,
+          refunded_amount: 0,
+          commercial_correlation_id: booking.commercial_correlation_id,
+        }).select('id').single()
+        if (replacementError || !replacement) {
+          await supabase.from('consultation_bookings').update({
+            status: previousStatus,
+            cancelled_at: null,
+            cancelled_by: null,
+            cancellation_reason: null,
+            settlement_status: booking.settlement_status,
+            settlement_outcome: 'RESCHEDULE_REQUIRED',
+          }).eq('id', booking.id)
+          return json({ code: 'CONSULTATION_SLOT_UNAVAILABLE', error: 'That time is no longer available. Propose another time.' }, 409, cors)
+        }
+        replacementBookingId = replacement.id
+      } else {
+        const { error: moveError } = await supabase
+          .from('consultation_bookings')
+          .update({
+            scheduled_start_at: selectedStartAt,
+            scheduled_end_at: selectedEndAt,
+            reminder_24h_sent_at: null,
+            reminder_30m_sent_at: null,
+            reminder_5m_sent_at: null,
+            reminder_start_sent_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id)
+          .eq('status', 'CONFIRMED')
+        if (moveError) return json({ code: 'CONSULTATION_SLOT_UNAVAILABLE', error: 'That time is no longer available. Propose another time.' }, 409, cors)
+      }
 
       const supportMeta = parseOrderSupportMeta(order.special_note)
       await supabase.from('orders').update({
@@ -302,6 +414,7 @@ Deno.serve(async (req) => {
           body: input.decision === 'ACCEPTED' ? 'The new time is booked and reminders were updated.' : 'The existing time is still booked. Coordinate another option in chat.',
           preferenceKey: 'messages',
           data: { orderId: order.id, target: 'order', destination: 'order' },
+          communication: inAppConsultationNotice(order.id, `consultation-reschedule-response:${requestRow.id}:${input.decision}:${recipientId}`),
         },
       }),
       enqueueOrderEventEmailJob(supabase, {
@@ -317,8 +430,8 @@ Deno.serve(async (req) => {
         priority: 15,
       }),
     ])
-    await audit(supabase, { event: 'consultation.reschedule_responded', actor_id: caller.id, actor_role: actorRole, order_id: order.id, payload: { request_id: requestRow.id, decision: input.decision } })
-    return json({ ok: true, status: input.decision }, 200, cors)
+    await audit(supabase, { event: 'consultation.reschedule_responded', actor_id: caller.id, actor_role: actorRole, order_id: order.id, payload: { request_id: requestRow.id, decision: input.decision, replacement_booking_id: replacementBookingId } })
+    return json({ ok: true, status: input.decision, replacementBookingId }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
     return json({ code: 'INTERNAL_ERROR', error: 'Could not update this consultation time.' }, 500, getCorsHeaders(req))

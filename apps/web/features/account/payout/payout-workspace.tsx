@@ -518,10 +518,10 @@ function PayoutContent({ userId, identity }: { userId: string; identity: Account
           Customer accounts do not receive tailor earnings.
         </p>
         <Link
-          href="/apply?source=account"
+          href="/account/profile?setup=1"
           className="mt-4 inline-flex text-sm font-semibold text-needle"
         >
-          Apply as a tailor
+          Set up a tailor profile
         </Link>
       </section>
     )

@@ -61,6 +61,7 @@ import {
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import {
   normalizePhoneForStorage,
+  ACCOUNT_PHONE_UNIQUENESS_HINT,
   PHONE_STORAGE_HINT,
   validatePhoneForProfile,
 } from '@drape/shared/phone'
@@ -861,7 +862,7 @@ export default function CustomerSetupScreen() {
                   }}
                   error={phoneError}
                   required
-                  hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
+                  hint={phoneAvailabilityChecking ? 'Checking phone number…' : `${PHONE_STORAGE_HINT} ${ACCOUNT_PHONE_UNIQUENESS_HINT}`}
                 />
               </View>
 

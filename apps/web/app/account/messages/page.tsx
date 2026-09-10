@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { MessagesWorkspace } from '../../../features/account/messages/messages-workspace'
+import { AccountAppSurface } from '../../../components/account-app-surface'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -9,5 +9,5 @@ export const metadata: Metadata = buildMetadata({
 })
 
 export default function AccountMessagesPage(): React.JSX.Element {
-  return <MessagesWorkspace />
+  return <AccountAppSurface surface="messages" embedded />
 }

@@ -49,6 +49,16 @@ export type VerificationPushMessage = {
   sound?: string
   channelId?: string
   interruptionLevel?: 'passive' | 'active' | 'time-sensitive' | 'critical'
+  communication?: {
+    category: 'ACCOUNT'
+    purpose: 'TRANSACTIONAL'
+    severity: 'NOTICE' | 'WARNING'
+    mandatory: true
+    inApp: true
+    destinationKey: 'VERIFICATION'
+    destinationParams: { profileId: string; decision: VerificationDecision }
+    deduplicationKey: string
+  }
 }
 
 export type VerificationPushResult = {
@@ -204,6 +214,16 @@ export function buildVerificationDecisionPush(input: {
       sound: 'default',
       channelId: 'account-updates',
       interruptionLevel: 'active' as const,
+      communication: {
+        category: 'ACCOUNT' as const,
+        purpose: 'TRANSACTIONAL' as const,
+        severity: 'NOTICE' as const,
+        mandatory: true as const,
+        inApp: true as const,
+        destinationKey: 'VERIFICATION' as const,
+        destinationParams: { profileId: input.profileId, decision: 'APPROVE' as const },
+        deduplicationKey: `tailor-verification-decision:${input.profileId}:${input.status}`,
+      },
     }
   }
 
@@ -219,6 +239,16 @@ export function buildVerificationDecisionPush(input: {
     sound: 'default',
     channelId: 'account-updates',
     interruptionLevel: 'active' as const,
+    communication: {
+      category: 'ACCOUNT' as const,
+      purpose: 'TRANSACTIONAL' as const,
+      severity: 'WARNING' as const,
+      mandatory: true as const,
+      inApp: true as const,
+      destinationKey: 'VERIFICATION' as const,
+      destinationParams: { profileId: input.profileId, decision: 'REJECT' as const },
+      deduplicationKey: `tailor-verification-decision:${input.profileId}:${input.status}`,
+    },
   }
 }
 export function createResendVerificationEmailSender(options?: {

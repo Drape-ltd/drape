@@ -127,6 +127,7 @@ type PayoutRow = {
   provider: string
   status: string
   provider_payout_id: string | null
+  provider_response: Record<string, unknown> | null
   provider_transfer_status: string | null
   bank_settlement_status: string | null
   provider_bank_payout_id: string | null
@@ -136,6 +137,8 @@ type PayoutRow = {
   bank_settlement_failure_code: string | null
   blocked_reason: string | null
   order_id: string | null
+  payout_purpose: string | null
+  settlement_tranche_id: string | null
   initiated_at: string | null
   completed_at: string | null
   failed_at: string | null
@@ -561,6 +564,7 @@ export type OpsPayout = {
   provider: string
   status: string
   providerPayoutId: string | null
+  requiresPaystackOtp: boolean
   providerTransferStatus: string | null
   bankSettlementStatus: string | null
   providerBankPayoutId: string | null
@@ -571,6 +575,8 @@ export type OpsPayout = {
   blockedReason: string | null
   blockedReasonMessage: string | null
   orderId: string | null
+  payoutPurpose: string | null
+  settlementTrancheId: string | null
   orderReference: string | null
   orderStage: string | null
   orderKind: string | null
@@ -601,6 +607,7 @@ export type OpsPayout = {
 export type OpsSettlementTranche = {
   id: string
   orderId: string
+  orderReference: string | null
   code: string
   sequence: number
   amount: number
@@ -905,6 +912,7 @@ export type OpsMoneyDeskRequest = {
   targetType: string
   targetId: string
   orderId: string | null
+  orderReference: string | null
   caseId: string | null
   amount: number | null
   currency: string | null
@@ -988,6 +996,19 @@ export type OpsReturnResolution = {
   createdAt: string
 }
 
+export type OpsMediaReviewItem = {
+  id: string
+  tailorProfileId: string | null
+  ownerUserId: string | null
+  url: string
+  kind: string
+  purpose: string
+  moderationStatus: string
+  riskLevel: string
+  reasons: string[]
+  createdAt: string
+}
+
 export type OpsDashboardData = {
   summary: {
     openDisputes: number
@@ -1038,6 +1059,7 @@ export type OpsDashboardData = {
   pendingVerifications: OpsVerification[]
   deletionRequests: OpsAccountDeletionRequest[]
   reviewQueue: OpsReviewQueueItem[]
+  mediaReviewQueue: OpsMediaReviewItem[]
   payouts: OpsPayout[]
   settlementTranches: OpsSettlementTranche[]
   moneyDeskRequests: OpsMoneyDeskRequest[]
@@ -1702,6 +1724,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     verificationsResult,
     deletionRequestsResult,
     reviewQueueResult,
+    mediaReviewQueueResult,
     sellerItemsResult,
     payoutsResult,
     settlementTranchesResult,
@@ -1790,13 +1813,19 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       .order('created_at', { ascending: false })
       .limit(24),
     client
+      .from('media_assets')
+      .select('id,tailor_profile_id,owner_user_id,public_url,media_kind,purpose,moderation_status,moderation_risk_level,moderation_reasons,created_at')
+      .or('moderation_status.in.(PENDING_REVIEW,AUTO_BLOCKED),moderation_risk_level.eq.MEDIUM')
+      .order('created_at', { ascending: false })
+      .limit(48),
+    client
       .from('seller_items')
       .select('id, tailor_profile_id, title, description, category, sizes, price_amount, currency, photo_urls, is_live, stock_status, inventory_quantity, size_inventory, pickup_available, delivery_available, shipping_available, created_at, updated_at')
       .order('updated_at', { ascending: false })
       .limit(48),
     client
       .from('payouts')
-      .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, provider_transfer_status, bank_settlement_status, provider_bank_payout_id, bank_settlement_expected_at, bank_settlement_completed_at, bank_settlement_failed_at, bank_settlement_failure_code, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
+      .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, provider_response, provider_transfer_status, bank_settlement_status, provider_bank_payout_id, bank_settlement_expected_at, bank_settlement_completed_at, bank_settlement_failed_at, bank_settlement_failure_code, blocked_reason, order_id, payout_purpose, settlement_tranche_id, initiated_at, completed_at, failed_at, processed_at')
       .order('processed_at', { ascending: false })
       .limit(24),
     client
@@ -1976,6 +2005,10 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   const reviewQueue =
     reviewQueueResult.status === 'fulfilled' && !reviewQueueResult.value.error
       ? ((reviewQueueResult.value.data ?? []) as ReviewRow[])
+      : []
+  const mediaReviewQueue =
+    mediaReviewQueueResult.status === 'fulfilled' && !mediaReviewQueueResult.value.error
+      ? ((mediaReviewQueueResult.value.data ?? []) as Array<Record<string, unknown>>)
       : []
   const sellerItems =
     sellerItemsResult.status === 'fulfilled' && !sellerItemsResult.value.error
@@ -2495,6 +2528,8 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
     ...openOrderReviews.map((review) => review.orderId),
     ...reviewQueue.map((review) => review.order_id),
     ...payouts.map((payout) => payout.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ...settlementTranches.map((tranche) => tranche.order_id),
+    ...moneyDeskRequests.map((request) => request.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
     ...supportThreadOrderIds,
     ...workflowOpsIssues.map((issue) => issue.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
     ...legacyWorkflowIssues.map((issue) => issue.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
@@ -2974,11 +3009,29 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         history: issue?.id ? (issueHistoryByIssueId.get(issue.id) ?? []) : [],
       }
     }),
+    mediaReviewQueue: mediaReviewQueue.map((asset) => ({
+      id: String(asset.id),
+      tailorProfileId: typeof asset.tailor_profile_id === 'string' ? asset.tailor_profile_id : null,
+      ownerUserId: typeof asset.owner_user_id === 'string' ? asset.owner_user_id : null,
+      url: typeof asset.public_url === 'string' ? asset.public_url : '',
+      kind: typeof asset.media_kind === 'string' ? asset.media_kind : 'IMAGE',
+      purpose: typeof asset.purpose === 'string' ? asset.purpose : 'UNKNOWN',
+      moderationStatus: typeof asset.moderation_status === 'string' ? asset.moderation_status : 'PENDING_REVIEW',
+      riskLevel: typeof asset.moderation_risk_level === 'string' ? asset.moderation_risk_level : 'UNKNOWN',
+      reasons: Array.isArray(asset.moderation_reasons) ? asset.moderation_reasons.map(String) : [],
+      createdAt: typeof asset.created_at === 'string' ? asset.created_at : new Date(0).toISOString(),
+    })),
     payouts: payouts.map((payout) => {
       const tailorProfile = tailorProfilesById.get(payout.tailor_profile_id)
       const order = payout.order_id ? ordersById.get(payout.order_id) : null
       const tailorUser = tailorProfile ? usersById.get(tailorProfile.user_id) : order ? usersById.get(order.tailor_id) : null
       const paymentContext = payout.order_id ? orderPaymentContextByOrderId.get(payout.order_id) : null
+      const providerTransfer = payout.provider_response?.transfer && typeof payout.provider_response.transfer === 'object'
+        ? payout.provider_response.transfer as Record<string, unknown>
+        : payout.provider_response
+      const requiresPaystackOtp = payout.provider === 'PAYSTACK'
+        && payout.status === 'PROCESSING'
+        && providerTransfer?.status === 'otp'
 
       return {
         id: payout.id,
@@ -2990,6 +3043,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         provider: payout.provider,
         status: payout.status,
         providerPayoutId: payout.provider_payout_id,
+        requiresPaystackOtp,
         providerTransferStatus: payout.provider_transfer_status,
         bankSettlementStatus: payout.bank_settlement_status,
         providerBankPayoutId: payout.provider_bank_payout_id,
@@ -3000,6 +3054,8 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
         blockedReason: payout.blocked_reason,
         blockedReasonMessage: payoutBlockedReasonCopy(payout.blocked_reason),
         orderId: payout.order_id,
+        payoutPurpose: payout.payout_purpose,
+        settlementTrancheId: payout.settlement_tranche_id,
         orderReference: order?.reference ?? null,
         orderStage: order?.stage ?? null,
         orderKind: order?.order_kind ?? null,
@@ -3032,6 +3088,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       return {
         id: tranche.id,
         orderId: tranche.order_id,
+        orderReference: ordersById.get(tranche.order_id)?.reference ?? null,
         code: tranche.code,
         sequence: tranche.sequence,
         amount: tranche.amount,
@@ -3058,6 +3115,7 @@ async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
       targetType: request.target_type,
       targetId: request.target_id,
       orderId: request.order_id,
+      orderReference: request.order_id ? ordersById.get(request.order_id)?.reference ?? null : null,
       caseId: request.case_id,
       amount: request.amount,
       currency: request.currency,

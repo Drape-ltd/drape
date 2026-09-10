@@ -194,6 +194,10 @@ const BodySchema = z.discriminatedUnion('action', [
     role: z.enum(['CUSTOMER', 'TAILOR']),
     currency: z.string().trim().min(3).max(3),
   }),
+  z.object({
+    action: z.literal('switch-role'),
+    role: z.enum(['CUSTOMER', 'TAILOR']),
+  }),
 ])
 
 function jsonResponse(payload: Record<string, unknown>, status: number, cors: HeadersInit) {
@@ -386,6 +390,66 @@ Deno.serve(async (req) => {
         payload: { function: FN, ip: clientIp, action: body.action },
       })
       return rateLimitExceededResponse(cors)
+    }
+
+    if (body.action === 'switch-role') {
+      const targetRole = body.role
+      const [{ data: userRow, error: userError }, { data: customerProfile }, { data: tailorProfile }] = await Promise.all([
+        supabase.from('users').select('display_name, phone, role').eq('id', caller.id).maybeSingle(),
+        supabase.from('customer_profiles').select('id').eq('user_id', caller.id).maybeSingle(),
+        supabase.from('tailor_profiles').select('id, display_name').eq('user_id', caller.id).maybeSingle(),
+      ])
+      if (userError || !userRow) {
+        return jsonResponse({ error: 'Your account role could not be checked right now.' }, 500, cors)
+      }
+      if (targetRole === 'TAILOR' && !tailorProfile) {
+        return jsonResponse({
+          error: 'Complete your tailor application before switching to tailor mode.',
+          message: 'Complete your tailor application before switching to tailor mode.',
+        }, 409, cors)
+      }
+      if (targetRole === 'CUSTOMER' && !customerProfile) {
+        const displayName = String(userRow.display_name || tailorProfile?.display_name || caller.email?.split('@')[0] || 'Drapeon')
+        const { error: customerError } = await supabase.from('customer_profiles').insert({
+          user_id: caller.id,
+          display_name: displayName,
+          phone: userRow.phone ?? null,
+          unit_preference: 'cm',
+          garment_context: 'PREFER_NOT_TO_SAY',
+          measurements: { unit: 'cm', garmentContext: 'PREFER_NOT_TO_SAY', fitFlags: [] },
+          updated_at: new Date().toISOString(),
+        })
+        if (customerError) {
+          log('error', FN, 'role_switch.customer_profile_create_failed', { actor_id: caller.id, error: customerError.message })
+          return jsonResponse({ error: 'Your customer profile could not be prepared right now.' }, 500, cors)
+        }
+      }
+
+      const previousRole = userRow.role === 'CUSTOMER' || userRow.role === 'TAILOR' ? userRow.role : null
+      const now = new Date().toISOString()
+      const { error: roleError } = await supabase.from('users').update({ role: targetRole, updated_at: now }).eq('id', caller.id)
+      if (roleError) {
+        return jsonResponse({ error: 'Drapeon mode could not switch right now.' }, 500, cors)
+      }
+      const { data: authUserData } = await supabase.auth.admin.getUserById(caller.id)
+      const metadata = readAuthMetadata(authUserData?.user?.user_metadata)
+      const { error: authRoleError } = await supabase.auth.admin.updateUserById(caller.id, {
+        user_metadata: { ...metadata, role: targetRole },
+      })
+      if (authRoleError) {
+        if (previousRole) {
+          await supabase.from('users').update({ role: previousRole, updated_at: now }).eq('id', caller.id)
+        }
+        log('error', FN, 'role_switch.auth_metadata_failed', { actor_id: caller.id, error: authRoleError.message })
+        return jsonResponse({ error: 'Drapeon mode could not switch right now.' }, 500, cors)
+      }
+      await audit(supabase, {
+        event: 'account.role_switched',
+        actor_id: caller.id,
+        actor_role: targetRole,
+        payload: { function: FN, previous_role: previousRole, next_role: targetRole },
+      })
+      return jsonResponse({ ok: true, role: targetRole }, 200, cors)
     }
 
     if (body.action === 'bootstrap-web-onboarding') {

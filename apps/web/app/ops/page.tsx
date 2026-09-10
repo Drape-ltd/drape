@@ -54,6 +54,7 @@ import {
   type OpsDispute,
   type OpsOrderReviewItem,
   type OpsMoneyDeskRequest,
+  type OpsMediaReviewItem,
   type OpsReturnResolution,
   type OpsPayout,
   type OpsReviewQueueItem,
@@ -128,11 +129,14 @@ const NOTICE_COPY: Record<string, string> = {
   'dispatch-event-saved': 'Drapeon Dispatch update saved and sent to both order participants.',
   'review-published': 'Review is public now.',
   'review-held': 'Review is held from public view.',
+  'media-approved': 'Portfolio media approved and the tailor notification was queued.',
+  'media-blocked': 'Portfolio media removed from public surfaces and the tailor notification was queued.',
   'conversation-blocked': 'Conversation paused for safety review.',
   'conversation-unblocked': 'Conversation reopened.',
   'order-review-refunded': 'Order review approved and refund resolution recorded.',
   'order-review-continued': 'Order review closed and the order was returned to its live stage.',
   'payout-release-triggered': 'Payout release was triggered for that order.',
+  'payout-otp-finalized': 'Paystack accepted the OTP. The exact pending transfer is now confirmed.',
   'material-advance-release-triggered': 'Material advance release was triggered.',
   'material-overage-resolved': 'The unapproved overage was recorded as the tailor’s responsibility.',
   'payout-resolution-applied': 'Payout resolution was saved and payout release was retried.',
@@ -180,12 +184,15 @@ const ERROR_COPY: Record<string, string> = {
   'workforce-unassigned': 'Your workforce identity is valid, but no control-plane role is assigned to it yet.',
   'service-role-missing': 'Add the server-side Supabase service role env vars to load ops data.',
   'invalid-action': 'That ops action was not recognized.',
+  'media-reason-required': 'Add a clear reason before removing portfolio media.',
+  'delivery-queue-failed': 'The decision was saved, but its notification could not be queued. Check queue health before closing the case.',
   conflict: 'That record changed since the page loaded. Refresh the dashboard and try again.',
   'save-failed': 'That update could not be saved right now.',
   'refund-failed': 'The provider refund did not complete, so the order was not marked refunded.',
   'partial-refund-invalid': 'Complete the reviewed reason, evidence reference, and refund-source fields. Protected tailor entitlement, service fee, refundable tax, fulfillment, and consultation must add up to the customer refund exactly.',
   'reviewed-partial-refund-outcome-invalid': 'Choose whether to close or resume the order and add a clear reviewed reason.',
   'payout-release-failed': 'The payout release could not be triggered right now.',
+  'payout-otp-failed': 'Paystack did not accept that OTP for the pending transfer.',
   'material-advance-release-failed': 'The material advance could not be released right now.',
   'workflow-issue-save-failed': 'That workflow issue could not be updated right now.',
   'manual-issue-create-failed': 'That manual issue could not be created right now.',
@@ -199,6 +206,7 @@ const ERROR_COPY: Record<string, string> = {
   'dispatch-proof-invalid': 'Use a JPG, PNG, or WebP delivery-proof image smaller than 8 MB.',
   'dispatch-event-save-failed': 'The delivery update was not saved. Review the current step and required proof, then try again.',
   'verification-rejection-reason-required': 'Add a rejection reason before rejecting verification.',
+  'verification-elevation-required': 'Re-authenticate through workforce access with MFA before approving or rejecting a trust review.',
   'money-desk-required': 'Direct money movement is disabled. Prepare this action in Money Desk for independent approval.',
   'refund-resolution-prepared': 'Exact refund restoration is locked and ready for Money Desk approval.',
   'money-desk-elevation-required': 'Start a fresh 15-minute Money Desk elevation before continuing.',
@@ -461,7 +469,7 @@ function buildOpsPulseSnapshot(data: OpsDashboardData): OpsPulseSnapshot {
   const latest = criticalIssues[0] ?? null
 
   return {
-    openCount: activeIssues.length,
+    openCount: activeIssues.length + data.pendingVerifications.length,
     criticalCount: criticalIssues.length,
     latestKey: latest ? `${latest.id}:${latest.createdAt}` : '',
     latestTitle: latest?.summary ?? null,
@@ -549,6 +557,14 @@ function buildPriorityQueueItems(
       description: 'Ready-made stock, media, visibility, or fulfillment issues.',
       team: 'Ops',
       urgency: data.summary.shopInventoryAlerts > 0 ? 'watch' : 'normal',
+    },
+    {
+      view: 'verification',
+      label: 'Trust reviews',
+      count: data.summary.pendingVerifications,
+      description: 'Private challenge videos and profile evidence waiting for a go-live decision.',
+      team: 'Trust & safety',
+      urgency: data.summary.pendingVerifications > 0 ? 'watch' : 'normal',
     },
     {
       view: 'workflow-issues',
@@ -1520,12 +1536,17 @@ function VerificationEvidencePanel({
 function VerificationCard({
   profile,
   redirectTo,
+  session,
 }: {
   profile: OpsVerification
   redirectTo: string
+  session: OpsSession
 }): React.JSX.Element {
+  const canDecide = isNamedOpsWorkforceSession(session) && Boolean(session.email) && hasFreshOpsMfa(session)
+
   return (
     <CardCollapse
+      id={`verification-${profile.profileId}`}
       background="bg-white/86"
       summary={
         <>
@@ -1622,6 +1643,11 @@ function VerificationCard({
 
       <div className="mt-5 border-t border-ink/8 pt-5">
         <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
+        {!canDecide ? (
+          <p className="mb-3 rounded-lg border border-rust/14 bg-rust/8 px-4 py-3 text-sm font-semibold leading-6 text-rust-700">
+            Re-authenticate through workforce access with MFA to approve or reject this trust review.
+          </p>
+        ) : null}
         <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
         <input type="hidden" name="kind" value="verification-decision" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
@@ -1655,7 +1681,8 @@ function VerificationCard({
             name="decision"
             value="APPROVE"
             formNoValidate
-            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+            disabled={!canDecide}
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90 disabled:cursor-not-allowed disabled:opacity-45"
           >
             Approve and go live
           </button>
@@ -1663,7 +1690,8 @@ function VerificationCard({
             type="submit"
             name="decision"
             value="REJECT"
-            className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12"
+            disabled={!canDecide}
+            className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12 disabled:cursor-not-allowed disabled:opacity-45"
           >
             Reject verification
           </button>
@@ -1781,6 +1809,7 @@ function DeletionRequestCard({
 }
 
 function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
+  const isSettlementTranche = payout.payoutPurpose === 'SETTLEMENT_TRANCHE' || Boolean(payout.settlementTrancheId)
   const deliveryState = derivePayoutDeliveryState({
     provider: payout.provider,
     status: payout.status,
@@ -1791,7 +1820,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
   const deliveryExplanation = payoutDeliveryExplanation(deliveryState, payout.provider)
   const canRetryRelease =
     !!payout.orderId && ['BLOCKED', 'FAILED', 'PENDING'].includes(payout.status.toUpperCase())
-  const releaseLabel = releaseWindowLabel(payout)
+  const releaseLabel = isSettlementTranche ? 'Evidence-backed staged settlement' : releaseWindowLabel(payout)
   const isBlockedOrFailed = ['BLOCKED', 'FAILED'].includes(payout.status.toUpperCase())
   const isTestPayout = !!(
     payout.providerPayoutId?.startsWith('py_test_') ||
@@ -1877,11 +1906,11 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
             items={[
               { label: 'Payout amount', value: formatMoney(payout.amount, payout.currency) },
               { label: 'Order total', value: formatMoney(payout.orderTotalAmount, payout.orderCurrency) },
-              { label: 'Tailor earning', value: formatMoney(payout.sourceAmount, payout.sourceCurrency) },
+              { label: 'Order work subtotal', value: formatMoney(payout.sourceAmount, payout.sourceCurrency) },
               { label: 'Platform fee', value: formatMoney(payout.platformFeeAmount, payout.orderCurrency) },
               { label: 'Tax collected', value: formatMoney(payout.taxAmount, payout.orderCurrency) },
               { label: 'Fulfillment fee', value: formatMoney(payout.shippingAmount, payout.orderCurrency) },
-              { label: 'Captured', value: formatMoney(payout.capturedAmount, payout.orderCurrency) },
+              { label: 'Captured across order', value: formatMoney(payout.capturedAmount, payout.orderCurrency) },
               { label: 'Already refunded', value: formatMoney(payout.alreadyRefundedAmount, payout.orderCurrency) },
               { label: 'Refundable remaining', value: formatMoney(payout.maxRefundableAmount, payout.orderCurrency) },
             ]}
@@ -1899,7 +1928,10 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
               { label: 'What this means', value: deliveryExplanation },
               { label: 'Provider transfer', value: formatDatabaseEnumLabel(payout.providerTransferStatus, '—') },
               { label: 'Bank settlement', value: formatDatabaseEnumLabel(payout.bankSettlementStatus, '—') },
-              { label: 'Escrow released', value: payout.escrowReleased ? 'Yes' : 'No' },
+              { label: 'Payout purpose', value: formatDatabaseEnumLabel(payout.payoutPurpose, isSettlementTranche ? 'Settlement tranche' : '—') },
+              ...(isSettlementTranche
+                ? [{ label: 'Settlement tranche', value: payout.settlementTrancheId ?? '—' }]
+                : [{ label: 'Whole-order escrow released', value: payout.escrowReleased ? 'Yes' : 'No' }]),
               { label: 'Provider ID', value: payout.providerPayoutId ?? '—' },
               { label: 'Bank payout ID', value: payout.providerBankPayoutId ?? '—' },
               { label: 'Blocked reason', value: payout.blockedReasonMessage ?? formatDatabaseEnumLabel(payout.blockedReason, '—') },
@@ -1913,7 +1945,9 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
               { label: 'Handoff complete', value: formatDateTime(payout.handoffCompletedAt) },
               { label: 'Customer confirmed', value: formatDateTime(payout.customerHandoffConfirmedAt) },
               { label: 'Confirmation source', value: formatDatabaseEnumLabel(payout.handoffConfirmationSource, '—') },
-              { label: 'Release window', value: payout.payoutReadyAt ? `${formatDateTime(payout.payoutReadyAt)} · ${releaseLabel}` : releaseLabel },
+              ...(isSettlementTranche
+                ? [{ label: 'Release policy', value: releaseLabel }]
+                : [{ label: 'Release window', value: payout.payoutReadyAt ? `${formatDateTime(payout.payoutReadyAt)} · ${releaseLabel}` : releaseLabel }]),
               { label: 'Initiated', value: formatDateTime(payout.initiatedAt) },
               { label: 'Expected at bank', value: formatDateTime(payout.bankSettlementExpectedAt) },
               { label: 'Confirmed at bank', value: formatDateTime(payout.bankSettlementCompletedAt) },
@@ -1924,6 +1958,41 @@ function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
           />
         </div>
       </div>
+
+      {payout.requiresPaystackOtp ? (
+        <div className="mt-5 border-t border-ink/8 pt-5">
+          <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Provider approval</p>
+          <form action="/ops/action" method="post" className="grid gap-4 rounded-[8px] border border-needle/18 bg-needle/5 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(180px,240px)_auto] lg:items-end">
+            <input type="hidden" name="kind" value="payout-otp-finalize" />
+            <input type="hidden" name="redirectTo" value={buildOpsRedirectTarget('payouts', 'payouts')} />
+            <input type="hidden" name="payoutId" value={payout.id} />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/62">Paystack OTP required</p>
+              <p className="mt-2 text-sm leading-7 text-ink/68">
+                Paystack created this exact transfer but is waiting for its one-time code. Confirming it finalizes this transfer; it does not create another payout.
+              </p>
+            </div>
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              One-time code
+              <input
+                name="otp"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                minLength={4}
+                maxLength={12}
+                required
+                placeholder="Enter Paystack code"
+                className="h-11 rounded-lg border border-ink/12 bg-white px-3 text-sm font-normal tracking-[0.18em] text-ink outline-none focus:border-needle"
+              />
+            </label>
+            <button type="submit" className="inline-flex h-11 items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white transition hover:bg-needle/90">
+              Confirm OTP
+            </button>
+          </form>
+        </div>
+      ) : null}
 
       {canRetryRelease ? (
         <div className="mt-5 border-t border-ink/8 pt-5">
@@ -3224,6 +3293,57 @@ function ReviewQueueCard({
   )
 }
 
+function MediaReviewCard({ media, redirectTo }: { media: OpsMediaReviewItem; redirectTo: string }): React.JSX.Element {
+  const isVideo = media.kind.toUpperCase() === 'VIDEO' || isVideoMediaUrl(media.url)
+  const statusTone = media.moderationStatus.includes('BLOCK') ? 'BLOCKED' : 'PENDING'
+  return (
+    <CardCollapse
+      background="bg-[linear-gradient(180deg,#fffdf9_0%,#f5eee3_100%)]"
+      summary={(
+        <>
+          <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(statusTone)}`}>{formatDatabaseEnumLabel(media.moderationStatus)}</span>
+          <span className="font-semibold text-ink">Portfolio media</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-ink/48">{media.reasons.join(' · ') || `${formatDatabaseEnumLabel(media.riskLevel)} risk`}</span>
+          <span className="shrink-0 text-xs text-ink/38">{formatRelativeTime(media.createdAt)}</span>
+        </>
+      )}
+    >
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,22rem)_1fr]">
+        <div className="relative aspect-[4/5] overflow-hidden rounded-[10px] border border-ink/8 bg-bone">
+          {isVideo ? (
+            <video src={media.url} poster={videoPosterFrameUrl(media.url) ?? undefined} controls preload="metadata" className="h-full w-full object-contain" />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={media.url} alt="Portfolio media awaiting Trust review" className="h-full w-full object-contain" />
+          )}
+        </div>
+        <div>
+          <DetailList items={[
+            { label: 'Media reference', value: media.id },
+            { label: 'Purpose', value: formatDatabaseEnumLabel(media.purpose) },
+            { label: 'Risk', value: formatDatabaseEnumLabel(media.riskLevel) },
+            { label: 'Signals', value: media.reasons.length > 0 ? media.reasons.join(', ') : 'No report signal recorded' },
+            { label: 'Uploaded', value: formatDateTime(media.createdAt) },
+          ]} />
+          <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4">
+            <input type="hidden" name="kind" value="media-moderation" />
+            <input type="hidden" name="redirectTo" value={redirectTo} />
+            <input type="hidden" name="mediaAssetId" value={media.id} />
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Removal reason
+              <textarea name="reason" rows={3} placeholder="Required only when removing this media" className="rounded-[8px] border border-ink/12 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-needle" />
+            </label>
+            <div className="flex flex-wrap gap-3">
+              <button type="submit" name="decision" value="APPROVE" className="rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white hover:bg-needle/90">Approve media</button>
+              <button type="submit" name="decision" value="BLOCK" className="rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 hover:bg-rust/12">Remove from public view</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </CardCollapse>
+  )
+}
+
 function DispatchCard({
   item,
   redirectTo,
@@ -3854,6 +3974,7 @@ function filterOpsDashboardData(data: OpsDashboardData, query: string): OpsDashb
     deletionRequests: data.deletionRequests.filter((item) => matchesOpsSearch(item, trimmed)),
     reviewQueue: data.reviewQueue.filter((item) => matchesOpsSearch(item, trimmed)),
     payouts: data.payouts.filter((item) => matchesOpsSearch(item, trimmed)),
+    settlementTranches: data.settlementTranches.filter((item) => matchesOpsSearch(item, trimmed)),
     moneyDeskRequests: data.moneyDeskRequests.filter((item) => matchesOpsSearch(item, trimmed)),
     returnResolutions: data.returnResolutions.filter((item) => matchesOpsSearch(item, trimmed)),
     shopItems: data.shopItems.filter((item) => matchesOpsSearch(item, trimmed)),
@@ -4811,6 +4932,11 @@ function MoneyDeskSurface({
   const historyStatuses = new Set(['SUCCEEDED', 'REJECTED', 'CANCELLED'])
   const activeMoneyDeskRequests = data.moneyDeskRequests.filter((item) => !historyStatuses.has(item.status))
   const moneyDeskHistory = data.moneyDeskRequests.filter((item) => historyStatuses.has(item.status))
+  const openSettlementTrancheRequestIds = new Set(
+    data.moneyDeskRequests
+      .filter((item) => item.targetType === 'SETTLEMENT_TRANCHE' && ['PENDING_APPROVAL', 'APPROVED', 'EXECUTING'].includes(item.status))
+      .map((item) => item.targetId),
+  )
 
   return (
     <SectionFrame
@@ -4916,11 +5042,16 @@ function MoneyDeskSurface({
                 <p className="mt-2 text-sm text-ink/62">{formatMoney(tranche.amount, tranche.currency)} · order {tranche.orderId} · eligible {formatDateTime(tranche.eligibleAt)}</p>
                 <p className="mt-1 text-xs text-ink/48">Waiting {tranche.waitingHours}h{tranche.frozenReason ? ` · ${formatDatabaseEnumLabel(tranche.frozenReason)}` : ''}</p>
               </div>
-              {namedMfaSession && canPrepare && tranche.status === 'ELIGIBLE' && tranche.planStatus === 'ACTIVE' ? (
+              {openSettlementTrancheRequestIds.has(tranche.id) ? (
+                <div className="rounded-lg border border-needle/16 bg-needle/7 px-4 py-3 text-sm font-semibold text-needle-700">
+                  Release review already open
+                </div>
+              ) : namedMfaSession && canPrepare && tranche.status === 'ELIGIBLE' && tranche.planStatus === 'ACTIVE' ? (
                 <form method="POST" action="/ops/action" className="grid gap-2 sm:min-w-[320px]">
                   <input type="hidden" name="kind" value="money-desk-request" /><input type="hidden" name="redirectTo" value={redirectTo} />
                   <input type="hidden" name="actionType" value="PAYOUT_RELEASE" /><input type="hidden" name="targetType" value="SETTLEMENT_TRANCHE" />
                   <input type="hidden" name="targetId" value={tranche.id} /><input type="hidden" name="trancheId" value={tranche.id} /><input type="hidden" name="orderId" value={tranche.orderId} />
+                  <input type="hidden" name="idempotencyKey" value={`settlement-tranche-release:${tranche.id}`} />
                   <input type="hidden" name="amountMinor" value={tranche.amount} /><input type="hidden" name="currency" value={tranche.currency} />
                   <input name="reason" required minLength={12} maxLength={1000} defaultValue={`Verified ${formatDatabaseEnumLabel(tranche.code).toLowerCase()} evidence and open-review gate before release.`} className="h-11 rounded-lg border border-ink/12 bg-white px-3 text-sm text-ink" />
                   <button type="submit" className="rounded-lg bg-needle px-4 py-2.5 text-sm font-semibold text-white">Prepare tranche release</button>
@@ -5174,6 +5305,17 @@ function renderOpsSection(
           title="Make review visibility intentional instead of accidental."
           description="This queue shows reviews that are still held or unpublished so ops can decide whether they should go public, stay held, or just be sanity-checked in context."
         >
+          {data.mediaReviewQueue.length > 0 ? (
+            <div className="mb-8">
+              <div className="mb-4 flex items-end justify-between gap-4">
+                <div><p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle">Portfolio safety</p><h3 className="mt-1 text-2xl text-ink">Reported or restricted media</h3></div>
+                <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-xs font-semibold text-ink/55">{data.mediaReviewQueue.length}</span>
+              </div>
+              <div className="grid gap-5">
+                {data.mediaReviewQueue.map((media) => <MediaReviewCard key={media.id} media={media} redirectTo={buildOpsRedirectTarget(currentView, 'reviews')} />)}
+              </div>
+            </div>
+          ) : null}
           {data.reviewQueue.length > 0 ? (
             <div className="grid gap-5">
               {data.reviewQueue.map((review) => (
@@ -5262,8 +5404,8 @@ function renderOpsSection(
         <SectionFrame
           id="verification"
           eyebrow="Verification"
-          title="Pending verification stays visible even before a fuller admin system exists."
-          description="This gives ops one place to spot pending tailor profiles and open the private challenge-video submission quickly."
+          title="Review every tailor before their storefront goes live."
+          description="Open the private challenge video, compare the public profile and portfolio evidence, then record one authenticated approval or a specific retake reason."
         >
           {data.pendingVerifications.length > 0 ? (
             <div className="grid gap-5">
@@ -5272,13 +5414,14 @@ function renderOpsSection(
                   key={profile.profileId}
                   profile={profile}
                   redirectTo={buildOpsRedirectTarget(currentView, 'verification')}
+                  session={context.session}
                 />
               ))}
             </div>
           ) : (
             <EmptyState
               title="No pending verification requests right now."
-              body="When a tailor submits ID verification, the profile will appear here until it is handled."
+              body="When a tailor submits the private trust challenge, the profile will appear here until it is handled."
             />
           )}
         </SectionFrame>

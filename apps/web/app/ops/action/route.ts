@@ -47,6 +47,7 @@ const DELETION_STATUSES = new Set([
   'REJECTED',
 ])
 const REVIEW_VISIBILITY_ACTIONS = new Set(['PUBLISH', 'HOLD'])
+const MEDIA_MODERATION_ACTIONS = new Set(['APPROVE', 'BLOCK'])
 const COMMUNICATION_CAMPAIGN_KINDS = new Set(['PSA', 'SERVICE_STATUS', 'PRODUCT_UPDATE', 'PROMOTION'])
 const COMMUNICATION_CATEGORIES = new Set(['SERVICE_STATUS', 'PROMOTION', 'PRODUCT_UPDATE', 'SAFETY', 'SUPPORT', 'ACCOUNT'])
 const COMMUNICATION_PURPOSES = new Set(['TRANSACTIONAL', 'OPERATIONAL', 'MARKETING'])
@@ -93,6 +94,7 @@ const OPS_ACTION_RATE_LIMITS: Partial<Record<OpsActionKind, { windowSeconds: num
   'order-partial-refund': { windowSeconds: 5 * 60, maxRequests: 8 },
   'reviewed-partial-refund-outcome': { windowSeconds: 5 * 60, maxRequests: 8 },
   'payout-release': { windowSeconds: 5 * 60, maxRequests: 10 },
+  'payout-otp-finalize': { windowSeconds: 5 * 60, maxRequests: 10 },
   'payout-bulk-release': { windowSeconds: 5 * 60, maxRequests: 3 },
   'material-advance-release': { windowSeconds: 5 * 60, maxRequests: 10 },
   'material-overage-resolution': { windowSeconds: 5 * 60, maxRequests: 10 },
@@ -747,6 +749,46 @@ async function enqueuePayoutChangePush(
   }
 }
 
+async function enqueueMediaModerationOutcome(
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  input: { mediaAssetId: string; ownerUserId: string; decision: 'APPROVE' | 'BLOCK'; reason: string },
+) {
+  const approved = input.decision === 'APPROVE'
+  return client.rpc('enqueue_domain_event', {
+    p_event_type: 'media.moderation_decided',
+    p_aggregate_type: 'media_asset',
+    p_aggregate_id: input.mediaAssetId,
+    p_actor_id: null,
+    p_actor_role: 'OPS',
+    p_order_id: null,
+    p_idempotency_key: `media-moderation:${input.mediaAssetId}:${input.decision.toLowerCase()}`,
+    p_payload: {
+      userId: input.ownerUserId,
+      subject: approved ? 'Portfolio media approved' : 'Portfolio media removed',
+      eyebrow: 'Portfolio safety',
+      headline: approved ? 'Your portfolio media is approved' : 'One portfolio item was removed',
+      body: approved
+        ? 'Drapeon Trust completed its review. The media is available on your public profile.'
+        : `Drapeon Trust removed the media from public surfaces. ${input.reason}`,
+      ctaLabel: 'Review portfolio',
+      webPath: '/account/profile',
+      appUrl: 'drapeon://tailor/profile/edit',
+      details: [{ label: 'Media reference', value: input.mediaAssetId.slice(0, 8).toUpperCase() }],
+      notification: {
+        title: approved ? 'Portfolio media approved' : 'Portfolio media removed',
+        body: approved ? 'The reviewed media is visible on your public profile.' : 'Drapeon Trust removed one item from your public profile.',
+        preferenceKey: 'accountUpdates',
+        data: { destination: 'TAILOR_PROFILE_EDIT', mediaAssetId: input.mediaAssetId },
+      },
+    },
+    p_metadata: { source: 'ops-media-moderation' },
+    p_jobs: ['SEND_PUSH', 'SEND_ACCOUNT_EVENT_EMAIL'],
+    p_priority: 20,
+    p_max_attempts: 8,
+    p_run_at: new Date().toISOString(),
+  })
+}
+
 type AccountDeletionDeliveryStatus =
   | 'ACKNOWLEDGED'
   | 'BLOCKED'
@@ -1278,20 +1320,59 @@ async function triggerOrderPayoutRelease(orderId: string, recoveryRequestId?: st
   return { ok: true as const, providerReference: result?.payoutId ?? null }
 }
 
+async function finalizePaystackPayoutOtp(payoutId: string, otp: string) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { ok: false as const, error: 'missing-service-role-config' }
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/release-order-payouts`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ action: 'FINALIZE_PAYSTACK_OTP', payoutId, otp }),
+  })
+  const payload = await response.json().catch(() => null) as {
+    ok?: boolean
+    error?: string
+    message?: string
+    payoutId?: string
+    fabricCandidateId?: string
+  } | null
+
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false as const,
+      error: payload?.message ?? payload?.error ?? `payout-otp-function-${response.status}`,
+    }
+  }
+
+  return {
+    ok: true as const,
+    payoutId: payload.payoutId ?? payoutId,
+    fabricCandidateId: payload.fabricCandidateId ?? null,
+  }
+}
+
 function payoutDestinationFingerprint(provider: string, destination: string | null | undefined) {
   return createHash('sha256')
     .update(`${provider}:${destination?.trim() || 'MISSING'}`)
     .digest('hex')
 }
 
-async function triggerSettlementTrancheRelease(trancheId: string) {
+async function triggerSettlementTrancheRelease(trancheId: string, moneyDeskRequestId: string) {
   const supabaseUrl = getSupabaseUrl()
   const serviceRoleKey = getSupabaseServiceRoleKey()
   if (!supabaseUrl || !serviceRoleKey) return { ok: false as const, error: 'missing-service-role-config' }
   const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/release-settlement-tranche`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trancheId }),
+    body: JSON.stringify({ trancheId, moneyDeskRequestId }),
   })
   const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string; providerReference?: string } | null
   return response.ok && payload?.ok
@@ -1487,6 +1568,7 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
     case 'payout-change-decision':
     case 'deletion-status':
     case 'review-visibility':
+    case 'media-moderation':
     case 'conversation-access':
     case 'dispatch-stage':
     case 'dispatch-quote':
@@ -1495,6 +1577,7 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
     case 'order-partial-refund':
     case 'reviewed-partial-refund-outcome':
     case 'payout-release':
+    case 'payout-otp-finalize':
     case 'payout-block-resolution':
     case 'material-advance-release':
     case 'ops-issue-status':
@@ -2002,6 +2085,10 @@ export async function POST(request: Request) {
       }
       let reviewedIdempotencyKey = readString(formData, 'idempotencyKey') || undefined
 
+      if (actionTypeValue === 'PAYOUT_RELEASE' && targetType === 'SETTLEMENT_TRANCHE') {
+        reviewedIdempotencyKey = `settlement-tranche-release:${targetId}`
+      }
+
       if (actionTypeValue === 'PAYOUT_RELEASE' && targetType === 'ORDER_RESIDUAL_SETTLEMENT') {
         if (!orderId || targetId !== orderId) {
           return redirectWithMessage(request, redirectTo, 'error', 'money-desk-request-invalid', 'Choose one closed order for residual settlement.')
@@ -2234,7 +2321,7 @@ export async function POST(request: Request) {
         executionResult = moneyRequest.target_type === 'CONSULTATION_BOOKING'
           ? await triggerConsultationEarningRelease(moneyRequest.target_id)
           : trancheId
-          ? await triggerSettlementTrancheRelease(trancheId)
+          ? await triggerSettlementTrancheRelease(trancheId, moneyRequest.id)
           : await triggerOrderPayoutRelease(
             moneyRequest.order_id || moneyRequest.target_id,
             moneyRequest.target_type === 'ORDER_RESIDUAL_SETTLEMENT' ? moneyRequest.id : null,
@@ -2692,6 +2779,10 @@ export async function POST(request: Request) {
     }
 
     if (kind === 'verification-decision') {
+      if (!isNamedOpsWorkforceSession(session) || !session.email || !hasFreshOpsMfa(session)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'verification-elevation-required')
+      }
+
       const tailorUserId = readString(formData, 'tailorUserId')
       const decision = readString(formData, 'decision').toUpperCase()
       const reason = readString(formData, 'reason') || readString(formData, 'note')
@@ -3013,6 +3104,51 @@ export async function POST(request: Request) {
         'notice',
         publishNow ? 'review-published' : 'review-held',
       )
+    }
+
+    if (kind === 'media-moderation') {
+      const mediaAssetId = readString(formData, 'mediaAssetId')
+      const decision = readString(formData, 'decision').toUpperCase()
+      const reason = readString(formData, 'reason').trim()
+      if (!mediaAssetId || !MEDIA_MODERATION_ACTIONS.has(decision) || (decision === 'BLOCK' && reason.length < 8)) {
+        return redirectWithMessage(request, redirectTo, 'error', decision === 'BLOCK' ? 'media-reason-required' : 'invalid-action')
+      }
+      const { data: asset, error: assetError } = await client
+        .from('media_assets')
+        .select('id,owner_user_id,moderation_status')
+        .eq('id', mediaAssetId)
+        .maybeSingle()
+      if (assetError || !asset?.id || !asset.owner_user_id) return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+
+      const approved = decision === 'APPROVE'
+      const { error: moderationError } = await client.rpc('set_media_asset_moderation_status', {
+        p_media_asset_id: mediaAssetId,
+        p_status: approved ? 'APPROVED' : 'BLOCKED',
+        p_risk_level: approved ? 'LOW' : 'HIGH',
+        p_reasons: approved ? [] : [`OPS_BLOCK:${reason}`],
+        p_reviewed_by: session.email ?? session.role,
+      })
+      if (moderationError) return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+
+      await client.from('media_safety_reports').update({
+        status: approved ? 'DISMISSED' : 'RESOLVED',
+        resolved_at: new Date().toISOString(),
+        resolved_by: session.email ?? session.role,
+      }).eq('media_asset_id', mediaAssetId).eq('status', 'OPEN')
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS', event: 'ops.media_moderation_updated', severity: approved ? 'info' : 'warn',
+        payload: { media_asset_id: mediaAssetId, previous_status: asset.moderation_status, decision, reason: reason || null },
+      })
+      await syncEntityOpsIssue({
+        client, issueType: 'CONTENT_FLAG', relatedEntityType: 'media_asset', relatedEntityId: mediaAssetId,
+        status: 'RESOLVED', performedBy: session.email ?? session.role, performedRole: session.role.toUpperCase(),
+        actionTaken: approved ? 'MEDIA_APPROVED' : 'MEDIA_BLOCKED', reason: reason || decision,
+      })
+      const { error: deliveryError } = await enqueueMediaModerationOutcome(client, {
+        mediaAssetId, ownerUserId: asset.owner_user_id, decision: decision as 'APPROVE' | 'BLOCK', reason,
+      })
+      if (deliveryError) return redirectWithMessage(request, redirectTo, 'error', 'delivery-queue-failed')
+      return redirectWithMessage(request, redirectTo, 'notice', approved ? 'media-approved' : 'media-blocked')
     }
 
     if (kind === 'conversation-access') {
@@ -3992,6 +4128,41 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'notice', 'payout-release-triggered')
     }
 
+    if (kind === 'payout-otp-finalize') {
+      const payoutId = readString(formData, 'payoutId')
+      const otp = readString(formData, 'otp')
+      if (!payoutId || !/^\d{4,12}$/u.test(otp)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const finalized = await finalizePaystackPayoutOtp(payoutId, otp)
+      if (!finalized.ok) {
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          event: 'ops.payout_otp_finalize_failed',
+          severity: 'warn',
+          payload: {
+            source: 'ops-dashboard',
+            payout_id: payoutId,
+            error: finalized.error,
+          },
+        })
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-otp-failed', finalized.error)
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        event: 'ops.payout_otp_finalized',
+        severity: 'info',
+        payload: {
+          source: 'ops-dashboard',
+          payout_id: finalized.payoutId,
+          fabric_candidate_id: finalized.fabricCandidateId,
+        },
+      })
+      return redirectWithMessage(request, redirectTo, 'notice', 'payout-otp-finalized')
+    }
+
     if (kind === 'material-advance-release') {
       return redirectWithMessage(request, redirectTo, 'error', 'money-desk-required')
     }
@@ -4699,6 +4870,7 @@ export async function POST(request: Request) {
         .update(`${providerReference}|${trackingNumber}|${etaAt}|${locationLabel}|${latitudeText}|${longitudeText}|${customerNote}|${evidenceFile?.size ?? 0}`)
         .digest('hex')
         .slice(0, 24)}`
+      const occurredAt = new Date().toISOString()
       const { data, error } = await client.rpc('record_order_fulfillment_event', {
         p_order_id: orderId,
         p_parcel_number: 1,
@@ -4721,7 +4893,7 @@ export async function POST(request: Request) {
         p_location: location,
         p_eta_at: etaDate?.toISOString() ?? null,
         p_eta_timezone: etaTimezone || null,
-        p_occurred_at: new Date().toISOString(),
+        p_occurred_at: occurredAt,
         p_payload: {},
       })
       if (error) {
@@ -4732,6 +4904,74 @@ export async function POST(request: Request) {
 
       const outcome = readRpcRecord(data)
       const runId = typeof outcome.runId === 'string' ? outcome.runId : null
+      const settlementEvidenceKind = ['CARRIER_ACCEPTED', 'COLLECTED'].includes(eventType)
+        ? 'CARRIER_ACCEPTED'
+        : eventType === 'DELIVERED'
+          ? 'VERIFIED_DELIVERY'
+          : null
+      if (settlementEvidenceKind) {
+        const { error: settlementEvidenceError } = await client.rpc(
+          'record_order_settlement_evidence',
+          {
+            p_order_id: orderId,
+            p_evidence_kind: settlementEvidenceKind,
+            p_source: 'DRAPEON_OPS',
+            p_occurred_at: occurredAt,
+            p_external_reference: trackingNumber || providerReference || String(outcome.eventId ?? ''),
+            p_recorded_by: null,
+            p_metadata: {
+              dispatch_event_type: eventType,
+              dispatch_event_id: outcome.eventId ?? null,
+              run_id: runId,
+            },
+          },
+        )
+        if (
+          settlementEvidenceError &&
+          !settlementEvidenceError.message.includes('ledger-recorded initial payment')
+        ) {
+          const relatedEntityType = runId ? 'ORDER_FULFILLMENT_RUN' : 'ORDER'
+          const relatedEntityId = runId || orderId
+          await client.from('ops_issues').upsert({
+            issue_type: 'PAYOUT_BLOCKED',
+            severity: 'HIGH',
+            status: 'OPEN',
+            source: 'ops-dispatch-event',
+            order_id: orderId,
+            related_entity_type: relatedEntityType,
+            related_entity_id: relatedEntityId,
+            title: 'Dispatch settlement evidence did not sync',
+            description: 'The delivery event is recorded, but its matching payout evidence did not reach the settlement ledger.',
+            recommended_action: 'Retry the same dispatch event idempotently after repairing the settlement evidence call. Do not create a duplicate delivery event or payout.',
+            dedupe_key: `dispatch-settlement-evidence:${orderId}:${settlementEvidenceKind}`,
+            metadata: {
+              dispatch_event_type: eventType,
+              dispatch_event_id: outcome.eventId ?? null,
+              error: settlementEvidenceError.message,
+            },
+            resolved_at: null,
+            last_seen_at: occurredAt,
+          }, { onConflict: 'dedupe_key' })
+          return redirectWithMessage(
+            request,
+            redirectTo,
+            'error',
+            'dispatch-event-save-failed',
+            'The delivery update was saved, but payout evidence did not sync. Retry the same update; Drapeon will not create a duplicate event.',
+          )
+        }
+        await syncEntityOpsIssue({
+          client,
+          issueType: 'PAYOUT_BLOCKED',
+          relatedEntityType: runId ? 'ORDER_FULFILLMENT_RUN' : 'ORDER',
+          relatedEntityId: runId || orderId,
+          status: 'RESOLVED',
+          performedBy: session.email ?? session.subject,
+          performedRole: session.role.toUpperCase(),
+          actionTaken: 'DISPATCH_SETTLEMENT_EVIDENCE_SYNCED',
+          reason: `${settlementEvidenceKind} evidence reached the settlement ledger.`,
+        })
+      }
       if (runId && ['DELIVERED', 'PICKED_UP'].includes(eventType)) {
         await client.rpc('enqueue_domain_event', {
           p_event_type: 'dispatch.reconciliation_requested',

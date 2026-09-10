@@ -27,6 +27,7 @@ import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-fi
 import {
   formatMoneyInputValue,
   parseMoneyInputToMinorUnits,
+  TAILOR_SPECIALTY_GROUPS,
   type AccountCurrencyCode,
 } from '@drape/shared'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -34,16 +35,7 @@ import type { Availability } from '@/lib/shared-types'
 
 // ─── Specialty options ────────────────────────────────────────────────────────
 
-const SPECIALTY_GROUPS: TagGroup[] = [
-  { label: 'West African', items: ['Agbada', 'Iro & Buba', 'Ankara', 'Kaftans', 'Dashiki', 'Boubou', 'Native Wear', 'Asoebi', 'Kente'] },
-  { label: 'Formal & Western', items: ['Suits', 'Wool Suits', 'Tuxedo', 'Shirts', 'Trousers', 'Blazers'] },
-  { label: 'Womenswear', items: ['Bespoke Dress', 'Wedding Gown', 'Prom Dress', 'Bridal', 'Jumpsuit', 'Skirts', 'Blouses'] },
-  { label: 'South Asian', items: ['Lehenga', 'Saree Blouse', 'Kurta', 'Shalwar Kameez', 'Sherwani'] },
-  { label: 'Middle Eastern & North African', items: ['Abaya', 'Jalabiya', 'Kaftan'] },
-  { label: 'East Asian', items: ['Qipao / Cheongsam'] },
-  { label: 'Craft & Textile', items: ['Crochet', 'Knitwear', 'Embroidery', 'Beadwork', 'Adire', 'Batik'] },
-  { label: 'Lifestyle & Ready-made', items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'] },
-]
+const SPECIALTY_GROUPS: TagGroup[] = TAILOR_SPECIALTY_GROUPS
 const BIO_PROMPTS = [
   'What you make best',
   'Who you usually sew for',

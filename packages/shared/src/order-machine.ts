@@ -32,6 +32,60 @@ export type OrderStage =
 
 export type Actor = 'CUSTOMER' | 'TAILOR' | 'PLATFORM' | 'SYSTEM'
 
+export type OrderKind = 'CUSTOM' | 'READY_MADE'
+
+export const HANDOFF_SUPPORT_STAGES = [
+  'READY_FOR_COLLECTION',
+  'OUT_FOR_DELIVERY',
+  'SHIPPED',
+  'DELIVERED',
+  'COLLECTED',
+  'IN_DISPUTE',
+] as const satisfies readonly OrderStage[]
+
+export function isHandoffSupportStage(
+  stage: string | null | undefined,
+): stage is (typeof HANDOFF_SUPPORT_STAGES)[number] {
+  return (
+    typeof stage === 'string' &&
+    HANDOFF_SUPPORT_STAGES.includes(stage as (typeof HANDOFF_SUPPORT_STAGES)[number])
+  )
+}
+
+/**
+ * Ready-made purchases skip custom garment production. The seller prepares the
+ * stocked item, then moves it to the handoff that the customer selected.
+ */
+export function readyMadeTailorNextStages(
+  stage: string | null | undefined,
+  deliveryMethod: string | null | undefined,
+): OrderStage[] {
+  if (stage === 'CONFIRMED') return ['FINISHING']
+  if (stage !== 'FINISHING') return []
+
+  return deliveryMethod === 'LOCAL_COLLECTION' || deliveryMethod === 'PICKUP'
+    ? ['READY_FOR_COLLECTION']
+    : ['READY_FOR_DRAPE_DISPATCH']
+}
+
+export function readyMadeStageLabel(stage: string | null | undefined): string | null {
+  if (!stage) return null
+  const labels: Partial<Record<OrderStage, string>> = {
+    PAYMENT_PENDING: 'Waiting for payment',
+    PAYMENT_FAILED: 'Payment failed',
+    CONFIRMED: 'Order confirmed',
+    FINISHING: 'Preparing order',
+    READY_FOR_COLLECTION: 'Ready for pickup',
+    READY_FOR_DRAPE_DISPATCH: 'Ready for Drapeon dispatch',
+    SHIPPED: 'Shipped',
+    OUT_FOR_DELIVERY: 'On the way',
+    DELIVERED: 'Delivered',
+    COLLECTED: 'Collected',
+    COMPLETE: 'Complete',
+  }
+  return labels[stage as OrderStage] ?? null
+}
+
 export interface Transition {
   from: OrderStage
   to: OrderStage

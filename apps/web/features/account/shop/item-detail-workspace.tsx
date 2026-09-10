@@ -2,22 +2,34 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Maximize2 } from 'lucide-react'
 import {
+  ORDER_CANCELLATION_ACK_COPY,
+  ORDER_CANCELLATION_POLICY_ROWS,
+  convertAccountCurrencyEstimate,
+  READY_MADE_FIT_FIELDS,
+  formatReadyMadeFitRange,
   formatDatabaseEnumLabel,
   formatMoney,
+  normalizeAccountCurrency,
+  normalizeReadyMadeSizeGuide,
   normalizePhoneForStorage,
+  recommendReadyMadeSize,
   validatePhoneForProfile,
 } from '@drape/shared'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { createClient } from '../../../lib/supabase'
 import { StructuredAddressSearch } from '../../../components/structured-address-search'
 import { PhoneNumberField } from '../../../components/ui/phone-number-field'
+import { MediaViewerDialog } from '../../../components/ui/media-viewer-dialog'
+import { WishlistSaveControl } from '../../../components/wishlist-save-control'
 import { AccountRouteRuntime, type AccountRouteIdentity } from '../account-route-runtime'
 import { legacyItemMedia, MarketplaceMediaTile } from './marketplace-media-tile'
 import type { ShopItem } from './shop-workspace'
 
 type Pricing = {
   currency: string
+  displayCurrency?: string
   subtotalAmount: number
   platformFeeAmount: number
   taxAmount: number
@@ -38,6 +50,13 @@ type DetailedItem = ShopItem & {
   pickup_available: boolean | null
   delivery_available: boolean | null
   shipping_available: boolean | null
+}
+type FitProfile = {
+  id: string
+  label: string
+  measurements: Record<string, unknown> | null
+  unit_preference: string | null
+  is_default: boolean | null
 }
 function first<T>(value: T | T[] | null) {
   return Array.isArray(value) ? (value[0] ?? null) : value
@@ -82,8 +101,8 @@ async function loadItem(itemId: string, userId: string, role: AccountRouteIdenti
   return (profile.data as { id?: string } | null)?.id === item.tailor_profile_id ? item : null
 }
 
-function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: string) => void }) {
-  const sizes = item.sizes ?? []
+function CheckoutPanel({ item, userId, onOrder }: { item: DetailedItem; userId: string; onOrder: (id: string) => void }) {
+  const sizes = useMemo(() => item.sizes ?? [], [item.sizes])
   const options = [
     item.pickup_available && 'PICKUP',
     item.delivery_available && 'DELIVERY',
@@ -100,12 +119,38 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
   const [postalCode, setPostalCode] = useState('')
   const [countryCode, setCountryCode] = useState('')
   const [fitAck, setFitAck] = useState(false)
+  const [fitProfiles, setFitProfiles] = useState<FitProfile[]>([])
+  const [fitProfileId, setFitProfileId] = useState('')
   const [policyAck, setPolicyAck] = useState(false)
   const [pricing, setPricing] = useState<Pricing | null>(null)
   const [pricingKey, setPricingKey] = useState('')
   const [busy, setBusy] = useState<'preview' | 'create' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const needsAddress = fulfillment !== 'PICKUP'
+  const guide = useMemo(() => normalizeReadyMadeSizeGuide(item.size_guide, sizes), [item.size_guide, sizes])
+  const fitProfile = fitProfiles.find((profile) => profile.id === fitProfileId) ?? fitProfiles[0] ?? null
+  const inStockSizes = sizes.filter((value) => Number(item.size_inventory?.[value] ?? item.inventory_quantity ?? 0) > 0)
+  const recommendation = useMemo(() => recommendReadyMadeSize({
+    guide,
+    measurements: fitProfile?.measurements,
+    sizes: inStockSizes,
+  }), [fitProfile?.measurements, guide, inStockSizes])
+  useEffect(() => {
+    let cancelled = false
+    const supabase = createClient()
+    Promise.all([
+      supabase.from('customer_measurement_profiles').select('id,label,measurements,unit_preference,is_default').eq('customer_id', userId).order('is_default', { ascending: false }).order('updated_at', { ascending: false }).limit(20),
+      supabase.from('customer_profiles').select('measurements,unit_preference').eq('user_id', userId).maybeSingle(),
+    ]).then(([profilesResult, customerResult]) => {
+      if (cancelled) return
+      const profiles = (profilesResult.data ?? []) as FitProfile[]
+      const legacy = customerResult.data as { measurements?: Record<string, unknown> | null; unit_preference?: string | null } | null
+      const next = profiles.length ? profiles : legacy?.measurements ? [{ id: 'customer', label: 'Me', measurements: legacy.measurements, unit_preference: legacy.unit_preference ?? null, is_default: true }] : []
+      setFitProfiles(next)
+      setFitProfileId((current) => current || next[0]?.id || '')
+    })
+    return () => { cancelled = true }
+  }, [userId])
   const inputKey = JSON.stringify({
     size,
     quantity,
@@ -214,10 +259,10 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
     }
   }
   return (
-    <section className="app-surface p-5" id="checkout">
-      <h2 className="text-xl font-semibold">Checkout</h2>
+    <section className="rounded-[10px] border border-ink/14 bg-white p-4 shadow-sm" id="checkout">
+      <h2 className="text-xl font-semibold">Choose your options</h2>
       <p className="mt-1 text-sm text-ink/58">
-        Review fit, fulfillment, tax, and the locked total before payment.
+        Select size, quantity, and fulfillment. You will review the final total before payment.
       </p>
       {error ? (
         <p
@@ -227,7 +272,7 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
           {error}
         </p>
       ) : null}
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3">
         <label className="grid gap-1 text-xs font-semibold">
           Size
           <select
@@ -271,8 +316,45 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
           </select>
         </label>
       </div>
+      <section className="mt-4 rounded-[8px] border border-needle/18 bg-needle/[0.035] p-3" aria-labelledby="fit-guide-title">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 id="fit-guide-title" className="text-sm font-semibold text-ink">Fit guide</h3>
+            <p className="mt-0.5 text-xs leading-5 text-ink/58">Compare this seller&apos;s garment ranges with saved wearer measurements.</p>
+          </div>
+          <Link href="/account/measurements" className="shrink-0 text-xs font-semibold text-needle">Measurements</Link>
+        </div>
+        {fitProfiles.length > 1 ? (
+          <label className="mt-3 grid gap-1 text-xs font-semibold">
+            Wearer
+            <select value={fitProfileId} onChange={(event) => { setFitProfileId(event.target.value); setFitAck(false) }} className="h-9 rounded-[8px] border border-ui-border bg-white px-3 text-sm">
+              {fitProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+            </select>
+          </label>
+        ) : null}
+        <div className="mt-3 rounded-[8px] bg-white p-3">
+          <p className="text-sm font-semibold text-needle">{recommendation.summary}</p>
+          <p className="mt-1 text-xs leading-5 text-ink/62">{recommendation.detail}</p>
+          {recommendation.status === 'MISSING_MEASUREMENTS' ? (
+            <Link href="/account/measurements" className="mt-2 inline-flex text-xs font-semibold text-needle underline underline-offset-4">Add measurements</Link>
+          ) : null}
+        </div>
+        <details className="mt-3 rounded-[8px] border border-ui-border bg-white p-3">
+          <summary className="cursor-pointer text-sm font-semibold">View seller size guide</summary>
+          {guide.fields.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[360px] text-left text-xs">
+                <thead><tr className="border-b border-ui-border"><th className="pb-2 pr-3">Size</th>{guide.fields.map((field) => <th key={field} className="pb-2 pr-3">{READY_MADE_FIT_FIELDS.find((entry) => entry.key === field)?.label ?? field}</th>)}</tr></thead>
+                <tbody>{sizes.map((guideSize) => <tr key={guideSize} className="border-b border-ink/6 last:border-0"><th className="py-2 pr-3">{guideSize}</th>{guide.fields.map((field) => <td key={field} className="py-2 pr-3 text-ink/64">{formatReadyMadeFitRange(guide.sizeRanges[guideSize]?.[field], guide.unit) ?? '—'}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
+          ) : <p className="mt-2 text-xs leading-5 text-rust">This seller has not completed a measurement guide. Ask the tailor if you are unsure before paying.</p>}
+          {guide.fitNotes ? <p className="mt-3 text-xs leading-5"><strong>Fit:</strong> {guide.fitNotes}</p> : null}
+          {guide.stretchNotes ? <p className="mt-1 text-xs leading-5"><strong>Stretch:</strong> {guide.stretchNotes}</p> : null}
+        </details>
+      </section>
       {needsAddress ? (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="mt-4 grid gap-3">
           <label className="grid gap-1 text-xs font-semibold">
             Recipient name
             <input
@@ -295,7 +377,7 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
               setCountryCode((v.countryCode || v.country).toUpperCase())
             }}
           />
-          <label className="grid gap-1 text-xs font-semibold sm:col-span-2">
+          <label className="grid gap-1 text-xs font-semibold">
             Street address
             <input
               value={address}
@@ -328,7 +410,7 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
             onChange={(e) => setFitAck(e.target.checked)}
             className="mt-1"
           />
-          I reviewed the size and fit guidance.
+          I reviewed the seller&apos;s size guide and confirm {size || 'this fit'} is the size I want.
         </label>
         <label className="flex items-start gap-2 text-sm">
           <input
@@ -337,8 +419,19 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
             onChange={(e) => setPolicyAck(e.target.checked)}
             className="mt-1"
           />
-          I understand cancellation and handoff reviews stay inside Drapeon.
+          {ORDER_CANCELLATION_ACK_COPY}
         </label>
+      </div>
+      <div className="mt-3 grid gap-2">
+        <details className="rounded-[8px] border border-ui-border bg-white p-3">
+          <summary className="cursor-pointer text-sm font-semibold">Payment protection and remedies</summary>
+          <p className="mt-2 text-xs leading-5 text-ink/62">Payment stays protected through the order handoff. If the piece is wrong, damaged, missing, or materially different, report it from the order before closing it.</p>
+        </details>
+        <details className="rounded-[8px] border border-ui-border bg-white p-3">
+          <summary className="cursor-pointer text-sm font-semibold">Fulfillment and cancellation</summary>
+          <p className="mt-2 text-xs leading-5 text-ink/62">{fulfillment === 'PICKUP' ? 'Pickup details stay private until the tailor marks the order ready. Bring the collection code and inspect the piece before closing the order.' : 'The displayed standard delivery or shipping fee is collected in checkout. Any extra carrier, customs, or import charge must follow the reviewed order flow.'}</p>
+          <div className="mt-3 grid gap-2">{ORDER_CANCELLATION_POLICY_ROWS.map((row) => <div key={row.title}><p className="text-xs font-semibold">{row.title}</p><p className="text-xs leading-5 text-ink/58">{row.body}</p></div>)}</div>
+        </details>
       </div>
       {pricing ? (
         <dl className="mt-4 grid gap-2 rounded-[8px] bg-bone p-4 text-sm">
@@ -358,6 +451,21 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
               {formatMoney(pricing.totalAmount, pricing.currency)}
             </dd>
           </div>
+          {(() => {
+            const chargeCurrency = normalizeAccountCurrency(pricing.currency)
+            const accountCurrency = normalizeAccountCurrency(pricing.displayCurrency)
+            if (!chargeCurrency || !accountCurrency || chargeCurrency === accountCurrency) return null
+            const estimate = convertAccountCurrencyEstimate(pricing.totalAmount, chargeCurrency, accountCurrency)
+            return (
+              <div className="mt-1 rounded-[8px] border border-needle/15 bg-white p-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs text-ink/58">Approx. in your account currency</span>
+                  <strong className="text-sm text-needle">{formatMoney(estimate, accountCurrency)}</strong>
+                </div>
+                <p className="mt-1 text-[11px] leading-4 text-ink/52">Estimate only. Secure checkout and your receipt remain in {chargeCurrency}.</p>
+              </div>
+            )
+          })()}
           {pricing.taxFallback ? (
             <p className="text-xs text-rust">
               Tax is estimated because live lookup was unavailable.
@@ -365,20 +473,20 @@ function CheckoutPanel({ item, onOrder }: { item: DetailedItem; onOrder: (id: st
           ) : null}
         </dl>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 grid gap-2">
         <button
           onClick={() => void preview()}
           disabled={Boolean(busy)}
-          className="h-10 rounded-[8px] border border-ui-border bg-white px-4 text-sm font-semibold disabled:opacity-50"
+          className="h-10 w-full rounded-[8px] border border-ui-border bg-white px-4 text-sm font-semibold disabled:opacity-50"
         >
-          {busy === 'preview' ? 'Calculating…' : 'Preview total'}
+          {busy === 'preview' ? 'Calculating…' : 'Review order total'}
         </button>
         <button
           onClick={() => void create()}
           disabled={Boolean(busy) || !fresh || !fitAck || !policyAck}
-          className="h-10 rounded-[8px] bg-drape-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+          className="h-10 w-full rounded-[8px] bg-drape-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
         >
-          {busy === 'create' ? 'Holding stock…' : 'Hold stock and continue'}
+          {busy === 'create' ? 'Reserving item…' : 'Reserve item and continue'}
         </button>
       </div>
     </section>
@@ -430,6 +538,12 @@ function Detail({
     () => legacyItemMedia(item?.photo_urls, text(item?.title, 'Ready-made piece')),
     [item]
   )
+  const selectedMedia = media[selected] ?? null
+  const viewerItems = media.map((entry, index) => ({
+    kind: entry.kind.toLowerCase() as 'image' | 'video',
+    src: entry.url,
+    title: `${text(item?.title, 'Ready-made piece')} · view ${index + 1}`,
+  }))
   if (state.status === 'loading')
     return (
       <section className="app-surface p-6" aria-busy="true">
@@ -479,17 +593,47 @@ function Detail({
     }
   }
   return (
-    <div className="grid gap-5 pb-10 lg:grid-cols-2 xl:grid-cols-[3fr_2fr] lg:items-start">
-      <section className="app-surface overflow-hidden" data-testid="item-media-panel">
-        <div className="relative aspect-[4/3] bg-needle/8">
-          <MarketplaceMediaTile
-            media={media[selected] ?? null}
+    <div className="ready-made-product-layout grid gap-5 pb-10 pt-3">
+      <section
+        className="w-full overflow-hidden md:sticky md:top-24"
+        data-testid="item-media-panel"
+      >
+        {selectedMedia ? (
+          <MediaViewerDialog
+            kind={selectedMedia.kind.toLowerCase() as 'image' | 'video'}
+            src={selectedMedia.url}
             title={text(item.title, 'Ready-made piece')}
-            priority
-          />
-        </div>
+            description="Use the arrows to inspect every available view."
+            initialIndex={selected}
+            items={viewerItems}
+          >
+            <button
+              type="button"
+              className="group relative block aspect-square w-full cursor-zoom-in overflow-hidden rounded-[8px] border border-ink/8 bg-white"
+              aria-label="Expand product media"
+            >
+              <MarketplaceMediaTile
+                media={selectedMedia}
+                title={text(item.title, 'Ready-made piece')}
+                priority
+                fit="contain"
+              />
+              <span className="absolute bottom-3 right-3 inline-flex h-9 items-center gap-2 rounded-full bg-white/92 px-3 text-xs font-semibold text-ink shadow-sm">
+                <Maximize2 className="size-3.5" /> Expand
+              </span>
+            </button>
+          </MediaViewerDialog>
+        ) : (
+          <div className="relative aspect-square overflow-hidden rounded-[8px] bg-needle/8">
+            <MarketplaceMediaTile
+              media={null}
+              title={text(item.title, 'Ready-made piece')}
+              priority
+            />
+          </div>
+        )}
         {media.length > 1 ? (
-          <div className="grid grid-cols-5 gap-2 p-3">
+          <div className="ready-made-thumbnail-grid grid gap-2 p-3">
             {media.map((entry, index) => (
               <button
                 key={entry.id}
@@ -504,12 +648,14 @@ function Detail({
           </div>
         ) : null}
       </section>
-      <div className="grid h-fit gap-4">
-        <section className="app-surface p-5">
+      <div className="grid h-fit gap-4 px-1">
+        <section className="border-b border-ink/10 pb-5">
           <p className="text-xs font-semibold uppercase tracking-[.16em] text-needle">
             {text(item.category, 'Ready-made')}
           </p>
-          <h1 className="mt-2 text-3xl text-ink">{text(item.title, 'Ready-made piece')}</h1>
+          <h1 className="mt-2 text-2xl font-semibold leading-tight text-ink xl:text-3xl">
+            {text(item.title, 'Ready-made piece')}
+          </h1>
           <p className="mt-2 text-2xl font-semibold">
             {formatMoney(item.price_amount, item.currency)}
           </p>
@@ -547,25 +693,18 @@ function Detail({
             </p>
           ) : null}
           <div className="mt-5 flex flex-wrap gap-2">
+            {!own ? <WishlistSaveControl userId={userId} target={{ type: 'READY_MADE_ITEM', id: readyMadeItemId }} /> : null}
             {canBuy ? (
-              <>
-                <a
-                  href="#checkout"
-                  className="h-10 rounded-[8px] bg-drape-green px-4 py-2.5 text-sm font-semibold text-white"
-                >
-                  Start checkout
-                </a>
-                <button
-                  onClick={() => void inquire()}
-                  disabled={busy}
-                  className="h-10 rounded-[8px] border border-ui-border px-4 text-sm font-semibold"
-                >
-                  {busy ? 'Opening…' : 'Ask tailor'}
-                </button>
-              </>
+              <button
+                onClick={() => void inquire()}
+                disabled={busy}
+                className="h-10 rounded-[8px] border border-ui-border px-4 text-sm font-semibold"
+              >
+                {busy ? 'Opening…' : 'Ask tailor'}
+              </button>
             ) : own ? (
               <Link
-                href="/account/profile"
+                href="/account/shop"
                 className="h-10 rounded-[8px] border border-ui-border px-4 py-2.5 text-sm font-semibold"
               >
                 Manage catalogue
@@ -577,8 +716,10 @@ function Detail({
             )}
           </div>
         </section>
+      </div>
+      <aside className="h-fit md:sticky md:top-24">
         {orderId ? (
-          <section className="app-surface p-5">
+          <section className="rounded-[10px] border border-needle/20 bg-white p-4 shadow-sm">
             <h2 className="text-xl font-semibold">Stock held</h2>
             <p className="mt-2 text-sm text-ink/60">
               Your order is saved. Continue to the locked payment review.
@@ -591,9 +732,20 @@ function Detail({
             </Link>
           </section>
         ) : canBuy ? (
-          <CheckoutPanel item={item} onOrder={setOrderId} />
-        ) : null}
-      </div>
+          <CheckoutPanel item={item} userId={userId} onOrder={setOrderId} />
+        ) : own ? (
+          <Link
+            href="/account/shop"
+            className="inline-flex h-10 items-center rounded-[8px] border border-ui-border px-4 text-sm font-semibold"
+          >
+            Manage catalogue
+          </Link>
+        ) : (
+          <p className="rounded-[8px] border border-rust/20 p-4 text-sm text-rust">
+            This piece is not currently available for checkout.
+          </p>
+        )}
+      </aside>
     </div>
   )
 }

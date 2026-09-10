@@ -20,6 +20,7 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
   const pathname = usePathname()
   const [menuOpen, setMenuOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
+  const [accountHome, setAccountHome] = useState<Route>('/account/orders')
   const [checkingSession, setCheckingSession] = useState(true)
   const [signingOut, setSigningOut] = useState(false)
   const isActive = (href: string): boolean => pathname === href || pathname?.startsWith(`${href}/`) === true
@@ -40,9 +41,22 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
       .then(() => {
         const supabase = createClient()
 
-        supabase.auth.getSession().then(({ data }) => {
+        supabase.auth.getSession().then(async ({ data }) => {
           if (!active) return
           setSignedIn(Boolean(data.session?.user.id))
+          if (data.session?.user.id) {
+            const metadataRole = data.session.user.user_metadata?.role
+            if (metadataRole === 'TAILOR') {
+              setAccountHome('/account/work')
+            } else {
+              const { data: tailor } = await supabase
+                .from('tailor_profiles')
+                .select('id')
+                .eq('user_id', data.session.user.id)
+                .maybeSingle()
+              if (active) setAccountHome(tailor?.id ? '/account/work' : '/account/orders')
+            }
+          }
           setCheckingSession(false)
         }).catch((error: unknown) => {
           console.warn('[public-site-header] Auth session check failed.', error)
@@ -89,6 +103,8 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
   }
 
   const overlay = tone === 'overlay'
+  const navHref = (item: (typeof navItems)[number]): Route =>
+    signedIn && item.label === 'Explore' ? '/account/explore' : item.href
 
   return (
     <header className={overlay
@@ -120,7 +136,7 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
           {navItems.map((item) => (
             <Link
               key={item.href}
-              href={item.href}
+              href={navHref(item)}
               className={overlay ? 'rounded-full border border-transparent px-3 py-2 text-white/82 transition hover:bg-white/12 hover:text-white' : linkClassName(item)}
               aria-current={isNavItemActive(item) ? 'page' : undefined}
               data-analytics-event="nav_click"
@@ -139,12 +155,12 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
           {signedIn ? (
             <>
               <Link
-                href="/account/work"
+                href={accountHome}
                 className={overlay ? 'rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:bg-bone' : 'rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600'}
                 data-analytics-event="nav_click"
-                data-analytics-label="Dashboard"
+                data-analytics-label="Account"
               >
-                Dashboard
+                Account
               </Link>
               <button
                 type="button"
@@ -187,7 +203,7 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
         {navItems.map((item) => (
           <Link
             key={item.href}
-            href={item.href}
+            href={navHref(item)}
             className={`${overlay ? 'rounded-full px-3 py-2 text-center text-white transition hover:bg-white/12' : linkClassName(item)} min-h-11 text-center`}
             aria-current={isNavItemActive(item) ? 'page' : undefined}
             data-analytics-event="nav_click"
@@ -200,13 +216,13 @@ export function PublicSiteHeader({ tone = 'light' }: { tone?: 'light' | 'overlay
         {signedIn ? (
           <div className="grid gap-2 pt-2 sm:grid-cols-2">
             <Link
-              href="/account/work"
+              href={accountHome}
               className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-needle-600"
               data-analytics-event="nav_click"
-              data-analytics-label="Dashboard"
+              data-analytics-label="Account"
               onClick={() => setMenuOpen(false)}
             >
-              Dashboard
+              Account
             </Link>
             <button
               type="button"

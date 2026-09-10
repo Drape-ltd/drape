@@ -22,6 +22,7 @@ export async function sendAccountEventEmail(
     webPath: string
     appUrl?: string | null
     details?: Array<{ label: string; value: string }>
+    idempotencyKey?: string | null
   },
 ) {
   const email = input.recipientEmail?.trim() || await userEmail(supabase, input.userId)
@@ -41,9 +42,15 @@ export async function sendAccountEventEmail(
     secondaryCtaLabel: input.appUrl ? 'Open in Drapeon' : undefined,
     secondaryCtaUrl: input.appUrl ?? undefined,
   })
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  }
+  if (input.idempotencyKey?.trim()) headers['Idempotency-Key'] = input.idempotencyKey.trim()
   const response = await fetch(RESEND_API, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers,
+    signal: AbortSignal.timeout(12_000),
     body: JSON.stringify({
       from: normalizeDrapeonSender(Deno.env.get('RESEND_FROM')),
       to: [email],
@@ -54,5 +61,5 @@ export async function sendAccountEventEmail(
   })
   const result = await response.json().catch(() => ({})) as { id?: string; message?: string }
   if (!response.ok) throw new Error(result.message ?? `Account email failed with ${response.status}.`)
-  return { status: 'DELIVERED' as const, provider: 'RESEND', providerReference: result.id ?? null }
+  return { status: 'ACCEPTED' as const, provider: 'RESEND', providerReference: result.id ?? null }
 }

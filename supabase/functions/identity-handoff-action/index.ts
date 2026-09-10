@@ -10,6 +10,7 @@ import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/ra
 import { sendSmsDirect } from '../_shared/sms.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { TAILOR_TRUST_VIDEO_CHALLENGES } from '../../../packages/shared/src/identity-trust.ts'
+import { deriveTailorSetupProgress } from '../../../packages/shared/src/tailor-setup.ts'
 
 const FN = 'identity-handoff-action'
 const RESEND_API = 'https://api.resend.com/emails'
@@ -21,6 +22,7 @@ const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEM
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('create'),
+    challengeId: z.string().trim().min(1).max(120).optional(),
   }),
   z.object({
     action: z.literal('send-link'),
@@ -58,6 +60,137 @@ type HandoffRow = {
   storage_path?: string | null
   challenge_id?: string | null
   challenge_text?: string | null
+}
+
+type SetupValidationResult =
+  | { ok: true; profileId: string }
+  | {
+      ok: false
+      status: 409 | 500
+      error: string
+      code: 'TAILOR_SETUP_INCOMPLETE' | 'TAILOR_SETUP_UNAVAILABLE'
+      firstIncompleteStep?: number
+      fieldErrors?: Record<string, string>
+    }
+
+async function validateSetupBeforeTrustSubmission(
+  supabase: SupabaseClient,
+  tailorUserId: string,
+): Promise<SetupValidationResult> {
+  const { data: profile, error: profileError } = await supabase
+    .from('tailor_profiles')
+    .select('id, display_name, bio, location, languages, specialty_tags, currency, price_range_min, price_range_max, avatar_url, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, portfolio_video_urls')
+    .eq('user_id', tailorUserId)
+    .maybeSingle()
+
+  if (profileError) {
+    log('error', FN, 'setup_validation.profile_lookup_failed', {
+      tailor_user_id: tailorUserId,
+      error: profileError.message,
+    })
+    return {
+      ok: false,
+      status: 500,
+      code: 'TAILOR_SETUP_UNAVAILABLE',
+      error: 'We could not verify your saved setup. Please try again.',
+    }
+  }
+
+  if (!profile?.id) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'TAILOR_SETUP_INCOMPLETE',
+      error: 'Complete and save your tailor setup before submitting the trust video.',
+      firstIncompleteStep: 0,
+    }
+  }
+
+  const [userResult, pickupResult, portfolioResult, readyMadeResult] = await Promise.all([
+    supabase.from('users').select('phone').eq('id', tailorUserId).maybeSingle(),
+    supabase.from('tailor_pickup_details').select('pickup_address').eq('user_id', tailorUserId).maybeSingle(),
+    supabase.from('portfolio_items').select('id', { count: 'exact', head: true }).eq('tailor_profile_id', profile.id),
+    supabase.from('seller_items').select('id', { count: 'exact', head: true }).eq('tailor_profile_id', profile.id),
+  ])
+
+  const lookupError =
+    userResult.error ?? pickupResult.error ?? portfolioResult.error ?? readyMadeResult.error
+  if (lookupError) {
+    log('error', FN, 'setup_validation.evidence_lookup_failed', {
+      tailor_user_id: tailorUserId,
+      tailor_profile_id: profile.id,
+      error: lookupError.message,
+    })
+    return {
+      ok: false,
+      status: 500,
+      code: 'TAILOR_SETUP_UNAVAILABLE',
+      error: 'We could not verify your saved setup evidence. Please try again.',
+    }
+  }
+
+  const legacyPhotoCount = Array.isArray(profile.portfolio_photo_urls)
+    ? profile.portfolio_photo_urls.filter((value: unknown) => typeof value === 'string' && value.trim().length > 0).length
+    : 0
+  const legacyVideoCount = Array.isArray(profile.portfolio_video_urls)
+    ? profile.portfolio_video_urls.filter((value: unknown) => typeof value === 'string' && value.trim().length > 0).length
+    : 0
+  const phone = typeof userResult.data?.phone === 'string' ? userResult.data.phone.trim() : ''
+  const normalizedPhone = phone ? normalizePhone(phone) : null
+  const priceMin = typeof profile.price_range_min === 'number'
+    ? String(profile.price_range_min / 100)
+    : ''
+  const priceMax = typeof profile.price_range_max === 'number'
+    ? String(profile.price_range_max / 100)
+    : ''
+
+  const progress = deriveTailorSetupProgress({
+    displayName: typeof profile.display_name === 'string' ? profile.display_name : '',
+    phone,
+    phoneError: phone && !normalizedPhone ? 'Add a valid phone number for order updates and account recovery' : null,
+    profilePhotoPresent:
+      typeof profile.avatar_url === 'string' && profile.avatar_url.trim().length > 0,
+    location: typeof profile.location === 'string' ? profile.location : '',
+    bio: typeof profile.bio === 'string' ? profile.bio : '',
+    languages: Array.isArray(profile.languages)
+      ? profile.languages.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    specialties: Array.isArray(profile.specialty_tags)
+      ? profile.specialty_tags.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    priceMin,
+    priceMax,
+    currency: typeof profile.currency === 'string' ? profile.currency : 'USD',
+    portfolioItemCount: Math.max(portfolioResult.count ?? 0, legacyPhotoCount + legacyVideoCount),
+    readyMadeItemCount: readyMadeResult.count ?? 0,
+    sellerType: typeof profile.seller_type === 'string' ? profile.seller_type : 'TAILOR',
+    supportsCustomOrders: profile.supports_custom_orders === true,
+    supportsReadyMade: profile.supports_ready_made === true,
+    pickupAvailable: profile.pickup_available === true,
+    deliveryAvailable: profile.delivery_available === true,
+    shippingAvailable: profile.shipping_available === true,
+    pickupAddress:
+      typeof pickupResult.data?.pickup_address === 'string' ? pickupResult.data.pickup_address : '',
+    // The uploaded object and randomized handoff are validated immediately before this check.
+    idDocumentPresent: true,
+  })
+
+  const fieldErrors = Object.fromEntries(
+    Object.entries(progress.fieldErrors).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  )
+  if (Object.keys(fieldErrors).length > 0) {
+    const firstError = Object.values(progress.stepErrors[progress.firstIncompleteStep])[0]
+    return {
+      ok: false,
+      status: 409,
+      code: 'TAILOR_SETUP_INCOMPLETE',
+      error: firstError ?? 'Complete and save your tailor setup before submitting the trust video.',
+      firstIncompleteStep: progress.firstIncompleteStep,
+      fieldErrors,
+    }
+  }
+
+  return { ok: true, profileId: profile.id }
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -370,7 +503,10 @@ Deno.serve(async (req) => {
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS).toISOString()
       const randomBytes = new Uint32Array(1)
       crypto.getRandomValues(randomBytes)
-      const challenge =
+      const requestedChallenge = body.challengeId
+        ? TAILOR_TRUST_VIDEO_CHALLENGES.find((item) => item.id === body.challengeId)
+        : null
+      const challenge = requestedChallenge ??
         TAILOR_TRUST_VIDEO_CHALLENGES[randomBytes[0] % TAILOR_TRUST_VIDEO_CHALLENGES.length] ??
         TAILOR_TRUST_VIDEO_CHALLENGES[0]
       const { data, error } = await supabase
@@ -574,6 +710,30 @@ Deno.serve(async (req) => {
           409,
           cors
         )
+
+      const setupValidation = await validateSetupBeforeTrustSubmission(
+        supabase,
+        row.tailor_user_id,
+      )
+      if (!setupValidation.ok) {
+        log('warn', FN, 'handoff.setup_incomplete', {
+          handoff_id: row.id,
+          tailor_user_id: row.tailor_user_id,
+          code: setupValidation.code,
+          first_incomplete_step: setupValidation.firstIncompleteStep ?? null,
+          fields: setupValidation.fieldErrors ? Object.keys(setupValidation.fieldErrors) : [],
+        })
+        return jsonResponse(
+          {
+            error: setupValidation.error,
+            code: setupValidation.code,
+            firstIncompleteStep: setupValidation.firstIncompleteStep,
+            fieldErrors: setupValidation.fieldErrors,
+          },
+          setupValidation.status,
+          cors,
+        )
+      }
 
       const submissionRpc = hasVersionedConsent
         ? 'submit_identity_verification_handoff_with_consent'

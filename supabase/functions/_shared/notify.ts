@@ -178,7 +178,7 @@ function optionalUuid(value: unknown) {
 
 const DESTINATION_KEYS = new Set([
   'NOTIFICATIONS', 'ORDER_DETAIL', 'ORDER_CHAT', 'PAYOUT_SETUP',
-  'ACCOUNT_SETTINGS', 'SERVICE_STATUS', 'SUPPORT_CASE', 'PROMOTION',
+  'ACCOUNT_SETTINGS', 'VERIFICATION', 'SERVICE_STATUS', 'SUPPORT_CASE', 'PROMOTION',
 ])
 
 function inboxDestination(notification: PushPayload) {
@@ -199,7 +199,7 @@ function safeDestinationParams(notification: PushPayload) {
   const supplied = notification.communication?.destinationParams ?? {}
   const params: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(supplied)) {
-    if (['orderId', 'orderRef', 'messageId', 'caseId', 'campaignId', 'tab', 'type'].includes(key) &&
+    if (['orderId', 'orderRef', 'messageId', 'caseId', 'campaignId', 'profileId', 'decision', 'tab', 'type'].includes(key) &&
       (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
       params[key] = value
     }

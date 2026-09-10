@@ -3,7 +3,8 @@
  *
  * Called by the mobile app immediately after a tailor submits their profile
  * with id_verification_status = 'PENDING'. Sends an ops review email via Resend
- * containing one-click approve / reject links.
+ * that opens the exact protected Ops verification queue. Decisions are made
+ * only from a fresh MFA-backed Ops session.
  *
  * Required env vars (set in Supabase Dashboard → Edge Functions → Secrets):
  *   RESEND_API_KEY   – Resend API key
@@ -13,8 +14,6 @@
  *   SUPABASE_URL     – injected automatically by Supabase runtime
  *   SUPABASE_ANON_KEY – injected automatically by Supabase runtime
  *   SUPABASE_SERVICE_ROLE_KEY – injected automatically
- *   DECISION_FUNCTION_URL – optional public URL of the handle-verification-decision function
- *                           (defaults to https://<project-ref>.supabase.co/functions/v1/handle-verification-decision)
  *   OPS_DASHBOARD_URL – optional direct URL for the ops verification dashboard
  *   OPS_WEB_BASE_URL  – optional protected Ops origin (defaults to ops.drapeon.co)
  */
@@ -22,7 +21,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
-import { signPayload, escapeHtml } from '../_shared/hmac.ts'
+import { escapeHtml } from '../_shared/hmac.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { audit } from '../_shared/logger.ts'
 import { getOpsNotificationFrom, getOpsRecipients } from '../_shared/ops-notifications.ts'
@@ -241,30 +240,23 @@ function renderProofItems(items: OpsVerificationProofItemEvidence[]) {
     .join('')
 }
 
-function getOpsDashboardUrl() {
+function getOpsDashboardUrl(tailorId: string, profileId: string) {
   const explicit = Deno.env.get('OPS_DASHBOARD_URL')?.trim()
   const opsBase = (Deno.env.get('OPS_WEB_BASE_URL')?.trim() || 'https://ops.drapeon.co')
     .replace(/\/+$/u, '')
   const candidate =
     explicit && explicit.length > 0
       ? explicit
-      : `${opsBase}/ops?view=verification#verification`
+      : `${opsBase}/ops`
   try {
     const url = new URL(candidate)
+    url.searchParams.set('view', 'verification')
+    url.searchParams.set('q', tailorId)
+    url.hash = `verification-${profileId}`
     return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
   } catch {
     return null
   }
-}
-
-function getDecisionFunctionUrl() {
-  const explicit = Deno.env.get('DECISION_FUNCTION_URL')
-  if (explicit && explicit.trim().length > 0) return explicit.trim()
-
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  if (!supabaseUrl) throw new Error('Missing SUPABASE_URL environment variable.')
-
-  return `${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/handle-verification-decision`
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -521,25 +513,6 @@ Deno.serve(async (req) => {
       return preflightFailureResponse(verificationPreflight, corsHeaders, 409)
     }
 
-    const verificationSecret = Deno.env.get('VERIFICATION_SECRET')
-    if (!verificationSecret) {
-      console.error('[notify-ops-verification] VERIFICATION_SECRET env var not set')
-      return jsonResponse(
-        { error: 'Verification review is temporarily unavailable. Please try again later.' },
-        500,
-        corsHeaders
-      )
-    }
-
-    // Tokens expire in 7 days — ops has a full week to act before needing a re-submit
-    const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
-    const approveToken = await signPayload(verificationSecret, `${tailorId}:APPROVE:${exp}`)
-    const rejectToken = await signPayload(verificationSecret, `${tailorId}:REJECT:${exp}`)
-
-    const decisionBase = getDecisionFunctionUrl()
-    const approveUrl = `${decisionBase}?tailorId=${tailorId}&decision=APPROVE&exp=${exp}&token=${approveToken}`
-    const rejectUrl = `${decisionBase}?tailorId=${tailorId}&decision=REJECT&exp=${exp}&token=${rejectToken}`
-
     const priceMin = formatPrice(profile.price_range_min, profile.currency)
     const priceMax = formatPrice(profile.price_range_max, profile.currency)
     const tags = (profile.specialty_tags ?? []).join(', ') || '—'
@@ -548,7 +521,7 @@ Deno.serve(async (req) => {
     const avatarReviewUrl = safePublicReviewUrl(profile.avatar_url)
     const portfolioReviewUrls = publicReviewUrls([...portfolioPhotoUrls, ...portfolioVideoUrls])
     const proofMediaReviewUrls = publicReviewUrls(proofItems.flatMap((item) => item.mediaUrls))
-    const opsDashboardUrl = getOpsDashboardUrl()
+    const opsDashboardUrl = getOpsDashboardUrl(tailorId, profile.id)
     const evidenceSummary = buildOpsVerificationEvidenceSummary({
       avatarUrl: avatarReviewUrl,
       trustVideoUrl: trustVideoReviewUrl,
@@ -598,11 +571,8 @@ Deno.serve(async (req) => {
   ${renderLinkList('All proof media', proofMediaReviewUrls)}
 </div>
 
-<br>
-<a href="${escapeHtml(approveUrl)}" style="background:#2F6844;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;margin-right:12px">Approve</a>
-<a href="${escapeHtml(rejectUrl)}"  style="background:#B91C1C;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block">Reject</a>
-
-<p style="color:#999;font-size:12px;margin-top:24px">Expires: ${new Date(exp * 1000).toUTCString()}</p>
+${opsDashboardUrl ? `<p style="margin-top:22px;font-family:sans-serif"><a href="${escapeHtml(opsDashboardUrl)}" style="background:#2F6844;color:#fff;padding:12px 24px;border-radius:999px;text-decoration:none;display:inline-block;font-weight:700">Review securely in Drapeon Ops</a></p>` : ''}
+<p style="color:#777;font:12px/1.6 sans-serif;margin-top:18px">Approval and rejection require an authenticated Ops session with fresh MFA. Email links never make the decision directly.</p>
 `
 
     const recipients = getOpsRecipients()
@@ -652,6 +622,7 @@ Deno.serve(async (req) => {
         delivery_id: deliveryId,
         delivery_key: deliveryKey,
         recipient_count: recipients.length,
+        review_url: opsDashboardUrl,
       },
     })
 

@@ -49,12 +49,12 @@ export default function PricingPage(): React.JSX.Element {
             Create account
           </Link>
           <Link
-            href="/apply"
+            href="/sign-up?role=TAILOR"
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
             data-analytics-event="secondary_cta_click"
             data-analytics-label="Pricing apply as tailor"
           >
-            Apply as a tailor
+            Join as a tailor
           </Link>
         </div>
       }

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
+import { TailorDirectory, type TailorDirectoryParams } from '../../../components/tailor-directory'
 import { buildMetadata } from '../../../lib/metadata'
+import { getApprovedPublicTailors } from '../../../lib/public-marketplace'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Explore',
@@ -8,6 +9,8 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/explore',
 })
 
-export default function AccountExplorePage(): never {
-  redirect('/explore')
+export default async function AccountExplorePage({ searchParams }: { searchParams: Promise<TailorDirectoryParams> }) {
+  const params = await searchParams
+  const tailors = await getApprovedPublicTailors(40, 0, '')
+  return <TailorDirectory tailors={tailors} params={params} basePath="/account/explore" profileBasePath="/account/tailors" />
 }

@@ -21,7 +21,9 @@ self.addEventListener('push', (event) => {
   const derivedUrl = (() => {
     if (!orderId || scopePath.startsWith('/ops')) return null
     if (data.target === 'call-join') {
-      return `/account/call-join?orderId=${encodeURIComponent(orderId)}`
+      const callKind = data.callKind === 'consultation' ? 'consultation' : 'ready-made'
+      const callType = data.callType === 'audio' ? 'audio' : 'video'
+      return `/account/call-join?orderId=${encodeURIComponent(orderId)}&callKind=${callKind}&callType=${callType}`
     }
     if (data.target === 'messages') {
       return `/account/messages?orderId=${encodeURIComponent(orderId)}`

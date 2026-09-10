@@ -9,7 +9,7 @@ const productLinks: Array<{ href: Route; label: string }> = [
   { href: '/how-it-works', label: 'How it works' },
   { href: '/vision', label: 'Drapeon Vision' },
   { href: '/tailors', label: 'For tailors' },
-  { href: '/apply', label: 'Apply as a tailor' },
+  { href: '/sign-up?role=TAILOR', label: 'Join as a tailor' },
   { href: '/sign-up', label: 'Create account' },
 ]
 

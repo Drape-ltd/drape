@@ -10,7 +10,7 @@ import {
 
 const FN = 'read-gateway'
 
-type ReadAction = 'tailor-shop' | 'seller-item' | 'explore-tailors' | 'tailor-profile'
+type ReadAction = 'tailor-shop' | 'seller-item' | 'explore-tailors' | 'tailor-profile' | 'tailor-payout-events'
 
 type TailorDiscoveryGatewayRow = Record<string, unknown> & {
   id?: string
@@ -154,8 +154,11 @@ async function fetchTailorShop(supabase: any, tailorId: string) {
     await Promise.all([
       supabase
         .from('tailor_profiles')
-        .select('display_name, availability, accepts_custom_orders_now, shop_paused, is_live, supports_custom_orders')
+        .select('display_name, availability, accepts_custom_orders_now, shop_paused, is_live, is_verified, is_test_profile, supports_custom_orders')
         .eq('id', tailorId)
+        .eq('is_live', true)
+        .eq('is_verified', true)
+        .eq('is_test_profile', false)
         .maybeSingle(),
       supabase
         .from('seller_items')
@@ -172,6 +175,7 @@ async function fetchTailorShop(supabase: any, tailorId: string) {
   if (profileError && itemsError) throw profileError
   if (itemsError) throw itemsError
 
+  if (!profileData) return null
   const profile = asRecord(profileData)
   const items = ((itemsData ?? []) as Array<Record<string, unknown>>)
     .map((row) => {
@@ -243,10 +247,13 @@ async function fetchSellerItem(supabase: any, itemId: string) {
       pickup_available,
       delivery_available,
       shipping_available,
-      tailor_profiles(display_name, user_id, location, availability, shop_paused, is_live)
+      tailor_profiles!inner(display_name, user_id, location, availability, shop_paused, is_live, is_verified, is_test_profile)
     `)
     .eq('id', itemId)
     .eq('is_live', true)
+    .eq('tailor_profiles.is_live', true)
+    .eq('tailor_profiles.is_verified', true)
+    .eq('tailor_profiles.is_test_profile', false)
     .gt('inventory_quantity', 0)
     .neq('stock_status', 'HIDDEN')
     .neq('stock_status', 'SOLD_OUT')
@@ -377,6 +384,7 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
     .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, availability, accepts_custom_orders_now, shop_paused, specialty_tags, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, price_range_min, price_range_max, avg_response_hours, ranking_score')
     .eq('is_live', true)
     .eq('is_verified', true)
+    .eq('is_test_profile', false)
     .order('ranking_score', { ascending: false, nullsFirst: false })
     .order('avg_rating', { ascending: false, nullsFirst: false })
     .order('total_reviews', { ascending: false, nullsFirst: false })
@@ -416,6 +424,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       .eq('id', tailorId)
       .eq('is_live', true)
       .eq('is_verified', true)
+      .eq('is_test_profile', false)
       .maybeSingle(),
     supabase
       .from('reviews')
@@ -541,6 +550,19 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
       position: typeof row.portfolio_position === 'number' ? row.portfolio_position : index,
     }]
   })
+  const canonicalUrls = new Set(
+    canonicalMedia.map((item) => item.url.split(/[?#]/u)[0] ?? item.url),
+  )
+  const mergedMedia = [
+    ...canonicalMedia,
+    ...legacyMedia
+      .filter((item) => !canonicalUrls.has(item.url.split(/[?#]/u)[0] ?? item.url))
+      .map((item, index) => ({
+        ...item,
+        isPrimary: false,
+        position: canonicalMedia.length + index,
+      })),
+  ]
   const reviewerAvatarUrls = reviewsData
     .map((row) => {
       const orderRow = firstJoinedRow(row.orders as Record<string, unknown> | Record<string, unknown>[] | null)
@@ -581,7 +603,7 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
         ...safeProfilePortfolioPhotos,
       ])),
       portfolioVideos: safeProfilePortfolioVideos,
-      media: canonicalMedia.length > 0 ? canonicalMedia : legacyMedia,
+      media: mergedMedia,
       supportsCustomOrders: profileRow.supports_custom_orders !== false,
       supportsReadyMade: profileRow.supports_ready_made === true,
       pickupAvailable: profileRow.pickup_available === true,
@@ -615,9 +637,9 @@ async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
 }
 
 async function fetchTailorProfile(supabase: any, req: Request, tailorId: string) {
-  const publicData = await cachedRead(`tailor-profile-public:${tailorId}`, 120_000, () =>
-    fetchTailorProfilePublic(supabase, tailorId)
-  )
+  // Safety decisions must be visible on the next read. Discovery can tolerate a
+  // short cache, but an exact profile must never retain newly blocked media.
+  const publicData = await fetchTailorProfilePublic(supabase, tailorId)
   if (!publicData) return null
 
   const authUserId = await resolveAuthenticatedUserId(req, supabase)
@@ -645,6 +667,28 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
     },
     isSaved,
   }
+}
+
+async function fetchTailorPayoutEvents(supabase: any, req: Request) {
+  const authUserId = await resolveAuthenticatedUserId(req, supabase)
+  if (!authUserId) return { error: 'AUTH_REQUIRED' as const }
+  const { data: profile, error: profileError } = await supabase
+    .from('tailor_profiles')
+    .select('id')
+    .eq('user_id', authUserId)
+    .maybeSingle()
+  if (profileError) throw profileError
+  const tailorProfileId = asString(profile?.id)
+  if (!tailorProfileId) return { events: [] }
+  const { data, error } = await supabase
+    .from('provider_payout_events')
+    .select('id,provider,provider_bank_payout_id,amount,currency,status,arrival_at,failure_message,created_at')
+    .eq('tailor_profile_id', tailorProfileId)
+    .is('payout_id', null)
+    .order('created_at', { ascending: false })
+    .limit(40)
+  if (error) throw error
+  return { events: data ?? [] }
 }
 
 Deno.serve(async (req) => {
@@ -705,6 +749,12 @@ Deno.serve(async (req) => {
         cors,
         cacheControlForReadAction(action),
       )
+    }
+
+    if (action === 'tailor-payout-events') {
+      const result = await fetchTailorPayoutEvents(supabase, req)
+      if ('error' in result) return jsonResponse({ error: result.error, message: 'Sign in again to view payout activity.' }, 401, cors, 'no-store')
+      return jsonResponse({ ok: true, data: result }, 200, cors, 'private, no-store')
     }
 
     return jsonResponse({ error: 'UNKNOWN_READ_ACTION', message: 'This read action is not supported.' }, 400, cors)

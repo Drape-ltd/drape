@@ -317,7 +317,11 @@ export function buildBriefDossier(
     row('recipient', 'Recipient', input.recipientName),
     row('phone', 'Recipient phone', input.recipientPhone),
     row('address', input.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to', input.deliveryAddress, 'stacked'),
-    row('preference', 'Shipping preference', label(custom?.shippingPreference)),
+    row(
+      'preference',
+      'Shipping preference',
+      custom?.shippingPreference ? label(custom.shippingPreference) : null,
+    ),
     row('instructions', 'Delivery instructions', custom?.deliveryInstructions ?? stringValue(meta.deliveryInstructions), 'stacked'),
     row('provider', 'Provider', input.fulfillmentProvider ?? input.carrier),
     row('reference', 'Fulfillment reference', input.fulfillmentReference),
@@ -332,7 +336,12 @@ export function buildBriefDossier(
     row('status', 'Group order', bulkOrder?.enabled === true ? 'Bulk or group brief' : null),
     row('label', 'Group label', stringValue(bulkOrder?.label)),
     row('recipient_count', 'Recipients', countLabel(numberValue(bulkOrder?.recipientCount) ?? input.bulkMemberCount, 'recipient')),
-    row('fabric_mode', 'Fabric mode', stringValue(bulkOrder?.fabricModeLabel) ?? label(stringValue(bulkOrder?.fabricMode), 'Not set')),
+    row(
+      'fabric_mode',
+      'Fabric mode',
+      stringValue(bulkOrder?.fabricModeLabel) ??
+        (stringValue(bulkOrder?.fabricMode) ? label(stringValue(bulkOrder?.fabricMode)) : null),
+    ),
     row('measurement_policy', 'Measurement policy', stringValue(bulkOrder?.memberMeasurementPolicy), 'stacked'),
     row('members', 'Members', memberNames.length > 0 ? memberNames.join('\n') : null, 'stacked'),
     row('notes', 'Bulk notes', stringValue(bulkOrder?.notes), 'stacked'),

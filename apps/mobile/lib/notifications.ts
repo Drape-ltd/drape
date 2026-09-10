@@ -183,8 +183,11 @@ function resolveNotificationPath(
     return `${base}/orders/${orderId}${query ? `?${query}` : ''}`
   }
 
-  if (role === 'TAILOR' && notificationType === 'tailor_verification_decision') {
-    return '/(tailor)/profile'
+  if (
+    role === 'TAILOR' &&
+    (notificationType === 'tailor_verification_decision' || destination?.toUpperCase() === 'VERIFICATION')
+  ) {
+    return '/(tailor)/profile/setup'
   }
 
   if (role === 'TAILOR' && destination === 'PAYOUT') {

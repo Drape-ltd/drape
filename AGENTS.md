@@ -20,6 +20,14 @@ For Drapeon Vision, read `docs/drapeon-vision-design-and-regression-runbook.md` 
 5. Preserve native crash logs and the first failure signature before patching.
 6. For camera retakes and mode switches, verify the second and third run, not only the first.
 
+## Android Release Artifacts
+
+1. Before every Play release, determine whether R8/ProGuard code shrinking or obfuscation is enabled for the exact submitted build variant.
+2. When obfuscation is enabled, retain the build-matched `mapping.txt` and upload it to Google Play with that App Bundle. Never reuse a mapping file from another build.
+3. Upload the same build-matched mapping to Sentry or the configured crash provider so production crashes and ANRs remain symbolicated.
+4. Treat a missing deobfuscation file warning as a release-observability gap: it may not block submission, but it must be recorded and corrected before calling the Android release fully complete.
+5. Keep the AAB, native debug symbols, deobfuscation mapping, release/build identifiers, and crash-provider upload result together as one traceable release artifact set.
+
 ## Navigation and Route State
 
 1. Route params are canonical for deep links and contextual returns. Use sanitized `returnTo`, `historyChain`, and explicit context IDs.
@@ -59,6 +67,7 @@ Do not say a change is fixed merely because it compiles.
 4. For a regression, also exercise the adjacent path most likely to break.
 5. Report what was verified, on which platform, and what remains unverified.
 6. Keep required Metro, device-log, or server sessions running until the live pass is finished.
+7. Every web change must be inspected in the connected in-app browser against the exact affected public or authenticated state. Compilation, automated tests, and user-provided screenshots are supporting evidence, not substitutes for this live visual pass. If the required browser, role, or fixture state is unavailable, record the path as unverified and do not call the web change complete.
 
 ## Production Migration Safety
 

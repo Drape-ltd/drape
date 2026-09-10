@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '../lib/supabase'
+import { TurnstileChallenge } from './turnstile-challenge'
 
 function mapRecoveryError(message: string | undefined) {
   const normalized = (message ?? '').toLowerCase()
@@ -10,6 +11,9 @@ function mapRecoveryError(message: string | undefined) {
   }
   if (normalized.includes('network') || normalized.includes('fetch')) {
     return 'Connection looks weak. Try again when the signal improves.'
+  }
+  if (normalized.includes('captcha') || normalized.includes('security verification')) {
+    return 'The security check expired or could not be verified. Complete it again and retry.'
   }
   return 'We could not send a reset link right now. Please try again.'
 }
@@ -23,12 +27,19 @@ function getBrowserRecoveryOrigin() {
 }
 
 function getHostedRecoveryUrl() {
+  const browserOrigin = getBrowserRecoveryOrigin()
+  if (
+    browserOrigin &&
+    (browserOrigin.includes('://localhost') || browserOrigin.includes('://127.0.0.1'))
+  ) {
+    return `${browserOrigin}/auth/recover`
+  }
+
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
   if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
     return `${configured}/auth/recover`
   }
 
-  const browserOrigin = getBrowserRecoveryOrigin()
   if (browserOrigin) return `${browserOrigin}/auth/recover`
 
   return 'https://drapeon.co/auth/recover'
@@ -39,6 +50,8 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaResetKey, setCaptchaResetKey] = useState(0)
 
   async function submit() {
     if (loading) return
@@ -48,6 +61,10 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
     const normalizedEmail = email.trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       setError('Enter the email attached to your Drapeon account.')
+      return
+    }
+    if (!captchaToken) {
+      setError('Complete the security check before requesting a reset link.')
       return
     }
 
@@ -62,7 +79,10 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
     setLoading(true)
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
       redirectTo: getHostedRecoveryUrl(),
+      captchaToken,
     })
+    setCaptchaToken(null)
+    setCaptchaResetKey((current) => current + 1)
     setLoading(false)
 
     if (resetError) {
@@ -100,6 +120,11 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
           className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
         />
       </label>
+      <TurnstileChallenge
+        key={captchaResetKey}
+        action="recovery"
+        onTokenChange={setCaptchaToken}
+      />
       {error ? (
         <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
           {error}
@@ -112,7 +137,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
       ) : null}
       <button
         type="submit"
-        disabled={loading}
+        disabled={loading || !captchaToken}
         className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
       >
         {loading ? 'Sending...' : 'Send reset link'}

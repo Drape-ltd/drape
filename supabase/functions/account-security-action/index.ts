@@ -11,7 +11,10 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { validatePasswordStrength } from '../../../packages/shared/src/auth-security.ts'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { normalizeDrapeonSender } from '../_shared/email-template.ts'
+import {
+  normalizeDrapeonSender,
+  renderDrapeonTransactionalEmail,
+} from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import {
@@ -91,7 +94,7 @@ function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)
 }
 
-async function sendResendEmail(input: { to: string; subject: string; html: string }) {
+async function sendResendEmail(input: { to: string; subject: string; html: string; text?: string }) {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     log('warn', FN, 'resend.missing_api_key')
@@ -110,6 +113,7 @@ async function sendResendEmail(input: { to: string; subject: string; html: strin
       to: [input.to],
       subject: input.subject,
       html: input.html,
+      text: input.text,
     }),
   })
 
@@ -129,25 +133,22 @@ async function sendPasswordChangedEmail(to: string | null | undefined) {
   const email = to?.trim()
   if (!email) return false
 
-  const timestamp = new Date().toISOString()
+  const receipt = renderDrapeonTransactionalEmail({
+    preheader: 'Your Drapeon password was changed.',
+    eyebrow: 'Security receipt',
+    headline: 'Password changed',
+    recipientName: email.split('@')[0],
+    body: 'Your Drapeon password was changed after a recent password confirmation. Any device that signs in again must use the new password.',
+    details: [{ label: 'Account', value: email }],
+    ctaLabel: 'Review account security',
+    ctaUrl: `${getSiteUrl()}/account/settings#login-security`,
+    secondaryCtaLabel: 'This was not me',
+    secondaryCtaUrl: `${getSiteUrl()}/security`,
+  })
   return sendResendEmail({
     to: email,
     subject: 'Your Drapeon password was changed',
-    html: `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">Password changed</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Your Drapeon password was changed after a recent password confirmation.</p>
-  <p style="line-height:1.6;margin:0 0 16px">If this was not you, reset your password immediately and contact security@drapeon.co.</p>
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Time</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
-      timestamp
-    )}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Account email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(
-      email
-    )}</td></tr>
-  </table>
-  <a href="${getSiteUrl()}/security" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Security help</a>
-</div>`,
+    ...receipt,
   })
 }
 
@@ -537,6 +538,36 @@ Deno.serve(async (req) => {
         {
           error: 'We could not update your password right now. Please try again in a moment.',
           message: 'We could not update your password right now. Please try again in a moment.',
+        },
+        500,
+        cors
+      )
+    }
+
+    const { error: revokeError } = await supabase
+      .from('auth_trusted_devices')
+      .update({
+        revoked_at: new Date().toISOString(),
+        revoked_reason: 'PASSWORD_CHANGED',
+      })
+      .eq('user_id', caller.id)
+      .is('revoked_at', null)
+
+    if (revokeError) {
+      log('error', FN, 'trusted_devices.revoke_failed', {
+        actor_id: caller.id,
+        error: revokeError.message,
+      })
+      await audit(supabase, {
+        event: 'auth.password_changed_device_revoke_failed',
+        actor_id: caller.id,
+        severity: 'error',
+        payload: { function: FN, reason: revokeError.message },
+      })
+      return jsonResponse(
+        {
+          error: 'Your password changed, but remembered devices could not be cleared. Contact support before signing in again.',
+          message: 'Your password changed, but remembered devices could not be cleared. Contact support before signing in again.',
         },
         500,
         cors

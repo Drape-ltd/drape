@@ -5,7 +5,7 @@ import { createClient } from '../../../lib/supabase'
 import { AccountRouteRuntime } from '../account-route-runtime'
 import { OrdersContent, type AccountMessage, type AccountOrder, type AccountPayment, type OrdersData, type OrderParty } from './orders-content'
 
-const orderSelect = 'id, order_kind, garment_type, item_title, stage, delivery_method, quoted_amount, total_amount, currency, quoted_currency, created_at, updated_at, customer_id, tailor_id, tailor_profile_id, seller_item_id, tailor_profiles!tailor_profile_id(display_name, business_name)'
+const orderSelect = 'id, order_kind, garment_type, item_title, stage, delivery_method, quoted_amount, total_amount, currency, quoted_currency, created_at, updated_at, customer_id, tailor_id, tailor_profile_id, seller_item_id, special_note, tailor_profiles!tailor_profile_id(display_name, business_name)'
 type LoadState = { status: 'loading' } | { status: 'ready'; data: OrdersData } | { status: 'error'; message: string }
 function unique(values: Array<string | null>) { return [...new Set(values.filter((value): value is string => Boolean(value)))] }
 
@@ -29,7 +29,7 @@ async function loadOrders(userId: string): Promise<OrdersData> {
   const ids = orders.map((order) => order.id)
   if (!ids.length) return { userId, tailorProfileId, orders, payments: [], messages: [], consultationAttendanceReviews: [] }
   const [paymentsResult, messagesResult, reviewsResult] = await Promise.all([
-    supabase.from('order_payments').select('order_id, status, created_at').in('order_id', ids).order('created_at', { ascending: false }).limit(80),
+    supabase.from('order_payments').select('order_id, phase, status, amount, currency, created_at').in('order_id', ids).order('created_at', { ascending: false }).limit(80),
     supabase.from('messages').select('order_id, body, photo_url, voice_url, created_at').in('order_id', ids).order('created_at', { ascending: false }).limit(100),
     supabase.from('consultation_attendance_reviews').select('order_id, status, reported_by_role, resolution_code, created_at').in('order_id', ids).order('created_at', { ascending: false }),
   ])

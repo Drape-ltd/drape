@@ -2,8 +2,8 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
-import { Camera, ChevronRight, LockKeyhole, ShieldCheck, UserRound } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Camera, ChevronRight, Laptop, LockKeyhole, ShieldCheck, Smartphone, UserRound, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   CONTACTS,
@@ -11,12 +11,16 @@ import {
   normalizePhoneForStorage,
   validatePasswordStrength,
   validatePhoneForProfile,
+  type TrustedDeviceSummary,
 } from '@drape/shared'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { PHONE_STORAGE_HINT } from '@drape/shared/phone'
 import { CommunicationCenter } from '../../../components/communication-center'
 import { PhoneNumberField } from '../../../components/ui/phone-number-field'
 import { createClient } from '../../../lib/supabase'
+import { invalidateAccountData, readAccountData } from '../../../lib/account-data-cache'
+import { publishWebAccountIdentityUpdate } from '../../../lib/web-account-cache-events'
+import { deviceTrustRequest } from '../../../lib/device-trust-client'
 import { AccountRouteRuntime, type AccountRouteIdentity } from '../account-route-runtime'
 
 type Profile = {
@@ -32,6 +36,7 @@ type Loaded = {
   orderCurrencies: string[]
 }
 type Deletion = { id: string; status: string; createdAt: string; activeOrderCount: number }
+type DataAccessRequest = { id: string | null; status: string; createdAt: string }
 type Notice = { tone: 'error' | 'success'; text: string } | null
 const currencies = ['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES']
 
@@ -187,7 +192,14 @@ function Basics({
   const [notice, setNotice] = useState<Notice>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  const avatarPreviewUrl = useMemo(() => file ? URL.createObjectURL(file) : null, [file])
+  const [savedAvatarUrl, setSavedAvatarUrl] = useState(profile?.avatar_url ?? null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!avatarPreviewUrl) return
+    return () => URL.revokeObjectURL(avatarPreviewUrl)
+  }, [avatarPreviewUrl])
   async function saveName() {
     const error = validateDisplayName(name)
     if (error) {
@@ -255,6 +267,8 @@ function Basics({
         role: identity.role,
         avatarUrl: url,
       })
+      setSavedAvatarUrl(url)
+      publishWebAccountIdentityUpdate({ avatarUrl: url })
       setFile(null)
       if (fileRef.current) fileRef.current.value = ''
       setNotice({ tone: 'success', text: 'Profile photo updated.' })
@@ -274,39 +288,74 @@ function Basics({
         label="Profile photo"
         detail="Used in your account and, for approved tailors, your public profile."
       >
-        <div className="flex flex-wrap items-center gap-3 md:justify-end">
-          <div className="size-14 overflow-hidden rounded-full border border-ui-border bg-needle/8">
-            {profile?.avatar_url ? (
-              <Image
-                src={profile.avatar_url}
-                alt="Current profile"
-                width={56}
-                height={56}
-                unoptimized
-                className="size-full object-cover"
+        <div className="flex max-w-xl items-center gap-3 text-left md:justify-end">
+          <div
+            className="shrink-0 overflow-hidden rounded-full border border-ui-border bg-needle/8 shadow-sm"
+            style={{ width: '4rem', height: '4rem' }}
+          >
+            {avatarPreviewUrl ? (
+              <img
+                src={avatarPreviewUrl}
+                alt="Selected profile photo preview"
+                className="block object-cover"
+                style={{ width: '100%', height: '100%' }}
               />
-            ) : null}
+            ) : savedAvatarUrl ? (
+              <Image
+                src={savedAvatarUrl}
+                alt="Current profile"
+                width={80}
+                height={80}
+                unoptimized
+                className="block object-cover"
+                style={{ width: '100%', height: '100%' }}
+              />
+            ) : (
+              <span className="grid place-items-center text-needle" style={{ width: '100%', height: '100%' }}><UserRound className="size-7" aria-hidden="true" /></span>
+            )}
           </div>
-          <label className={`${secondary} inline-flex cursor-pointer items-center gap-2`}>
-            <Camera className="size-4" />
-            {file ? file.name : 'Choose photo'}
-            <input
-              ref={fileRef}
-              className="sr-only"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-            />
-          </label>
-          {file ? (
-            <button
-              className={primary}
-              disabled={busy !== null}
-              onClick={() => void uploadAvatar()}
-            >
-              {busy === 'avatar' ? 'Uploading…' : 'Save photo'}
-            </button>
-          ) : null}
+          <div className="min-w-0">
+            <p className="truncate text-xs text-ink/52">{file ? file.name : savedAvatarUrl ? 'Current photo' : 'JPG, PNG, or WebP · maximum 10 MB'}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <label className={`${secondary} inline-flex cursor-pointer items-center gap-2`}>
+                <Camera className="size-4" aria-hidden="true" />
+                {file ? 'Choose another' : 'Choose photo'}
+                <input
+                  ref={fileRef}
+                  className="sr-only"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(event) => {
+                    setNotice(null)
+                    setFile(event.target.files?.[0] || null)
+                  }}
+                />
+              </label>
+              {file ? (
+                <>
+                  <button
+                    type="button"
+                    className={`${secondary} inline-flex items-center gap-2`}
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setFile(null)
+                      if (fileRef.current) fileRef.current.value = ''
+                    }}
+                  >
+                    <X className="size-4" aria-hidden="true" /> Clear
+                  </button>
+                  <button
+                    type="button"
+                    className={primary}
+                    disabled={busy !== null}
+                    onClick={() => void uploadAvatar()}
+                  >
+                    {busy === 'avatar' ? 'Uploading…' : 'Save profile photo'}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
         </div>
       </Row>
       <Row label="Display name" detail="This is the name other people see inside Drapeon.">
@@ -596,6 +645,279 @@ function Sessions({ session }: { session: Session }) {
   )
 }
 
+function TrustedDevices({ session }: { session: Session }) {
+  const [devices, setDevices] = useState<TrustedDeviceSummary[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice>(null)
+
+  const loadDevices = useCallback(async () => {
+    try {
+      const result = await deviceTrustRequest(session, { action: 'list' })
+      setDevices(result.devices ?? [])
+      setStatus('ready')
+    } catch (cause) {
+      setStatus('error')
+      setNotice({ tone: 'error', text: cause instanceof Error ? cause.message : 'Trusted devices could not load.' })
+    }
+  }, [session])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadDevices()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadDevices])
+
+  async function revoke(device: TrustedDeviceSummary) {
+    setBusyId(device.id)
+    setNotice(null)
+    try {
+      await deviceTrustRequest(session, { action: 'revoke', deviceId: device.id })
+      setDevices((current) => current.filter((item) => item.id !== device.id))
+      setNotice({
+        tone: 'success',
+        text: device.current
+          ? 'This browser is no longer trusted. Your current signed-in session remains active.'
+          : 'That device has been revoked.',
+      })
+    } catch (cause) {
+      setNotice({ tone: 'error', text: cause instanceof Error ? cause.message : 'That device could not be revoked.' })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function revokeOthers() {
+    const current = devices.find((device) => device.current)
+    setBusyId('all')
+    setNotice(null)
+    try {
+      await deviceTrustRequest(session, { action: 'revoke-all', exceptDeviceId: current?.id })
+      setDevices((items) => items.filter((device) => device.current))
+      setNotice({ tone: 'success', text: 'All other trusted devices were revoked.' })
+    } catch (cause) {
+      setNotice({ tone: 'error', text: cause instanceof Error ? cause.message : 'Other devices could not be revoked.' })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  if (status === 'loading') return <p className="text-sm text-ink/52">Checking trusted devices…</p>
+  if (status === 'error') {
+    return (
+      <div className="grid gap-3 md:justify-items-end">
+        <Alert notice={notice} />
+        <button className={secondary} onClick={() => { setStatus('loading'); void loadDevices() }}>Try again</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid min-w-0 gap-3 md:min-w-[22rem]">
+      <Alert notice={notice} />
+      {devices.length ? (
+        <ul className="grid gap-2" aria-label="Trusted devices">
+          {devices.map((device) => (
+            <li key={device.id} className="flex items-center gap-3 rounded-[8px] border border-ink/8 bg-white px-3 py-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-needle/8 text-needle">
+                {device.platform === 'WEB' ? <Laptop className="size-4" aria-hidden="true" /> : <Smartphone className="size-4" aria-hidden="true" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-ink">{device.label}</span>
+                <span className="mt-0.5 block text-xs text-ink/50">
+                  {device.current ? 'This device · ' : ''}Last used {formatRelative(device.lastUsedAt)}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-xs font-semibold text-rust hover:underline disabled:text-ink/30"
+                disabled={busyId !== null}
+                onClick={() => void revoke(device)}
+              >
+                {busyId === device.id ? 'Revoking…' : 'Revoke'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-ink/52">No remembered devices yet. Your next password sign-in will require an email code.</p>
+      )}
+      {devices.some((device) => !device.current) ? (
+        <button className={secondary} disabled={busyId !== null} onClick={() => void revokeOthers()}>
+          {busyId === 'all' ? 'Revoking…' : 'Revoke all other devices'}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function DataAccessPanel({ session }: { session: Session }) {
+  const [state, setState] = useState<{
+    status: 'loading' | 'ready' | 'error'
+    request: DataAccessRequest | null
+  }>({ status: 'loading', request: null })
+  const [note, setNote] = useState('')
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<Notice>(null)
+
+  const check = useCallback(async () => {
+    setState({ status: 'loading', request: null })
+    try {
+      const result = await invoke<{ request?: DataAccessRequest | null }>('request-data-access', {
+        action: 'STATUS',
+        source: 'WEB_APP',
+      })
+      setState({ status: 'ready', request: result.request || null })
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'We could not check your data-request status.'
+      setState({ status: 'error', request: null })
+      setNotice({ tone: 'error', text: message })
+    }
+  }, [])
+
+  useEffect(() => {
+    queueMicrotask(() => { void check() })
+  }, [check, session.user.id])
+
+  async function submit() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const result = await invoke<{
+        alreadyPending?: boolean
+        request?: DataAccessRequest | null
+      }>('request-data-access', {
+        action: 'SUBMIT',
+        source: 'WEB_APP',
+        note: note.trim() || undefined,
+      })
+      setState({ status: 'ready', request: result.request || null })
+      setNotice({
+        tone: 'success',
+        text: result.alreadyPending
+          ? 'Your existing data request is still in review.'
+          : 'Your data request is now in Drapeon.',
+      })
+      setNote('')
+      setOpen(false)
+    } catch (cause) {
+      setNotice({
+        tone: 'error',
+        text: cause instanceof Error ? cause.message : 'Your data request could not be submitted.',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (state.status === 'loading') return <p className="text-sm text-ink/52">Checking request status…</p>
+  if (state.status === 'error') {
+    return (
+      <div className="grid gap-2 text-left md:justify-items-end">
+        <Alert notice={notice || { tone: 'error', text: 'We could not check your data-request status.' }} />
+        <div className="flex flex-wrap gap-2">
+          <button className={secondary} onClick={() => void check()}>Try again</button>
+          <a className={`${secondary} inline-flex items-center`} href={`mailto:${CONTACTS.privacy}?subject=Data access request`}>
+            Email privacy team
+          </a>
+        </div>
+      </div>
+    )
+  }
+  if (state.request) {
+    return (
+      <div className="grid max-w-xl gap-2 rounded-[8px] border border-needle/20 bg-needle/5 p-3 text-left">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-needle">Request received</p>
+        <p className="text-sm font-semibold text-ink">Your data request is in privacy review.</p>
+        <p className="text-xs leading-5 text-ink/55">
+          Requested {formatRelative(state.request.createdAt)}. We aim to acknowledge requests within 72 hours and respond within 30 days. Identity verification may be required before release.
+        </p>
+        {state.request.id ? <p className="break-all font-mono text-[11px] text-ink/45">{state.request.id}</p> : null}
+        <Alert notice={notice} />
+      </div>
+    )
+  }
+  if (!open) {
+    return <button className={secondary} onClick={() => setOpen(true)}>Request my data</button>
+  }
+  return (
+    <div className="grid max-w-xl gap-3 text-left">
+      <p className="text-xs leading-5 text-ink/55">
+        Use this for a broader copy of your account data. You can edit your name, phone, measurements, and preferences directly without a formal request.
+      </p>
+      <textarea
+        aria-label="Data request context"
+        className={`${input} min-h-20 py-2`}
+        maxLength={300}
+        placeholder="Optional: tell the privacy team what you need"
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button className={primary} disabled={busy} onClick={() => void submit()}>
+          {busy ? 'Submitting…' : 'Submit data request'}
+        </button>
+        <button className={secondary} disabled={busy} onClick={() => { setOpen(false); setNote(''); setNotice(null) }}>
+          Cancel
+        </button>
+      </div>
+      <Alert notice={notice} />
+    </div>
+  )
+}
+
+function RoleSwitcher({
+  session,
+  identity,
+  loaded,
+}: {
+  session: Session
+  identity: AccountRouteIdentity
+  loaded: Loaded
+}) {
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<Notice>(null)
+  const hasTailor = Boolean(loaded.tailor)
+  const target = identity.role === 'TAILOR' ? 'CUSTOMER' : 'TAILOR'
+  const canSwitch = target === 'CUSTOMER' ? true : hasTailor
+
+  async function switchRole() {
+    if (!canSwitch || busy) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const supabase = createClient()
+      await invoke('account-profile-action', { action: 'switch-role', role: target })
+      const refreshResult = await supabase.auth.refreshSession()
+      if (refreshResult.error) throw refreshResult.error
+      invalidateAccountData()
+      window.location.assign(target === 'TAILOR' ? '/account/work' : '/account/orders')
+    } catch {
+      setNotice({ tone: 'error', text: 'Drapeon mode could not switch. Try again.' })
+      setBusy(false)
+    }
+  }
+
+  if (!canSwitch) {
+    return identity.role === 'CUSTOMER' ? (
+      <Link href="/account/profile?setup=1" className="inline-flex items-center gap-1 text-sm font-semibold text-needle">
+        Set up a tailor profile <ChevronRight className="size-4" />
+      </Link>
+    ) : null
+  }
+
+  return (
+    <div className="grid gap-2 md:justify-items-end">
+      <Alert notice={notice} />
+      <button className={secondary} disabled={busy} onClick={() => void switchRole()}>
+        {busy ? 'Switching…' : target === 'TAILOR' ? 'Switch to tailor mode' : 'Switch to customer mode'}
+      </button>
+    </div>
+  )
+}
+
 function DeletionPanel({ session }: { session: Session }) {
   const [state, setState] = useState<{
     status: 'loading' | 'ready' | 'error'
@@ -743,7 +1065,7 @@ function SettingsContent({
   const [revision, setRevision] = useState(0)
   useEffect(() => {
     let active = true
-    void load(session.user.id, identity.role)
+    void readAccountData(`settings:${session.user.id}:${identity.role}`, () => load(session.user.id, identity.role))
       .then((data) => {
         if (active) setState({ status: 'ready', data })
       })
@@ -769,32 +1091,28 @@ function SettingsContent({
       <section className="app-surface p-6" role="alert">
         <h2 className="text-xl font-semibold">Settings unavailable</h2>
         <p className="mt-2 text-sm text-ink/60">{state.message}</p>
-        <button className={`${primary} mt-4`} onClick={() => setRevision((v) => v + 1)}>
+        <button className={`${primary} mt-4`} onClick={() => { invalidateAccountData(`settings:${session.user.id}:`); setRevision((v) => v + 1) }}>
           Try again
         </button>
       </section>
     )
-  const refresh = () => setRevision((v) => v + 1)
+  const refresh = () => { invalidateAccountData(`settings:${session.user.id}:`); setRevision((v) => v + 1) }
   const savedPhone = normalizePhoneForStorage(String(session.user.user_metadata?.phone || ''))
   return (
     <div className="grid gap-5 pb-10">
       <Section title="Profile and preferences" icon={<UserRound className="size-4" />}>
         <Basics session={session} identity={identity} loaded={state.data} refresh={refresh} />
         <Row
-          label="Workspace"
+          label={identity.role === 'TAILOR' ? 'Tailor account' : 'Account type'}
           detail={
             identity.role === 'TAILOR'
-              ? 'Tailor workspace active. Customer purchasing tools remain available.'
-              : 'Customer workspace active. Tailor access requires review.'
+              ? 'Tailor tools are active. Switch modes when you need to buy as a customer.'
+              : state.data.tailor
+                ? 'Customer tools are active. Your approved tailor workspace remains available.'
+                : 'Customer account active. Tailor access requires review.'
           }
         >
-          <Link
-            href={identity.role === 'TAILOR' ? '/account/work' : '/apply?source=account'}
-            className="inline-flex items-center gap-1 text-sm font-semibold text-needle"
-          >
-            {identity.role === 'TAILOR' ? 'Open work queue' : 'Apply as a tailor'}{' '}
-            <ChevronRight className="size-4" />
-          </Link>
+          <RoleSwitcher session={session} identity={identity} loaded={state.data} />
         </Row>
       </Section>
       <Section title="Security" icon={<LockKeyhole className="size-4" />}>
@@ -820,6 +1138,12 @@ function SettingsContent({
             Account recovery <ChevronRight className="size-4" />
           </Link>
         </Row>
+        <Row
+          label="Trusted devices"
+          detail="Recognized devices can skip the email code for up to 30 days. Sensitive account and payout changes still require fresh verification."
+        >
+          <TrustedDevices session={session} />
+        </Row>
         <Row label="Active sessions">
           <Sessions session={session} />
         </Row>
@@ -834,16 +1158,9 @@ function SettingsContent({
           label="Privacy choices"
           detail="Request access to your protected measurements, orders, messages, and account data."
         >
-          <div className="flex flex-wrap gap-3 md:justify-end">
-            <Link href="/privacy" className="text-sm font-semibold text-needle">
-              Privacy policy
-            </Link>
-            <a
-              href={`mailto:${CONTACTS.privacy}?subject=Data access request`}
-              className="text-sm font-semibold text-needle"
-            >
-              Request my data
-            </a>
+          <div className="grid gap-3 md:justify-items-end">
+            <Link href="/privacy" className="text-sm font-semibold text-needle">Privacy policy</Link>
+            <DataAccessPanel session={session} />
           </div>
         </Row>
         {identity.role === 'TAILOR' ? (

@@ -21,6 +21,7 @@ export function AccountSignedInRedirect({
     supabase.auth.getSession().then(({ data }) => {
       if (!active || !data.session) return
       const params = new URLSearchParams(window.location.search)
+      if (params.get('device') === 'verify') return
       const roleIntent = params.get('role')?.toLowerCase()
       const contextualReturn = safeAccountReturnPath(params.get('next'))
       router.replace((contextualReturn ?? (roleIntent === 'tailor' && tailorIntentTo ? tailorIntentTo : to)) as Route)

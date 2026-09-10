@@ -7,11 +7,11 @@ import { createPaystackTransfer } from '../_shared/paystack.ts'
 import { createStripeTransfer } from '../_shared/stripe.ts'
 import { Sentry } from '../_shared/sentry.ts'
 import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
-import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { createOrRefreshOpsIssue, resolveOpsIssueByDedupeKey } from '../_shared/ops-issues.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'release-settlement-tranche'
-const BodySchema = z.object({ trancheId: uuid })
+const BodySchema = z.object({ trancheId: uuid, moneyDeskRequestId: uuid })
 const response = (body: Record<string, unknown>, status: number, cors: HeadersInit) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 
 Deno.serve(async (req) => {
@@ -26,13 +26,32 @@ Deno.serve(async (req) => {
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) return response({ ok: false, error: parsed.error }, 400, cors)
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const { data: moneyDeskRequest, error: moneyDeskRequestError } = await supabase
+      .from('money_desk_requests')
+      .select('id,status,action_type,target_type,target_id,approval_count,required_approval_count')
+      .eq('id', parsed.data.moneyDeskRequestId)
+      .maybeSingle()
+    if (
+      moneyDeskRequestError
+      || !moneyDeskRequest?.id
+      || moneyDeskRequest.status !== 'EXECUTING'
+      || moneyDeskRequest.action_type !== 'PAYOUT_RELEASE'
+      || moneyDeskRequest.target_type !== 'SETTLEMENT_TRANCHE'
+      || moneyDeskRequest.target_id !== parsed.data.trancheId
+      || moneyDeskRequest.approval_count < moneyDeskRequest.required_approval_count
+    ) {
+      return response({ ok: false, error: moneyDeskRequestError?.message ?? 'An approved, executing Money Desk request is required.' }, 409, cors)
+    }
     const { data: tranche, error: trancheError } = await supabase.from('order_settlement_tranches')
-      .select('id,plan_id,order_id,code,amount,currency,status,eligible_at,payout_id,correlation_id,order_settlement_plans!inner(status,frozen_reason,tailor_id,customer_id,source_payment_id,policy_version)')
+      .select('id,plan_id,order_id,code,amount,currency,status,eligible_at,payout_id,money_desk_request_id,correlation_id,order_settlement_plans!inner(status,frozen_reason,tailor_id,customer_id,source_payment_id,policy_version)')
       .eq('id', parsed.data.trancheId).maybeSingle()
     if (trancheError) throw trancheError
     if (!tranche) return response({ ok: false, error: 'Settlement tranche was not found.' }, 404, cors)
     orderIdForFailure = tranche.order_id
     trancheIdForFailure = tranche.id
+    if (tranche.money_desk_request_id && tranche.money_desk_request_id !== moneyDeskRequest.id) {
+      return response({ ok: false, error: 'This tranche is linked to a different Money Desk request.' }, 409, cors)
+    }
     const plan = Array.isArray(tranche.order_settlement_plans) ? tranche.order_settlement_plans[0] : tranche.order_settlement_plans
     if (plan?.status !== 'ACTIVE' || tranche.status !== 'ELIGIBLE') return response({ ok: false, error: plan?.status === 'FROZEN' ? 'Settlement is frozen by an open review.' : 'This tranche is not eligible for release.' }, 409, cors)
     const { data: order } = await supabase.from('orders').select('reference,tailor_paystack_recipient_code_locked,tailor_stripe_connect_account_id_locked').eq('id', tranche.order_id).single()
@@ -47,7 +66,7 @@ Deno.serve(async (req) => {
       amount: tranche.amount, currency: tranche.currency, provider, status: 'PROCESSING', payout_purpose: 'SETTLEMENT_TRANCHE', source_payment_id: plan.source_payment_id,
       provider_transfer_status: 'PROCESSING', bank_settlement_status: provider === 'STRIPE' ? 'PENDING' : 'NOT_APPLICABLE',
       provider_destination_id: provider === 'STRIPE' ? account : recipient,
-      provider_response: { function: FN, tranche_code: tranche.code },
+      provider_response: { function: FN, tranche_code: tranche.code, money_desk_request_id: moneyDeskRequest.id },
     }).select('id').single()
     if (payoutError) throw payoutError
     payoutIdForFailure = payout.id
@@ -76,16 +95,22 @@ Deno.serve(async (req) => {
       completed_at: provider === 'STRIPE' ? null : now,
       provider_response: { function: FN, tranche_code: tranche.code, provider_reference: providerReference },
     }).eq('id', payout.id)
-    await supabase.from('order_settlement_tranches').update({ status: 'RELEASED', released_at: now, payout_id: payout.id, provider_reference: providerReference, release_ledger_transaction_id: ledgerId }).eq('id', tranche.id).eq('status', 'ELIGIBLE')
+    await supabase.from('order_settlement_tranches').update({ status: 'RELEASED', released_at: now, payout_id: payout.id, money_desk_request_id: moneyDeskRequest.id, provider_reference: providerReference, release_ledger_transaction_id: ledgerId }).eq('id', tranche.id).eq('status', 'ELIGIBLE')
     const { count } = await supabase.from('order_settlement_tranches').select('id', { count: 'exact', head: true }).eq('plan_id', tranche.plan_id).neq('status', 'RELEASED')
     if ((count ?? 1) === 0) {
       await supabase.from('order_settlement_plans').update({ status: 'SETTLED', updated_at: now }).eq('id', tranche.plan_id)
       await supabase.from('orders').update({ escrow_released: true, escrow_released_at: now }).eq('id', tranche.order_id)
     }
-    await audit(supabase, { event: 'settlement.tranche_released', actor_role: 'SYSTEM', order_id: tranche.order_id, payload: { function: FN, tranche_id: tranche.id, tranche_code: tranche.code, amount: tranche.amount, currency: tranche.currency, payout_id: payout.id, provider_reference: providerReference } })
+    await resolveOpsIssueByDedupeKey(supabase, `settlement-eligible:${tranche.id}`, {
+      outcome: 'RELEASED',
+      moneyDeskRequestId: moneyDeskRequest.id,
+      payoutId: payout.id,
+      providerReference,
+    })
+    await audit(supabase, { event: 'settlement.tranche_released', actor_role: 'SYSTEM', order_id: tranche.order_id, payload: { function: FN, tranche_id: tranche.id, tranche_code: tranche.code, amount: tranche.amount, currency: tranche.currency, payout_id: payout.id, money_desk_request_id: moneyDeskRequest.id, provider_reference: providerReference } })
     await Promise.all([
-      enqueuePushJob(supabase, { userId: plan.tailor_id, orderId: tranche.order_id, source: FN, idempotencyKey: `settlement-released:tailor:${tranche.id}`, priority: 9, notification: { title: 'Earnings released', body: provider === 'STRIPE' ? 'Drapeon released this milestone to your Stripe balance. Bank arrival will be tracked separately.' : 'Drapeon released this verified earnings milestone to your payout account.', preferenceKey: 'paymentReleased', data: { orderId: tranche.order_id, settlementTrancheId: tranche.id } } }),
-      enqueuePushJob(supabase, { userId: plan.customer_id, orderId: tranche.order_id, source: FN, idempotencyKey: `settlement-released:customer:${tranche.id}`, priority: 7, notification: { title: 'Payment protection updated', body: 'A verified order milestone was released to the tailor. Remaining stages stay protected.', preferenceKey: 'paymentReleased', data: { orderId: tranche.order_id, settlementTrancheId: tranche.id } } }),
+      enqueuePushJob(supabase, { userId: plan.tailor_id, orderId: tranche.order_id, source: FN, idempotencyKey: `settlement-released:tailor:${tranche.id}`, priority: 9, notification: { title: 'Earnings released', body: provider === 'STRIPE' ? 'Drapeon released this milestone to your Stripe balance. Bank arrival will be tracked separately.' : 'Drapeon released this verified earnings milestone to your payout account.', preferenceKey: 'paymentReleased', data: { orderId: tranche.order_id, settlementTrancheId: tranche.id }, communication: { category: 'PAYOUT', purpose: 'TRANSACTIONAL', severity: 'NOTICE', mandatory: true, inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: tranche.order_id }, deduplicationKey: `settlement-released:tailor:${tranche.id}` } } }),
+      enqueuePushJob(supabase, { userId: plan.customer_id, orderId: tranche.order_id, source: FN, idempotencyKey: `settlement-released:customer:${tranche.id}`, priority: 7, notification: { title: 'Payment protection updated', body: 'A verified order milestone was released to the tailor. Remaining stages stay protected.', preferenceKey: 'paymentReleased', data: { orderId: tranche.order_id, settlementTrancheId: tranche.id }, communication: { category: 'PAYOUT', purpose: 'TRANSACTIONAL', severity: 'NOTICE', mandatory: true, inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: tranche.order_id }, deduplicationKey: `settlement-released:customer:${tranche.id}` } } }),
       enqueueOrderEventEmailJob(supabase, { recipientUserId: plan.tailor_id, audience: 'TAILOR', order: { id: tranche.order_id }, subject: 'Drapeon released an earnings milestone', headline: 'Earnings released', body: provider === 'STRIPE' ? 'The reviewed milestone is now in your Stripe balance. Drapeon will update Earnings when Stripe reports the bank payout outcome.' : 'The reviewed settlement tranche reached a terminal provider outcome. Open the order to see what remains protected.', ctaLabel: 'View order', source: FN, priority: 9, idempotencyKey: `settlement-released:tailor:${tranche.id}` }),
       enqueueOrderEventEmailJob(supabase, { recipientUserId: plan.customer_id, audience: 'CUSTOMER', order: { id: tranche.order_id }, subject: 'Your order payment protection was updated', headline: 'Verified milestone released', body: 'Drapeon released one verified milestone to the tailor. Any later settlement stages remain protected under the order timeline.', ctaLabel: 'View order', source: FN, priority: 7, idempotencyKey: `settlement-released:customer:${tranche.id}` }),
     ])

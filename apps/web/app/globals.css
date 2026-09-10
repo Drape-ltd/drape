@@ -149,6 +149,26 @@
   will-change: opacity, transform;
 }
 
+/* Product detail uses a stable commerce layout. Keep this explicit rather
+   than relying on generated arbitrary grid classes that can disappear during
+   development recompilation. */
+@media (min-width: 768px) {
+  .ready-made-product-layout {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) minmax(15rem, 0.72fr);
+    align-items: start;
+  }
+}
+
+.ready-made-thumbnail-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (min-width: 1280px) {
+  .ready-made-product-layout {
+    grid-template-columns: minmax(19rem, 24rem) minmax(20rem, 1fr) minmax(17rem, 20rem);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -161,5 +181,39 @@
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+/* The same protected-call iframe stays mounted while account routes change. */
+.account-active-call {
+  position: fixed;
+  z-index: 50;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: #1f2e3f;
+  box-shadow: 0 24px 60px rgb(17 26 22 / 24%);
+}
+
+.account-active-call--focused {
+  inset: 5.35rem 1rem 1rem;
+  border-radius: 12px;
+}
+
+.account-active-call--floating {
+  right: 1.25rem;
+  bottom: 1.25rem;
+  width: min(23rem, calc(100vw - 2rem));
+  border-radius: 14px;
+  background: #171a18;
+}
+
+@media (min-width: 1024px) {
+  .account-active-call--focused {
+    right: 1.5rem;
+    left: 20.5rem;
+    transition: left 180ms ease;
+  }
+
+  .account-active-call--focused.account-active-call--collapsed {
+    left: 7rem;
   }
 }

@@ -145,6 +145,7 @@ export type CustomerOrderRow = {
   quotedCurrency: string
   hasReview: boolean
   consultationReview: ConsultationAttendanceReviewSnapshot | null
+  makeUpConsultationScheduledAt: string | null
   deliveryMethod: string | null
 }
 
@@ -221,6 +222,7 @@ type CustomerOrderDetailQueryRow = {
   delivery_method: string | null
   fabric_tracking: string | null
   collection_code: string | null
+  collection_code_expiry: string | null
   video_call_url: string | null
   created_at: string
   tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
@@ -513,6 +515,7 @@ export type TailorOrderRow = {
   videoCallUrl: string | null
   createdAt: string
   consultationReview: ConsultationAttendanceReviewSnapshot | null
+  makeUpConsultationScheduledAt: string | null
 }
 
 export type CustomerOrderDetail = {
@@ -530,6 +533,7 @@ export type CustomerOrderDetail = {
   deliveryMethod: string
   fabricTracking: string | null
   collectionCode: string | null
+  collectionCodeExpiry: string | null
   videoCallUrl: string | null
   stageUpdates: Array<{
     id: string
@@ -767,6 +771,7 @@ export type TailorPublicProfile = {
   avatarUrl: string | null
   portfolioPhotos: string[]
   portfolioVideos: string[]
+  media?: Array<{ id: string; kind: 'IMAGE' | 'VIDEO'; url: string }>
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
   pickupAvailable: boolean
@@ -972,6 +977,32 @@ async function fetchLatestConsultationAttendanceReviews(orderIds: string[]) {
   return reviews
 }
 
+type ConsultationMakeUpListQueryRow = {
+  order_id: string
+  scheduled_start_at: string | null
+}
+
+async function fetchScheduledMakeUpConsultations(orderIds: string[]) {
+  if (orderIds.length === 0) return new Map<string, string>()
+
+  const { data, error } = await supabase
+    .from('consultation_bookings')
+    .select('order_id, scheduled_start_at')
+    .in('order_id', orderIds)
+    .eq('status', 'CONFIRMED')
+    .not('replaces_booking_id', 'is', null)
+    .order('scheduled_start_at', { ascending: false })
+
+  if (error) throw error
+
+  const bookings = new Map<string, string>()
+  for (const row of (data ?? []) as ConsultationMakeUpListQueryRow[]) {
+    if (!row.scheduled_start_at || bookings.has(row.order_id)) continue
+    bookings.set(row.order_id, row.scheduled_start_at)
+  }
+  return bookings
+}
+
 async function fetchCustomerOrders(
   userId: string,
   tab: 'active' | 'completed'
@@ -997,9 +1028,13 @@ async function fetchCustomerOrders(
     .filter(
       (o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
     )
-  const consultationReviews = await fetchLatestConsultationAttendanceReviews(
-    rows.filter((order) => order.stage === 'CONSULTATION').map((order) => order.id)
-  )
+  const consultationOrderIds = rows
+    .filter((order) => order.stage === 'CONSULTATION' || order.stage === 'PENDING_QUOTE')
+    .map((order) => order.id)
+  const [consultationReviews, makeUpConsultations] = await Promise.all([
+    fetchLatestConsultationAttendanceReviews(consultationOrderIds),
+    fetchScheduledMakeUpConsultations(consultationOrderIds),
+  ])
 
   return rows
     .map((o) => {
@@ -1018,6 +1053,7 @@ async function fetchCustomerOrders(
         quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
         hasReview: (o.reviews ?? []).length > 0,
         consultationReview: consultationReviews.get(o.id) ?? null,
+        makeUpConsultationScheduledAt: makeUpConsultations.get(o.id) ?? null,
         deliveryMethod: o.delivery_method,
       }
     })
@@ -1043,9 +1079,13 @@ async function fetchTailorOrders(
   if (error) throw error
 
   const rows = (data ?? []) as TailorOrderQueryRow[]
-  const consultationReviews = await fetchLatestConsultationAttendanceReviews(
-    rows.filter((order) => order.stage === 'CONSULTATION').map((order) => order.id)
-  )
+  const consultationOrderIds = rows
+    .filter((order) => order.stage === 'CONSULTATION' || order.stage === 'PENDING_QUOTE')
+    .map((order) => order.id)
+  const [consultationReviews, makeUpConsultations] = await Promise.all([
+    fetchLatestConsultationAttendanceReviews(consultationOrderIds),
+    fetchScheduledMakeUpConsultations(consultationOrderIds),
+  ])
   const customerNames = await fetchCustomerNameMap(rows.map((row) => row.customer_id))
   const inquiryRows = rows.filter((o) => {
     if (o.stage !== 'PENDING_QUOTE') return false
@@ -1087,6 +1127,7 @@ async function fetchTailorOrders(
         videoCallUrl: o.video_call_url ?? null,
         createdAt: o.created_at,
         consultationReview: consultationReviews.get(o.id) ?? null,
+        makeUpConsultationScheduledAt: makeUpConsultations.get(o.id) ?? null,
       }
     })
 }
@@ -1102,7 +1143,7 @@ async function fetchCustomerOrderDetail(
       id, reference, garment_type, garment_description, stage,
       tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, quoted_completion_date,
       fabric_source, delivery_method, fabric_tracking,
-      collection_code, video_call_url, created_at,
+      collection_code, collection_code_expiry, video_call_url, created_at,
       tailor_profiles!tailor_profile_id(display_name),
       order_stage_updates(id, stage, note, photo_url, created_at)
     `
@@ -1131,6 +1172,7 @@ async function fetchCustomerOrderDetail(
     deliveryMethod: d.delivery_method ?? '',
     fabricTracking: d.fabric_tracking,
     collectionCode: d.collection_code,
+    collectionCodeExpiry: d.collection_code_expiry,
     videoCallUrl: d.video_call_url ?? null,
     stageUpdates: (d.order_stage_updates ?? []).map((u) => ({
       id: u.id,
@@ -2281,7 +2323,8 @@ export function useTailorPublic(tailorId: string | undefined, userId?: string) {
     queryKey: [...qk.tailorPublic(tailorId ?? ''), userId ?? 'guest'],
     queryFn: () => fetchTailorPublic(tailorId!, userId),
     enabled: !!tailorId,
-    staleTime: 10 * 60_000,
+    staleTime: 15_000,
+    refetchOnMount: 'always',
   })
 }
 

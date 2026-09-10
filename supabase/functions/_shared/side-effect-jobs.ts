@@ -17,6 +17,16 @@ type PushJobInput = {
     channelId?: string
     sound?: string
     interruptionLevel?: string
+    communication?: {
+      category: 'ORDER' | 'MESSAGE' | 'PAYMENT' | 'PAYOUT' | 'ACCOUNT' | 'SECURITY' | 'SUPPORT' | 'SAFETY' | 'SERVICE_STATUS' | 'PROMOTION' | 'PRODUCT_UPDATE'
+      purpose: 'TRANSACTIONAL' | 'OPERATIONAL' | 'MARKETING'
+      severity?: 'INFO' | 'NOTICE' | 'WARNING' | 'CRITICAL'
+      mandatory?: boolean
+      inApp?: boolean
+      destinationKey?: string
+      destinationParams?: Record<string, unknown>
+      deduplicationKey?: string
+    }
   }
   source: string
   idempotencyKey: string

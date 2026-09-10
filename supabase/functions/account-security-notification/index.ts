@@ -8,7 +8,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { normalizeDrapeonSender } from '../_shared/email-template.ts'
+import {
+  normalizeDrapeonSender,
+  renderDrapeonTransactionalEmail,
+} from '../_shared/email-template.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
@@ -53,15 +56,6 @@ function getResendApiKey() {
   return Deno.env.get('RESEND_API_KEY')?.trim() ?? ''
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
 async function sendSecurityEmail(input: {
   to: string
   event: 'PASSWORD_CHANGED' | 'EMAIL_CHANGE_STARTED'
@@ -73,14 +67,12 @@ async function sendSecurityEmail(input: {
     return false
   }
 
-  const timestamp = new Date().toISOString()
   const appUrl = getSiteUrl()
   const subject =
     input.event === 'PASSWORD_CHANGED'
       ? 'Your Drapeon password was changed'
       : 'Drapeon email change requested'
-  const headline =
-    input.event === 'PASSWORD_CHANGED' ? 'Password changed' : 'Email change requested'
+  const headline = input.event === 'PASSWORD_CHANGED' ? 'Password changed' : 'Email change requested'
   const body =
     input.event === 'PASSWORD_CHANGED'
       ? 'Your Drapeon password was changed from a signed-in session.'
@@ -89,6 +81,24 @@ async function sendSecurityEmail(input: {
     input.event === 'PASSWORD_CHANGED'
       ? 'If this was not you, reset your password immediately and contact security@drapeon.co.'
       : 'If this was not you, do not confirm the change and contact security@drapeon.co immediately.'
+
+  const receipt = renderDrapeonTransactionalEmail({
+    preheader: subject,
+    eyebrow: 'Security receipt',
+    headline,
+    recipientName: input.to.split('@')[0],
+    body: `${body}\n\n${action}`,
+    details: [
+      { label: 'Account', value: input.to },
+      ...(input.event === 'EMAIL_CHANGE_STARTED' && input.newEmail
+        ? [{ label: 'Requested email', value: input.newEmail }]
+        : []),
+    ],
+    ctaLabel: 'Review account security',
+    ctaUrl: `${appUrl}/account/settings#login-security`,
+    secondaryCtaLabel: 'Security help',
+    secondaryCtaUrl: `${appUrl}/security`,
+  })
 
   const response = await fetch(RESEND_API, {
     method: 'POST',
@@ -101,17 +111,7 @@ async function sendSecurityEmail(input: {
       from: getResendFrom(),
       to: [input.to],
       subject,
-      html: `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-  <h1 style="font-size:24px;margin:0 0 12px">${escapeHtml(headline)}</h1>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(body)}</p>
-  <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(action)}</p>
-  <table style="width:100%;border-collapse:collapse;margin:24px 0">
-    <tr><td style="padding:8px 0;color:#6b7280">Time</td><td style="padding:8px 0;font-weight:600">${escapeHtml(timestamp)}</td></tr>
-    <tr><td style="padding:8px 0;color:#6b7280">Account email</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.to)}</td></tr>
-  </table>
-  <a href="${appUrl}/security" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Security help</a>
-</div>`,
+      ...receipt,
     }),
   })
 

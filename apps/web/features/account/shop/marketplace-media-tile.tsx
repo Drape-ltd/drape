@@ -46,17 +46,19 @@ export function MarketplaceMediaTile({
   media,
   title,
   priority = false,
+  fit = 'cover',
   className = '',
 }: {
   media: MarketplaceMedia | null
   title: string
   priority?: boolean
+  fit?: 'cover' | 'contain'
   className?: string
 }) {
   if (!media)
     return (
       <div
-        className={`h-full w-full bg-[linear-gradient(145deg,rgba(46,113,84,0.14),rgba(244,240,232,0.72))] ${className}`}
+        className={`relative h-full w-full overflow-hidden bg-[linear-gradient(145deg,rgba(46,113,84,0.14),rgba(244,240,232,0.72))] ${className}`}
         role="img"
         aria-label={`${title} media coming soon`}
       />
@@ -64,30 +66,34 @@ export function MarketplaceMediaTile({
   const position = marketplaceMediaObjectPosition(media)
   if (media.kind === 'VIDEO') {
     return (
-      <video
-        src={media.url}
-        poster={media.posterUrl ?? undefined}
-        muted
-        loop
-        autoPlay
-        playsInline
-        preload="metadata"
-        aria-label={media.altText || `${title} video`}
-        className={`h-full w-full object-cover ${className}`}
-        style={{ objectPosition: position }}
-      />
+      <div className={`relative h-full w-full overflow-hidden ${className}`}>
+        <video
+          src={media.url}
+          poster={media.posterUrl ?? undefined}
+          muted
+          loop
+          autoPlay
+          playsInline
+          preload="metadata"
+          aria-label={media.altText || `${title} video`}
+          className="absolute inset-0 h-full w-full object-cover"
+          style={{ objectPosition: position }}
+        />
+      </div>
     )
   }
   return (
-    <Image
-      src={media.url}
-      alt={media.altText || title}
-      fill
-      priority={priority}
-      sizes="(min-width:1440px) 22vw,(min-width:1024px) 28vw,(min-width:640px) 45vw,92vw"
-      unoptimized
-      className={`object-cover ${className}`}
-      style={{ objectPosition: position }}
-    />
+    <div className={`relative h-full w-full overflow-hidden ${className}`}>
+      <Image
+        src={media.url}
+        alt={media.altText || title}
+        fill
+        priority={priority}
+        sizes="(min-width:1440px) 22vw,(min-width:1024px) 28vw,(min-width:640px) 45vw,92vw"
+        unoptimized
+        className={fit === 'contain' ? 'object-contain' : 'object-cover'}
+        style={{ objectPosition: position }}
+      />
+    </div>
   )
 }

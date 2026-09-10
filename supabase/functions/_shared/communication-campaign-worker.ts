@@ -398,14 +398,21 @@ export async function processCommunicationCampaignRecipient(
           ctaLabel: asString(content.ctaLabel) ?? links.ctaLabel,
           webPath: links.webPath,
           appUrl: links.appUrl,
+          idempotencyKey: `communication/${recipient.id}/EMAIL`,
         });
-        await recordOutcome(supabase, recipient.id, channel, result.status, {
+        await recordOutcome(
+          supabase,
+          recipient.id,
+          channel,
+          result.status === "ACCEPTED" ? "SENT" : result.status,
+          {
           reason: "reason" in result ? result.reason : null,
           provider: "provider" in result ? result.provider : "RESEND",
           providerReference: "providerReference" in result
             ? result.providerReference
             : null,
-        });
+          },
+        );
       } else {
         const role = asString(snapshot.role) === "TAILOR"
           ? "TAILOR"

@@ -136,6 +136,7 @@ function SheetFrame({
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const keyboardEventRef = useRef<KeyboardEvent | null>(null)
   const [keyboardInset, setKeyboardInset] = useState(0)
+  const bodyBottomInset = actions.length > 0 ? 0 : bottomInset
 
   const revealFocusedInput = useCallback((event: KeyboardEvent) => {
     if (!scrollable) return
@@ -231,7 +232,7 @@ function SheetFrame({
           contentContainerStyle={[
             styles.scrollContent,
             standaloneNativeFrame && styles.standaloneScrollContent,
-            { paddingBottom: Spacing.xl + bottomInset + keyboardInset },
+            { paddingBottom: Spacing.xl + bodyBottomInset + keyboardInset },
           ]}
         >
           {children}
@@ -243,7 +244,7 @@ function SheetFrame({
           style={styles.scrollBody}
           contentContainerStyle={[
             styles.scrollContent,
-            { paddingBottom: Spacing.xl + bottomInset + keyboardInset },
+            { paddingBottom: Spacing.xl + bodyBottomInset + keyboardInset },
           ]}
           automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
@@ -252,11 +253,11 @@ function SheetFrame({
       )
     : useNativeSheetBody && RuntimeBottomSheetView
       ? (
-        <RuntimeBottomSheetView style={[styles.body, { paddingBottom: bottomInset }]}>
+        <RuntimeBottomSheetView style={[styles.body, { paddingBottom: bodyBottomInset }]}>
           {children}
         </RuntimeBottomSheetView>
       )
-      : <View style={[styles.body, { paddingBottom: bottomInset }]}>{children}</View>
+      : <View style={[styles.body, { paddingBottom: bodyBottomInset }]}>{children}</View>
 
   return (
     <>
@@ -578,6 +579,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
   },
   footerActionPrimary: {
     backgroundColor: Colors.needleGreen,
@@ -594,9 +596,11 @@ const styles = StyleSheet.create({
     opacity: 0.56,
   },
   footerActionLabel: {
+    flexShrink: 1,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
     color: Colors.textInverse,
+    textAlign: 'center',
   },
   footerActionLabelSecondary: {
     color: Colors.ink,

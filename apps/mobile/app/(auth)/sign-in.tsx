@@ -17,9 +17,10 @@ import { capture } from '@/lib/analytics'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
+import { TurnstileChallenge } from '@/components/auth/TurnstileChallenge'
 import { Button, Input, Divider, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
-import { CONTACTS, buildWhatsAppSupportUrl } from '@drape/shared'
+import { CONTACTS, buildWhatsAppSupportUrl, isDeviceTrustCode } from '@drape/shared'
 import { colors } from '@drape/shared/design-system'
 
 type RoleIntent = 'CUSTOMER' | 'TAILOR'
@@ -40,7 +41,7 @@ function normalizeRoleIntent(value: unknown): RoleIntent | null {
 export default function SignInScreen() {
   const router = useRouter()
   const params = useLocalSearchParams<{ intent?: string }>()
-  const { signIn, signInWithGoogle, signInWithApple } = useAuth()
+  const { signIn, verifyDeviceChallenge, cancelDeviceChallenge, signInWithGoogle, signInWithApple } = useAuth()
   const roleIntent = normalizeRoleIntent(params.intent)
   const intentLabel = roleIntent === 'TAILOR' ? 'tailor' : roleIntent === 'CUSTOMER' ? 'customer' : null
   const intentTitle = roleIntent === 'TAILOR'
@@ -60,6 +61,11 @@ export default function SignInScreen() {
   const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null)
   const [emailError, setEmailError] = useState('')
   const [passwordError, setPasswordError] = useState('')
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaResetKey, setCaptchaResetKey] = useState(0)
+  const [rememberDevice, setRememberDevice] = useState(true)
+  const [deviceChallenge, setDeviceChallenge] = useState<{ challengeId: string; maskedEmail: string; expiresAt: string } | null>(null)
+  const [deviceCode, setDeviceCode] = useState('')
 
   function validateEmail(value: string) {
     const trimmed = value.trim()
@@ -76,6 +82,13 @@ export default function SignInScreen() {
   }
 
   function goBack() {
+    if (deviceChallenge) {
+      void cancelDeviceChallenge().finally(() => {
+        setDeviceChallenge(null)
+        setDeviceCode('')
+      })
+      return
+    }
     router.replace('/(auth)/welcome')
   }
 
@@ -88,10 +101,16 @@ export default function SignInScreen() {
       setPasswordError('Password is required.')
       return
     }
+    if (!captchaToken) {
+      Alert.alert('Security check required', 'Complete the quick security check before signing in.')
+      return
+    }
     setPasswordError('')
 
     setLoading(true)
-    const { error } = await signIn(email.trim().toLowerCase(), password, roleIntent)
+    const { error, deviceChallenge: challenge } = await signIn(email.trim().toLowerCase(), password, roleIntent, captchaToken, rememberDevice)
+    setCaptchaToken(null)
+    setCaptchaResetKey((current) => current + 1)
     setLoading(false)
     if (error) {
       if (error === 'Incorrect password. Try again.') {
@@ -111,11 +130,27 @@ export default function SignInScreen() {
       } else {
         Alert.alert('Sign in failed', error)
       }
+    } else if (challenge) {
+      setPassword('')
+      setDeviceCode('')
+      setDeviceChallenge(challenge)
     } else {
       setPasswordError('')
       capture('sign_in')
     }
     // RouteGuard handles redirect
+  }
+
+  async function handleVerifyDevice() {
+    if (!deviceChallenge || loading || !isDeviceTrustCode(deviceCode)) return
+    setLoading(true)
+    const { error } = await verifyDeviceChallenge(deviceChallenge.challengeId, deviceCode)
+    setLoading(false)
+    if (error) {
+      Alert.alert('Code not verified', error)
+      return
+    }
+    capture('sign_in', { method: 'password', device_verified: true })
   }
 
   async function handleGoogle() {
@@ -160,6 +195,54 @@ export default function SignInScreen() {
     } catch {
       Alert.alert('Contact support', `Message Drapeon on WhatsApp or email ${CONTACTS.support} for account access help.`)
     }
+  }
+
+  if (deviceChallenge) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <AuthBackButton style={styles.back} onPress={goBack} />
+        <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <KeyboardAwareScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <AuthEntryHeader
+              eyebrow="New device"
+              title="Check your email."
+              body={`Enter the six-digit code sent to ${deviceChallenge.maskedEmail}.`}
+              showWordmark={false}
+            />
+            <View style={styles.formCard}>
+              <View style={styles.verificationIcon}>
+                <Ionicons name="shield-checkmark-outline" size={28} color={Colors.needleGreen} />
+              </View>
+              <Input
+                label="Verification code"
+                placeholder="000000"
+                value={deviceCode}
+                onChangeText={(value) => setDeviceCode(value.replace(/\D/g, '').slice(0, 6))}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="one-time-code"
+                maxLength={6}
+                required
+                testID="device-code-input"
+              />
+              <Text style={styles.codeHint}>
+                Expires {new Date(deviceChallenge.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Never share this code.
+              </Text>
+              <Button
+                label="Verify and continue"
+                onPress={handleVerifyDevice}
+                loading={loading}
+                disabled={!isDeviceTrustCode(deviceCode)}
+                testID="device-code-submit"
+              />
+              <TouchableOpacity onPress={goBack} accessibilityRole="button" accessibilityLabel="Use another account">
+                <Text style={styles.useAnotherAccount}>Use another account</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAwareScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    )
   }
 
   return (
@@ -230,13 +313,37 @@ export default function SignInScreen() {
               testID="password-input"
             />
 
+            <TurnstileChallenge
+              key={captchaResetKey}
+              action="signin"
+              onTokenChange={setCaptchaToken}
+            />
+
             <Button
               label="Sign in"
               testID="sign-in-submit"
               onPress={handleSignIn}
               loading={loading}
-              disabled={!email || !password || !!emailError}
+              disabled={!email || !password || !!emailError || !captchaToken}
             />
+
+            <TouchableOpacity
+              style={styles.rememberRow}
+              onPress={() => setRememberDevice((current) => !current)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: rememberDevice }}
+              accessibilityLabel="Trust this device for 30 days"
+            >
+              <Ionicons
+                name={rememberDevice ? 'checkbox' : 'square-outline'}
+                size={22}
+                color={rememberDevice ? Colors.needleGreen : Colors.midGrey}
+              />
+              <View style={styles.rememberCopy}>
+                <Text style={styles.rememberTitle}>Trust this device for 30 days</Text>
+                <Text style={styles.rememberHint}>Leave this off on a shared or public device.</Text>
+              </View>
+            </TouchableOpacity>
 
             <Text style={styles.prompt}>
               Don't have an account?{' '}
@@ -393,4 +500,19 @@ const styles = StyleSheet.create({
   oauthIconApple: { color: oauthPalette.appleFg },
   oauthLabel: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: oauthPalette.googleFg },
   oauthLabelApple: { color: oauthPalette.appleFg },
+  verificationIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+    alignSelf: 'center',
+  },
+  codeHint: { fontFamily: Fonts.body, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  useAnotherAccount: { fontFamily: Fonts.bodySemiBold, fontSize: FontSize.sm, color: Colors.needleGreen, textAlign: 'center' },
+  rememberRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
+  rememberCopy: { flex: 1, gap: 2 },
+  rememberTitle: { fontFamily: Fonts.bodySemiBold, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  rememberHint: { fontFamily: Fonts.body, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 })

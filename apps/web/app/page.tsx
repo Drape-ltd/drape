@@ -3,6 +3,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { ArrowRight, Check, MessageCircle, Ruler, Scissors, ShieldCheck } from 'lucide-react'
 import { PublicSiteHeader } from '../components/public-site-header'
+import { ProductStoryShowcase } from '../components/product-story-showcase'
 import { SiteFooter } from '../components/site-footer'
 import { buildMetadata } from '../lib/metadata'
 
@@ -23,7 +24,7 @@ export default function Home(): React.JSX.Element {
     <main className="min-h-screen overflow-x-hidden bg-[#f4f0e8] text-ink">
       <section className="px-3 pt-3 sm:px-5 sm:pt-5">
         <div className="relative mx-auto min-h-[660px] max-w-[92rem] overflow-hidden rounded-[18px] bg-ink lg:min-h-[min(780px,calc(100svh-2.5rem))]">
-          <Image src="/editorial/drapeon-craft-hero-v1.png" alt="A sewing machine stitching deep green and ivory cloth beside tailor's chalk and measuring tape" fill priority sizes="100vw" className="craft-hero-motion object-cover object-[66%_center]" />
+          <Image src="/editorial/drapeon-craft-hero-v1.jpg" alt="A sewing machine stitching deep green and ivory cloth beside tailor's chalk and measuring tape" fill priority sizes="100vw" className="craft-hero-motion object-cover object-[66%_center]" />
           <div aria-hidden="true" className="craft-hero-light absolute inset-y-0 left-[42%] w-[18%] bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.11),transparent)] mix-blend-soft-light" />
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,12,10,0.88)_0%,rgba(10,12,10,0.6)_40%,rgba(10,12,10,0.12)_76%),linear-gradient(0deg,rgba(10,12,10,0.38)_0%,transparent_52%)]" />
           <PublicSiteHeader tone="overlay" />
@@ -43,7 +44,7 @@ export default function Home(): React.JSX.Element {
                 </div>
                 <div className="flex flex-wrap items-center gap-2.5 text-sm">
                   <Link href="/how-it-works" className="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/24 bg-black/14 px-4 font-semibold text-white/82 backdrop-blur transition-colors hover:border-white/40 hover:bg-white/10 hover:text-white" data-analytics-event="secondary_cta_click" data-analytics-label="Homepage how it works">See how it works <ArrowRight aria-hidden="true" size={14} /></Link>
-                  <Link href="/apply" className="inline-flex min-h-10 items-center rounded-full border border-white/18 bg-black/14 px-4 font-semibold text-white/72 backdrop-blur transition-colors hover:border-white/36 hover:bg-white/10 hover:text-white" data-analytics-event="secondary_cta_click" data-analytics-label="Homepage join as tailor">Apply as a tailor</Link>
+                  <Link href="/sign-up?role=TAILOR" className="inline-flex min-h-10 items-center rounded-full border border-white/18 bg-black/14 px-4 font-semibold text-white/72 backdrop-blur transition-colors hover:border-white/36 hover:bg-white/10 hover:text-white" data-analytics-event="secondary_cta_click" data-analytics-label="Homepage join as tailor">Join as a tailor</Link>
                 </div>
               </div>
             </div>
@@ -69,10 +70,12 @@ export default function Home(): React.JSX.Element {
         </div>
       </section>
 
+      <ProductStoryShowcase />
+
       <section className="public-section-editorial border-y border-ink/8 bg-[#faf8f3]">
         <div className="mx-auto grid max-w-[92rem] gap-5 px-5 sm:px-8 lg:grid-cols-[1.12fr_0.88fr]">
           <article className="group relative min-h-[520px] overflow-hidden rounded-[16px] bg-ink sm:min-h-[640px]">
-            <Image src="/editorial/drapeon-pattern-planning-v1.png" alt="Pattern pieces, measuring tape, chalk, ruler and green fabric prepared on a worktable" fill sizes="(min-width: 1024px) 56vw, 100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />
+            <Image src="/editorial/drapeon-pattern-planning-v1.jpg" alt="Pattern pieces, measuring tape, chalk, ruler and green fabric prepared on a worktable" fill sizes="(min-width: 1024px) 56vw, 100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />
             <div className="absolute inset-0 bg-[linear-gradient(0deg,rgba(14,18,15,0.82)_0%,rgba(14,18,15,0.02)_55%)]" />
             <div className="absolute bottom-0 left-0 max-w-xl p-7 text-white sm:p-10">
               <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-white/62"><Ruler aria-hidden="true" size={16} /> Before the first cut</div>
@@ -87,7 +90,7 @@ export default function Home(): React.JSX.Element {
               <div className="mt-10 sm:mt-12"><h2 className="text-3xl leading-[1.02] sm:text-4xl">Context before volume.</h2><p className="mt-4 max-w-md text-sm leading-6 text-ink/62">Drapeon is designed around the relationship between a customer, a tailor, and the piece taking shape.</p></div>
             </article>
             <article className="group relative min-h-[360px] overflow-hidden rounded-[16px] bg-ink sm:min-h-[440px]">
-              <Image src="/editorial/drapeon-finishing-detail-v1.png" alt="A finished green seam beside brass shears and ivory thread" fill sizes="(min-width: 1024px) 44vw, 100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />
+              <Image src="/editorial/drapeon-finishing-detail-v1.jpg" alt="A finished green seam beside brass shears and ivory thread" fill sizes="(min-width: 1024px) 44vw, 100vw" className="object-cover transition duration-700 group-hover:scale-[1.015] motion-reduce:transition-none" />
               <div className="absolute inset-0 bg-[linear-gradient(0deg,rgba(14,18,15,0.72)_0%,transparent_52%)]" />
               <div className="absolute bottom-0 left-0 p-7 text-white sm:p-9"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/58">Through the last detail</p><h3 className="mt-3 max-w-sm text-3xl leading-tight text-white sm:text-4xl">Keep every decision with the project.</h3></div>
             </article>
@@ -134,7 +137,7 @@ export default function Home(): React.JSX.Element {
           </div>
           <div className="relative z-10 mt-8 border-t border-white/20 pt-6 lg:mt-0">
             <p className="max-w-lg text-base leading-7 text-white/74">A dedicated workspace for serious enquiries, clearer projects, and the craft behind every order.</p>
-            <Link href="/apply" className="mt-7 inline-flex min-h-12 items-center justify-center gap-3 rounded-full bg-white px-6 text-sm font-semibold text-ink transition-colors hover:bg-bone">Apply as a tailor <ArrowRight aria-hidden="true" size={17} /></Link>
+            <Link href="/sign-up?role=TAILOR" className="mt-7 inline-flex min-h-12 items-center justify-center gap-3 rounded-full bg-white px-6 text-sm font-semibold text-ink transition-colors hover:bg-bone">Join as a tailor <ArrowRight aria-hidden="true" size={17} /></Link>
           </div>
           <div aria-hidden="true" className="pointer-events-none absolute -bottom-20 -right-16 h-72 w-72 rounded-full border border-dashed border-white/16" />
           <div aria-hidden="true" className="pointer-events-none absolute -bottom-8 right-8 h-44 w-44 rounded-full border border-dashed border-white/12" />

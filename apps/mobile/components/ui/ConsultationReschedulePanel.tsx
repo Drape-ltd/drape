@@ -18,6 +18,8 @@ type RequestRow = {
   proposed_start_options: string[] | null
   note: string | null
 }
+type AttendanceResolution = { resolution_code: string | null; reported_reason: string | null }
+type MakeupBooking = { id: string; scheduled_start_at: string; call_type: string; replaces_booking_id: string | null }
 
 const oneDay = 24 * 60 * 60 * 1000
 const defaultTimes = () => [1, 2, 3].map((day) => {
@@ -38,6 +40,7 @@ export function ConsultationReschedulePanel({
   actorId,
   counterpartName,
   onOpenChat,
+  onOpenCall,
   onUpdated,
   onPendingChange,
   onRescheduleRequiredChange,
@@ -47,6 +50,7 @@ export function ConsultationReschedulePanel({
   actorId: string | null | undefined
   counterpartName?: string
   onOpenChat?: () => void
+  onOpenCall?: (callType: 'audio' | 'video') => void
   onUpdated?: () => void
   onPendingChange?: (pending: boolean) => void
   onRescheduleRequiredChange?: (required: boolean) => void
@@ -59,16 +63,32 @@ export function ConsultationReschedulePanel({
   const [pickerIndex, setPickerIndex] = useState<number | null>(null)
   const [note, setNote] = useState('')
   const [selectedStartAt, setSelectedStartAt] = useState<string | null>(null)
+  const [attendanceResolution, setAttendanceResolution] = useState<AttendanceResolution | null>(null)
+  const [makeupBooking, setMakeupBooking] = useState<MakeupBooking | null>(null)
 
   const refresh = useCallback(async () => {
-    const { data: requestData } = await supabase.from('consultation_reschedule_requests')
-      .select('id, requested_by, requested_by_role, proposed_start_at, proposed_start_options, note')
-      .eq('order_id', orderId).eq('status', 'PENDING').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const [requestResult, reviewResult, bookingResult] = await Promise.all([
+      supabase.from('consultation_reschedule_requests')
+        .select('id, requested_by, requested_by_role, proposed_start_at, proposed_start_options, note')
+        .eq('order_id', orderId).eq('status', 'PENDING').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('consultation_attendance_reviews')
+        .select('resolution_code, reported_reason')
+        .eq('order_id', orderId).eq('status', 'RESOLVED').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('consultation_bookings')
+        .select('id, scheduled_start_at, call_type, replaces_booking_id')
+        .eq('order_id', orderId).eq('status', 'CONFIRMED').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    ])
+    const requestData = requestResult.data
     const nextRequest = (requestData as RequestRow | null) ?? null
+    const nextResolution = (reviewResult.data as AttendanceResolution | null) ?? null
+    const nextBooking = (bookingResult.data as MakeupBooking | null) ?? null
+    const nextMakeup = nextBooking?.replaces_booking_id ? nextBooking : null
     setRequest(nextRequest)
+    setAttendanceResolution(nextResolution)
+    setMakeupBooking(nextMakeup)
     setSelectedStartAt(nextRequest?.proposed_start_options?.[0] ?? nextRequest?.proposed_start_at ?? null)
     onPendingChange?.(!!nextRequest)
-    onRescheduleRequiredChange?.(false)
+    onRescheduleRequiredChange?.(nextResolution?.resolution_code === 'RESCHEDULE_REQUIRED' && !nextMakeup)
     setLoading(false)
   }, [onPendingChange, onRescheduleRequiredChange, orderId])
 
@@ -76,6 +96,8 @@ export function ConsultationReschedulePanel({
   useEffect(() => {
     const channel = supabase.channel(`consultation-reschedule:${orderId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_reschedule_requests', filter: `order_id=eq.${orderId}` }, () => { void refresh() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_bookings', filter: `order_id=eq.${orderId}` }, () => { void refresh() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_attendance_reviews', filter: `order_id=eq.${orderId}` }, () => { void refresh() })
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [orderId, refresh])
@@ -151,6 +173,7 @@ export function ConsultationReschedulePanel({
 
   if (loading) return null
   const mine = request?.requested_by === actorId
+  const rescheduleRequired = attendanceResolution?.resolution_code === 'RESCHEDULE_REQUIRED'
   return (
     <>
       {request ? (
@@ -176,6 +199,34 @@ export function ConsultationReschedulePanel({
               <Button label="Suggest other times" variant="secondary" onPress={() => openComposer(options)} disabled={!!busy} />
             </View>
           ) : onOpenChat ? <Button label="Open chat" variant="secondary" onPress={onOpenChat} /> : null}
+        </View>
+      ) : null}
+
+      {!request && makeupBooking ? (
+        <View style={styles.card}>
+          <Text style={styles.eyebrow}>MAKE-UP CONSULTATION</Text>
+          <Text style={styles.title}>New time confirmed</Text>
+          <Text style={styles.hint}>No second payment is needed. The original fee remains protected and this call has a fresh attendance record.</Text>
+          <View style={styles.option}>
+            <Feather name={makeupBooking.call_type === 'AUDIO' ? 'phone' : 'video'} size={17} color={Colors.needleGreen} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.optionText}>{formatTime(makeupBooking.scheduled_start_at)}</Text>
+              <Text style={styles.whyDetail}>{makeupBooking.call_type === 'AUDIO' ? 'Audio' : 'Video'} · Opens 5 minutes before</Text>
+            </View>
+          </View>
+          {onOpenCall ? <Button label="Open call lobby" onPress={() => onOpenCall(makeupBooking.call_type === 'AUDIO' ? 'audio' : 'video')} /> : null}
+          {onOpenChat ? <Button label="Open chat" variant="secondary" onPress={onOpenChat} /> : null}
+        </View>
+      ) : null}
+
+      {!request && !makeupBooking && rescheduleRequired ? (
+        <View style={styles.card}>
+          <Text style={styles.eyebrow}>MAKE-UP CONSULTATION</Text>
+          <Text style={styles.title}>Choose another time together</Text>
+          <Text style={styles.hint}>Both accounts confirmed that the call did not happen. The order remains open for a quote, and the protected consultation fee will follow the new booking.</Text>
+          {attendanceResolution.reported_reason ? <Text style={styles.note}>Why another time is needed: {attendanceResolution.reported_reason}</Text> : null}
+          <Button label="Propose new times" onPress={() => openComposer()} />
+          {onOpenChat ? <Button label="Open chat" variant="secondary" onPress={onOpenChat} /> : null}
         </View>
       ) : null}
 

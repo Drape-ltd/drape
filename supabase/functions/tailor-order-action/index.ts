@@ -558,6 +558,8 @@ type OrderRow = {
   tracking_number?: string | null
   carrier?: string | null
   collection_code?: string | null
+  collection_code_expiry?: string | null
+  collection_code_used?: boolean | null
   collection_code_attempts?: number | null
   collection_code_last_attempt_at?: string | null
   updated_at?: string | null
@@ -712,6 +714,15 @@ async function sendPushToUser(
             ...notificationDestinationData({ kind: 'ORDER', orderId }),
           }
         : notification.data,
+      communication: {
+        category: 'ORDER',
+        purpose: 'TRANSACTIONAL',
+        severity: 'NOTICE',
+        inApp: true,
+        destinationKey: orderId ? 'ORDER_DETAIL' : 'NOTIFICATIONS',
+        destinationParams: orderId ? { orderId } : {},
+        deduplicationKey: `${FN}:${userId}:${orderId ?? 'user'}:${eventKey}`,
+      },
     },
     source: FN,
     orderId,
@@ -1009,11 +1020,14 @@ Deno.serve(async (req) => {
 
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
-      ? 'id, stage, tailor_id, customer_id, delivery_method, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
+      ? 'id, reference, stage, order_kind, tailor_id, customer_id, garment_type, item_title, currency, quoted_currency, quoted_amount, delivery_method, collection_code, collection_code_expiry, collection_code_used, collection_code_attempts, collection_code_last_attempt_at, updated_at'
       : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, fabric_funding_policy_version, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used, fulfillment_policy_version, fulfillment_classification, fulfillment_origin_snapshot, fulfillment_destination_snapshot, fulfillment_corridor_control_id, fulfillment_collection_mode'
 
     // Fetch order — verify tailor ownership and current stage
-    const { data: orderData, error: orderError } = await supabase
+    // This function's discriminated action union is intentionally large; keep the
+    // PostgREST result narrowed by OrderRow instead of asking TypeScript to expand
+    // every select/action combination.
+    const { data: orderData, error: orderError } = await (supabase as any)
       .from('orders')
       .select(orderSelect)
       .eq('id', orderId)
@@ -1540,6 +1554,14 @@ Deno.serve(async (req) => {
             preferenceKey: 'orderUpdates',
             data: { orderId },
           })
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Your pickup is recorded',
+          'Your pickup code was verified and the order is now collected. Open the order to complete it, review the item, or request aftercare support.',
+          null,
+          'collection-confirmed',
         )
       }
       return new Response(JSON.stringify({ ok: true }), {
@@ -2831,7 +2853,7 @@ Deno.serve(async (req) => {
 
       if (order.customer_id) {
         let notificationOrder = order
-        const { data: currentOrder, error: currentOrderError } = await supabase
+        const { data: currentOrder, error: currentOrderError } = await (supabase as any)
           .from('orders')
           .select(orderSelect)
           .eq('id', orderId)
@@ -3306,6 +3328,21 @@ Deno.serve(async (req) => {
 
       if (!updatedOrder?.id) {
         if (await orderAlreadyScheduledForConsultation(supabase, orderId, scheduledStartAt)) {
+          if (order.customer_id) {
+            EdgeRuntime.waitUntil(
+              sendPushToUser(supabase, order.customer_id.toString(), {
+                ...CUSTOMER_NOTIFICATION['approve-consultation'],
+                preferenceKey: 'orderUpdates',
+                data: { orderId },
+              }),
+            )
+            queueCustomerOrderEmail(
+              supabase,
+              order,
+              'Consultation approved',
+              'Your tailor approved and reserved your consultation slot. Pay the fee if required before the call opens.',
+            )
+          }
           return new Response(JSON.stringify({ ok: true, idempotent: true }), {
             headers: { ...cors, 'Content-Type': 'application/json' },
           })
@@ -4361,6 +4398,66 @@ Deno.serve(async (req) => {
         )
       }
 
+      const collectionCodeExpiry = order.collection_code_expiry
+        ? Date.parse(order.collection_code_expiry)
+        : Number.NaN
+      if (order.collection_code_used || !Number.isFinite(collectionCodeExpiry) || collectionCodeExpiry <= Date.now()) {
+        const freshCode = generateCollectionCode()
+        const freshExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        const { data: rotatedOrder, error: rotateError } = await supabase
+          .from('orders')
+          .update({
+            collection_code: freshCode,
+            collection_code_expiry: freshExpiry,
+            collection_code_used: false,
+            collection_code_attempts: 0,
+            collection_code_last_attempt_at: null,
+          })
+          .eq('id', orderId)
+          .eq('stage', 'READY_FOR_COLLECTION')
+          .eq('delivery_method', 'LOCAL_COLLECTION')
+          .eq('collection_code', order.collection_code ?? '')
+          .select('id')
+          .maybeSingle()
+
+        if (rotateError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: rotateError.message })
+          return jsonResponse({ error: 'We could not refresh the expired pickup code. Ask the customer to refresh and try again.' }, 500, cors)
+        }
+        if (!rotatedOrder) {
+          return jsonErrorResponse(cors, 409, 'COLLECTION_STATE_CHANGED', 'The pickup code changed on another device. Refresh the order before trying again.')
+        }
+        await audit(supabase, {
+          event: 'collection_code.rotated',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          order_id: orderId,
+          payload: { reason: 'EXPIRED_DURING_VERIFICATION', expires_at: freshExpiry },
+        })
+        if (order.customer_id) {
+          EdgeRuntime.waitUntil(sendPushToUser(supabase, order.customer_id.toString(), {
+            title: 'New pickup code available',
+            body: 'Your previous pickup code expired. Open the order to see the new code.',
+            preferenceKey: 'orderUpdates',
+            data: { orderId, event: 'collection_code_rotated' },
+          }))
+          queueCustomerOrderEmail(
+            supabase,
+            order,
+            'Your pickup code was refreshed',
+            'Your previous pickup code expired. Open the order to see the new code before collection.',
+            null,
+            `collection-code-rotated:${freshExpiry}`,
+          )
+        }
+        return jsonErrorResponse(
+          cors,
+          409,
+          'COLLECTION_CODE_EXPIRED',
+          'That pickup code expired. A fresh code is now available in the customer’s order; ask them to refresh.',
+        )
+      }
+
       let attempts = readCollectionCodeAttempts({
         attempts: order.collection_code_attempts,
         lastAttemptAt: order.collection_code_last_attempt_at,
@@ -4442,9 +4539,10 @@ Deno.serve(async (req) => {
         )
       }
 
-      const { error } = await supabase.from('orders')
+      const { data: collectedOrder, error } = await supabase.from('orders')
         .update({
           stage: 'COLLECTED',
+          collection_code_used: true,
           collection_code_attempts: 0,
           collection_code_last_attempt_at: null,
           stage_updated_at: new Date().toISOString(),
@@ -4453,10 +4551,18 @@ Deno.serve(async (req) => {
           handoff_confirmation_source: 'COLLECTION_CODE_VERIFIED',
         })
         .eq('id', orderId)
+        .eq('stage', 'READY_FOR_COLLECTION')
+        .eq('collection_code', code)
+        .eq('collection_code_used', false)
+        .select('id')
+        .maybeSingle()
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
         return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+      if (!collectedOrder) {
+        return jsonErrorResponse(cors, 409, 'COLLECTION_STATE_CHANGED', 'This pickup was already recorded or the code changed. Refresh the order before trying again.')
       }
 
       await supabase.from('order_stage_updates').insert({

@@ -188,21 +188,21 @@ Deno.serve(async (req) => {
         : jsonError(corsHeaders, 503, 'DAILY_TOKEN_UNAVAILABLE', 'The protected call pass could not be created. Try again shortly.')
     }
 
-    if (order.stage !== 'CONSULTATION') {
-      return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_READY', 'This order is no longer in the consultation stage.')
-    }
-
     const supportMeta = parseOrderSupportMeta((order as { special_note?: string | null }).special_note)
     const consultationMeta = supportMeta.consultation ?? null
 
     const { data: consultationBooking } = await supabase
       .from('consultation_bookings')
-      .select('id, status, scheduled_start_at, scheduled_end_at, fee_mode, payment_status, paid_at, call_type')
+      .select('id, status, scheduled_start_at, scheduled_end_at, fee_mode, payment_status, paid_at, call_type, replaces_booking_id')
       .eq('order_id', orderId)
       .eq('status', 'CONFIRMED')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    const isMakeupConsultation = order.stage === 'PENDING_QUOTE' && Boolean(consultationBooking?.replaces_booking_id)
+    if (order.stage !== 'CONSULTATION' && !isMakeupConsultation) {
+      return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_READY', 'This order has no active consultation call.')
+    }
     const metadataIsScheduled = Boolean(
       consultationMeta
       && consultationMeta.status !== 'REQUESTED'
@@ -370,7 +370,7 @@ Deno.serve(async (req) => {
       .from('orders')
       .update({ video_call_url: roomUrl })
       .eq('id', orderId)
-      .eq('stage', 'CONSULTATION')
+      .eq('stage', order.stage)
 
     if (callerRole === 'CUSTOMER') {
       updateQuery = updateQuery.eq('customer_id', caller.id)
@@ -394,7 +394,7 @@ Deno.serve(async (req) => {
         .from('orders')
         .select('video_call_url')
         .eq('id', orderId)
-        .eq('stage', 'CONSULTATION')
+        .eq('stage', order.stage)
 
       if (callerRole === 'CUSTOMER') {
         freshQuery = freshQuery.eq('customer_id', caller.id)
@@ -441,13 +441,22 @@ Deno.serve(async (req) => {
             channelId: 'calls',
             sound: 'default',
             interruptionLevel: 'time-sensitive',
-            data: {
-              orderId,
-              target: 'call-join',
-              callKind: 'consultation',
-              callType,
-            },
-          }),
+              data: {
+                orderId,
+                target: 'call-join',
+                callKind: 'consultation',
+                callType,
+              },
+              communication: {
+                category: 'MESSAGE',
+                purpose: 'TRANSACTIONAL',
+                severity: 'NOTICE',
+                inApp: true,
+                destinationKey: 'ORDER_CHAT',
+                destinationParams: { orderId },
+                deduplicationKey: `consultation-call-started:${orderId}:${recipientId}:${callType}:in-app`,
+              },
+            }),
           enqueueSmsJob(supabase, {
             userId: recipientId.toString(),
             audience: recipientAudience(callerRole),

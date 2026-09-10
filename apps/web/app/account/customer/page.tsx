@@ -25,7 +25,7 @@ export default function CustomerAccountPage(): React.JSX.Element {
             href="/sign-in?role=customer"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
           >
-            Open customer dashboard
+            Open customer account
           </a>
           <Link
             href="/sign-up?role=customer"
@@ -36,7 +36,7 @@ export default function CustomerAccountPage(): React.JSX.Element {
         </div>
       }
     >
-      <AccountSignedInRedirect to="/account/dashboard" />
+      <AccountSignedInRedirect to="/account/orders" />
       <section className="py-8">
         <SectionTitle
           eyebrow="What customer access controls"

@@ -32,6 +32,7 @@ import type {
 } from '@drape/shared'
 
 import { createClient } from '../lib/supabase'
+import { publishWebNotificationUnreadCount } from '../lib/web-account-cache-events'
 import { Button } from './ui/button'
 import { Switch } from './ui/switch'
 
@@ -130,18 +131,19 @@ function inboxDestination(item: InboxItem): string | null {
   const caseId = stringParam('caseId') ?? stringParam('case_id')
 
   switch (item.destination_key) {
-    case 'ORDER_DETAIL': return orderId ? `/account/orders?orderId=${encodeURIComponent(orderId)}` : '/account/orders'
+    case 'ORDER_DETAIL': return orderId ? `/account/orders/${encodeURIComponent(orderId)}` : '/account/orders'
     case 'ORDER_CHAT': return conversationId
       ? `/account/messages?conversationId=${encodeURIComponent(conversationId)}`
       : orderId
         ? `/account/messages?orderId=${encodeURIComponent(orderId)}`
         : '/account/messages'
     case 'PAYOUT_SETUP': return '/account/payout'
+    case 'VERIFICATION': return '/account/profile?setup=1'
     case 'ACCOUNT_SETTINGS': return '/account/settings'
     case 'SERVICE_STATUS': return '/status'
     case 'SUPPORT_CASE': return caseId ? `/account/support?caseId=${encodeURIComponent(caseId)}` : '/account/support'
-    case 'PROMOTION': return '/account'
-    case 'NOTIFICATIONS': return '/account/settings#communications'
+    case 'PROMOTION': return '/account/checkout'
+    case 'NOTIFICATIONS': return '/account/notifications'
     default: return null
   }
 }
@@ -161,7 +163,15 @@ function SeverityDot({ severity }: { severity: CommunicationSeverity }) {
   return <span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${color}`} />
 }
 
-export function CommunicationCenter({ session }: { session: Session | null }) {
+export function CommunicationCenter({
+  session,
+  mode = 'all',
+  inboxLimit = 6,
+}: {
+  session: Session | null
+  mode?: 'all' | 'inbox'
+  inboxLimit?: number
+}) {
   const [preferences, setPreferences] = useState<PreferenceMatrix | null>(null)
   const [consents, setConsents] = useState<ConsentState>({})
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([])
@@ -179,20 +189,25 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
     setError(null)
     try {
       const [preferenceData, inboxData] = await Promise.all([
-        invokeCommunications<PreferencesResponse>({ action: 'PREFERENCES_GET' }),
-        invokeCommunications<InboxResponse>({ action: 'INBOX_LIST', limit: 6 }),
+        mode === 'all'
+          ? invokeCommunications<PreferencesResponse>({ action: 'PREFERENCES_GET' })
+          : Promise.resolve<PreferencesResponse | null>(null),
+        invokeCommunications<InboxResponse>({ action: 'INBOX_LIST', limit: inboxLimit }),
       ])
-      setPreferences(preferenceData.preferences)
-      setConsents(preferenceData.marketingConsents ?? {})
+      if (preferenceData) {
+        setPreferences(preferenceData.preferences)
+        setConsents(preferenceData.marketingConsents ?? {})
+      }
       setInboxItems(inboxData.items ?? [])
       setUnreadCount(inboxData.unreadCount ?? 0)
+      publishWebNotificationUnreadCount(inboxData.unreadCount ?? 0)
     } catch (loadError) {
       setError(messageFromError(loadError))
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [session])
+  }, [inboxLimit, mode, session])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load() }, 0)
@@ -261,7 +276,11 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
         read_at: action === 'UNREAD' ? null : entry.read_at ?? new Date().toISOString(),
         acknowledged_at: action === 'ACKNOWLEDGED' ? new Date().toISOString() : entry.acknowledged_at,
       } : entry))
-      setUnreadCount((count) => action === 'UNREAD' ? count + (item.read_at ? 1 : 0) : Math.max(0, count - (item.read_at ? 0 : 1)))
+      setUnreadCount((count) => {
+        const next = action === 'UNREAD' ? count + (item.read_at ? 1 : 0) : Math.max(0, count - (item.read_at ? 0 : 1))
+        publishWebNotificationUnreadCount(next)
+        return next
+      })
       setSuccess(action === 'ACKNOWLEDGED' ? 'Acknowledgement recorded.' : 'Inbox updated.')
     } catch (markError) {
       setError(messageFromError(markError))
@@ -270,7 +289,29 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
     }
   }
 
-  if (loading && !preferences) {
+  async function markAllInboxRead() {
+    if (unreadCount <= 0) return
+    const key = 'inbox:all:READ'
+    setSavingKey(key)
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await invokeCommunications<{ updatedCount: number; readAt: string }>({ action: 'INBOX_MARK_ALL_READ' })
+      setInboxItems((current) => current.map((entry) => ({
+        ...entry,
+        read_at: entry.read_at ?? result.readAt,
+      })))
+      setUnreadCount(0)
+      publishWebNotificationUnreadCount(0)
+      setSuccess(result.updatedCount === 1 ? '1 notification marked as read.' : `${result.updatedCount} notifications marked as read.`)
+    } catch (markError) {
+      setError(messageFromError(markError))
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
+  if (loading && (mode === 'inbox' || !preferences)) {
     return (
       <div className="flex min-h-40 items-center justify-center gap-2 rounded-[12px] border border-ui-border bg-white text-sm text-ink/60">
         <LoaderCircle className="size-5 animate-spin" /> Loading communications…
@@ -282,8 +323,8 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
     <div id="communications" className="grid scroll-mt-28 gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-ink">Communications</p>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-ink/52">Control routine alerts and optional updates. Important account, money, safety, support, and service messages always remain available in Drapeon.</p>
+          <p className="text-sm font-semibold text-ink">{mode === 'inbox' ? 'Notifications' : 'Communications'}</p>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-ink/52">{mode === 'inbox' ? 'Payment, order, payout, safety, and support updates stay here even if push or email is unavailable.' : 'Control routine alerts and optional updates. Important account, money, safety, support, and service messages always remain available in Drapeon.'}</p>
         </div>
         <Button variant="secondary" size="sm" onClick={() => void load(true)} disabled={refreshing}>
           <RefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
@@ -293,7 +334,7 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
       {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/5 px-4 py-3 text-sm text-rust">{error}</div> : null}
       {success ? <div role="status" className="rounded-[8px] border border-drape-green/20 bg-drape-green/5 px-4 py-3 text-sm text-drape-green">{success}</div> : null}
 
-      <section aria-labelledby="routine-communications" className="grid gap-3">
+      {mode === 'all' ? <section aria-labelledby="routine-communications" className="grid gap-3">
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-drape-green">Routine alerts</p>
           <h3 id="routine-communications" className="mt-1 text-base font-semibold text-ink">Choose what interrupts you</h3>
@@ -328,9 +369,9 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
             </div>
           ))}
         </div>
-      </section>
+      </section> : null}
 
-      <section aria-labelledby="essential-communications" className="grid gap-3">
+      {mode === 'all' ? <section aria-labelledby="essential-communications" className="grid gap-3">
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-drape-green">Essential</p>
           <h3 id="essential-communications" className="mt-1 text-base font-semibold text-ink">Protection that stays on</h3>
@@ -347,9 +388,9 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
             </div>
           ))}
         </div>
-      </section>
+      </section> : null}
 
-      <section aria-labelledby="optional-communications" className="grid gap-3">
+      {mode === 'all' ? <section aria-labelledby="optional-communications" className="grid gap-3">
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-drape-green">Optional</p>
           <h3 id="optional-communications" className="mt-1 text-base font-semibold text-ink">Offers and product news</h3>
@@ -379,15 +420,28 @@ export function CommunicationCenter({ session }: { session: Session | null }) {
             </div>
           ))}
         </div>
-      </section>
+      </section> : null}
 
       <section aria-labelledby="communication-inbox" className="grid gap-3">
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-drape-green">Inbox</p>
             <h3 id="communication-inbox" className="mt-1 flex items-center gap-2 text-base font-semibold text-ink"><Inbox className="size-5" /> Important updates</h3>
           </div>
-          <span className="rounded-full bg-drape-green/8 px-3 py-1 text-xs font-bold text-drape-green">{unreadCount} unread</span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-drape-green/8 px-3 py-1 text-xs font-bold text-drape-green">{unreadCount} unread</span>
+            {unreadCount > 0 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void markAllInboxRead()}
+                disabled={savingKey === 'inbox:all:READ'}
+              >
+                {savingKey === 'inbox:all:READ' ? <LoaderCircle className="animate-spin" /> : <CheckCheck />}
+                {savingKey === 'inbox:all:READ' ? 'Marking…' : 'Mark all read'}
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {inboxItems.length === 0 ? (

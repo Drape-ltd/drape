@@ -144,7 +144,11 @@ export function consultationAttendanceResolutionCopy(resolutionCode: string | nu
 export function consultationOrderListState(input: {
   actorRole: 'CUSTOMER' | 'TAILOR'
   review?: ConsultationAttendanceReviewSnapshot | null
+  makeUpScheduledAt?: string | null
 }): ConsultationOrderListState | null {
+  if (input.makeUpScheduledAt) {
+    return { label: 'Make-up consultation scheduled', needsAction: false }
+  }
   const review = input.review
   if (!review) return null
 
@@ -239,6 +243,21 @@ export const CONSULTATION_ATTENDANCE_POLICY = Object.freeze({
   attendedOverlapMinutes: 5,
   contestWindowHours: 24,
 })
+
+/**
+ * The earliest instant at which either participant may report an attendance
+ * problem. Keep this clock shared so mobile and web do not unlock different
+ * actions for the same consultation.
+ */
+export function consultationAttendanceReportAvailableAt(
+  scheduledStartAt: string | Date | number,
+) {
+  const scheduledStart = timestamp(scheduledStartAt)
+  if (scheduledStart == null) return null
+  return new Date(
+    scheduledStart + CONSULTATION_ATTENDANCE_POLICY.claimantWaitMinutes * minuteMs,
+  ).toISOString()
+}
 
 export const CONSULTATION_CANCELLATION_POLICY = Object.freeze({
   fullRefundNoticeHours: 24,

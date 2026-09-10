@@ -70,6 +70,7 @@ type TailorProfile = {
   avatarUrl: string | null
   portfolioPhotos: string[]
   portfolioVideos: string[]
+  media?: Array<{ id: string; kind: 'IMAGE' | 'VIDEO'; url: string }>
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
   pickupAvailable: boolean
@@ -104,6 +105,7 @@ type ReviewSummary = {
 type MediaPreviewItem = {
   uri: string
   bucket: StorageImageBucket
+  assetId?: string
 }
 
 const AVAILABILITY_LABEL: Record<string, string> = {
@@ -164,6 +166,7 @@ export default function TailorProfileScreen() {
   const [showPortfolioModal, setShowPortfolioModal] = useState(false)
   const [showReviewsModal, setShowReviewsModal] = useState(false)
   const [showStylesModal, setShowStylesModal] = useState(false)
+  const [reportingMedia, setReportingMedia] = useState(false)
   const [wishlistPickerOpen, setWishlistPickerOpen] = useState(false)
   const [newWishlistName, setNewWishlistName] = useState('')
   const { currency, rates } = useCurrency()
@@ -298,6 +301,33 @@ export default function TailorProfileScreen() {
     setTimeout(() => setPreviewVideoUrl(url), 150)
   }
 
+  function reportMedia(item: MediaPreviewItem | undefined) {
+    if (!item?.assetId || reportingMedia) return
+    const choices = [
+      ['NUDITY_OR_SEXUAL', 'Nudity or sexual content'],
+      ['VIOLENCE_OR_HATE', 'Violence or hateful content'],
+      ['CHILD_SAFETY', 'Child safety concern'],
+      ['SCAM_OR_IMPERSONATION', 'Scam or impersonation'],
+      ['OTHER', 'Something else'],
+    ] as const
+    Alert.alert('Report portfolio media', 'Choose the closest reason. One report opens a Trust review; urgent or repeated reports temporarily hide the media.', [
+      ...choices.map(([reason, text]) => ({
+        text,
+        onPress: async () => {
+          setReportingMedia(true)
+          const { data: result, error } = await invokeFunction('media-report-action', { body: { mediaAssetId: item.assetId, reason } })
+          setReportingMedia(false)
+          if (error || !(result as { ok?: boolean } | null)?.ok) {
+            Alert.alert('Report not sent', await readFunctionErrorMessage(error, 'Could not send this report right now.'))
+            return
+          }
+          Alert.alert('Report received', 'Drapeon Trust will review this media. You can continue browsing.')
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
   if (isLoading && !data) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -386,9 +416,11 @@ export default function TailorProfileScreen() {
     ? portfolioImages
     : (profile.avatarUrl ? [profile.avatarUrl] : [])
   const heroImages = heroSourceImages.filter((url) => !failedHeroImages.includes(url))
+  const mediaIdByUrl = new Map((profile.media ?? []).map((item) => [item.url, item.id]))
   const portfolioImageItems: MediaPreviewItem[] = portfolioImages.map((uri) => ({
     uri,
     bucket: 'portfolio-photos',
+    assetId: mediaIdByUrl.get(uri),
   }))
   const heroSlides: MediaPreviewItem[] = heroImages.map((uri) => ({
     uri,
@@ -886,6 +918,12 @@ export default function TailorProfileScreen() {
                   </Text>
                 </View>
               ) : null}
+              {imagePreviewItems[imageViewerIndex]?.assetId ? (
+                <TouchableOpacity style={styles.previewReport} onPress={() => reportMedia(imagePreviewItems[imageViewerIndex])} disabled={reportingMedia} accessibilityRole="button" accessibilityLabel="Report this portfolio image">
+                  <Feather name="flag" size={15} color={Colors.textInverse} />
+                  <Text style={styles.previewCloseText}>{reportingMedia ? 'Sending…' : 'Report'}</Text>
+                </TouchableOpacity>
+              ) : null}
             </>
           ) : null}
         </View>
@@ -902,12 +940,20 @@ export default function TailorProfileScreen() {
             <Text style={styles.previewCloseText}>Close</Text>
           </TouchableOpacity>
           {previewVideoUrl ? (
-            <PortfolioVideoPreview
-              uri={previewVideoUrl}
-              style={styles.previewVideo}
-              contentFit="contain"
-              nativeControls
-            />
+            <>
+              <PortfolioVideoPreview
+                uri={previewVideoUrl}
+                style={styles.previewVideo}
+                contentFit="contain"
+                nativeControls
+              />
+              {mediaIdByUrl.get(previewVideoUrl) ? (
+                <TouchableOpacity style={styles.previewReport} onPress={() => reportMedia({ uri: previewVideoUrl, bucket: 'portfolio-photos', assetId: mediaIdByUrl.get(previewVideoUrl) })} disabled={reportingMedia} accessibilityRole="button" accessibilityLabel="Report this portfolio video">
+                  <Feather name="flag" size={15} color={Colors.textInverse} />
+                  <Text style={styles.previewCloseText}>{reportingMedia ? 'Sending…' : 'Report'}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </>
           ) : null}
         </View>
       </Modal>
@@ -1647,6 +1693,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   previewCloseText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  previewReport: { position: 'absolute', right: Spacing.lg, bottom: Spacing.xl, zIndex: 5, minHeight: 44, paddingHorizontal: Spacing.md, borderRadius: Radius.full, backgroundColor: 'rgba(0,0,0,0.62)', flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
   previewCount: {
     position: 'absolute',
     bottom: 48,

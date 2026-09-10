@@ -46,7 +46,7 @@ import {
 } from '@drape/shared/checkout-policy'
 import { phoneHintForContext } from '@/lib/phone-context'
 import { READY_MADE_CHECKOUT_REMINDER, READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
-import { normalizeReadyMadeSizeGuide, recommendReadyMadeSize } from '@/lib/ready-made-fit'
+import { normalizeReadyMadeSizeGuide, recommendReadyMadeSize } from '@drape/shared/ready-made-fit'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { useOrderPaymentFlow } from '@/lib/payments'
 import { queryClient } from '@/lib/queryClient'

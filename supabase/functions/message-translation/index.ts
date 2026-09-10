@@ -74,6 +74,25 @@ type ProviderTranslation = {
   provider: string
 }
 
+class TranslationProviderError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly status: number,
+  ) {
+    super('TRANSLATION_PROVIDER_FAILED')
+  }
+}
+
+function translationProviderMessage(error: TranslationProviderError) {
+  if (error.status === 401 || error.status === 403) {
+    return 'Translation is temporarily unavailable. Try again later; your original message is unchanged.'
+  }
+  if (error.status === 429) {
+    return 'Translation is temporarily at capacity. Try again shortly; your original message is unchanged.'
+  }
+  return 'The translation provider is unavailable right now. Your original message is unchanged.'
+}
+
 function azureHeaders() {
   const apiKey = Deno.env.get('AZURE_TRANSLATOR_KEY')?.trim()
   if (!apiKey) return null
@@ -87,6 +106,10 @@ function azureHeaders() {
   }
 }
 
+function googleConfigured() {
+  return Boolean(Deno.env.get('GOOGLE_CLOUD_TRANSLATION_API_KEY')?.trim())
+}
+
 async function providerError(response: Response, provider: string) {
   const detail = await response.text().catch(() => '')
   log('warn', FN, 'provider.request_failed', {
@@ -94,7 +117,7 @@ async function providerError(response: Response, provider: string) {
     status: response.status,
     detail: detail.slice(0, 240),
   })
-  throw new Error('TRANSLATION_PROVIDER_FAILED')
+  throw new TranslationProviderError(provider, response.status)
 }
 
 async function azureLanguages() {
@@ -154,7 +177,18 @@ async function googleRequest(path: string, init?: RequestInit) {
 }
 
 async function providerLanguages() {
-  if (azureHeaders()) return azureLanguages()
+  if (azureHeaders()) {
+    try {
+      return await azureLanguages()
+    } catch (error) {
+      if (!googleConfigured()) throw error
+      log('warn', FN, 'provider.fallback', {
+        from: 'azure-translator-v3',
+        to: 'google-cloud-translation-v2',
+        operation: 'languages',
+      })
+    }
+  }
 
   const result = await googleRequest('/languages?target=en')
   return (result?.data?.languages ?? [])
@@ -167,7 +201,18 @@ async function providerTranslate(
   targetLanguage: string,
   sourceLanguage?: string | null,
 ): Promise<ProviderTranslation> {
-  if (azureHeaders()) return azureTranslate(text, targetLanguage, sourceLanguage)
+  if (azureHeaders()) {
+    try {
+      return await azureTranslate(text, targetLanguage, sourceLanguage)
+    } catch (error) {
+      if (!googleConfigured()) throw error
+      log('warn', FN, 'provider.fallback', {
+        from: 'azure-translator-v3',
+        to: 'google-cloud-translation-v2',
+        operation: 'translate',
+      })
+    }
+  }
 
   const requestBody: Record<string, unknown> = { q: text, target: targetLanguage, format: 'text' }
   if (sourceLanguage) requestBody.source = sourceLanguage
@@ -259,6 +304,9 @@ Deno.serve(async (req) => {
         if (error instanceof Error && error.message === 'TRANSLATION_NOT_CONFIGURED') {
           return jsonError(cors, 503, 'TRANSLATION_NOT_CONFIGURED', 'Translation is not configured yet.')
         }
+        if (error instanceof TranslationProviderError) {
+          return jsonError(cors, 502, 'TRANSLATION_PROVIDER_FAILED', translationProviderMessage(error))
+        }
         return jsonError(cors, 502, 'TRANSLATION_PROVIDER_FAILED', 'Could not load translation languages.')
       }
     }
@@ -339,6 +387,9 @@ Deno.serve(async (req) => {
     } catch (error) {
       if (error instanceof Error && error.message === 'TRANSLATION_NOT_CONFIGURED') {
         return jsonError(cors, 503, 'TRANSLATION_NOT_CONFIGURED', 'Translation is not configured yet.')
+      }
+      if (error instanceof TranslationProviderError) {
+        return jsonError(cors, 502, 'TRANSLATION_PROVIDER_FAILED', translationProviderMessage(error))
       }
       return jsonError(cors, 502, 'TRANSLATION_PROVIDER_FAILED', 'This message could not be translated right now.')
     }

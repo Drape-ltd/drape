@@ -364,20 +364,24 @@ async function lookupTailorName(supabase: SupabaseClient, userId: string | null 
   return data?.display_name?.trim() || data?.business_name?.trim() || 'there'
 }
 
-async function sendEmail(to: string, subject: string, html: string, text: string) {
+async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey?: string) {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     log('warn', FN, 'resend.missing_api_key')
     throw new Error('RESEND_API_KEY is not configured.')
   }
 
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'drape-order-email/1.0',
+  }
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+
   const response = await fetch(RESEND_API, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'User-Agent': 'drape-order-email/1.0',
-    },
+    headers,
+    signal: AbortSignal.timeout(12_000),
     body: JSON.stringify({
       from: getResendFrom(),
       to: [to],
@@ -460,6 +464,7 @@ export async function sendOrderEventEmail(
     action?: string | null
     evidenceImageUrl?: string | null
     evidenceStorageBucket?: 'order-photos' | 'commercial-evidence' | null
+    idempotencyKey?: string | null
   }
 ) {
   const email = await lookupUserEmail(supabase, input.recipientUserId)
@@ -485,8 +490,14 @@ export async function sendOrderEventEmail(
     action: input.action,
     evidenceImageUrl,
   })
-  const result = await sendEmail(email, input.subject, payload.html, payload.text)
-  return { status: 'DELIVERED' as const, ...result }
+  const result = await sendEmail(
+    email,
+    input.subject,
+    payload.html,
+    payload.text,
+    input.idempotencyKey?.trim() || undefined,
+  )
+  return { status: 'ACCEPTED' as const, ...result }
 }
 
 export async function sendOrderConfirmationEmails(
@@ -511,6 +522,7 @@ export async function sendOrderConfirmationEmails(
   ])
   const receipt = receiptResult.error ? null : receiptResult.data as InitialReceiptContext | null
 
+  const deliveries: Promise<unknown>[] = []
   if (customerEmail) {
     const customerEmailPayload = customerOrderConfirmationEmail({
       customerName,
@@ -518,12 +530,13 @@ export async function sendOrderConfirmationEmails(
       phase,
       receipt,
     })
-    await sendEmail(
+    deliveries.push(sendEmail(
       customerEmail,
       customerEmailPayload.subject,
       customerEmailPayload.html,
-      customerEmailPayload.text
-    )
+      customerEmailPayload.text,
+      `order-confirmation/${order.id}/${phase}/customer`
+    ))
   }
 
   if (tailorEmail) {
@@ -534,11 +547,13 @@ export async function sendOrderConfirmationEmails(
       phase,
       receipt,
     })
-    await sendEmail(
+    deliveries.push(sendEmail(
       tailorEmail,
       tailorEmailPayload.subject,
       tailorEmailPayload.html,
-      tailorEmailPayload.text
-    )
+      tailorEmailPayload.text,
+      `order-confirmation/${order.id}/${phase}/tailor`
+    ))
   }
+  await Promise.all(deliveries)
 }

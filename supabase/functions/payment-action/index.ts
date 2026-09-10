@@ -54,6 +54,7 @@ import { finalizeDispatchShortfallFunding } from '../_shared/drapeon-dispatch.ts
 
 const FN = 'payment-action'
 const QUOTE_NEGOTIATION_V1 = Deno.env.get('QUOTE_NEGOTIATION_V1') === 'true'
+const PaymentPhaseSchema = z.enum(['INITIAL_ORDER', 'FULFILLMENT', 'CONSULTATION'])
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -65,11 +66,13 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId: uuid,
     quoteId: uuid.optional(),
     expectedQuoteVersion: z.number().int().positive().optional(),
+    expectedPhase: PaymentPhaseSchema.optional(),
   }),
   z.object({
     action: z.literal('confirm-payment'),
     orderId: uuid,
     paymentIntentId: z.string().trim().min(1).optional(),
+    expectedPhase: PaymentPhaseSchema.optional(),
   }),
 ])
 
@@ -623,6 +626,15 @@ async function finalizeSuccessfulPayment(
         providerPaymentId: paymentIntentId,
       })
     }
+    await resolveOpsIssueByDedupeKey(
+      supabase,
+      `payment-blocked:${order.id}:payment_already_succeeded`,
+      {
+        recovery: 'FULFILLMENT_PAYMENT_CONFIRMED',
+        provider,
+        payment_intent_id: paymentIntentId,
+      },
+    )
     return { alreadyConfirmed: true as const, stage: order.stage }
   }
 
@@ -676,6 +688,16 @@ async function finalizeSuccessfulPayment(
       provider,
       providerPaymentId: paymentIntentId,
     })
+
+    await resolveOpsIssueByDedupeKey(
+      supabase,
+      `payment-blocked:${order.id}:payment_already_succeeded`,
+      {
+        recovery: 'FULFILLMENT_PAYMENT_CONFIRMED',
+        provider,
+        payment_intent_id: paymentIntentId,
+      },
+    )
 
     await audit(supabase, {
       event: 'payment.fulfillment_confirmed',
@@ -884,6 +906,16 @@ async function finalizeSuccessfulPayment(
           : 'Your order is funded. The tailor can continue production inside Drapeon.',
         preferenceKey: 'paymentConfirmations',
         data: { orderId: order.id },
+        communication: {
+          category: 'PAYMENT',
+          purpose: 'TRANSACTIONAL',
+          severity: 'NOTICE',
+          mandatory: true,
+          inApp: true,
+          destinationKey: 'ORDER_DETAIL',
+          destinationParams: { orderId: order.id },
+          deduplicationKey: `payment-confirmed:${order.id}:${paymentIntentId}:customer`,
+        },
       },
     })
     await enqueueSmsJob(supabase, {
@@ -1017,6 +1049,17 @@ Deno.serve(async (req) => {
     const phase = parsed.data.action === 'confirm-payment'
       ? resolveConfirmPhase(row, parsed.data.paymentIntentId)
       : resolveActivePaymentPhase(row)
+    if (parsed.data.expectedPhase && parsed.data.expectedPhase !== phase) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'payment_phase_changed', {
+        expected_phase: parsed.data.expectedPhase,
+        active_phase: phase,
+      })
+      return jsonError(cors, 409, 'This payment changed while checkout was open. Refresh before continuing.', {
+        code: 'PAYMENT_PHASE_CHANGED',
+        expectedPhase: parsed.data.expectedPhase,
+        activePhase: phase,
+      })
+    }
     let amount =
       phase === 'FULFILLMENT'
         ? fulfillmentPaymentAmount(row)

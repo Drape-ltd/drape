@@ -1,6 +1,7 @@
 import {
   CONSULTATION_ATTENDANCE_POLICY,
   CONSULTATION_POLICY_VERSION,
+  consultationAttendanceReportAvailableAt,
   consultationAttendanceEvidenceCopy,
   consultationAttendanceResolutionCopy,
   consultationOrderListState,
@@ -106,6 +107,11 @@ describe('consultation commercial policy', () => {
 })
 
 describe('consultation attendance evidence', () => {
+  it('uses the shared 15-minute wait before attendance can be reported', () => {
+    expect(consultationAttendanceReportAvailableAt(start)).toBe(at(15))
+    expect(consultationAttendanceReportAvailableAt('not-a-date')).toBeNull()
+  })
+
   it('settles deterministic terminal outcomes without treating a room as attendance', () => {
     expect(deriveConsultationTerminalAction({
       feeMode: 'PAID', paymentStatus: 'PAID', attendanceOutcome: 'INSUFFICIENT_EVIDENCE',
@@ -165,6 +171,14 @@ describe('consultation attendance evidence', () => {
       actorRole: 'TAILOR',
       review: { status: 'RESOLVED', reportedByRole: 'CUSTOMER', resolutionCode: 'RESCHEDULE_REQUIRED' },
     })).toEqual({ label: 'Quote ready', needsAction: false })
+  })
+
+  it('keeps an accepted make-up call visible after quote preparation resumes', () => {
+    expect(consultationOrderListState({
+      actorRole: 'CUSTOMER',
+      review: { status: 'RESOLVED', reportedByRole: 'CUSTOMER', resolutionCode: 'RESCHEDULE_REQUIRED' },
+      makeUpScheduledAt: '2026-09-09T23:00:00.000Z',
+    })).toEqual({ label: 'Make-up consultation scheduled', needsAction: false })
   })
 
   it('keeps refund and earning outcomes visible without exposing raw decision codes', () => {

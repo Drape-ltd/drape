@@ -125,6 +125,7 @@ function contentSecurityPolicy(nonce: string) {
     'https://r.stripe.com',
     'https://m.stripe.network',
     'https://cloudflareinsights.com',
+    'https://challenges.cloudflare.com',
     isDevelopment ? 'ws://localhost:*' : '',
     isDevelopment ? 'ws://127.0.0.1:*' : '',
   ].filter(Boolean).join(' ')
@@ -134,6 +135,7 @@ function contentSecurityPolicy(nonce: string) {
     isDevelopment ? "'unsafe-eval'" : '',
     'https://js.stripe.com',
     'https://static.cloudflareinsights.com',
+    'https://challenges.cloudflare.com',
   ].filter(Boolean).join(' ')
 
   return [
@@ -147,7 +149,7 @@ function contentSecurityPolicy(nonce: string) {
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src ${connectSrc}`,
-    "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+    "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://challenges.cloudflare.com https://drape.daily.co",
     "font-src 'self' data:",
     "manifest-src 'self'",
     "worker-src 'self' blob:",
@@ -171,6 +173,17 @@ export function middleware(request: NextRequest) {
 
   if (isPublicProductionOpsRequest(request)) {
     return notFoundResponse()
+  }
+
+  if (
+    request.nextUrl.pathname.startsWith('/account') &&
+    request.cookies.has('drapeon.deviceChallenge')
+  ) {
+    const redirect = request.nextUrl.clone()
+    redirect.pathname = '/sign-in'
+    redirect.searchParams.set('device', 'verify')
+    redirect.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`)
+    return NextResponse.redirect(redirect)
   }
 
   if (

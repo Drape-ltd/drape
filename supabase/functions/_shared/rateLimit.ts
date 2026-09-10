@@ -26,6 +26,7 @@ const AUTH_ENDPOINTS = new Set([
   'handle-verification-decision',
   'account-profile-action',
   'account-security-action',
+  'trusted-device-action',
   'reauth-proof-action',
 ])
 const WEBHOOK_ENDPOINTS = new Set([

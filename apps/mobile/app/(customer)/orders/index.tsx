@@ -67,7 +67,7 @@ export default function OrdersListScreen() {
     refetch,
   } = useCustomerOrders(user?.id, tab)
   const consultationOrderIdsKey = orders
-    .filter((order) => order.stage === 'CONSULTATION')
+    .filter((order) => order.stage === 'CONSULTATION' || order.makeUpConsultationScheduledAt)
     .map((order) => order.id)
     .sort()
     .join(',')
@@ -81,6 +81,11 @@ export default function OrdersListScreen() {
         channel.on(
           'postgres_changes',
           { event, schema: 'public', table: 'consultation_attendance_reviews', filter: `order_id=eq.${orderId}` },
+          () => { void refetch() }
+        )
+        channel.on(
+          'postgres_changes',
+          { event, schema: 'public', table: 'consultation_bookings', filter: `order_id=eq.${orderId}` },
           () => { void refetch() }
         )
       }
@@ -174,8 +179,12 @@ export default function OrdersListScreen() {
           }
           renderItem={({ item }) => {
             const showReviewNudge = ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(item.stage) && !item.hasReview
-            const consultationState = item.stage === 'CONSULTATION'
-              ? consultationOrderListState({ actorRole: 'CUSTOMER', review: item.consultationReview })
+            const consultationState = item.stage === 'CONSULTATION' || item.makeUpConsultationScheduledAt
+              ? consultationOrderListState({
+                  actorRole: 'CUSTOMER',
+                  review: item.consultationReview,
+                  makeUpScheduledAt: item.makeUpConsultationScheduledAt,
+                })
               : null
             const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
               orderStage: item.stage,

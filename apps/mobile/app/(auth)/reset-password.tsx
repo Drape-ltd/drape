@@ -83,11 +83,29 @@ export default function ResetPasswordScreen() {
 
     setSaving(true)
     const { error } = await supabase.auth.updateUser({ password })
-    setSaving(false)
 
     if (error) {
+      setSaving(false)
       Alert.alert('Could not update password', mapResetPasswordError(error.message))
     } else {
+      const [{ error: revokeError }, { error: noticeError }] = await Promise.all([
+        supabase.functions.invoke('trusted-device-action', {
+          body: { action: 'revoke-all' },
+        }),
+        supabase.functions.invoke('account-security-notification', {
+          body: { event: 'PASSWORD_CHANGED' },
+        }),
+      ])
+
+      if (revokeError || noticeError) {
+        setSaving(false)
+        Alert.alert(
+          'Password changed — review security',
+          'Your password changed, but Drapeon could not finish every security cleanup step. Sign in with your new password and review Login & security.',
+        )
+        return
+      }
+
       try {
         await supabase.auth.signOut({ scope: 'global' })
         await clearRecentReauth()
@@ -99,6 +117,7 @@ export default function ResetPasswordScreen() {
           // Best effort — the success screen still gives the user a way back to sign in.
         }
       }
+      setSaving(false)
       setDone(true)
     }
   }

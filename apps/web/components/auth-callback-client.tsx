@@ -5,13 +5,16 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
 import { resolveAuthenticatedRole } from '@drape/shared/auth-role'
+import { IDENTITY_CONSENT_POLICY_VERSION } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import {
   bootstrapWebOnboarding,
+  persistedWebOnboardingPayload,
   webOnboardingFromUser,
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
 import { markWebSessionScope } from '../lib/web-session-scope'
+import { deleteSignupMediaDraft, readSignupMediaDraft, type SignupMediaDraftDescriptor } from '../lib/signup-media-draft'
 
 type EmailOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
 
@@ -107,6 +110,260 @@ function readStoredOnboarding() {
   }
 }
 
+async function uploadOnboardingAvatar(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  role: 'CUSTOMER' | 'TAILOR',
+  avatarDataUrl: string,
+) {
+  if (!avatarDataUrl.startsWith('data:image/jpeg;base64,')) return
+  const blob = await fetch(avatarDataUrl).then((response) => response.blob())
+  const path = `${userId}/avatar.jpg`
+  const uploaded = await supabase.storage.from('avatars').upload(path, blob, {
+    contentType: 'image/jpeg',
+    cacheControl: '31536000',
+    upsert: true,
+  })
+  if (uploaded.error) throw uploaded.error
+  const publicUrl = supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl
+  const avatarUrl = `${publicUrl}?v=${Date.now()}`
+  const result = await supabase.functions.invoke('account-profile-action', {
+    body: { action: 'update-avatar', role, avatarUrl },
+  })
+  if (result.error || (result.data as { error?: unknown } | null)?.error) {
+    throw result.error ?? new Error('Profile photo could not be attached to this account.')
+  }
+}
+
+async function uploadOnboardingAvatarDraft(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  role: 'CUSTOMER' | 'TAILOR',
+  draft: SignupMediaDraftDescriptor,
+) {
+  const blob = await readSignupMediaDraft(draft.key)
+  if (!blob) throw new Error('Your saved profile photo is missing from this browser. Return to signup and choose it again.')
+  const path = `${userId}/avatar.jpg`
+  const uploaded = await supabase.storage.from('avatars').upload(path, blob, {
+    contentType: 'image/jpeg',
+    cacheControl: '31536000',
+    upsert: true,
+  })
+  if (uploaded.error) throw uploaded.error
+  const publicUrl = supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl
+  const result = await supabase.functions.invoke('account-profile-action', {
+    body: { action: 'update-avatar', role, avatarUrl: `${publicUrl}?v=${Date.now()}` },
+  })
+  if (result.error || (result.data as { error?: unknown } | null)?.error) {
+    throw result.error ?? new Error('Profile photo could not be attached to this account.')
+  }
+  await deleteSignupMediaDraft(draft.key).catch(() => undefined)
+}
+
+async function uploadOnboardingPortfolio(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  dataUrls: string[],
+) {
+  const urls: string[] = []
+  for (const [index, dataUrl] of dataUrls.slice(0, 4).entries()) {
+    if (!dataUrl.startsWith('data:image/jpeg;base64,')) continue
+    const blob = await fetch(dataUrl).then((response) => response.blob())
+    const path = `portfolio/${userId}/signup-${index + 1}-${Date.now()}.jpg`
+    const uploaded = await supabase.storage.from('portfolio-photos').upload(path, blob, {
+      contentType: 'image/jpeg',
+      cacheControl: '31536000',
+      upsert: false,
+    })
+    if (uploaded.error) throw uploaded.error
+    urls.push(supabase.storage.from('portfolio-photos').getPublicUrl(path).data.publicUrl)
+  }
+  if (!urls.length) return
+  const seeded = await supabase.functions.invoke('portfolio-item-action', {
+    body: { action: 'seed-from-setup', photoUrls: urls },
+  })
+  if (seeded.error || (seeded.data as { error?: unknown } | null)?.error) {
+    throw seeded.error ?? new Error('Portfolio photos could not be attached to this account.')
+  }
+}
+
+async function uploadOnboardingPortfolioImages(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  drafts: SignupMediaDraftDescriptor[],
+) {
+  const urls: string[] = []
+  for (const [index, draft] of drafts.slice(0, 12).entries()) {
+    const blob = await readSignupMediaDraft(draft.key)
+    if (!blob) throw new Error('A saved portfolio photo is missing from this browser. Return to signup and choose it again.')
+    const path = `portfolio/${userId}/signup-${index + 1}-${Date.now()}.jpg`
+    const uploaded = await supabase.storage.from('portfolio-photos').upload(path, blob, {
+      contentType: 'image/jpeg',
+      cacheControl: '31536000',
+      upsert: false,
+    })
+    if (uploaded.error) throw uploaded.error
+    urls.push(supabase.storage.from('portfolio-photos').getPublicUrl(path).data.publicUrl)
+  }
+  if (!urls.length) return
+  const seeded = await supabase.functions.invoke('portfolio-item-action', {
+    body: { action: 'seed-from-setup', photoUrls: urls },
+  })
+  if (seeded.error || (seeded.data as { error?: unknown } | null)?.error) {
+    throw seeded.error ?? new Error('Portfolio photos could not be attached to this account.')
+  }
+  await Promise.all(drafts.map((draft) => deleteSignupMediaDraft(draft.key).catch(() => undefined)))
+}
+
+function videoExtension(contentType: string) {
+  if (contentType === 'video/quicktime') return 'mov'
+  if (contentType === 'video/webm') return 'webm'
+  return 'mp4'
+}
+
+async function uploadOnboardingPortfolioVideos(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  drafts: SignupMediaDraftDescriptor[],
+) {
+  const urls: string[] = []
+  for (const [index, draft] of drafts.slice(0, 4).entries()) {
+    const blob = await readSignupMediaDraft(draft.key)
+    if (!blob) throw new Error('A saved portfolio video is missing from this browser. Return to signup and choose it again.')
+    const path = `portfolio/${userId}/videos/signup-${index + 1}-${Date.now()}.${videoExtension(draft.contentType)}`
+    const uploaded = await supabase.storage.from('portfolio-photos').upload(path, blob, {
+      contentType: draft.contentType,
+      cacheControl: '31536000',
+      upsert: false,
+    })
+    if (uploaded.error) throw uploaded.error
+    urls.push(supabase.storage.from('portfolio-photos').getPublicUrl(path).data.publicUrl)
+  }
+  if (!urls.length) return
+  const updated = await supabase.functions.invoke('tailor-profile-action', {
+    body: { action: 'update-portfolio-videos', videoUrls: urls },
+  })
+  if (updated.error || (updated.data as { error?: unknown } | null)?.error) {
+    throw updated.error ?? new Error('Portfolio videos could not be attached to this account.')
+  }
+  await Promise.all(drafts.map((draft) => deleteSignupMediaDraft(draft.key).catch(() => undefined)))
+}
+
+async function submitOnboardingTrustVideo(
+  supabase: ReturnType<typeof createClient>,
+  onboarding: WebOnboardingPayload,
+  deferSubmission: boolean,
+) {
+  const draft = onboarding.trustVideoDraft
+  const challengeId = onboarding.trustChallengeId
+  if (!draft || !challengeId || onboarding.trustConsentGranted !== true) return null
+  const blob = await readSignupMediaDraft(draft.key)
+  if (!blob) throw new Error('Your saved private trust video is missing from this browser. Return to setup and record it again.')
+
+  const created = await supabase.functions.invoke('identity-handoff-action', {
+    body: { action: 'create', challengeId },
+  })
+  const createdData = (created.data ?? {}) as { token?: string; challengeId?: string; error?: string }
+  if (created.error || !createdData.token || createdData.challengeId !== challengeId) {
+    throw created.error ?? new Error(createdData.error ?? 'The private challenge could not be prepared.')
+  }
+  const uploadRequest = await supabase.functions.invoke('identity-handoff-action', {
+    body: { action: 'create-upload-url', token: createdData.token, contentType: draft.contentType },
+  })
+  const uploadData = (uploadRequest.data ?? {}) as { path?: string; uploadToken?: string; error?: string }
+  if (uploadRequest.error || !uploadData.path || !uploadData.uploadToken) {
+    throw uploadRequest.error ?? new Error(uploadData.error ?? 'The private video upload could not start.')
+  }
+  const uploaded = await supabase.storage.from('trust-verification').uploadToSignedUrl(
+    uploadData.path,
+    uploadData.uploadToken,
+    blob,
+    { contentType: draft.contentType, cacheControl: '0' },
+  )
+  if (uploaded.error) throw uploaded.error
+  if (deferSubmission) {
+    return {
+      token: createdData.token,
+      storagePath: uploadData.path,
+      draft,
+      challengeId,
+      challengeText: onboarding.trustChallengeText ?? '',
+      consentGranted: true as const,
+    }
+  }
+  const submitted = await supabase.functions.invoke('identity-handoff-action', {
+    body: {
+      action: 'submit',
+      token: createdData.token,
+      storagePath: uploadData.path,
+      consentGranted: true,
+      consentVersion: IDENTITY_CONSENT_POLICY_VERSION,
+      consentSource: 'WEB_SETUP',
+      locale: navigator.language || 'en',
+    },
+  })
+  const submittedData = (submitted.data ?? {}) as { error?: string }
+  if (submitted.error || submittedData.error) {
+    throw submitted.error ?? new Error(submittedData.error ?? 'The private trust video could not be submitted.')
+  }
+  await deleteSignupMediaDraft(draft.key).catch(() => undefined)
+  return null
+}
+
+function preserveTailorSetupDraft(
+  userId: string,
+  onboarding: WebOnboardingPayload,
+  trustResume?: {
+    token: string
+    storagePath: string
+    draft: SignupMediaDraftDescriptor
+    challengeId: string
+    challengeText: string
+    consentGranted: true
+  } | null,
+) {
+  const tailor = onboarding.tailor
+  if (!tailor) return
+  window.localStorage.setItem(`drape:tailor-setup-draft:v3:${userId}`, JSON.stringify({
+    version: 3,
+    displayName: onboarding.displayName,
+    location: tailor.location,
+    bio: tailor.bio ?? '',
+    languages: tailor.languages,
+    specialties: tailor.specialties,
+    currency: onboarding.defaultCurrency,
+    priceMin: tailor.priceRangeMin ? String(tailor.priceRangeMin / 100) : '',
+    priceMax: tailor.priceRangeMax ? String(tailor.priceRangeMax / 100) : '',
+    availability: tailor.availability ?? 'OPEN',
+    sellerType: tailor.sellerType ?? 'TAILOR',
+    supportsCustomOrders: tailor.supportsCustomOrders,
+    supportsReadyMade: tailor.supportsReadyMade,
+    acceptsCustomOrdersNow: tailor.supportsCustomOrders,
+    shopPaused: false,
+    pickupAvailable: tailor.fulfillment.includes('PICKUP'),
+    deliveryAvailable: tailor.fulfillment.includes('DELIVERY'),
+    shippingAvailable: tailor.fulfillment.includes('SHIPPING'),
+    pickupAddress: tailor.pickupAddress ?? '',
+    pickupCity: tailor.pickupCity ?? '',
+    pickupRegion: tailor.pickupRegion ?? '',
+    pickupPostalCode: tailor.pickupPostalCode ?? '',
+    pickupCountryCode: tailor.pickupCountryCode ?? '',
+    pickupInstructions: '',
+    consultationMode: tailor.consultationMode ?? 'FREE',
+    consultationRequirement: tailor.consultationRequirement ?? 'OPTIONAL',
+    consultationFee: tailor.consultationFee ?? '',
+    consultationDuration: tailor.consultationDuration ?? '30',
+    consultationCallType: tailor.consultationCallType ?? 'VIDEO',
+    consultationFeeCreditable: tailor.consultationFeeCreditable === true,
+    signupTrustVideoDraft: trustResume?.draft ?? null,
+    signupTrustChallengeId: trustResume?.challengeId ?? '',
+    signupTrustChallengeText: trustResume?.challengeText ?? '',
+    signupTrustConsentGranted: trustResume?.consentGranted === true,
+    signupTrustHandoffToken: trustResume?.token ?? '',
+    signupTrustStoragePath: trustResume?.storagePath ?? '',
+  }))
+}
+
 export function AuthCallbackClient(): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -159,12 +416,15 @@ export function AuthCallbackClient(): React.JSX.Element {
         }
 
         if (role) {
+          const persistedOnboarding = matchingOnboarding
+            ? persistedWebOnboardingPayload(matchingOnboarding)
+            : undefined
           const { error: metadataError } = await supabase.auth.updateUser({
             data: {
               role,
               display_name: matchingOnboarding?.displayName,
               phone: matchingOnboarding?.phone,
-              web_onboarding: matchingOnboarding ?? undefined,
+              web_onboarding: persistedOnboarding,
             },
           })
           if (metadataError) throw metadataError
@@ -174,6 +434,50 @@ export function AuthCallbackClient(): React.JSX.Element {
               userId: data.user.id,
               onboarding: matchingOnboarding,
             })
+            if (matchingOnboarding.avatarDraft) {
+              await uploadOnboardingAvatarDraft(
+                supabase,
+                data.user.id,
+                role,
+                matchingOnboarding.avatarDraft,
+              )
+            } else if (matchingOnboarding.avatarDataUrl) {
+              await uploadOnboardingAvatar(
+                supabase,
+                data.user.id,
+                role,
+                matchingOnboarding.avatarDataUrl,
+              )
+            }
+            if (role === 'TAILOR') {
+              if (matchingOnboarding.portfolioImageDrafts?.length) {
+                await uploadOnboardingPortfolioImages(
+                  supabase,
+                  data.user.id,
+                  matchingOnboarding.portfolioImageDrafts,
+                )
+              } else if (matchingOnboarding.portfolioDataUrls?.length) {
+                await uploadOnboardingPortfolio(
+                  supabase,
+                  data.user.id,
+                  matchingOnboarding.portfolioDataUrls,
+                )
+              }
+              if (matchingOnboarding.portfolioVideoDrafts?.length) {
+                await uploadOnboardingPortfolioVideos(
+                  supabase,
+                  data.user.id,
+                  matchingOnboarding.portfolioVideoDrafts,
+                )
+              }
+              const sellerType = matchingOnboarding.tailor?.sellerType ?? 'TAILOR'
+              const trustResume = await submitOnboardingTrustVideo(
+                supabase,
+                matchingOnboarding,
+                sellerType !== 'TAILOR',
+              )
+              preserveTailorSetupDraft(data.user.id, matchingOnboarding, trustResume)
+            }
           } else {
             await syncRoleMirror(role)
           }
@@ -181,11 +485,12 @@ export function AuthCallbackClient(): React.JSX.Element {
 
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
         window.localStorage.removeItem('drapeon.web.auth.onboarding')
+        window.localStorage.removeItem('drapeon.web.auth.signup-draft.v1')
         markWebSessionScope(true)
 
         if (active) {
           setFailed(false)
-          setMessage('Account link confirmed. Opening your Drapeon workspace...')
+          setMessage('Account link confirmed. Opening your Drapeon account...')
           router.replace(next as Route)
         }
       } catch (error) {

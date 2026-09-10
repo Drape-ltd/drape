@@ -1,7 +1,6 @@
 'use client'
 
 import { useRef, useState, type ReactNode } from 'react'
-import { Ruler, ScanLine, Users } from 'lucide-react'
 import {
   CORE_MEASUREMENT_FIELDS,
   MEASUREMENT_FIELD_KEYS,
@@ -21,7 +20,6 @@ import { OpenAppButton } from '../../../components/open-app-button'
 import { Button } from '../../../components/ui/button'
 import { Field } from '../../../components/ui/field'
 import { Input } from '../../../components/ui/input'
-import { MetricCard } from '../../../components/ui/metric-card'
 import { NativeSelect } from '../../../components/ui/native-select'
 import { StatusChip } from '../../../components/ui/status-chip'
 import { Surface, SurfaceHeader } from '../../../components/ui/surface'
@@ -623,7 +621,7 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
             <option value="PARENT">Parent</option>
             <option value="CHILD">Child</option>
             <option value="FRIEND">Friend</option>
-            <option value="GROUP_MEMBER">Group member</option>
+            <option value="GROUP_MEMBER">Someone in my party</option>
             <option value="OTHER">Someone else</option>
           </NativeSelect>
         </Field>
@@ -713,10 +711,12 @@ export function MeasurementsContent({ data, onRefresh }: { data: MeasurementsRen
   const legacyMeasurementCount = hasMeasurements(data.customerProfile) ? 1 : 0
   return (
     <div className="grid gap-6">
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <MetricCard label="Named profiles" value={data.measurementProfiles.length} hint="Reusable wearer profiles" icon={<Users />} />
-        <MetricCard label="Drapeon Vision scans" value={data.measurementScans.length} hint="Saved guided captures" icon={<ScanLine />} />
-        <MetricCard label="Profile units" value={data.customerProfile?.unit_preference || data.measurementProfiles[0]?.unit_preference || 'Not set'} hint="Applied across measurements" icon={<Ruler />} />
+      <section className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-[8px] border border-ui-border bg-white px-4 py-3 text-sm" aria-label="Measurement summary">
+        <p><span className="font-semibold text-ink">{data.measurementProfiles.length}</span> <span className="text-ink/55">named profile{data.measurementProfiles.length === 1 ? '' : 's'}</span></p>
+        <span className="hidden h-4 w-px bg-ink/10 sm:block" />
+        <p><span className="font-semibold text-ink">{data.measurementScans.length}</span> <span className="text-ink/55">Vision scan{data.measurementScans.length === 1 ? '' : 's'}</span></p>
+        <span className="hidden h-4 w-px bg-ink/10 sm:block" />
+        <p className="text-ink/55">Units: <span className="font-semibold text-ink">{data.customerProfile?.unit_preference || data.measurementProfiles[0]?.unit_preference || 'Not set'}</span></p>
       </section>
       <ManualMeasurementEditor data={data} onRefresh={onRefresh} />
       <section className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">

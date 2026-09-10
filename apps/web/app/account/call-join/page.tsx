@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { MessagesWorkspace } from '../../../features/account/messages/messages-workspace'
+import { CallWorkspace } from '../../../features/account/call/call-workspace'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -9,5 +9,5 @@ export const metadata: Metadata = buildMetadata({
 })
 
 export default function AccountCallJoinPage(): React.JSX.Element {
-  return <MessagesWorkspace />
+  return <CallWorkspace />
 }

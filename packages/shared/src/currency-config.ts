@@ -1,6 +1,27 @@
 export const SUPPORTED_ACCOUNT_CURRENCIES = ['NGN', 'GHS', 'KES', 'USD', 'GBP', 'EUR', 'CAD'] as const
 export type AccountCurrencyCode = (typeof SUPPORTED_ACCOUNT_CURRENCIES)[number]
 
+/** USD-relative reference rates used only for clearly-labelled display estimates. */
+export const ACCOUNT_CURRENCY_REFERENCE_RATES: Record<AccountCurrencyCode, number> = {
+  USD: 1,
+  GBP: 0.79,
+  EUR: 0.92,
+  NGN: 1580,
+  GHS: 15.6,
+  KES: 129,
+  CAD: 1.36,
+}
+
+export function convertAccountCurrencyEstimate(
+  amountMinorUnits: number,
+  fromCurrency: AccountCurrencyCode,
+  toCurrency: AccountCurrencyCode,
+) {
+  const fromRate = ACCOUNT_CURRENCY_REFERENCE_RATES[fromCurrency]
+  const toRate = ACCOUNT_CURRENCY_REFERENCE_RATES[toCurrency]
+  return Math.round((amountMinorUnits / fromRate) * toRate)
+}
+
 export const PAYSTACK_ACCOUNT_CURRENCIES = ['NGN', 'GHS', 'KES'] as const
 export const STRIPE_ACCOUNT_CURRENCIES = ['USD', 'GBP', 'EUR', 'CAD'] as const
 

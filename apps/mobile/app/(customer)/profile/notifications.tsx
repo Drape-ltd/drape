@@ -24,6 +24,7 @@ import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import {
   listCommunicationInbox,
+  markAllCommunicationInboxRead,
   markCommunicationInbox,
   type CommunicationInboxItem,
 } from '@/lib/communications'
@@ -194,6 +195,7 @@ export default function NotificationsScreen() {
   const lastNotifCheckRef = useRef<string | null>(null)
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [markingAllRead, setMarkingAllRead] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [retryTrigger, setRetryTrigger] = useState(0)
 
@@ -396,6 +398,20 @@ export default function NotificationsScreen() {
     }
   }
 
+  async function markAllRead() {
+    const previous = items
+    setMarkingAllRead(true)
+    setItems((current) => current.map((item) => ({ ...item, isNew: false })))
+    try {
+      await markAllCommunicationInboxRead()
+    } catch {
+      setItems(previous)
+      Alert.alert('Could not mark notifications read', 'Your notification history is unchanged. Please try again.')
+    } finally {
+      setMarkingAllRead(false)
+    }
+  }
+
   useEffect(() => {
     if (!user?.id) return
     const channel = supabase
@@ -414,6 +430,18 @@ export default function NotificationsScreen() {
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
+        {items.some((item) => item.isNew) ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Mark all notifications as read"
+            style={styles.markAllButton}
+            onPress={() => void markAllRead()}
+            disabled={markingAllRead}
+          >
+            <Feather name="check-circle" size={15} color={Colors.needleGreen} />
+            <Text style={styles.markAllText}>{markingAllRead ? 'Marking…' : 'Mark all read'}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {loading ? (
@@ -551,11 +579,14 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: {
+    flex: 1,
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     fontFamily: Fonts.display,
   },
+  markAllButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderRadius: Radius.full, backgroundColor: Colors.needleGreenLight },
+  markAllText: { color: Colors.needleGreen, fontSize: FontSize.xs, fontWeight: FontWeight.bold },
   card: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,

@@ -58,7 +58,7 @@ export default function AccountPage(): React.JSX.Element {
     <MarketingShell
       eyebrow="Account access"
       title="One account. Clear roles. Protected admin."
-      description="Drapeon separates customer, tailor, and ops access so every person lands in the right workspace without mixing responsibilities."
+      description="Drapeon separates customer, tailor, and ops access so every person lands in the right part of their account without mixing responsibilities."
       visual={<AppSurfacePreview variant="account" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -77,7 +77,7 @@ export default function AccountPage(): React.JSX.Element {
         </div>
       }
     >
-      <AccountSignedInRedirect to="/account/dashboard" />
+      <AccountSignedInRedirect to="/account/orders" />
       <section className="py-8">
         <SectionTitle
           eyebrow="Access paths"

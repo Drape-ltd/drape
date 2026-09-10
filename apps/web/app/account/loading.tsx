@@ -2,14 +2,14 @@ import { LoaderCircle } from 'lucide-react'
 
 export default function AccountLoading(): React.JSX.Element {
   return (
-    <main className="min-h-screen bg-ui-canvas px-4 py-4 text-ink sm:px-6 lg:px-8">
-      <div className="mx-auto grid min-h-[calc(100vh-2rem)] max-w-[92rem] place-items-center rounded-[12px] border border-ui-border bg-white">
-        <div className="flex max-w-sm flex-col items-center px-6 text-center" role="status" aria-live="polite">
-          <LoaderCircle className="size-6 animate-spin text-drape-green motion-reduce:animate-none" aria-hidden="true" />
-          <p className="mt-4 text-sm font-semibold">Opening your Drapeon workspace</p>
-          <p className="mt-1 text-sm leading-6 text-ui-subtle">Your account and current work are loading securely.</p>
+    <section className="app-surface grid min-h-52 place-items-center p-6 text-ink">
+      <div className="flex max-w-sm items-center gap-3" role="status" aria-live="polite">
+        <LoaderCircle className="size-5 animate-spin text-drape-green motion-reduce:animate-none" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-semibold">Loading this page</p>
+          <p className="mt-0.5 text-xs text-ui-subtle">Your account navigation stays in place.</p>
         </div>
       </div>
-    </main>
+    </section>
   )
 }

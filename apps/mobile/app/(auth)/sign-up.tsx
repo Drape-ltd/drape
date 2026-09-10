@@ -16,6 +16,7 @@ import { capture } from '@/lib/analytics'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
+import { TurnstileChallenge } from '@/components/auth/TurnstileChallenge'
 import { Button, Input, Divider, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 import { colors } from '@drape/shared/design-system'
@@ -83,6 +84,8 @@ export default function SignUpScreen() {
   const [nameError, setNameError] = useState('')
   const [emailError, setEmailError] = useState('')
   const [passwordError, setPasswordError] = useState('')
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const strength = passwordStrength(password)
   const passwordRequirements = passwordChecklist(password)
   const passwordRequirementsMet = passwordRequirements.every((requirement) => requirement.met)
@@ -126,14 +129,21 @@ export default function SignUpScreen() {
     if (!validateName(displayName)) return
     if (!validateEmail(email) || !validatePassword(password)) return
     if (!passwordRequirementsMet || password !== confirmPassword) return
+    if (!captchaToken) {
+      Alert.alert('Security check required', 'Complete the quick security check before creating your account.')
+      return
+    }
 
     setLoading(true)
     const { error, requiresEmailConfirmation } = await signUp(
       email.trim().toLowerCase(),
       password,
       displayName.trim(),
-      role
+      role,
+      captchaToken,
     )
+    setCaptchaToken(null)
+    setCaptchaResetKey((current) => current + 1)
     setLoading(false)
 
     if (error) {
@@ -307,7 +317,7 @@ export default function SignUpScreen() {
 
             <Input
               label="Password"
-              placeholder="8+ characters"
+              placeholder="10+ characters"
               value={password}
               onChangeText={(value) => {
                 setPassword(value)
@@ -387,6 +397,12 @@ export default function SignUpScreen() {
               testID="confirm-password-input"
             />
 
+            <TurnstileChallenge
+              key={captchaResetKey}
+              action="signup"
+              onTokenChange={setCaptchaToken}
+            />
+
             <Button
               label="Create account"
               onPress={handleSignUp}
@@ -400,7 +416,8 @@ export default function SignUpScreen() {
                 !!nameError ||
                 !!emailError ||
                 !!passwordError ||
-                !!confirmPasswordError
+                !!confirmPasswordError ||
+                !captchaToken
               }
             />
 

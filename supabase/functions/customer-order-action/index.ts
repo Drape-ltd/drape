@@ -22,7 +22,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { hasBlockedContact, rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
-import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { createOrRefreshOpsIssue, resolveOpsIssueByDedupeKey } from '../_shared/ops-issues.ts'
 import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { isSupportedTimeZone } from '../_shared/date-time.ts'
 import {
@@ -76,6 +76,7 @@ const BodySchema = z.object({
     'accept-quote',
     'decline-quote',
     'complete-order',
+    'refresh-collection-code',
     'save-fabric-tracking',
     'approve-sourced-fabric',
     'request-sourced-fabric-change',
@@ -171,6 +172,7 @@ const BodySchema = z.object({
   ])).min(1).max(4).optional(),
   quoteRevisionNote: z.string().trim().min(10).max(1200).optional(),
   quoteTargetAmount: z.number().int().positive().max(999_999_999).optional(),
+  force: z.boolean().optional(),
 })
 
 const FN = 'customer-order-action'
@@ -186,6 +188,7 @@ type Action =
   | 'accept-quote'
   | 'decline-quote'
   | 'complete-order'
+  | 'refresh-collection-code'
   | 'save-fabric-tracking'
   | 'approve-sourced-fabric'
   | 'request-sourced-fabric-change'
@@ -236,6 +239,9 @@ type OrderRow = {
   handoff_completed_at?: string | null
   customer_handoff_confirmed_at?: string | null
   handoff_confirmation_source?: string | null
+  collection_code?: string | null
+  collection_code_expiry?: string | null
+  collection_code_used?: boolean | null
   active_quote_id?: string | null
   active_quote_version?: number | null
   negotiation_round_limit?: number | null
@@ -269,6 +275,7 @@ const VALID_FROM: Record<Action, string[]> = {
   'accept-quote':    ['QUOTE_SENT'],
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
+  'refresh-collection-code': ['READY_FOR_COLLECTION'],
   'save-fabric-tracking': ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'],
   'approve-sourced-fabric': PRE_CUTTING_STAGES,
   'request-sourced-fabric-change': PRE_CUTTING_STAGES,
@@ -479,6 +486,13 @@ function aftercareWindowClosesAt(order: OrderRow) {
   return new Date(parsed + AFTERCARE_WINDOW_MS).toISOString()
 }
 
+/** Cryptographically random 4-digit pickup credential (1000–9999). */
+function generateCollectionCode(): string {
+  const bytes = new Uint32Array(1)
+  crypto.getRandomValues(bytes)
+  return String(1000 + (bytes[0] % 9000))
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -519,7 +533,7 @@ Deno.serve(async (req) => {
     }
 
     const orderSelect =
-      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, tax_rate_bps, tax_region, tax_fallback, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
+      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, tax_rate_bps, tax_region, tax_fallback, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, collection_code, collection_code_expiry, collection_code_used, active_quote_id, active_quote_version, negotiation_round_limit, negotiation_rounds_used'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -591,6 +605,72 @@ Deno.serve(async (req) => {
     // client still holds the delivered snapshot.
     if (action === 'complete-order' && order.stage === 'COMPLETE') {
       return jsonResponse({ ok: true, duplicate: true, stage: 'COMPLETE' }, 200, cors)
+    }
+
+    if (action === 'refresh-collection-code') {
+      if (order.delivery_method !== 'LOCAL_COLLECTION') {
+        return jsonError(cors, 409, 'COLLECTION_METHOD_INACTIVE', 'This order is no longer using pickup.')
+      }
+
+      const now = Date.now()
+      const expiry = order.collection_code_expiry ? Date.parse(order.collection_code_expiry) : Number.NaN
+      const currentIsValid = Boolean(
+        /^\d{4}$/.test(order.collection_code ?? '')
+        && !order.collection_code_used
+        && Number.isFinite(expiry)
+        && expiry > now,
+      )
+      if (currentIsValid && !parsed.data.force) {
+        return jsonResponse({
+          ok: true,
+          rotated: false,
+          collectionCode: order.collection_code,
+          collectionCodeExpiry: order.collection_code_expiry,
+        }, 200, cors)
+      }
+
+      const collectionCode = generateCollectionCode()
+      const collectionCodeExpiry = new Date(now + 24 * 60 * 60 * 1000).toISOString()
+      let update = supabase
+        .from('orders')
+        .update({
+          collection_code: collectionCode,
+          collection_code_expiry: collectionCodeExpiry,
+          collection_code_used: false,
+          collection_code_attempts: 0,
+          collection_code_last_attempt_at: null,
+        })
+        .eq('id', orderId)
+        .eq('customer_id', caller.id)
+        .eq('stage', 'READY_FOR_COLLECTION')
+        .eq('delivery_method', 'LOCAL_COLLECTION')
+      if (order.collection_code) update = update.eq('collection_code', order.collection_code)
+      const { data: rotated, error: rotateError } = await update
+        .select('collection_code, collection_code_expiry')
+        .maybeSingle()
+
+      if (rotateError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: rotateError.message })
+        return jsonResponse({ error: 'We could not refresh this pickup code right now. Please try again.' }, 500, cors)
+      }
+      if (!rotated) {
+        return jsonError(cors, 409, 'COLLECTION_CODE_CHANGED', 'The pickup code changed on another device. Refresh this order to see the current code.')
+      }
+
+      await audit(supabase, {
+        event: 'collection_code.rotated',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: { reason: parsed.data.force ? 'CUSTOMER_REQUESTED' : 'EXPIRED', expires_at: collectionCodeExpiry },
+      })
+
+      return jsonResponse({
+        ok: true,
+        rotated: true,
+        collectionCode: rotated.collection_code,
+        collectionCodeExpiry: rotated.collection_code_expiry,
+      }, 200, cors)
     }
 
     const supportMeta = parseOrderSupportMeta(order.special_note)
@@ -2458,7 +2538,40 @@ Deno.serve(async (req) => {
 
         if (error) {
           log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+          await createOrRefreshOpsIssue(supabase, {
+            issueType: 'SYSTEM_ALERT',
+            severity: action === 'complete-order' ? 'HIGH' : 'MEDIUM',
+            source: FN,
+            actorId: caller.id,
+            actorRole: 'CUSTOMER',
+            orderId,
+            userId: caller.id,
+            stage: order.stage,
+            title: action === 'complete-order' ? 'Order completion failed' : 'Customer order update failed',
+            description: `The authoritative ${action} transition was rejected after the customer submitted it.`,
+            recommendedAction: 'Inspect the recorded database error, repair the transition contract, and replay the same idempotent customer action.',
+            dedupeKey: `customer-order-action:${action}:${orderId}`,
+            metadata: {
+              action,
+              from_stage: order.stage,
+              target_stage: nextStage,
+              database_error: error.message,
+            },
+            notifyOps: true,
+          }).catch(() => null)
           return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+
+        if (action === 'complete-order') {
+          await resolveOpsIssueByDedupeKey(
+            supabase,
+            `customer-order-action:complete-order:${orderId}`,
+            {
+              recovery: 'CUSTOMER_COMPLETION_SUCCEEDED',
+              from_stage: order.stage,
+              target_stage: nextStage,
+            },
+          )
         }
 
         await supabase.from('order_stage_updates').insert({

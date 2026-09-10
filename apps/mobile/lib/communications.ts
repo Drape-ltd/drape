@@ -122,3 +122,9 @@ export function markCommunicationInbox(
     inboxAction: mode,
   })
 }
+
+export function markAllCommunicationInboxRead() {
+  return callCommunications<{ updatedCount: number; readAt: string }>({
+    action: 'INBOX_MARK_ALL_READ',
+  })
+}

@@ -3,8 +3,13 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-import { CONTACTS, buildWhatsAppSupportUrl, formatDatabaseEnumLabel } from '@drape/shared'
+import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
+import {
+  CONTACTS,
+  buildWhatsAppSupportUrl,
+  formatDatabaseEnumLabel,
+  isHandoffSupportStage,
+} from '@drape/shared'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Button } from '../../../components/ui/button'
 import { Input } from '../../../components/ui/input'
@@ -141,16 +146,21 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<string | null>(null)
-  const activeOrders = useMemo(
-    () => data.orders.filter((order) => !terminal.has(order.stage ?? '')),
+  const handoffOrders = useMemo(
+    () => data.orders.filter((order) => isHandoffSupportStage(order.stage)),
     [data.orders]
   )
-  const [handoffOrderId, setHandoffOrderId] = useState(initialOrder || activeOrders[0]?.id || '')
+  const initialHandoffOrder = handoffOrders.some((order) => order.id === initialOrder)
+    ? initialOrder
+    : handoffOrders[0]?.id || ''
+  const [handoffOrderId, setHandoffOrderId] = useState(initialHandoffOrder)
   const [handoffType, setHandoffType] = useState('NEED_DRAPE_HELP')
   const [handoffDescription, setHandoffDescription] = useState('')
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [handoffError, setHandoffError] = useState<string | null>(null)
   const [handoffReceipt, setHandoffReceipt] = useState<string | null>(null)
+  const [requestOpen, setRequestOpen] = useState(Boolean(initialOrder))
+  const [handoffOpen, setHandoffOpen] = useState(false)
 
   async function submit() {
     setError(null)
@@ -180,6 +190,7 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
       setReceipt(`${message} Keep this reference for follow-up.`)
       setSubject('')
       setDescription('')
+      setRequestOpen(false)
       onRefresh()
     } catch (cause) {
       setError(
@@ -215,6 +226,7 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
         'Handoff help is open on this order. Its stage and support context remain attached.'
       )
       setHandoffDescription('')
+      setHandoffOpen(false)
       onRefresh()
     } catch (cause) {
       setHandoffError(
@@ -260,13 +272,19 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
   return (
     <div data-route-content-ready="true" className="grid gap-5 pb-10">
       <Surface>
-        <SurfaceHeader
-          eyebrow="Protected support"
-          title="Ask Drapeon for help"
-          description="Open a request tied to your account, and attach the order when the issue concerns payment, fit, delivery, production, or payout."
-        />
-        <div className="grid gap-3 p-5">
-          <Notice error={error} receipt={receipt} />
+        <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Protected support</p>
+            <h2 className="mt-1 text-xl font-semibold text-ink">Ask Drapeon for help</h2>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-ink/58">Attach account and order context only when you need support.</p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => setRequestOpen((value) => !value)} aria-expanded={requestOpen}>
+            {requestOpen ? <X className="size-4" /> : <Plus className="size-4" />}
+            {requestOpen ? 'Close' : 'New request'}
+          </Button>
+        </div>
+        <div className="px-5 pb-5"><Notice error={error} receipt={receipt} /></div>
+        {requestOpen ? <div className="grid gap-3 border-t border-ui-border p-5">
           <div className="grid gap-3 md:grid-cols-2">
             <label>
               <span className="sr-only">Support category</span>
@@ -316,24 +334,30 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
               Your text stays in place if submission fails.
             </p>
           </div>
-        </div>
+        </div> : null}
       </Surface>
-      {activeOrders.length ? (
+      {handoffOrders.length ? (
         <Surface>
-          <SurfaceHeader
-            eyebrow="Active handoff"
-            title="Pickup or delivery help"
-            description="Use this only when an active order has reached pickup, dispatch, or delivery. Other concerns belong in the request above."
-          />
-          <div className="grid gap-3 p-5">
-            <Notice error={handoffError} receipt={handoffReceipt} />
+          <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Active handoff</p>
+              <h2 className="mt-1 text-xl font-semibold text-ink">Pickup or delivery help</h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-ink/58">Report a problem once an active order reaches handoff.</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => setHandoffOpen((value) => !value)} aria-expanded={handoffOpen}>
+              {handoffOpen ? <X className="size-4" /> : <Plus className="size-4" />}
+              {handoffOpen ? 'Close' : 'Report issue'}
+            </Button>
+          </div>
+          <div className="px-5 pb-5"><Notice error={handoffError} receipt={handoffReceipt} /></div>
+          {handoffOpen ? <div className="grid gap-3 border-t border-ui-border p-5">
             <div className="grid gap-3 md:grid-cols-2">
               <NativeSelect
                 aria-label="Handoff order"
                 value={handoffOrderId}
                 onChange={(event) => setHandoffOrderId(event.target.value)}
               >
-                {activeOrders.map((order) => (
+                {handoffOrders.map((order) => (
                   <option key={order.id} value={order.id}>
                     {title(order)} · {formatDatabaseEnumLabel(order.stage, 'In progress')}
                   </option>
@@ -361,7 +385,7 @@ function SupportForms({ data, onRefresh }: { data: SupportData; onRefresh: () =>
             <Button onClick={() => void submitHandoff()} disabled={handoffBusy}>
               {handoffBusy ? 'Opening handoff help…' : 'Open handoff help'}
             </Button>
-          </div>
+          </div> : null}
         </Surface>
       ) : null}
       <Surface>

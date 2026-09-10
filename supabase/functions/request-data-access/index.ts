@@ -19,7 +19,9 @@ const FN = 'request-data-access'
 const REQUEST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
 const BodySchema = z.object({
+  action: z.enum(['STATUS', 'SUBMIT']).optional(),
   note: optionalNote,
+  source: z.enum(['MOBILE_APP', 'WEB_APP']).optional(),
 })
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
@@ -159,21 +161,10 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
 
-    const allowed = await checkRateLimit(supabase, `request-data-access:${caller.id}`, 86400, 5)
-    if (!allowed) {
-      await audit(supabase, {
-        event: 'rate_limit.exceeded',
-        actor_id: caller.id,
-        severity: 'warn',
-        payload: { function: FN },
-      })
-      return rateLimitExceededResponse(cors)
-    }
-
     const recentThreshold = new Date(Date.now() - REQUEST_WINDOW_MS).toISOString()
     const { data: existing, error: existingError } = await supabase
       .from('audit_logs')
-      .select('id')
+      .select('id, created_at')
       .eq('actor_id', caller.id)
       .eq('event', 'privacy.data_access_requested')
       .gte('created_at', recentThreshold)
@@ -186,8 +177,31 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'We could not check your existing data requests right now. Please try again.' }, 500, cors)
     }
 
+    const existingRequest = existing?.id
+      ? {
+          id: existing.id,
+          status: 'IN_REVIEW',
+          createdAt: existing.created_at,
+        }
+      : null
+
+    if (parsed.data.action === 'STATUS') {
+      return jsonResponse({ ok: true, request: existingRequest }, 200, cors)
+    }
+
     if (existing?.id) {
-      return jsonResponse({ ok: true, alreadyPending: true }, 200, cors)
+      return jsonResponse({ ok: true, alreadyPending: true, request: existingRequest }, 200, cors)
+    }
+
+    const allowed = await checkRateLimit(supabase, `request-data-access:${caller.id}`, 86400, 5)
+    if (!allowed) {
+      await audit(supabase, {
+        event: 'rate_limit.exceeded',
+        actor_id: caller.id,
+        severity: 'warn',
+        payload: { function: FN },
+      })
+      return rateLimitExceededResponse(cors)
     }
 
     const [{ data: tailorProfile }, { data: customerProfile }] = await Promise.all([
@@ -197,6 +211,7 @@ Deno.serve(async (req) => {
 
     const actorRole = tailorProfile ? 'TAILOR' : customerProfile ? 'CUSTOMER' : 'UNKNOWN'
     const note = parsed.data.note?.trim() ? parsed.data.note.trim() : null
+    const source = parsed.data.source ?? 'MOBILE_APP'
     let tailorExportId: string | null = null
 
     if (actorRole === 'TAILOR') {
@@ -215,7 +230,7 @@ Deno.serve(async (req) => {
           expires_at: exportPackage.expiresAt,
           metadata: {
             note,
-            requested_from: 'MOBILE_APP',
+            requested_from: source,
             package_version: exportPackage.version,
             export_package: exportPackage,
             includes: [
@@ -243,7 +258,7 @@ Deno.serve(async (req) => {
       actor_role: actorRole,
       payload: {
         function: FN,
-        source: 'MOBILE_APP',
+        source,
         account_email: caller.email ?? null,
         note,
         reason: note,
@@ -251,7 +266,7 @@ Deno.serve(async (req) => {
       },
     })
 
-    await createOrRefreshOpsIssue(supabase, {
+    const opsIssue = await createOrRefreshOpsIssue(supabase, {
       issueType: 'DATA_ACCESS_REQUEST',
       severity: 'MEDIUM',
       source: FN,
@@ -265,7 +280,7 @@ Deno.serve(async (req) => {
       metadata: {
         account_email: caller.email ?? null,
         note,
-        source: 'MOBILE_APP',
+        source,
         tailor_export_id: tailorExportId,
         export_scope: actorRole === 'TAILOR' ? 'TAILOR_PORTABILITY' : 'ACCOUNT_ACCESS',
       },
@@ -276,7 +291,25 @@ Deno.serve(async (req) => {
       actor_role: actorRole,
     })
 
-    return jsonResponse({ ok: true, alreadyPending: false, tailorExportId }, 200, cors)
+    const { data: createdAuditRequest } = await supabase
+      .from('audit_logs')
+      .select('id, created_at')
+      .eq('actor_id', caller.id)
+      .eq('event', 'privacy.data_access_requested')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    return jsonResponse({
+      ok: true,
+      alreadyPending: false,
+      tailorExportId,
+      request: {
+        id: createdAuditRequest?.id ?? opsIssue?.id ?? tailorExportId,
+        status: 'IN_REVIEW',
+        createdAt: createdAuditRequest?.created_at ?? new Date().toISOString(),
+      },
+    }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
     return jsonResponse({ error: 'We could not submit your data request right now. Please try again.' }, 500, cors)

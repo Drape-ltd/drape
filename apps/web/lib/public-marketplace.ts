@@ -168,6 +168,25 @@ function legacyMarketplaceMedia(photos: string[], videos: string[]): Marketplace
   }))]
 }
 
+function mergeMarketplaceMedia(
+  presented: MarketplaceMedia[],
+  photos: string[],
+  videos: string[],
+): MarketplaceMedia[] {
+  const seen = new Set(presented.map((item) => item.url.split(/[?#]/u)[0] ?? item.url))
+  const missing = legacyMarketplaceMedia(photos, videos).filter((item) => {
+    const canonical = item.url.split(/[?#]/u)[0] ?? item.url
+    if (seen.has(canonical)) return false
+    seen.add(canonical)
+    return true
+  })
+  return [...presented, ...missing.map((item, index) => ({
+    ...item,
+    isPrimary: false,
+    position: presented.length + index,
+  }))]
+}
+
 function fulfillmentLabels(input: { pickup?: boolean | null; delivery?: boolean | null; shipping?: boolean | null }) {
   return [
     input.pickup ? 'Pickup' as const : null,
@@ -370,9 +389,9 @@ async function readApprovedPublicTailors(limit = 40, offset = 0, query = ''): Pr
 
 export const getApprovedPublicTailors = cache(readApprovedPublicTailors)
 
-async function readApprovedPublicTailor(profileId: string) {
+async function readApprovedPublicTailor(profileId: string, fresh = false) {
   if (!/^[0-9a-f-]{36}$/i.test(profileId)) return null
-  return cachedPublicRead(`approved-tailor-v2:${profileId}`, 60, async () => {
+  const load = async () => {
     const data = await invokePublicReadGateway<PublicTailorProfileGateway>({ action: 'tailor-profile', tailorId: profileId })
     const profile = data?.profile
     if (!profile?.id || !profile.displayName) return null
@@ -395,7 +414,7 @@ async function readApprovedPublicTailor(profileId: string) {
       portfolioVideos,
       coverVideoUrl: portfolioVideos[0] ?? null,
       avatarUrl,
-      media: media.length > 0 ? media : legacyMarketplaceMedia(portfolioPhotos, portfolioVideos),
+      media: mergeMarketplaceMedia(media, portfolioPhotos, portfolioVideos),
       languages: (profile.languages ?? []).map((language) => safeText(language)).filter(Boolean).slice(0, 12),
       averageRating: typeof profile.avgRating === 'number' ? profile.avgRating : 0,
       totalReviews: typeof profile.totalReviews === 'number' ? profile.totalReviews : 0,
@@ -415,7 +434,8 @@ async function readApprovedPublicTailor(profileId: string) {
         createdAt: safeText(review.createdAt),
       })),
     }
-  })
+  }
+  return fresh ? load() : cachedPublicRead(`approved-tailor-v2:${profileId}`, 60, load)
 }
 
 // React cache deduplicates generateMetadata + page reads during one render;

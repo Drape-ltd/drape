@@ -28,15 +28,15 @@ export default function TailorAccountPage(): React.JSX.Element {
             Open tailor dashboard
           </a>
           <Link
-            href="/apply?source=account"
+            href="/sign-up?role=TAILOR"
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
           >
-            Apply as a tailor
+            Join as a tailor
           </Link>
         </div>
       }
     >
-      <AccountSignedInRedirect to="/account/dashboard" />
+      <AccountSignedInRedirect to="/account/work" />
       <section className="py-8">
         <SectionTitle
           eyebrow="What tailor access controls"

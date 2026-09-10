@@ -17,6 +17,8 @@ type TransactionalEmailInput = {
   evidenceImageUrl?: string | null
   evidenceImageAlt?: string
   evidenceLinkUrl?: string
+  verificationCode?: string
+  verificationHint?: string
 }
 
 function escapeHtml(value: string) {
@@ -117,6 +119,27 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
                   <a href="${escapeHtml(input.secondaryCtaUrl)}" style="color:#2f7557;font-weight:700;text-decoration:underline">${escapeHtml(input.secondaryCtaLabel)}</a>
                 </p>`
       : ''
+  const verificationCode = input.verificationCode?.trim()
+  const verificationBlock = verificationCode
+    ? `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:26px 0">
+        <tr>
+          <td align="center" style="background:#f5f3ee;border:1px solid #e7e3da;border-radius:14px;padding:22px 18px">
+            <p style="color:#6b716d;font-family:Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:1.5px;line-height:18px;margin:0 0 12px;text-transform:uppercase">Verification code</p>
+            <p style="color:#17211c;font-family:Arial,sans-serif;font-size:34px;font-weight:800;letter-spacing:9px;line-height:42px;margin:0;padding-left:9px">${escapeHtml(
+              verificationCode
+            )}</p>
+            ${
+              input.verificationHint?.trim()
+                ? `<p style="color:#6b716d;font-family:Arial,sans-serif;font-size:13px;line-height:20px;margin:10px 0 0">${escapeHtml(
+                    input.verificationHint.trim()
+                  )}</p>`
+                : ''
+            }
+          </td>
+        </tr>
+      </table>`
+    : ''
 
   const html = `<!doctype html>
 <html lang="en">
@@ -151,6 +174,7 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
                 <p style="color:#3d4942;font-family:Arial,sans-serif;font-size:16px;line-height:26px;margin:0">${paragraphHtml(
                   input.body
                 )}</p>
+                ${verificationBlock}
                 ${evidenceBlock}
                 ${detailsBlock}
                 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 4px">
@@ -195,6 +219,9 @@ export function renderDrapeonTransactionalEmail(input: TransactionalEmailInput) 
     `Hi ${input.recipientName},`,
     '',
     input.body,
+    ...(verificationCode
+      ? ['', `Verification code: ${verificationCode}`, input.verificationHint?.trim() ?? '']
+      : []),
     textDetails,
     '',
     `${input.ctaLabel}: ${input.ctaUrl}`,

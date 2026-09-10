@@ -1,4 +1,5 @@
 import {
+  convertAccountCurrencyEstimate,
   currencySymbol,
   detectCurrencyPreference,
   extractRegionCodeFromLocale,
@@ -8,6 +9,16 @@ import {
   resolveSellerPayoutCurrency,
   resolveSellerOrderCurrency,
 } from '../src/currency-config'
+
+describe('convertAccountCurrencyEstimate', () => {
+  it('converts an NGN checkout total into the customer USD display preference', () => {
+    expect(convertAccountCurrencyEstimate(11_760_000, 'NGN', 'USD')).toBe(7443)
+  })
+
+  it('preserves the amount when the currencies match', () => {
+    expect(convertAccountCurrencyEstimate(11_760_000, 'NGN', 'NGN')).toBe(11_760_000)
+  })
+})
 
 describe('parseMajorCurrencyAmountToMinor', () => {
   it('converts customer-entered major amounts into stored minor units', () => {

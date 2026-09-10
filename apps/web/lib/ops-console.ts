@@ -37,6 +37,7 @@ export type OpsActionKind =
   | 'payout-change-decision'
   | 'deletion-status'
   | 'review-visibility'
+  | 'media-moderation'
   | 'conversation-access'
   | 'dispatch-stage'
   | 'dispatch-quote'
@@ -45,6 +46,7 @@ export type OpsActionKind =
   | 'order-partial-refund'
   | 'reviewed-partial-refund-outcome'
   | 'payout-release'
+  | 'payout-otp-finalize'
   | 'material-advance-release'
   | 'material-overage-resolution'
   | 'payout-block-resolution'
@@ -347,6 +349,7 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'payout-change-decision',
     'deletion-status',
     'review-visibility',
+    'media-moderation',
     'conversation-access',
     'dispatch-stage',
     'dispatch-quote',
@@ -355,6 +358,7 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'order-partial-refund',
     'reviewed-partial-refund-outcome',
     'payout-release',
+    'payout-otp-finalize',
     'material-advance-release',
     'material-overage-resolution',
     'payout-block-resolution',
@@ -385,8 +389,8 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
   ],
   ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'dispatch-quote', 'dispatch-event', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
   customer_success: ['dispute-status', 'dispute-resolution', 'order-cancellation-refund-request', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'money-desk-elevation', 'money-desk-request', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
-  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'profile-change-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
-  finance: ['order-cancellation-refund-request', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'payout-release', 'payout-change-decision', 'material-advance-release', 'material-overage-resolution', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release', 'money-desk-elevation', 'money-desk-request', 'money-desk-decision', 'money-desk-execution', 'return-refund-prepare', 'benefit-campaign-create', 'benefit-campaign-activate', 'benefit-grant-create', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry'],
+  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'profile-change-decision', 'deletion-status', 'review-visibility', 'media-moderation', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
+  finance: ['order-cancellation-refund-request', 'order-partial-refund', 'reviewed-partial-refund-outcome', 'payout-release', 'payout-otp-finalize', 'payout-change-decision', 'material-advance-release', 'material-overage-resolution', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release', 'money-desk-elevation', 'money-desk-request', 'money-desk-decision', 'money-desk-execution', 'return-refund-prepare', 'benefit-campaign-create', 'benefit-campaign-activate', 'benefit-grant-create', 'consultation-attendance-resolution', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry'],
   engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'communication-campaign-create', 'communication-campaign-review', 'communication-campaign-publish', 'communication-campaign-pause', 'communication-campaign-resume', 'communication-campaign-cancel', 'communication-recipient-retry', 'service-incident-upsert', 'incident-communication-create'],
 }
 

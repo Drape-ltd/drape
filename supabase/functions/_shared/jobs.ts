@@ -121,6 +121,20 @@ export async function claimDueJobs(
   return (Array.isArray(data) ? data : []) as JobRow[];
 }
 
+export async function claimDueJobsById(
+  supabase: SupabaseClient,
+  workerId: string,
+  jobIds: string[],
+) {
+  const { data, error } = await supabase.rpc("claim_due_jobs_by_id", {
+    p_worker_id: workerId,
+    p_job_ids: jobIds,
+  });
+
+  if (error) throw new Error(error.message);
+  return (Array.isArray(data) ? data : []) as JobRow[];
+}
+
 export async function finishJob(
   supabase: SupabaseClient,
   input: {

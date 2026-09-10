@@ -4,7 +4,6 @@ import { siteUrl } from '../lib/metadata'
 const routes: Array<{ path: string; priority: number; changeFrequency: 'monthly' | 'weekly' }> = [
   { path: '', priority: 1, changeFrequency: 'weekly' },
   { path: '/join', priority: 0.95, changeFrequency: 'weekly' },
-  { path: '/apply', priority: 0.9, changeFrequency: 'weekly' },
   { path: '/how-it-works', priority: 0.86, changeFrequency: 'monthly' },
   { path: '/customers', priority: 0.84, changeFrequency: 'monthly' },
   { path: '/tailors', priority: 0.84, changeFrequency: 'monthly' },

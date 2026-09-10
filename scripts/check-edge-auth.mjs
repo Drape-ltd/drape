@@ -68,6 +68,7 @@ const manifest = {
   'handoff-support-action': ['user'],
   'identity-handoff-action': ['user'],
   'material-advance-action': ['mixedUserOrServiceRole'],
+  'media-report-action': ['user'],
   'monitor-settlements': ['cron'],
   'monitor-material-reconciliation': ['cron'],
   'monitor-payout-changes': ['cron'],
@@ -109,6 +110,7 @@ const manifest = {
   'tailor-order-action': ['user'],
   'tailor-quote-draft-action': ['user'],
   'tailor-profile-action': ['user'],
+  'trusted-device-action': ['user'],
 }
 
 function fail(message) {

@@ -8,7 +8,7 @@ import {
   isCommunicationChannel,
 } from '../_shared/communications.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getSupabaseAnonKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseAnonKey, getSupabaseUrl } from '../_shared/env.ts'
 
 type Json = Record<string, unknown>
 
@@ -32,6 +32,12 @@ function userClient(req: Request) {
   const authorization = req.headers.get('Authorization') ?? ''
   return createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
     global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
+function serviceClient() {
+  return createClient(getSupabaseUrl(), getServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 }
@@ -163,6 +169,18 @@ Deno.serve(async (req) => {
       })
       if (error) throw error
       return json(cors, 200, { item: data })
+    }
+
+    if (action === 'INBOX_MARK_ALL_READ') {
+      const readAt = new Date().toISOString()
+      const { data, error } = await serviceClient()
+        .from('communication_inbox')
+        .update({ read_at: readAt })
+        .eq('recipient_id', user.id)
+        .is('read_at', null)
+        .select('id')
+      if (error) throw error
+      return json(cors, 200, { updatedCount: data?.length ?? 0, readAt })
     }
 
     return json(cors, 400, { error: 'UNKNOWN_ACTION' })

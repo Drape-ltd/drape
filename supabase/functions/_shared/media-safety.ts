@@ -44,10 +44,18 @@ function inferMediaKind(url: string): MediaKind {
   return 'UNKNOWN'
 }
 
-function parsePublicStorageUrl(url: string) {
+async function parsePublicStorageUrl(url: string) {
   const marker = '/storage/v1/object/public/'
   const index = url.indexOf(marker)
-  if (index < 0) return null
+  if (index < 0) {
+    // Older setup and imported portfolio pieces may point at an approved public
+    // CDN URL rather than Supabase Storage. They still need a canonical media
+    // record so presentation controls do not silently disappear.
+    const canonical = canonicalMediaUrl(url)
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+    const objectPath = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+    return { bucketId: 'external-public', objectPath }
+  }
 
   const storagePath = url.slice(index + marker.length).split('?')[0] ?? ''
   const [bucketId, ...pathParts] = storagePath.split('/')
@@ -79,7 +87,7 @@ export async function queueMediaSafetyReview(
 
   const queuedAssetIds: string[] = []
   for (const url of urls) {
-    const parts = parsePublicStorageUrl(url)
+    const parts = await parsePublicStorageUrl(url)
     if (!parts) {
       log('warn', input.fn, 'media_safety.unparsed_url', {
         actor_id: input.actorId,
@@ -128,6 +136,37 @@ export async function queueMediaSafetyReview(
 
   if (queuedAssetIds.length === 0) return
 
+  let publishFirst = false
+  if (PUBLIC_REVIEW_SURFACES.has(input.surface) && input.tailorProfileId) {
+    const { data: verifiedProfile } = await supabase
+      .from('tailor_profiles')
+      .select('is_verified')
+      .eq('id', input.tailorProfileId)
+      .maybeSingle()
+    publishFirst = verifiedProfile?.is_verified === true
+  }
+
+  if (publishFirst) {
+    const { error: publishError } = await supabase
+      .from('media_assets')
+      .update({
+        moderation_status: 'AUTO_ALLOWED',
+        moderation_risk_level: 'LOW',
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: 'verified-tailor-publish-first',
+      })
+      .in('id', queuedAssetIds)
+      .eq('moderation_status', 'PENDING_REVIEW')
+    if (publishError) {
+      log('error', input.fn, 'media_safety.publish_first_failed', {
+        actor_id: input.actorId,
+        media_asset_ids: queuedAssetIds,
+        error: publishError.message,
+      })
+      publishFirst = false
+    }
+  }
+
   await audit(supabase, {
     event: 'media_safety.review_queued',
     actor_id: input.actorId,
@@ -142,11 +181,12 @@ export async function queueMediaSafetyReview(
       media_asset_ids: queuedAssetIds,
       related_entity_type: input.relatedEntityType ?? null,
       related_entity_id: input.relatedEntityId ?? null,
+      publish_first: publishFirst,
       ...(input.metadata ?? {}),
     },
   })
 
-  if (!PUBLIC_REVIEW_SURFACES.has(input.surface)) return
+  if (!PUBLIC_REVIEW_SURFACES.has(input.surface) || publishFirst) return
 
   await createOrRefreshOpsIssue(supabase, {
     issueType: 'CONTENT_FLAG',

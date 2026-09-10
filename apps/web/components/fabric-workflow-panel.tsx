@@ -294,15 +294,37 @@ function BrowserCropEditor({
   onCancel: () => void
   onSave: (draft: CropDraft) => void
 }) {
-  const source = useMemo(() => URL.createObjectURL(file), [file])
   const imageRef = useRef<HTMLImageElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
+  const [source, setSource] = useState('')
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const [imageReady, setImageReady] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
   const pointers = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ distance: number; zoom: number; centerX: number; centerY: number; left: number; top: number } | null>(null)
-  useEffect(() => () => URL.revokeObjectURL(source), [source])
+  useEffect(() => {
+    let active = true
+    const reader = new FileReader()
+    queueMicrotask(() => {
+      if (!active) return
+      setSource('')
+      setSourceError(null)
+      setImageReady(false)
+    })
+    reader.addEventListener('load', () => {
+      if (active && typeof reader.result === 'string') setSource(reader.result)
+    })
+    reader.addEventListener('error', () => {
+      if (active) setSourceError('This image could not be previewed. Choose it again or use another image.')
+    })
+    reader.readAsDataURL(file)
+    return () => {
+      active = false
+      reader.abort()
+    }
+  }, [file])
 
   const clampPosition = useCallback((next: { x: number; y: number }, nextZoom: number) => {
     const image = imageRef.current
@@ -484,14 +506,22 @@ function BrowserCropEditor({
             updateZoom(zoom - event.deltaY * 0.002)
           }}
         >
-          <img
-            ref={imageRef}
-            src={source}
-            alt="Crop preview"
-            draggable={false}
-            className="h-full w-full select-none object-cover"
-            style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }}
-          />
+          {source ? (
+            <img
+              ref={imageRef}
+              src={source}
+              alt="Crop preview"
+              draggable={false}
+              onLoad={() => setImageReady(true)}
+              onError={() => setSourceError('This image could not be previewed. Choose it again or use another image.')}
+              className="h-full w-full select-none object-cover"
+              style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }}
+            />
+          ) : (
+            <span className="absolute inset-0 grid place-items-center px-6 text-center text-sm font-semibold text-ink/55">
+              {sourceError ?? 'Preparing preview…'}
+            </span>
+          )}
           <span className="pointer-events-none absolute inset-0 border-2 border-white/90" />
         </div>
         <label className="mt-4 grid gap-2 text-sm font-semibold text-ink">
@@ -529,9 +559,10 @@ function BrowserCropEditor({
             onClick={() => {
               void save()
             }}
-            className="ml-auto rounded-[8px] bg-needle px-5 py-2.5 font-semibold text-white"
+            disabled={!imageReady || Boolean(sourceError)}
+            className="ml-auto rounded-[8px] bg-needle px-5 py-2.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
           >
-            Use photo
+            {imageReady ? 'Use photo' : 'Preparing photo…'}
           </button>
         </div>
       </div>

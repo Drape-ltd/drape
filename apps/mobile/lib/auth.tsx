@@ -15,11 +15,13 @@ import { unregisterPushInstallation } from './push-registration'
 import { syncUserRow } from './syncUserRow'
 import { reset as resetAnalytics } from './analytics'
 import { consumeAccountDeletionDeviceMarker } from './account-deletion'
+import { assessMobileDevice, verifyMobileDevice } from './device-trust'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
 
 type DrapeRole = 'CUSTOMER' | 'TAILOR'
+type DeviceChallengePrompt = { challengeId: string; maskedEmail: string; expiresAt: string }
 
 interface AuthContextValue {
   session: Session | null
@@ -29,9 +31,12 @@ interface AuthContextValue {
     email: string,
     password: string,
     displayName: string,
-    role: DrapeRole
+    role: DrapeRole,
+    captchaToken: string,
   ) => Promise<{ error: string | null; requiresEmailConfirmation: boolean }>
-  signIn: (email: string, password: string, roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
+  signIn: (email: string, password: string, roleIntent: DrapeRole | null | undefined, captchaToken: string, rememberDevice?: boolean) => Promise<{ error: string | null; deviceChallenge?: DeviceChallengePrompt }>
+  verifyDeviceChallenge: (challengeId: string, code: string) => Promise<{ error: string | null }>
+  cancelDeviceChallenge: () => Promise<void>
   signInWithGoogle: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   signInWithApple: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   reauthenticateWithProvider: (provider: 'apple' | 'google') => Promise<{ error: string | null; authorizationCode?: string | null }>
@@ -114,6 +119,9 @@ function mapAuthErrorMessage(message: string | null | undefined, fallback = 'We 
   }
   if (normalized.includes('email not confirmed') || normalized.includes('confirm your email')) {
     return 'Check your email and confirm your Drapeon account before signing in.'
+  }
+  if (normalized.includes('captcha') || normalized.includes('security verification')) {
+    return 'The security check expired or could not be verified. Complete it again and retry.'
   }
   if (normalized.includes('rate limit') || normalized.includes('too many') || normalized.includes('over_email_send_rate_limit')) {
     return 'Please wait a minute before trying again.'
@@ -260,13 +268,14 @@ function sha256Hex(input: string) {
   return hash.map((value) => value.toString(16).padStart(8, '0')).join('')
 }
 
-async function signInWithPasswordResilient(email: string, password: string) {
+async function signInWithPasswordResilient(email: string, password: string, captchaToken?: string) {
   const normalizedEmail = normalizeEmail(email)
   const trimmedPassword = password.trim()
   return withAuthBootstrapTimeout(
     supabase.auth.signInWithPassword({
       email: normalizedEmail,
       password: trimmedPassword,
+      options: { captchaToken },
     }),
     'Password sign in'
   )
@@ -374,6 +383,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const lastSessionUserIdRef = useRef<string | null | undefined>(undefined)
   const authRefreshStartedRef = useRef(false)
   const manualSignOutRef = useRef(false)
+  const deviceAssessmentPendingRef = useRef(false)
+  const pendingDeviceSessionRef = useRef<Session | null>(null)
+  const pendingDeviceRoleIntentRef = useRef<DrapeRole | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -464,6 +476,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           userId: session?.user?.id ?? null,
           role: session?.user?.user_metadata?.role ?? null,
         })
+      }
+      if (event === 'SIGNED_IN' && deviceAssessmentPendingRef.current) {
+        return
       }
       if (event === 'SIGNED_OUT') {
         stopSessionRefresh()
@@ -595,7 +610,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
     displayName: string,
-    role: DrapeRole
+    role: DrapeRole,
+    captchaToken: string,
   ) {
     const normalizedEmail = normalizeEmail(email)
     if (!isValidEmail(normalizedEmail)) {
@@ -630,6 +646,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: normalizedEmail,
       password,
       options: {
+        captchaToken,
         emailRedirectTo: getMobileAuthCallbackUrl(),
         data: { display_name: displayName, role },
       },
@@ -640,25 +657,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function signIn(email: string, password: string, roleIntent?: DrapeRole | null) {
+  async function signIn(
+    email: string,
+    password: string,
+    roleIntent: DrapeRole | null | undefined,
+    captchaToken: string,
+    rememberDevice = true,
+  ) {
     const normalizedEmail = normalizeEmail(email)
     if (!isValidEmail(normalizedEmail)) {
       return { error: 'Enter a valid email address.' }
     }
     try {
-      const { data, error } = await signInWithPasswordResilient(normalizedEmail, password)
-      if (!error) {
-        if (data.session) {
-          setSession(data.session)
-          void logAuthDebugSnapshot('password sign-in success', data.session)
+      deviceAssessmentPendingRef.current = true
+      const { data, error } = await signInWithPasswordResilient(normalizedEmail, password, captchaToken)
+      if (error) {
+        deviceAssessmentPendingRef.current = false
+        return { error: mapAuthErrorMessage(error.message, 'We could not sign you in right now. Please try again in a moment.') }
+      }
+      if (!data.session) {
+        deviceAssessmentPendingRef.current = false
+        return { error: 'Drapeon could not establish a complete session. Sign in again.' }
+      }
+      pendingDeviceSessionRef.current = data.session
+      pendingDeviceRoleIntentRef.current = roleIntent ?? null
+      const assessment = await assessMobileDevice(data.session, rememberDevice)
+      if (!assessment.trusted) {
+        if (!assessment.challengeId) throw new Error('A device verification code could not be created.')
+        return {
+          error: null,
+          deviceChallenge: {
+            challengeId: assessment.challengeId,
+            maskedEmail: assessment.maskedEmail ?? 'your account email',
+            expiresAt: assessment.expiresAt ?? new Date(Date.now() + 10 * 60_000).toISOString(),
+          },
         }
-        const roleError = await applyRoleIntent(roleIntent)
-        if (roleError) return { error: roleError }
       }
-      return {
-        error: error ? mapAuthErrorMessage(error.message, 'We could not sign you in right now. Please try again in a moment.') : null,
-      }
+      deviceAssessmentPendingRef.current = false
+      const roleError = await applyRoleIntent(roleIntent)
+      if (roleError) return { error: roleError }
+      setSession(data.session)
+      void logAuthDebugSnapshot('password sign-in success', data.session)
+      pendingDeviceSessionRef.current = null
+      pendingDeviceRoleIntentRef.current = null
+      return { error: null }
     } catch (error) {
+      deviceAssessmentPendingRef.current = false
+      pendingDeviceSessionRef.current = null
+      pendingDeviceRoleIntentRef.current = null
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
       return {
         error: mapAuthErrorMessage(
           error instanceof Error ? error.message : String(error),
@@ -666,6 +713,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ),
       }
     }
+  }
+
+  async function verifyDeviceChallenge(challengeId: string, code: string) {
+    const pendingSession = pendingDeviceSessionRef.current
+    if (!pendingSession) return { error: 'Sign in again to request a new device code.' }
+    try {
+      await verifyMobileDevice(pendingSession, challengeId, code)
+      deviceAssessmentPendingRef.current = false
+      const roleError = await applyRoleIntent(pendingDeviceRoleIntentRef.current)
+      if (roleError) return { error: roleError }
+      setSession(pendingSession)
+      pendingDeviceSessionRef.current = null
+      pendingDeviceRoleIntentRef.current = null
+      return { error: null }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'That code could not be verified.' }
+    }
+  }
+
+  async function cancelDeviceChallenge() {
+    deviceAssessmentPendingRef.current = false
+    pendingDeviceSessionRef.current = null
+    pendingDeviceRoleIntentRef.current = null
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+    setSession(null)
   }
 
   async function signInWithGoogle(roleIntent?: DrapeRole | null): Promise<{ error: string | null }> {
@@ -773,19 +845,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: 'Choose a valid Drapeon mode.' }
     }
 
-    const displayName = displayNameFromMetadata(session.user.user_metadata)
-
-    const { error } = await supabase.auth.updateUser({ data: { role } })
-    if (error) {
+    const { data: switchData, error } = await supabase.functions.invoke('account-profile-action', {
+      body: { action: 'switch-role', role },
+    })
+    if (error || switchData?.error) {
       return {
         error: mapAuthErrorMessage(
-          error.message,
+          switchData?.message || switchData?.error || error?.message,
           'We could not switch Drapeon modes right now. Please try again in a moment.'
         ),
       }
     }
-
-    await syncUserRow({ userId: session.user.id, role, displayName })
 
     const { data, error: refreshError } = await supabase.auth.refreshSession()
     if (refreshError) {
@@ -824,6 +894,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearUserScopedLocalState(currentUserId)
       resetAnalytics()
       setSession(null)
+      deviceAssessmentPendingRef.current = false
+      pendingDeviceSessionRef.current = null
+      pendingDeviceRoleIntentRef.current = null
     } finally {
       manualSignOutRef.current = false
     }
@@ -834,7 +907,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, signInWithGoogle, signInWithApple, reauthenticateWithProvider, switchRole, signOut }}>
+    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, verifyDeviceChallenge, cancelDeviceChallenge, signInWithGoogle, signInWithApple, reauthenticateWithProvider, switchRole, signOut }}>
       {children}
     </AuthContext.Provider>
   )

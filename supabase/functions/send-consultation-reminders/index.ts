@@ -301,7 +301,7 @@ async function sendReminder(
       orderId: order.id,
       idempotencyKey: `consultation-reminder:${order.id}:${kind}:customer`,
       priority: 15,
-      notification: payload,
+      notification: { ...payload, communication: { category: 'MESSAGE' as const, purpose: 'TRANSACTIONAL' as const, severity: urgent ? 'WARNING' as const : 'NOTICE' as const, inApp: true, destinationKey: urgent ? 'ORDER_DETAIL' : 'ORDER_DETAIL', destinationParams: { orderId: order.id }, deduplicationKey: `consultation-reminder:${order.id}:${kind}:customer:in-app` } },
     }));
     sends.push(enqueueSmsJob(supabase, {
       userId: order.customer_id,
@@ -333,7 +333,7 @@ async function sendReminder(
       orderId: order.id,
       idempotencyKey: `consultation-reminder:${order.id}:${kind}:tailor`,
       priority: 15,
-      notification: payload,
+      notification: { ...payload, communication: { category: 'MESSAGE' as const, purpose: 'TRANSACTIONAL' as const, severity: urgent ? 'WARNING' as const : 'NOTICE' as const, inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: order.id }, deduplicationKey: `consultation-reminder:${order.id}:${kind}:tailor:in-app` } },
     }));
     sends.push(enqueueSmsJob(supabase, {
       userId: order.tailor_id,
@@ -471,6 +471,7 @@ async function notifyBothByPushAndEmail(
         body: payload.customerBody,
         preferenceKey: "orderUpdates",
         data: { orderId: order.id },
+        communication: { category: 'MESSAGE', purpose: 'TRANSACTIONAL', severity: 'NOTICE', inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: order.id }, deduplicationKey: `consultation-followup:${order.id}:${payload.title}:customer:in-app` },
       },
     }));
     sends.push(enqueueOrderEventEmailJob(supabase, {
@@ -506,6 +507,7 @@ async function notifyBothByPushAndEmail(
         body: payload.tailorBody,
         preferenceKey: "newOrders",
         data: { orderId: order.id },
+        communication: { category: 'MESSAGE', purpose: 'TRANSACTIONAL', severity: 'NOTICE', inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: order.id }, deduplicationKey: `consultation-followup:${order.id}:${payload.title}:tailor:in-app` },
       },
     }));
     sends.push(enqueueOrderEventEmailJob(supabase, {

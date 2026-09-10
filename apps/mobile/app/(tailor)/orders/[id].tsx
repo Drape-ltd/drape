@@ -2861,13 +2861,14 @@ export default function TailorOrderDetailScreen() {
           {consultationMeta?.scheduledStartAt ? (
             <ConsultationAttendancePanel orderId={order.id} actorRole="TAILOR" />
           ) : null}
-          {order.stage === 'CONSULTATION' ? (
+          {consultationMeta?.scheduledStartAt ? (
             <ConsultationReschedulePanel
               orderId={order.id}
               actorRole="TAILOR"
               actorId={userId}
               counterpartName={order.customerName?.split(' ')[0]}
               onOpenChat={openOrderMessages}
+              onOpenCall={() => openConsultationCallMenu()}
               onUpdated={() => { void fetchOrder({ silent: true }) }}
               onRescheduleRequiredChange={setConsultationRescheduleRequired}
             />
@@ -4172,22 +4173,24 @@ export default function TailorOrderDetailScreen() {
         scrollable
         snapPoints={['48%']}
         enableDynamicSizing={false}
+        primaryAction={{
+          label: 'Keep current quote',
+          loading: revisionResponseSaving,
+          disabled: revisionResponseSaving,
+          onPress: () => { void respondToQuoteRevision('keep-current-quote') },
+          tone: 'primary',
+        }}
+        destructiveAction={{
+          label: 'Decline order',
+          disabled: revisionResponseSaving,
+          onPress: () => { void respondToQuoteRevision('decline-after-revision') },
+          tone: 'destructive',
+        }}
       >
         <View style={styles.stageChoiceList}>
           <Text style={styles.supportHint}>
             Keep the current quote only when its price, scope, and date still cover the requested changes. The customer will receive a formal event either way.
           </Text>
-          <DrapeCapsuleButton
-            label="Keep current quote"
-            loading={revisionResponseSaving}
-            onPress={() => { void respondToQuoteRevision('keep-current-quote') }}
-          />
-          <DrapeCapsuleButton
-            label="Decline order"
-            tone="destructive"
-            disabled={revisionResponseSaving}
-            onPress={() => { void respondToQuoteRevision('decline-after-revision') }}
-          />
         </View>
       </DrapeSheet>
 

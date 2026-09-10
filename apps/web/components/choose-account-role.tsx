@@ -8,7 +8,7 @@ import { createClient } from '../lib/supabase'
 type Role = 'CUSTOMER' | 'TAILOR'
 
 function safeNext(value: string | null) {
-  return value?.startsWith('/') && !value.startsWith('//') ? value : '/account/dashboard'
+  return value?.startsWith('/') && !value.startsWith('//') ? value : '/account/orders'
 }
 
 export function ChooseAccountRole(): React.JSX.Element {
@@ -47,7 +47,7 @@ export function ChooseAccountRole(): React.JSX.Element {
     }
 
     if (role === 'TAILOR') {
-      router.replace('/apply?source=account' as Route)
+      router.replace('/account/profile?setup=1' as Route)
       return
     }
     router.replace(safeNext(searchParams.get('next')) as Route)

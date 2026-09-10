@@ -423,7 +423,7 @@ export default function LoginSecurityScreen() {
                   <Input
                     value={newPassword}
                     onChangeText={setNewPassword}
-                    placeholder="8+ characters"
+                    placeholder="10+ characters"
                     secureTextEntry
                     textContentType="newPassword"
                     autoComplete="new-password"

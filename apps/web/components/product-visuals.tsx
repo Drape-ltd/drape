@@ -51,8 +51,8 @@ const previewContent: Record<PreviewVariant, {
   },
   account: {
     eyebrow: 'Account',
-    title: 'Pick a workspace',
-    rows: ['Customer orders', 'Tailor workspace', 'Protected ops console'],
+    title: 'Choose how you use Drapeon',
+    rows: ['Customer account', 'Tailor business tools', 'Protected ops console'],
     action: 'Open access path',
   },
 }

@@ -86,13 +86,21 @@ type TailorProfile = BriefTailorProfile
 const GROUP_ORDERS_ENABLED = process.env.NEXT_PUBLIC_GROUP_ORDERS_V1 === 'true'
 const MAX_WEB_FABRIC_REFERENCE_MEDIA = 4
 const WEB_OCCASION_OPTIONS = ['Wedding', 'Birthday', 'Event', 'Everyday', 'Business', 'Religious ceremony', 'Graduation', 'Travel', 'Funeral', 'Other']
+const WEB_BRIEF_STEP_TITLES = ['Garment details', 'Style references', 'Measurements', 'Fabric', 'Delivery', 'Review'] as const
+const WEB_BRIEF_STEP_SUBTITLES = [
+  'Tell the tailor exactly what you want to make, what it is for, and when you need it by.',
+  'Show visual references so the tailor can understand your taste, shape, and finishing direction faster.',
+  'Share the fit context your tailor needs to quote accurately and make the garment feel right on your body.',
+  'Choose who provides fabric and set the approval checkpoint before cutting begins.',
+  'Choose how the finished garment gets to you and keep delivery details structured.',
+  'Check every detail before sending. You can jump back to edit any section.',
+] as const
 const MESSAGE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 const MESSAGE_PHOTO_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const ORDER_EVIDENCE_CONTENT_TYPES = new Set<string>(ALLOWED_ORDER_EVIDENCE_CONTENT_TYPES)
 
 function accountRoute(path: string): Route { return path as Route }
 function cleanLabel(value: string | null | undefined, fallback = 'Not set') { return value?.trim() || fallback }
-function safeList(value: string[] | null | undefined, fallback = 'Not listed') { return value?.filter(Boolean).join(' · ') || fallback }
 function tailorPhoto(tailor: BriefTailorProfile) { return tailor.portfolio_photo_urls?.find(Boolean) ?? tailor.avatar_url ?? null }
 function canStartCustomBriefOnWeb(tailor: BriefTailorProfile, userId: string | null) {
   return tailor.is_live === true && tailor.supports_custom_orders === true && tailor.accepts_custom_orders_now !== false && tailor.availability !== 'FULLY_BOOKED' && tailor.user_id !== userId
@@ -218,16 +226,13 @@ function ActionNotice({ error, success }: { error: string | null; success: strin
   if (!error && !success) return null
   return <p role="status" className={`rounded-[8px] border px-4 py-3 text-sm ${error ? 'border-rust/20 bg-rust/6 text-rust' : 'border-needle/20 bg-needle/8 text-ink'}`}>{error ?? success}</p>
 }
-function PhotoTile({ src, label }: { src: string | null; label: string }) {
-  return src ? <Image src={src} alt={label} width={720} height={540} unoptimized className="aspect-[4/3] w-full rounded-[8px] object-cover" /> : <div className="grid aspect-[4/3] place-items-center rounded-[8px] bg-needle/8 text-sm text-ink/48">No image</div>
-}
-
 export type BriefRenderData = {
   tailor: BriefTailorProfile | null
   measurementProfiles: BriefMeasurementProfile[]
   userId: string | null
   accountCurrency: string | null
   customerProfile: BriefCustomerProfile | null
+  existingOrder: { id: string; reference: string; stage: string; created_at: string } | null
   warning: string | null
 }
 
@@ -340,8 +345,10 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null)
   const [draftStatus, setDraftStatus] = useState<'loading' | 'restored' | 'saving' | 'saved' | 'error' | null>(null)
   const [draftAttachmentWarning, setDraftAttachmentWarning] = useState(false)
+  const [step, setStep] = useState(0)
   const draftLoadStartedRef = useRef(false)
   const draftHydratedRef = useRef(false)
+  const formSectionRef = useRef<HTMLElement | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
   const fabricMediaInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -368,10 +375,10 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
   ])
 
   useEffect(() => {
-    if (!tailorId || draftLoadStartedRef.current) return
+    if (!tailorId || data.existingOrder || draftLoadStartedRef.current) return
     draftLoadStartedRef.current = true
     setDraftStatus('loading')
-    void invokeAccountFunction<{ draft?: { version: string; fields: Record<string, unknown>; has_device_only_attachments: boolean } | null }>('custom-order-draft-action', {
+    void invokeAccountFunction<{ draft?: { version: string; current_step: number; fields: Record<string, unknown>; has_device_only_attachments: boolean } | null }>('custom-order-draft-action', {
       action: 'load', tailorProfileId: tailorId,
     }).then((result) => {
       const draft = result.draft
@@ -400,22 +407,23 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
       setDeliveryPostalCode(text('deliveryPostalCode')); setDeliveryCountryCode(text('deliveryCountryCode') || 'US')
       setDeliveryVerificationSource(text('deliveryVerificationSource'))
       setDeliveryVerifiedAt(text('deliveryVerifiedAt'))
+      setStep(Number.isInteger(draft.current_step) ? Math.max(0, Math.min(WEB_BRIEF_STEP_TITLES.length - 1, draft.current_step)) : 0)
       setAcknowledged(f.acknowledged === true); setDraftAttachmentWarning(draft.has_device_only_attachments); draftHydratedRef.current = true; setDraftStatus('restored')
     }).catch(() => { draftHydratedRef.current = true; setDraftStatus('error') })
-  }, [fabricBudgetCurrency, firstMeasurementId, tailorId])
+  }, [data.existingOrder, fabricBudgetCurrency, firstMeasurementId, tailorId])
 
   useEffect(() => {
-    if (!tailorId || !draftHydratedRef.current || busy || !isMeaningfulCustomOrderDraft(draftFields)) return
+    if (!tailorId || data.existingOrder || createdOrderId || !draftHydratedRef.current || busy || !isMeaningfulCustomOrderDraft(draftFields)) return
     setDraftStatus((current) => current === 'restored' ? current : 'saving')
     const timer = window.setTimeout(() => {
       void invokeAccountFunction('custom-order-draft-action', {
         action: 'save', tailorProfileId: tailorId, version: CUSTOM_ORDER_DRAFT_VERSION,
-        currentStep: 0, fields: draftFields,
+        currentStep: step, fields: draftFields,
         hasDeviceOnlyAttachments: referencePhotos.length > 0 || fabricReferenceFiles.length > 0,
       }).then(() => setDraftStatus('saved')).catch(() => setDraftStatus('error'))
     }, 650)
     return () => window.clearTimeout(timer)
-  }, [busy, draftFields, fabricReferenceFiles.length, referencePhotos.length, tailorId])
+  }, [busy, createdOrderId, data.existingOrder, draftFields, fabricReferenceFiles.length, referencePhotos.length, step, tailorId])
 
   if (!tailor || !tailorId) {
     return (
@@ -424,6 +432,17 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
         body="Choose a tailor before starting a custom brief."
         action={<Link href="/account/explore" className="font-semibold text-needle">Back to Explore</Link>}
       />
+    )
+  }
+
+  if (data.existingOrder) {
+    return (
+      <section className="rounded-[8px] border border-needle/16 bg-white/90 p-6 shadow-sm sm:p-8">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Custom brief sent</p>
+        <h2 className="mt-2 font-serif text-3xl font-semibold text-ink">Your request is already with {safeEntityName(tailor.business_name || tailor.display_name, 'the tailor')}.</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-ink/62">Reference {data.existingOrder.reference} is waiting for the tailor to review and respond. Continue in the order so the brief, quote, messages, and notifications stay together.</p>
+        <Link href={accountRoute(`/account/orders/${data.existingOrder.id}`)} className="mt-6 inline-flex rounded-[8px] bg-needle px-5 py-3 text-sm font-semibold text-white">Open submitted order</Link>
+      </section>
     )
   }
 
@@ -517,6 +536,71 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
     setDeliveryVerificationSource('CUSTOMER_CONFIRMED_STRUCTURED')
     setDeliveryVerifiedAt(verifiedAt)
     await resolveWebFulfillment(deliveryMethod, verifiedAt, 'CUSTOMER_CONFIRMED_STRUCTURED')
+  }
+
+  function showStepError(message: string) {
+    setError(message)
+    window.requestAnimationFrame(() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
+
+  async function advanceStep() {
+    setError(null)
+    if (step === 0) {
+      const deadlineIso = dateInputToIso(deadline)
+      const deadlineDate = deadlineIso ? new Date(deadlineIso) : null
+      if (!garmentType) return showStepError('Choose the type of garment you want made.')
+      if (garmentType === 'Other' && !garmentTypeOther.trim()) return showStepError('Describe the garment type when choosing Other.')
+      if (!deadlineDate || Number.isNaN(deadlineDate.getTime()) || deadlineDate.getTime() < customOrderMinimumDeliveryDate().getTime()) return showStepError('Target delivery date must be at least 2 weeks from today.')
+      if (wearerMode === 'OTHER' && wearerName.trim().length < 2) return showStepError('Add the wearer name for this brief.')
+    }
+    if (step === 1) {
+      if (!isCustomOrderBriefLongEnough(description)) return showStepError('Write one clear paragraph, or at least 3 short lines, describing the garment.')
+      if (styleReferenceLinks.length === 0 && referencePhotos.length === 0) return showStepError('Add at least one Instagram, Pinterest, or TikTok reference link, or attach a reference photo.')
+      if (styleReferenceLinks.length > CUSTOM_ORDER_MAX_STYLE_LINKS || styleReferenceLinks.some((link) => !isAllowedCustomStyleReference(link))) return showStepError(`Use no more than ${CUSTOM_ORDER_MAX_STYLE_LINKS} Instagram, Pinterest, or TikTok links.`)
+    }
+    if (step === 2) {
+      if (!baseMeasurementSnapshot) return showStepError('Add saved measurements before continuing so the tailor can quote the fit accurately.')
+      if (fitNote.trim().length < 20) return showStepError('Add a fit note with at least 20 characters before continuing.')
+    }
+    if (step === 3) {
+      const fabricIssues = getCustomOrderFabricIssues({
+        fabricSource,
+        fabricDescription,
+        fabricBudgetAmount,
+        fabricBudgetCurrency,
+        fabricReferenceMediaCount: fabricReferenceFiles.length,
+        fabricReferenceLinkCount: fabricReferenceLinks.length,
+        fabricSubstitutionPreference,
+        fabricHandoffMode: fabricSource === 'CUSTOMER_SUPPLIES' ? 'CUSTOMER_TO_TAILOR' : null,
+        isBulkOrder: wearerMode === 'GROUP',
+        bulkRecipientCount: Number.parseInt(bulkRecipientCount, 10) || null,
+        bulkFabricMode,
+        suggestedVendorName: fabricVendorName,
+        suggestedVendorLocation: fabricVendorLocation,
+        suggestedVendorLink: fabricVendorLink.trim() || null,
+        suggestedVendorNotes: fabricVendorNotes,
+      })
+      if (fabricIssues[0]) return showStepError(fabricIssues[0].message)
+    }
+    if (step === 4) {
+      const normalizedRecipientPhone = needsDeliveryDetails ? normalizePhoneForStorage(recipientPhone) : ''
+      if (needsDeliveryDetails && (!recipientName.trim() || !deliveryAddress.trim() || !deliveryCity.trim() || !deliveryRegion.trim() || !deliveryCountryCode.trim())) return showStepError('Add the full delivery address before continuing.')
+      const phoneError = needsDeliveryDetails ? validatePhoneForProfile(normalizedRecipientPhone) : null
+      if (phoneError) return showStepError(phoneError)
+      const eligibility = await resolveWebFulfillment(deliveryMethod)
+      if (!eligibility || eligibility.status !== 'ELIGIBLE') {
+        if (eligibility) showStepError(fulfillmentEligibilityCopy(eligibility))
+        return
+      }
+    }
+    setStep((current) => Math.min(WEB_BRIEF_STEP_TITLES.length - 1, current + 1))
+    window.requestAnimationFrame(() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
+
+  function returnToStep(nextStep: number) {
+    setError(null)
+    setStep(Math.max(0, Math.min(WEB_BRIEF_STEP_TITLES.length - 1, nextStep)))
+    window.requestAnimationFrame(() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
 
   async function submitBrief() {
@@ -906,9 +990,10 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
         uploadedFabricReferenceUrls.push(await uploadPublicFile('order-photos', 'brief/' + data.userId + '/fabric', preparedFabricMedia))
       }
       const result = await invokeAccountFunction<{ orderId?: string }>('custom-order-action', buildPayload('create-order', uploadedReferencePhotos, uploadedFabricReferenceUrls))
-      await invokeAccountFunction('custom-order-draft-action', { action: 'delete', tailorProfileId: selectedTailor.id })
-      setCreatedOrderId(result.orderId ?? null)
+      if (!result.orderId) throw new Error('The order was created without a usable receipt. Open Orders before retrying.')
+      setCreatedOrderId(result.orderId)
       setSuccess('Custom brief sent. Opening the new order so you can track the quote.')
+      void invokeAccountFunction('custom-order-draft-action', { action: 'delete', tailorProfileId: selectedTailor.id }).catch(() => null)
       setDescription('')
       setStyleLinks('')
       setStyleNotes('')
@@ -932,9 +1017,7 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
       if (photoInputRef.current) photoInputRef.current.value = ''
       if (fabricMediaInputRef.current) fabricMediaInputRef.current.value = ''
       onRefresh()
-      if (result.orderId) {
-        router.push(accountRoute(`/account/orders/${result.orderId}`))
-      }
+      router.push(accountRoute(`/account/orders/${result.orderId}`))
     } catch (briefError) {
       setError(friendlyActionError(briefError, 'Custom brief could not be submitted. Check required fields and try again.'))
     } finally {
@@ -951,32 +1034,37 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
 
   return (
     <div className="grid gap-4">
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,0.62fr)_minmax(0,1fr)] lg:items-start">
-        <div className="rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm">
-          <div className="grid gap-4 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start lg:block">
-            <PhotoTile src={tailorPhoto(selectedTailor)} label="Tailor profile" />
-            <div>
-              <h2 className="mt-3 text-2xl font-semibold text-ink sm:mt-0 lg:mt-4">{safeEntityName(selectedTailor.business_name || selectedTailor.display_name, 'Tailor')}</h2>
-              <p className="mt-2 line-clamp-3 text-sm leading-6 text-ink/62">
-                {safeUserText(selectedTailor.location, 'Location pending')} · {safeList(selectedTailor.specialty_tags, 'Custom clothing')}
-              </p>
-              <p className="mt-3 w-fit rounded-full bg-bone/70 px-3 py-1.5 text-xs font-semibold text-needle">
-                Availability: {cleanLabel(selectedTailor.availability, 'Ask before booking')}
-              </p>
-            </div>
+      <section className="flex flex-col gap-3 rounded-[8px] border border-ink/8 bg-white/84 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="size-12 shrink-0 overflow-hidden rounded-full bg-needle/8">
+            {tailorPhoto(selectedTailor) ? <Image src={tailorPhoto(selectedTailor)!} alt="" width={96} height={96} unoptimized className="h-full w-full object-cover" /> : null}
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Custom brief for</p>
+            <h2 className="truncate text-lg font-semibold text-ink">{safeEntityName(selectedTailor.business_name || selectedTailor.display_name, 'Tailor')}</h2>
+            <p className="truncate text-xs text-ink/52">{safeUserText(selectedTailor.location, 'Location pending')} · {cleanLabel(selectedTailor.availability, 'Ask before booking')}</p>
           </div>
         </div>
-        <div className="self-start rounded-[8px] border border-needle/12 bg-needle/8 p-4 shadow-sm sm:p-5">
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-needle/80">Before quote</p>
-          <h2 className="mt-1 text-xl font-semibold leading-tight text-ink sm:text-2xl">The tailor reviews this before pricing.</h2>
-          <p className="mt-2 text-sm leading-6 text-ink/66">
-            This sends a pending-quote order. Add saved measurements first so the tailor can price with fit context.
-          </p>
-        </div>
+        <p className="max-w-md text-xs leading-5 text-ink/58">Nothing is charged now. Your tailor reviews the brief and sends a quote.</p>
       </section>
 
-      <section className="rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm sm:p-5">
+      <section ref={formSectionRef} className="scroll-mt-4 rounded-[8px] border border-ink/8 bg-white/84 p-4 shadow-sm sm:p-5">
         <div className="grid gap-5">
+          <div className="grid gap-3" aria-label={`Step ${step + 1} of ${WEB_BRIEF_STEP_TITLES.length}: ${WEB_BRIEF_STEP_TITLES[step]}`}>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Step {step + 1} of {WEB_BRIEF_STEP_TITLES.length}</p>
+                <h2 className="mt-1 font-serif text-2xl font-semibold text-ink">{WEB_BRIEF_STEP_TITLES[step]}</h2>
+                <p className="mt-1 text-sm text-ink/56">{WEB_BRIEF_STEP_SUBTITLES[step]}</p>
+              </div>
+              <span className="shrink-0 rounded-full border border-needle/15 bg-needle/6 px-3 py-1 text-xs font-semibold text-needle">{Math.round(((step + 1) / WEB_BRIEF_STEP_TITLES.length) * 100)}%</span>
+            </div>
+            <div className="flex gap-1.5" aria-hidden="true">
+              {WEB_BRIEF_STEP_TITLES.map((title, index) => (
+                <span key={title} className={`h-1.5 min-w-0 flex-1 rounded-full ${index <= step ? 'bg-needle' : 'bg-ink/10'}`} />
+              ))}
+            </div>
+          </div>
           <ActionNotice error={error} success={success} />
           {draftStatus ? (
             <div className={`rounded-[8px] border px-4 py-3 text-sm ${draftStatus === 'error' ? 'border-rust/20 bg-rust/6 text-rust' : 'border-needle/16 bg-needle/6 text-ink/68'}`} role="status">
@@ -990,6 +1078,8 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
             </Link>
           ) : null}
 
+          {step === 0 ? <>
+          <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">1 · Piece and wearer</p><p className="mt-1 text-sm text-ink/56">Define what is being made and who will wear it.</p></div>
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Garment</span>
@@ -1057,6 +1147,9 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
               </>
             ) : null}
           </div>
+          </> : null}
+          {step === 1 ? <>
+          <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">2 · Design and references</p><p className="mt-1 text-sm text-ink/56">Describe the result and attach the clearest visual references.</p></div>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Brief</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={5} maxLength={1200} placeholder="Describe the outfit, silhouette, occasion, fabric expectations, and anything the tailor must know." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
@@ -1107,7 +1200,10 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
             <span className="text-sm font-semibold text-ink">Style notes</span>
             <textarea value={styleNotes} onChange={(event) => setStyleNotes(event.target.value)} rows={3} maxLength={1200} className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
           </label>
+          </> : null}
 
+          {step === 2 ? <>
+          <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">3 · Fit</p><p className="mt-1 text-sm text-ink/56">Choose the wearer&apos;s saved measurements and note personal fit preferences.</p></div>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Measurements</span>
@@ -1122,7 +1218,7 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
                 if (!age?.stale) return null
                 return (
                   <span className="text-xs leading-5 text-amber-700">
-                    These measurements are {age.ageMonths} months old. Update them in Profile if your fit or body shape changed before submitting this brief.
+                    These measurements are {age.ageMonths} months old. Update them in Measurements if your fit or body shape changed before submitting this brief.
                   </span>
                 )
               })()}
@@ -1135,8 +1231,10 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
               </span>
             </label>
           </div>
+          </> : null}
 
-          <section className="grid gap-4 rounded-[8px] border border-ink/6 bg-bone/35 p-4">
+          {step === 3 ? <section className="grid gap-4">
+            <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">4 · Fabric</p><p className="mt-1 text-sm text-ink/56">Choose who supplies it and record the budget or handoff evidence.</p></div>
             <div className="grid gap-4 md:grid-cols-3">
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-ink">Fabric</span>
@@ -1232,7 +1330,9 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
                     {selectedFabricSubstitution?.hint ?? 'This tells the tailor whether to ask before using a close alternative.'}
                   </span>
                 </label>
-                <div className="grid gap-4 rounded-[8px] border border-ink/6 bg-white/70 p-4 md:grid-cols-2">
+                <details className="group rounded-[8px] border border-ui-border bg-bone/35">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-ink">Suggested fabric vendor <span className="text-xs font-semibold text-needle group-open:hidden">Add details</span><span className="hidden text-xs font-semibold text-ink/50 group-open:inline">Hide</span></summary>
+                  <div className="grid gap-4 border-t border-ui-border p-4 md:grid-cols-2">
                   <label className="grid gap-2">
                     <span className="text-sm font-semibold text-ink">Suggested vendor</span>
                     <input value={fabricVendorName} onChange={(event) => setFabricVendorName(event.target.value)} placeholder="Optional vendor or shop name" className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50" />
@@ -1249,15 +1349,18 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
                     <span className="text-sm font-semibold text-ink">Vendor notes</span>
                     <textarea value={fabricVendorNotes} onChange={(event) => setFabricVendorNotes(event.target.value)} rows={3} maxLength={500} placeholder="Optional sourcing context, no contact details." className="resize-none rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
                   </label>
-                </div>
+                  </div>
+                </details>
               </>
             ) : (
               <p className="rounded-[8px] border border-needle/10 bg-white/70 px-4 py-3 text-sm leading-6 text-ink/66">
                 Add at least one clear fabric photo or video. The tailor will confirm fabric suitability and handoff inside the order before quoting or cutting.
               </p>
             )}
-          </section>
+          </section> : null}
 
+          {step === 4 ? <>
+          <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">5 · Fulfillment</p><p className="mt-1 text-sm text-ink/56">Confirm how the finished garment reaches you.</p></div>
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-ink">Fulfillment</span>
@@ -1347,6 +1450,16 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
             </p>
           ) : null}
 
+          </> : null}
+
+          {step === 5 ? <>
+          <div className="grid gap-4 rounded-[8px] border border-ink/8 bg-bone/35 p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Piece</p><p className="mt-1 font-semibold text-ink">{garmentType === 'Other' ? garmentTypeOther : garmentType} · {wearerMode === 'SELF' ? 'For me' : wearerName}</p><p className="mt-1 text-sm text-ink/58">{occasion === 'Other' ? occasionOther : occasion} · Needed by {deadline}</p></div><button type="button" onClick={() => returnToStep(0)} className="text-sm font-semibold text-needle">Edit</button></div>
+            <div className="border-t border-ink/8 pt-4"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Design</p><p className="mt-1 text-sm leading-6 text-ink/72">{description}</p><p className="mt-1 text-xs text-ink/52">{referencePhotos.length} photo{referencePhotos.length === 1 ? '' : 's'} · {styleReferenceLinks.length} link{styleReferenceLinks.length === 1 ? '' : 's'}</p></div><button type="button" onClick={() => returnToStep(1)} className="text-sm font-semibold text-needle">Edit</button></div></div>
+            <div className="border-t border-ink/8 pt-4"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Fit</p><p className="mt-1 text-sm text-ink/72">{fitNote}</p></div><button type="button" onClick={() => returnToStep(2)} className="text-sm font-semibold text-needle">Edit</button></div></div>
+            <div className="border-t border-ink/8 pt-4"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Fabric</p><p className="mt-1 text-sm text-ink/72">{fabricSource === 'TAILOR_SOURCES' ? `Tailor sources · ${fabricBudgetCurrency} ${fabricBudget}` : 'Customer supplies fabric'}</p><p className="mt-1 text-xs text-ink/52">{fabricDescription}</p></div><button type="button" onClick={() => returnToStep(3)} className="text-sm font-semibold text-needle">Edit</button></div></div>
+            <div className="border-t border-ink/8 pt-4"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-needle">Fulfillment</p><p className="mt-1 text-sm text-ink/72">{deliveryMethod === 'LOCAL_COLLECTION' ? 'Local collection' : deliveryMethod === 'LOCAL_DELIVERY' ? 'Local delivery' : `${shippingPreference === 'EXPRESS' ? 'Express' : 'Standard'} shipping`}</p></div><button type="button" onClick={() => returnToStep(4)} className="text-sm font-semibold text-needle">Edit</button></div></div>
+          </div>
           <label className="flex items-start gap-3 rounded-[8px] border border-ink/8 bg-bone/55 p-4 text-sm leading-6 text-ink/66">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} className="mt-1" />
             <span>
@@ -1356,6 +1469,12 @@ export function BriefForm({ data, tailorId, onRefresh }: { data: BriefRenderData
           <button type="button" onClick={submitBrief} disabled={busy} className="inline-flex justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
             {busy ? 'Submitting brief...' : 'Submit custom brief'}
           </button>
+          </> : null}
+
+          <div className="flex items-center justify-between gap-3 border-t border-ink/8 pt-4">
+            {step > 0 ? <Button type="button" variant="secondary" onClick={() => returnToStep(step - 1)} disabled={busy}>Back</Button> : <span />}
+            {step < WEB_BRIEF_STEP_TITLES.length - 1 ? <Button type="button" onClick={() => void advanceStep()} disabled={busy || checkingFulfillment}>Continue</Button> : null}
+          </div>
         </div>
       </section>
     </div>

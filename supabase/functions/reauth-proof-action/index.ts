@@ -9,7 +9,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getServiceRoleKey, getSupabaseAnonKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { hasReauthProofSecret, issueReauthProof, REAUTH_PROOF_PURPOSES } from '../_shared/reauth-proof.ts'
@@ -159,7 +159,11 @@ Deno.serve(async (req) => {
       verificationMessage = 'Complete a fresh provider sign-in before continuing.'
       verificationActual = { provider: parsed.data.provider, issuedAt, ageSeconds, subjectMatches: subject === caller.id }
     } else {
-      const authClient = createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+      // This is an authenticated, rate-limited server-side password check. Use the
+      // service credential so global Auth CAPTCHA does not turn every sensitive
+      // in-account action into a second public sign-in challenge. GoTrue still
+      // validates the submitted password; the service key never leaves Edge.
+      const authClient = createClient(getSupabaseUrl(), getServiceRoleKey(), {
         auth: { persistSession: false, autoRefreshToken: false },
       })
       const { data: passwordData, error: passwordError } = await authClient.auth.signInWithPassword({

@@ -43,6 +43,9 @@ describe('deriveConversationEventPresentation', () => {
     expect(parseScheduledOrderCallMessage(
       'Drapeon order call scheduled for 31 Jul 2026, 10:20 about pickup or delivery. This call is free and stays inside Drapeon; keep final decisions in this thread. Note: Compare measurements',
     )).toEqual({ scheduledFor: '31 Jul 2026 · 10:20 AM', reason: 'pickup or delivery', note: 'Compare measurements' })
+    expect(parseScheduledOrderCallMessage(
+      'Drape order call scheduled for 28 Jul 2026, 22:29 about item condition. This call is free and stays inside Drape; keep final decisions in this thread.',
+    )).toEqual({ scheduledFor: '28 Jul 2026 · 10:29 PM', reason: 'item condition', note: null })
     expect(parseScheduledOrderCallMessage('Can we call tomorrow?')).toBeNull()
   })
 })

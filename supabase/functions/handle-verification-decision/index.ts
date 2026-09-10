@@ -3,11 +3,11 @@
  *
  * Handles tailor verification approve / reject decisions.
  *
- * Existing one-click ops email links are still supported as signed GET requests:
+ * Legacy signed email links are accepted as GET requests:
  *   ?tailorId=<uuid>&decision=APPROVE|REJECT&exp=<unix_ts>&token=<hmac_hex>
  *
- * The token is HMAC-SHA256(VERIFICATION_SECRET, tailorId:decision:exp).
- * Links expire after 7 days. Invalid or tampered links are rejected.
+ * They now route to the protected Ops queue instead of mutating verification.
+ * Invalid, expired, or tampered links are rejected.
  *
  * The ops dashboard calls this function as a service-role POST request with:
  *   { tailorUserId, decision, reason, performedBy, performedRole }
@@ -27,16 +27,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
-import { verifyPayload, escapeHtml } from '../_shared/hmac.ts'
+import { verifyPayload } from '../_shared/hmac.ts'
 import { log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import {
   createResendVerificationEmailSender,
-  DEFAULT_VERIFICATION_REJECTION_REASON,
   performVerificationDecision,
   VERIFICATION_SOURCE_OPS_DASHBOARD,
-  VERIFICATION_SOURCE_SIGNED_LINK,
 } from '../_shared/verification-decision.ts'
 
 const FN = 'handle-verification-decision'
@@ -212,65 +210,25 @@ async function handleSignedGet(req: Request) {
     return rateLimitExceededResponse(getCorsHeaders(req))
   }
 
-  const result = await performVerificationDecision(
-    supabase,
-    {
-      tailorUserId: tailorId,
-      decision,
-      reason: decision === 'REJECT' ? DEFAULT_VERIFICATION_REJECTION_REASON : null,
-      performedBy: 'signed-verification-link',
-      performedRole: 'OPS',
-      source: VERIFICATION_SOURCE_SIGNED_LINK,
+  const opsBase = (Deno.env.get('OPS_WEB_BASE_URL') ?? 'https://ops.drapeon.co').replace(/\/+$/u, '')
+  const destination = new URL('/ops', opsBase)
+  destination.searchParams.set('view', 'verification')
+  destination.searchParams.set('q', tailorId)
+  destination.hash = 'verification'
+
+  await supabase.from('audit_logs').insert({
+    actor_role: 'OPS',
+    event: 'ops.verification_signed_link_redirected',
+    severity: 'info',
+    payload: {
+      tailor_user_id: tailorId,
+      requested_decision: decision,
+      decision_applied: false,
+      destination: 'OPS_VERIFICATION_QUEUE',
     },
-    {
-      appUrl: Deno.env.get('SITE_URL') ?? Deno.env.get('NEXT_PUBLIC_SITE_URL') ?? null,
-      lookupUserEmail: (userId) => lookupAuthUserEmail(supabase, userId),
-      sendEmail: createResendVerificationEmailSender(),
-      sendPush: (userId, message) => sendPushToUser(supabase, userId, message),
-    },
-  )
-
-  if (!result.ok) {
-    if (result.status === 404) {
-      return htmlPage('Not found', '<h1>Tailor not found</h1><p>No profile found for this ID.</p>')
-    }
-
-    if (result.status === 409) {
-      return htmlPage(
-        'Already processed',
-        `<h1>Already processed</h1><p>This verification was already handled.</p>`,
-      )
-    }
-
-    log('error', FN, 'decision.failed', { tailor_id: tailorId, decision, error: result.code })
-    return htmlPage('Database error', '<h1>Database error</h1><p>Could not update profile. Please review this from the dashboard.</p>')
-  }
-
-  log('info', FN, 'id_verification.decision', {
-    tailor_id: tailorId,
-    decision,
-    source: VERIFICATION_SOURCE_SIGNED_LINK,
-    email_sent: result.emailSent,
-    email_error: result.emailError,
-    push_status: result.pushStatus,
-    push_error: result.pushError,
   })
 
-  const displayName = result.displayName || 'This tailor'
-  if (decision === 'APPROVE') {
-    return htmlPage(
-      'Tailor approved',
-      `<h1 style="color:#2F6844">Approved</h1>
-       <p><strong>${escapeHtml(displayName)}</strong> is now live on Drapeon.</p>
-       <p style="font-size:13px;margin-top:16px">They will receive an app notification and email confirmation shortly when delivery is available.</p>`,
-    )
-  }
-
-  return htmlPage(
-    'Tailor rejected',
-    `<h1 style="color:#B91C1C">Rejected</h1>
-     <p><strong>${escapeHtml(displayName)}</strong>'s profile has been marked as rejected and will not go live.</p>`,
-  )
+  return Response.redirect(destination.toString(), 303)
 }
 
 Deno.serve(async (req) => {

@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
-import { consultationAttendanceEvidenceCopy, consultationAttendanceResolutionCopy } from '@drape/shared'
+import {
+  consultationAttendanceEvidenceCopy,
+  consultationAttendanceReportAvailableAt,
+  consultationAttendanceResolutionCopy,
+} from '@drape/shared'
 
 type Role = 'CUSTOMER' | 'TAILOR'
 type ResponseCode = 'AGREE_NO_CALL' | 'I_ATTENDED' | 'CONNECTION_ISSUE' | 'OTHER'
-type Booking = { id: string; scheduled_start_at: string }
+type Booking = { id: string; scheduled_start_at: string; status: string; timezone: string | null }
 type Evidence = { derived_outcome: string; verified_overlap_seconds: number; provider_evidence_complete: boolean }
 type Review = { status: string; reported_by_role: Role; reported_reason: string; counterparty_due_at: string; evidence_outcome_at_report: string; counterparty_response_code: ResponseCode | null; resolution_code: string | null }
 
@@ -19,6 +23,12 @@ const responseOptions: Array<{ code: ResponseCode; title: string; hint: string }
 
 const display = (value: string) => value.toLowerCase().replaceAll('_', ' ').replace(/^./, (letter) => letter.toUpperCase())
 
+function attendanceHelpTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  }).format(new Date(value))
+}
+
 export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: string; actorRole: Role }) {
   const [booking, setBooking] = useState<Booking | null>(null)
   const [evidence, setEvidence] = useState<Evidence | null>(null)
@@ -29,14 +39,27 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<string | null>(null)
-  const [renderedAt] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const supabase = createClient()
-    const { data: bookingRow } = await supabase.from('consultation_bookings').select('id, scheduled_start_at').eq('order_id', orderId).in('status', ['CONFIRMED', 'COMPLETED', 'NO_SHOW']).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setLoadError(null)
+    const { data: bookingRow, error: bookingError } = await supabase.from('consultation_bookings').select('id, scheduled_start_at, status, timezone').eq('order_id', orderId).in('status', ['CONFIRMED', 'COMPLETED', 'NO_SHOW', 'EXPIRED']).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (bookingError) {
+      setLoading(false)
+      setLoadError('Attendance status could not load. Refresh and try again.')
+      return
+    }
     const next = bookingRow as Booking | null
     setBooking(next)
-    if (!next) return
+    if (!next) {
+      setEvidence(null)
+      setReview(null)
+      setLoading(false)
+      return
+    }
     const [evidenceResult, reviewResult] = await Promise.all([
       supabase.from('consultation_attendance_evidence').select('derived_outcome, verified_overlap_seconds, provider_evidence_complete').eq('booking_id', next.id).maybeSingle(),
       supabase.from('consultation_attendance_reviews').select('status, reported_by_role, reported_reason, counterparty_due_at, evidence_outcome_at_report, counterparty_response_code, resolution_code').eq('booking_id', next.id).maybeSingle(),
@@ -54,6 +77,7 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
     } else {
       setReview(reviewResult.data as Review | null)
     }
+    setLoading(false)
   }, [orderId])
 
   useEffect(() => {
@@ -61,17 +85,44 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
     return () => window.clearTimeout(timer)
   }, [load])
   useEffect(() => {
-    if (!booking?.id) return
     const supabase = createClient()
     const channel = supabase
-      .channel(`consultation-attendance:${booking.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_attendance_reviews', filter: `booking_id=eq.${booking.id}` }, () => { void load() })
+      .channel(`consultation-attendance:${orderId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_bookings', filter: `order_id=eq.${orderId}` }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_attendance_evidence', filter: `order_id=eq.${orderId}` }, () => { void load() })
+    if (booking?.id) {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table: 'consultation_attendance_reviews', filter: `booking_id=eq.${booking.id}` }, () => { void load() })
+    }
+    channel
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
-  }, [booking?.id, load])
+  }, [booking?.id, load, orderId])
+  useEffect(() => {
+    if (!booking) return
+    const availableAt = consultationAttendanceReportAvailableAt(booking.scheduled_start_at)
+    const availableAtMs = availableAt ? new Date(availableAt).getTime() : null
+    if (availableAtMs == null || now >= availableAtMs) return
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.min(Math.max(availableAtMs - now, 250), 30_000),
+    )
+    return () => window.clearTimeout(timer)
+  }, [booking, now])
+  if (loading) return null
+  if (loadError) {
+    return (
+      <section className="app-surface p-5" role="alert">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rust">Consultation attendance</p>
+        <p className="mt-2 text-sm font-semibold text-ink">{loadError}</p>
+        <button type="button" onClick={() => { setLoading(true); void load() }} className="mt-3 text-sm font-semibold text-needle">Try again</button>
+      </section>
+    )
+  }
   if (!booking) return null
   const activeBooking = booking
-  const reportWindowOpen = renderedAt >= new Date(activeBooking.scheduled_start_at).getTime() + 15 * 60_000
+  const reportAvailableAt = consultationAttendanceReportAvailableAt(activeBooking.scheduled_start_at)
+  const reportAvailableAtMs = reportAvailableAt ? new Date(reportAvailableAt).getTime() : null
+  const reportWindowOpen = reportAvailableAtMs != null && now >= reportAvailableAtMs
   const canRespond = review?.status === 'COUNTERPARTY_REVIEW' && review.reported_by_role !== actorRole
   const isReporter = review?.reported_by_role === actorRole
   const evidenceCopy = consultationAttendanceEvidenceCopy(review?.evidence_outcome_at_report)
@@ -137,7 +188,7 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
   }
 
   return (
-    <section className="rounded-[8px] border border-needle/14 bg-white/86 p-6 shadow-sm">
+    <section className="app-surface p-5">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Consultation attendance</p>
       <h2 className="mt-2 text-xl font-semibold text-ink">{cardTitle}</h2>
       <p className="mt-3 text-sm leading-6 text-ink/62">
@@ -185,7 +236,9 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
       ) : null}
       <p className="mt-3 text-xs leading-5 text-ink/45">
         {!review
-          ? 'Reports never move money automatically.'
+          ? !reportWindowOpen && reportAvailableAt
+            ? `If the call does not happen, attendance help opens ${attendanceHelpTime(reportAvailableAt)}. Reports never move money automatically.`
+            : 'Reports never move money automatically.'
           : review.status === 'COUNTERPARTY_REVIEW'
             ? (isReporter ? 'No further action is needed from you right now. The fee stays protected while the other person responds.' : 'Your response determines whether you reschedule together or Drapeon reviews the call activity.')
             : review.status === 'OPS_REVIEW'

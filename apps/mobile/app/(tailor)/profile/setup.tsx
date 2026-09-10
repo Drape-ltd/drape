@@ -95,6 +95,7 @@ import {
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
   normalizePhoneForStorage,
+  ACCOUNT_PHONE_UNIQUENESS_HINT,
   PHONE_STORAGE_HINT,
   validatePhoneForProfile,
 } from '@drape/shared/phone'
@@ -108,7 +109,12 @@ import {
   type TailorSetupFieldErrors,
   type TailorSetupStep,
 } from '@drape/shared/tailor-setup'
-import type { AccountCurrencyCode } from '@drape/shared'
+import {
+  TAILOR_LANGUAGE_GROUPS,
+  TAILOR_SELLER_TYPE_OPTIONS,
+  TAILOR_SPECIALTY_GROUPS,
+  type AccountCurrencyCode,
+} from '@drape/shared'
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
   MEDIA_CACHE_CONTROL_SECONDS,
@@ -235,109 +241,10 @@ const SETUP_ERROR_FIELD_PRIORITY: Record<TailorSetupStep, TailorSetupField[]> = 
   2: ['portfolio'],
   3: ['orderMode', 'fulfillment', 'pickupAddress', 'idDocument'],
 }
-const SELLER_TYPE_OPTIONS: Array<{ value: SellerType; label: string; hint: string }> = [
-  { value: 'TAILOR', label: 'Tailor', hint: 'Custom and bespoke work made to order.' },
-  { value: 'BOUTIQUE', label: 'Boutique', hint: 'Ready-made garments and stock collections.' },
-  { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'A full studio handling custom orders and ready-made collections together.' },
-]
-
-// ─── Language options (grouped by region) ────────────────────────────────────
-
-const LANGUAGE_GROUPS: TagGroup[] = [
-  {
-    label: 'West African',
-    items: [
-      'English',
-      'Yoruba',
-      'Igbo',
-      'Hausa',
-      'Pidgin',
-      'Twi',
-      'Akan',
-      'Fante',
-      'Ga',
-      'Ewe',
-      'Wolof',
-      'Fulani',
-      'Dagbani',
-    ],
-  },
-  {
-    label: 'East & Southern Africa',
-    items: ['Swahili', 'Amharic', 'Somali', 'Zulu', 'Xhosa', 'Shona', 'Kikuyu', 'Luganda'],
-  },
-  {
-    label: 'European',
-    items: ['French', 'Portuguese', 'Spanish', 'Italian', 'German', 'Dutch'],
-  },
-  {
-    label: 'Middle Eastern',
-    items: ['Arabic', 'Turkish', 'Farsi'],
-  },
-  {
-    label: 'South & Southeast Asian',
-    items: ['Hindi', 'Urdu', 'Punjabi', 'Gujarati', 'Bengali', 'Tamil', 'Tagalog'],
-  },
-  {
-    label: 'East Asian',
-    items: ['Mandarin', 'Japanese', 'Korean'],
-  },
-]
-
-// ─── Specialty options (grouped by category) ─────────────────────────────────
-
-const SPECIALTY_GROUPS: TagGroup[] = [
-  {
-    label: 'West African',
-    items: [
-      'Agbada',
-      'Iro & Buba',
-      'Ankara',
-      'Kaftans',
-      'Dashiki',
-      'Boubou',
-      'Native Wear',
-      'Asoebi',
-      'Kente',
-    ],
-  },
-  {
-    label: 'Formal & Western',
-    items: ['Suits', 'Wool Suits', 'Tuxedo', 'Shirts', 'Trousers', 'Blazers'],
-  },
-  {
-    label: 'Womenswear',
-    items: [
-      'Bespoke Dress',
-      'Wedding Gown',
-      'Prom Dress',
-      'Bridal',
-      'Jumpsuit',
-      'Skirts',
-      'Blouses',
-    ],
-  },
-  {
-    label: 'South Asian',
-    items: ['Lehenga', 'Saree Blouse', 'Kurta', 'Shalwar Kameez', 'Sherwani'],
-  },
-  {
-    label: 'Middle Eastern & North African',
-    items: ['Abaya', 'Jalabiya', 'Kaftan'],
-  },
-  {
-    label: 'East Asian',
-    items: ['Qipao / Cheongsam'],
-  },
-  {
-    label: 'Craft & Textile',
-    items: ['Crochet', 'Knitwear', 'Embroidery', 'Beadwork', 'Adire', 'Batik'],
-  },
-  {
-    label: 'Lifestyle & Ready-made',
-    items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'],
-  },
-]
+// Shared with web so onboarding never drifts into a second taxonomy.
+const SELLER_TYPE_OPTIONS = TAILOR_SELLER_TYPE_OPTIONS
+const LANGUAGE_GROUPS: TagGroup[] = TAILOR_LANGUAGE_GROUPS
+const SPECIALTY_GROUPS: TagGroup[] = TAILOR_SPECIALTY_GROUPS
 const BIO_PROMPTS = [
   'What you make best',
   'Who you usually sew for',
@@ -2811,7 +2718,7 @@ export default function TailorSetupScreen() {
                       }}
                       error={phoneError || visibleErrors.phone}
                       required
-                      hint={phoneAvailabilityChecking ? 'Checking phone number…' : PHONE_STORAGE_HINT}
+                      hint={phoneAvailabilityChecking ? 'Checking phone number…' : `${PHONE_STORAGE_HINT} ${ACCOUNT_PHONE_UNIQUENESS_HINT}`}
                       testID="phone-input"
                     />
                   </View>

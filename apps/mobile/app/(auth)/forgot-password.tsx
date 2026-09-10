@@ -15,6 +15,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
+import { TurnstileChallenge } from '@/components/auth/TurnstileChallenge'
 import { Button, Input, KeyboardAwareScrollView } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
@@ -37,6 +38,8 @@ export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState(emailParam ?? '')
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaResetKey, setCaptchaResetKey] = useState(0)
 
   async function handleReset() {
     const normalizedEmail = email.trim().toLowerCase()
@@ -45,16 +48,26 @@ export default function ForgotPasswordScreen() {
       Alert.alert('Invalid email', 'Enter a valid email address and try again.')
       return
     }
+    if (!captchaToken) {
+      Alert.alert('Security check required', 'Complete the quick security check before requesting a reset link.')
+      return
+    }
 
     setLoading(true)
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
       redirectTo: getPasswordRecoveryRedirectUrl(),
+      captchaToken,
     })
+    setCaptchaToken(null)
+    setCaptchaResetKey((current) => current + 1)
     setLoading(false)
     if (error) {
+      const isCaptchaError = error.message.toLowerCase().includes('captcha')
       Alert.alert(
         'Could not start reset',
-        isLikelyConnectivityIssue(error)
+        isCaptchaError
+          ? 'The security check expired or could not be verified. Complete it again and retry.'
+          : isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
           : 'We could not start password reset right now. Please try again in a moment.'
       )
@@ -150,11 +163,17 @@ export default function ForgotPasswordScreen() {
                   }
                 />
 
+                <TurnstileChallenge
+                  key={captchaResetKey}
+                  action="recovery"
+                  onTokenChange={setCaptchaToken}
+                />
+
                 <Button
                   label="Send reset link"
                   onPress={handleReset}
                   loading={loading}
-                  disabled={!email.trim() || !isValidEmail(email.trim().toLowerCase())}
+                  disabled={!email.trim() || !isValidEmail(email.trim().toLowerCase()) || !captchaToken}
                 />
               </View>
             </>

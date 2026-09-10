@@ -1944,7 +1944,7 @@ export default function OrderBriefScreen() {
 
     await invokeFunction('custom-order-draft-action', {
       body: { action: 'delete', tailorProfileId: tailorId },
-    })
+    }).catch(() => null)
 
     resetTo(router, {
       pathname: '/(customer)/orders/[id]',

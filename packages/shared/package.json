@@ -30,6 +30,7 @@
     "./display-text": "./src/display-text.ts",
     "./status-display": "./src/status-display.ts",
     "./measurement-profile": "./src/measurement-profile.ts",
+    "./ready-made-fit": "./src/ready-made-fit.ts",
     "./onboarding-proof-item": "./src/onboarding-proof-item.ts",
     "./ops-verification-evidence": "./src/ops-verification-evidence.ts",
     "./custom-order-fabric": "./src/custom-order-fabric.ts",
@@ -55,7 +56,8 @@
     "./quote-draft": "./src/quote-draft.ts",
     "./fulfillment-eligibility": "./src/fulfillment-eligibility.ts",
     "./tax-decision": "./src/tax-decision.ts",
-    "./drapeon-dispatch": "./src/drapeon-dispatch.ts"
+    "./drapeon-dispatch": "./src/drapeon-dispatch.ts",
+    "./voice-recording": "./src/voice-recording.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

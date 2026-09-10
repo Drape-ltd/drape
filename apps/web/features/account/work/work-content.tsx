@@ -4,7 +4,13 @@ import Link from 'next/link'
 import type { Route } from 'next'
 import { useState } from 'react'
 import { Briefcase, CheckCheck, ChevronDown, MessageCircle } from 'lucide-react'
-import { formatDatabaseEnumLabel, formatMoney, formatRelative } from '@drape/shared'
+import {
+  formatCallCountdown,
+  formatDatabaseEnumLabel,
+  formatMoney,
+  formatRelative,
+  getCallLifecycleState,
+} from '@drape/shared'
 import { Button } from '../../../components/ui/button'
 import { MetricCard } from '../../../components/ui/metric-card'
 import { StatusChip } from '../../../components/ui/status-chip'
@@ -35,6 +41,7 @@ export type WorkOrder = {
   quoted_amount: number | null
   currency: string | null
   quoted_currency: string | null
+  special_note: string | null
   updated_at: string | null
   created_at: string | null
   customer_id: string | null
@@ -58,7 +65,6 @@ const terminal = new Set([
 ])
 const needsAction = new Set([
   'PENDING_QUOTE',
-  'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
   'PAYMENT_FAILED',
@@ -109,9 +115,54 @@ function progress(order: WorkOrder) {
 function payoutReady(tailor: WorkTailor) {
   return tailor.payout_reverification_required !== true && tailor.payout_account_verified === true
 }
+function consultationMeta(order: WorkOrder) {
+  if (!order.special_note?.trim()) return null
+  try {
+    const parsed = JSON.parse(order.special_note) as {
+      consultation?: { status?: string | null; scheduledStartAt?: string | null; paidAt?: string | null; feeAmount?: number | null }
+    }
+    return parsed.consultation ?? null
+  } catch {
+    return null
+  }
+}
+function consultationQueueState(order: WorkOrder) {
+  const consultation = consultationMeta(order)
+  if (!consultation) return null
+  if (consultation.status === 'REQUESTED') return 'reply'
+  if (consultation.status !== 'SCHEDULED') return 'reply'
+  const lifecycle = getCallLifecycleState(consultation.scheduledStartAt)
+  if (lifecycle.status === 'expired') return 'reply'
+  return lifecycle.status
+}
+function needsReply(order: WorkOrder) {
+  return order.stage === 'PENDING_QUOTE' ||
+    (order.stage === 'CONSULTATION' && consultationQueueState(order) === 'reply')
+}
 function action(order: WorkOrder) {
   const stage = order.stage ?? ''
-  if (['PENDING_QUOTE', 'CONSULTATION'].includes(stage)) return 'Quote needed'
+  const scheduledConsultation = consultationQueueState(order)
+  if (stage === 'PENDING_QUOTE' && ['upcoming', 'active'].includes(scheduledConsultation ?? '')) {
+    const lifecycle = getCallLifecycleState(consultationMeta(order)?.scheduledStartAt)
+    return scheduledConsultation === 'active'
+      ? 'Quote prep open · join make-up call'
+      : `Quote prep open · ${formatCallCountdown(lifecycle.msUntilOpen)}`
+  }
+  if (stage === 'PENDING_QUOTE') return 'Quote needed'
+  if (stage === 'CONSULTATION') {
+    const consultation = consultationMeta(order)
+    const state = consultationQueueState(order)
+    if (consultation?.status === 'REQUESTED') return 'Consultation response needed'
+    if (state === 'active') return 'Join consultation'
+    if (state === 'upcoming') {
+      const lifecycle = getCallLifecycleState(consultation?.scheduledStartAt)
+      return consultation?.feeAmount && !consultation.paidAt
+        ? 'Awaiting consultation payment'
+        : formatCallCountdown(lifecycle.msUntilOpen)
+    }
+    if (state === 'reply') return 'Quote needed after consultation'
+    return 'Review consultation'
+  }
   if (stage === 'PAYMENT_FAILED') return 'Payment issue'
   if (stage === 'IN_DISPUTE') return 'Dispute active'
   if (production.has(stage) || dispatched.has(stage)) return 'Stage update'
@@ -119,13 +170,15 @@ function action(order: WorkOrder) {
 }
 function column(order: WorkOrder) {
   const stage = order.stage ?? ''
+  if (['upcoming', 'active'].includes(consultationQueueState(order) ?? '')) return 'scheduled'
   if (needsAction.has(stage)) return 'needs-action'
+  if (stage === 'CONSULTATION') return 'needs-action'
   if (production.has(stage)) return 'production'
   if (dispatched.has(stage)) return 'dispatched'
   return 'done'
 }
 function Stage({ value }: { value: string | null }) {
-  return <StatusChip status={value} fallback="In progress" />
+  return <StatusChip status={value} fallback="In progress" className="max-w-[11rem] shrink" />
 }
 
 function WorkOrderCard({ order }: { order: WorkOrder }) {
@@ -136,7 +189,7 @@ function WorkOrderCard({ order }: { order: WorkOrder }) {
       href={`/account/orders/${order.id}`}
       className="block rounded-[8px] border border-ui-border bg-white p-3.5 shadow-sm transition hover:border-needle/30 hover:shadow-md"
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-needle/70">
           {formatDatabaseEnumLabel(order.order_kind, 'Order')}
         </span>
@@ -157,19 +210,19 @@ function WorkOrderCard({ order }: { order: WorkOrder }) {
 }
 
 export function WorkContent({ data }: { data: WorkData }) {
-  const [open, setOpen] = useState([true, true, true, false])
+  const [open, setOpen] = useState([true, true, true, true, false])
   if (!data.tailor)
     return (
-    <section data-route-content-ready="true" className="app-surface p-7">
+      <section data-route-content-ready="true" className="app-surface p-7">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">
           Tailor workspace
         </p>
         <h2 className="mt-2 text-2xl font-semibold text-ink">Tailor workspace not set up.</h2>
         <p className="mt-2 max-w-xl text-sm leading-6 text-ink/62">
-          Apply for tailor access before orders, shop readiness, and payout context appear here.
+          Complete tailor setup before orders, shop readiness, and payout context appear here.
         </p>
         <Button asChild className="mt-5">
-          <Link href="/apply?source=account">Apply as a tailor</Link>
+          <Link href="/account/profile?setup=1">Set up a tailor profile</Link>
         </Button>
       </section>
     )
@@ -178,9 +231,7 @@ export function WorkContent({ data }: { data: WorkData }) {
     (order) => order.tailor_profile_id === tailor.id || order.tailor_id === data.userId
   )
   const active = orders.filter((order) => !terminal.has(order.stage ?? ''))
-  const replies = active.filter((order) =>
-    ['PENDING_QUOTE', 'CONSULTATION'].includes(order.stage ?? '')
-  )
+  const replies = active.filter(needsReply)
   const ready = payoutReady(tailor)
   const profileReady = Boolean(tailor.profile_completed || tailor.is_live)
   const verified = Boolean(
@@ -201,6 +252,12 @@ export function WorkContent({ data }: { data: WorkData }) {
       title: 'Needs action',
       body: 'Quotes, payment issues, and disputes.',
       orders: active.filter((order) => column(order) === 'needs-action'),
+    },
+    {
+      key: 'scheduled',
+      title: 'Consultations',
+      body: 'Upcoming and open protected calls.',
+      orders: active.filter((order) => column(order) === 'scheduled'),
     },
     {
       key: 'production',
@@ -227,8 +284,8 @@ export function WorkContent({ data }: { data: WorkData }) {
     replies.length
       ? {
           eyebrow: 'Today',
-          title: `${replies.length} quote${replies.length === 1 ? '' : 's'} waiting`,
-          body: 'Review the brief and send clear pricing or request a consultation.',
+          title: `${replies.length} order${replies.length === 1 ? '' : 's'} need attention`,
+          body: 'Respond to consultation requests or send pricing only when the consultation gate is complete.',
           href: '/account/orders',
           action: 'Review orders',
         }
@@ -282,24 +339,42 @@ export function WorkContent({ data }: { data: WorkData }) {
         />
         <div className="grid gap-4 p-5">
           <div className="grid gap-3 sm:grid-cols-3">
-            <MetricCard
-              label="Active"
-              value={active.length}
-              hint="Orders in progress"
-              icon={<Briefcase />}
-            />
-            <MetricCard
-              label="Needs reply"
-              value={replies.length}
-              hint="Quotes or consultations"
-              icon={<MessageCircle />}
-            />
-            <MetricCard
-              label="Completed"
-              value={tailor.total_orders ?? 0}
-              hint="Lifetime orders"
-              icon={<CheckCheck />}
-            />
+            <Link
+              href="/account/orders?filter=active"
+              aria-label={`View ${active.length} active orders`}
+            >
+              <MetricCard
+                label="Active"
+                value={active.length}
+                hint="Orders in progress"
+                icon={<Briefcase />}
+                className="h-full transition hover:border-needle/30 hover:shadow-md focus-within:ring-2 focus-within:ring-needle/20"
+              />
+            </Link>
+            <Link
+              href="/account/orders?filter=action"
+              aria-label={`View ${replies.length} orders needing a reply`}
+            >
+              <MetricCard
+                label="Needs reply"
+                value={replies.length}
+                hint="Quotes or consultations"
+                icon={<MessageCircle />}
+                className="h-full transition hover:border-needle/30 hover:shadow-md focus-within:ring-2 focus-within:ring-needle/20"
+              />
+            </Link>
+            <Link
+              href="/account/orders?filter=completed"
+              aria-label={`View ${tailor.total_orders ?? 0} completed orders`}
+            >
+              <MetricCard
+                label="Completed"
+                value={tailor.total_orders ?? 0}
+                hint="Lifetime orders"
+                icon={<CheckCheck />}
+                className="h-full transition hover:border-needle/30 hover:shadow-md focus-within:ring-2 focus-within:ring-needle/20"
+              />
+            </Link>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
             <Link
@@ -374,7 +449,7 @@ export function WorkContent({ data }: { data: WorkData }) {
             </p>
           </div>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-4">
+          <div className="grid gap-3 lg:grid-cols-3 2xl:grid-cols-5">
             {groups.map((group, index) => (
               <div
                 key={group.key}

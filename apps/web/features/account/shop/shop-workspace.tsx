@@ -1,10 +1,12 @@
 'use client'
 
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Search, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { formatMoney } from '@drape/shared'
 import { createClient } from '../../../lib/supabase'
+import { invalidateAccountData, readAccountData } from '../../../lib/account-data-cache'
 import { AccountRouteRuntime, type AccountRouteIdentity } from '../account-route-runtime'
 import { CatalogueManager } from './catalogue-manager'
 import { legacyItemMedia, MarketplaceMediaTile } from './marketplace-media-tile'
@@ -103,6 +105,8 @@ async function loadShop(userId: string, role: AccountRouteIdentity['role']) {
 }
 
 function ShopContent({ userId, identity }: { userId: string; identity: AccountRouteIdentity }) {
+  const searchParams = useSearchParams()
+  const tailorFilter = searchParams.get('tailor')
   const [state, setState] = useState<State>({ status: 'loading' })
   const [revision, setRevision] = useState(0)
   const [search, setSearch] = useState('')
@@ -110,7 +114,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
   const [sort, setSort] = useState('newest')
   useEffect(() => {
     let active = true
-    void loadShop(userId, identity.role)
+    void readAccountData(`shop:${userId}:${identity.role}`, () => loadShop(userId, identity.role))
       .then((data) => {
         if (active) setState({ status: 'ready', ...data })
       })
@@ -143,7 +147,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
         },
         () => {
           if (timer) clearTimeout(timer)
-          timer = setTimeout(() => setRevision((value) => value + 1), 180)
+          timer = setTimeout(() => { invalidateAccountData(`shop:${userId}:`); setRevision((value) => value + 1) }, 180)
         }
       )
       .subscribe()
@@ -151,7 +155,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
       if (timer) clearTimeout(timer)
       void supabase.removeChannel(channel)
     }
-  }, [state])
+  }, [state, userId])
   const derived = useMemo(() => {
     if (state.status !== 'ready') return { categories: [], items: [] }
     const categories = [
@@ -163,6 +167,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
     const items = state.items
       .filter(
         (item) =>
+          (!tailorFilter || item.tailor_profile_id === tailorFilter) &&
           (category === 'All' || item.category === category) &&
           (!needle ||
             [
@@ -185,7 +190,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
             : new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime()
       )
     return { categories, items }
-  }, [category, search, sort, state])
+  }, [category, search, sort, state, tailorFilter])
   if (state.status === 'loading')
     return (
       <section className="app-surface p-6" aria-busy="true">
@@ -199,7 +204,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
         <p className="mt-2 text-sm text-ink/62">{state.message}</p>
         <button
           className="mt-4 h-10 rounded-[8px] bg-drape-green px-4 text-sm font-semibold text-white"
-          onClick={() => setRevision((v) => v + 1)}
+          onClick={() => { invalidateAccountData(`shop:${userId}:`); setRevision((v) => v + 1) }}
         >
           Try again
         </button>
@@ -212,7 +217,7 @@ function ShopContent({ userId, identity }: { userId: string; identity: AccountRo
         userId={userId}
         profile={state.tailorProfile}
         items={state.items}
-        onRefresh={() => setRevision((value) => value + 1)}
+        onRefresh={() => { invalidateAccountData(`shop:${userId}:`); setRevision((value) => value + 1) }}
       />
     )
   }

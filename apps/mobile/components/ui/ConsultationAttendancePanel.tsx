@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { consultationAttendanceEvidenceCopy, consultationAttendanceResolutionCopy } from '@drape/shared'
+import { consultationAttendanceEvidenceCopy, consultationAttendanceReportAvailableAt, consultationAttendanceResolutionCopy } from '@drape/shared'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 type ActorRole = 'CUSTOMER' | 'TAILOR'
-type Booking = { id: string; scheduled_start_at: string; scheduled_end_at: string; status: string }
+type Booking = { id: string; scheduled_start_at: string; scheduled_end_at: string; status: string; timezone: string | null }
 type Evidence = { derived_outcome: string; verified_overlap_seconds: number; provider_evidence_complete: boolean }
 type ResponseCode = 'AGREE_NO_CALL' | 'I_ATTENDED' | 'CONNECTION_ISSUE' | 'OTHER'
 type Review = { status: string; reported_by_role: ActorRole; reported_reason: string; counterparty_due_at: string; evidence_outcome_at_report: string; counterparty_response_code: ResponseCode | null; resolution_code: string | null }
@@ -23,6 +23,12 @@ function label(value: string) {
   return value.toLowerCase().replaceAll('_', ' ').replace(/^./, (character) => character.toUpperCase())
 }
 
+function attendanceHelpTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  }).format(new Date(value))
+}
+
 export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: string; actorRole: ActorRole }) {
   const [booking, setBooking] = useState<Booking | null>(null)
   const [evidence, setEvidence] = useState<Evidence | null>(null)
@@ -32,13 +38,14 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [now, setNow] = useState(() => Date.now())
 
   const load = useCallback(async () => {
     const { data: bookingRow } = await supabase
       .from('consultation_bookings')
-      .select('id, scheduled_start_at, scheduled_end_at, status')
+      .select('id, scheduled_start_at, scheduled_end_at, status, timezone')
       .eq('order_id', orderId)
-      .in('status', ['CONFIRMED', 'COMPLETED', 'NO_SHOW'])
+      .in('status', ['CONFIRMED', 'COMPLETED', 'NO_SHOW', 'EXPIRED'])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -77,10 +84,22 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   }, [booking?.id, load])
+  useEffect(() => {
+    if (!booking) return
+    const availableAt = consultationAttendanceReportAvailableAt(booking.scheduled_start_at)
+    const availableAtMs = availableAt ? new Date(availableAt).getTime() : null
+    if (availableAtMs == null || now >= availableAtMs) return
+    const timer = setTimeout(
+      () => setNow(Date.now()),
+      Math.min(Math.max(availableAtMs - now, 250), 30_000),
+    )
+    return () => clearTimeout(timer)
+  }, [booking, now])
   if (!booking) return null
   const activeBooking = booking
 
-  const reportWindowOpen = Date.now() >= new Date(activeBooking.scheduled_start_at).getTime() + 15 * 60_000
+  const reportAvailableAt = consultationAttendanceReportAvailableAt(activeBooking.scheduled_start_at)
+  const reportWindowOpen = reportAvailableAt != null && now >= new Date(reportAvailableAt).getTime()
   const canRespond = review?.status === 'COUNTERPARTY_REVIEW' && review.reported_by_role !== actorRole
   const isReporter = review?.reported_by_role === actorRole
   const evidenceCopy = consultationAttendanceEvidenceCopy(review?.evidence_outcome_at_report)
@@ -179,7 +198,9 @@ export function ConsultationAttendancePanel({ orderId, actorRole }: { orderId: s
         ) : null}
         <Text style={styles.safety}>
           {!review
-            ? 'Reports never move money automatically.'
+            ? !reportWindowOpen && reportAvailableAt
+              ? `If the call does not happen, attendance help opens ${attendanceHelpTime(reportAvailableAt)}. Reports never move money automatically.`
+              : 'Reports never move money automatically.'
             : review.status === 'COUNTERPARTY_REVIEW'
               ? (isReporter ? 'No further action is needed from you right now. The fee stays protected while the other person responds.' : 'Your response determines whether you reschedule together or Drapeon reviews the call activity.')
               : review.status === 'OPS_REVIEW'

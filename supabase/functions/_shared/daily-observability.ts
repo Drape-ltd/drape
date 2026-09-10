@@ -199,6 +199,7 @@ export async function createDailyRoomWithObservability(
           enforce_unique_user_ids: true,
           eject_at_room_exp: true,
           enable_screenshare: false,
+          enable_prejoin_ui: true,
           start_video_off: input.audioOnly,
           start_audio_off: false,
         },

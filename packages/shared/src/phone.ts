@@ -92,3 +92,6 @@ export function validateDispatchPhoneForProfile(value: string): string | null {
 
 export const PHONE_STORAGE_HINT =
   'Choose the calling code, then enter or paste the phone number.'
+
+export const ACCOUNT_PHONE_UNIQUENESS_HINT =
+  'One phone number can belong to only one Drapeon account.'

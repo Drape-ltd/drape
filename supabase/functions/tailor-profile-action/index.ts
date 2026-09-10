@@ -302,7 +302,7 @@ Deno.serve(async (req) => {
 
     const { data: existingProfile, error: profileLookupError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, display_name, bio, location, languages, specialty_tags, currency, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live')
+      .select('id, user_id, display_name, bio, location, languages, specialty_tags, currency, avatar_url, trust_verification_video_path, id_verification_status, id_verification_metadata, payout_account_verified, payout_currency, portfolio_photo_urls, portfolio_video_urls, is_live, is_verified')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -316,7 +316,29 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: 'Complete your tailor profile before managing portfolio media.' }, 404, cors)
       }
 
-      const { data: media, error } = await supabase
+      const { data: portfolioItems, error: portfolioError } = await supabase
+        .from('portfolio_items')
+        .select('id, image_url, title, sort_order')
+        .eq('tailor_profile_id', existingProfile.id)
+        .not('image_url', 'is', null)
+        .order('sort_order', { ascending: true })
+
+      if (portfolioError) {
+        log('error', FN, 'media_presentation.portfolio_lookup_failed', { actor_id: caller.id, error: portfolioError.message })
+        return jsonResponse({ error: 'We could not load your portfolio presentation settings right now.' }, 500, cors)
+      }
+
+      const portfolioRows = (portfolioItems ?? []) as Array<{
+        id: string
+        image_url: string | null
+        title: string | null
+        sort_order: number | null
+      }>
+      const portfolioUrls = portfolioRows
+        .map((item) => item.image_url?.trim() ?? '')
+        .filter((url): url is string => url.length > 0)
+
+      const loadMedia = () => supabase
         .from('media_assets')
         .select('id, media_kind, public_url, poster_url, width, height, focal_x, focal_y, alt_text, is_primary, portfolio_position, status, moderation_status, processing_state, availability_state, created_at')
         .eq('owner_user_id', caller.id)
@@ -327,13 +349,75 @@ Deno.serve(async (req) => {
         .order('portfolio_position', { ascending: true, nullsFirst: false })
         .order('created_at', { ascending: true })
 
+      let { data: media, error } = await loadMedia()
+
+      if (!error && portfolioUrls.length > 0) {
+        const existingUrls = new Set(
+          ((media ?? []) as Array<{ public_url?: string | null }>)
+            .map((asset) => asset.public_url?.split(/[?#]/u)[0] ?? '')
+            .filter(Boolean),
+        )
+        const missingUrls = portfolioUrls.filter((url) => !existingUrls.has(url.split(/[?#]/u)[0] ?? url))
+        if (missingUrls.length > 0) {
+          await queueMediaSafetyReview(supabase, {
+            fn: FN,
+            actorId: caller.id,
+            actorRole: 'TAILOR',
+            surface: 'portfolio.public',
+            publicUrls: missingUrls,
+            purpose: 'PORTFOLIO',
+            tailorProfileId: existingProfile.id,
+            relatedEntityType: 'tailor_profile',
+            relatedEntityId: existingProfile.id,
+            metadata: { action: body.action, reconciliation: true },
+          })
+          const refreshed = await loadMedia()
+          media = refreshed.data
+          error = refreshed.error
+        }
+
+        if (existingProfile.is_verified === true) {
+          const { error: publishFirstError } = await supabase
+            .from('media_assets')
+            .update({
+              moderation_status: 'AUTO_ALLOWED',
+              moderation_risk_level: 'LOW',
+              reviewed_at: new Date().toISOString(),
+              reviewed_by: 'verified-tailor-publish-first',
+            })
+            .eq('owner_user_id', caller.id)
+            .eq('tailor_profile_id', existingProfile.id)
+            .eq('purpose', 'PORTFOLIO')
+            .eq('status', 'ACTIVE')
+            .eq('moderation_status', 'PENDING_REVIEW')
+
+          if (publishFirstError) {
+            log('warn', FN, 'media_presentation.publish_first_failed', {
+              actor_id: caller.id,
+              error: publishFirstError.message,
+            })
+          } else {
+            const refreshed = await loadMedia()
+            media = refreshed.data
+            error = refreshed.error
+          }
+        }
+
+      }
+
       if (error) {
         log('error', FN, 'media_presentation.lookup_failed', { actor_id: caller.id, error: error.message })
         return jsonResponse({ error: 'We could not load your portfolio presentation settings right now.' }, 500, cors)
       }
 
       return jsonResponse({
-        media: (media ?? []).map((item: Record<string, unknown>, index: number) => ({
+        media: (media ?? [])
+          .map((item: Record<string, unknown>) => {
+            const url = typeof item.public_url === 'string' ? item.public_url : ''
+            const portfolioIndex = portfolioRows.findIndex(
+              (row) => (row.image_url?.split(/[?#]/u)[0] ?? '') === (url.split(/[?#]/u)[0] ?? url),
+            )
+            return {
           id: item.id,
           kind: item.media_kind === 'VIDEO' ? 'VIDEO' : 'IMAGE',
           url: item.public_url,
@@ -344,12 +428,16 @@ Deno.serve(async (req) => {
           focalY: item.focal_y ?? 0.5,
           altText: item.alt_text ?? null,
           isPrimary: item.is_primary === true,
-          position: item.portfolio_position ?? index,
+          position: portfolioIndex >= 0 ? portfolioIndex : (item.portfolio_position ?? portfolioRows.length),
+          portfolioItemId: portfolioIndex >= 0 ? portfolioRows[portfolioIndex]?.id ?? null : null,
+          title: portfolioIndex >= 0 ? portfolioRows[portfolioIndex]?.title ?? null : null,
           status: item.status,
           moderationStatus: item.moderation_status,
           processingState: item.processing_state,
           availabilityState: item.availability_state,
-        })),
+            }
+          })
+          .sort((left, right) => Number(left.position) - Number(right.position)),
       }, 200, cors)
     }
 

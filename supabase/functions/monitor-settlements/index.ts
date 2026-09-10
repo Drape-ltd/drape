@@ -11,6 +11,7 @@ import { retrieveStripePayout, type StripePayout } from '../_shared/stripe.ts'
 
 const FN = 'monitor-settlements'
 const json = (body: Record<string, unknown>, status: number, cors: HeadersInit) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 
 type PendingStripeSettlement = {
   id: string
@@ -178,7 +179,12 @@ Deno.serve(async (req) => {
     const unauthorized = await authorizeCronRequest(req, FN, cors)
     if (unauthorized) return unauthorized
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
-    const { data: plans, error } = await supabase.from('order_settlement_plans').select('id,order_id,tailor_id,customer_id,currency,status').in('status', ['ACTIVE','FROZEN']).limit(500)
+    const body = await req.json().catch(() => ({})) as { orderId?: unknown }
+    const orderId = typeof body.orderId === 'string' && UUID_PATTERN.test(body.orderId) ? body.orderId : null
+    if (body.orderId != null && !orderId) return json({ ok: false, error: 'A valid orderId is required.' }, 400, cors)
+    let plansQuery = supabase.from('order_settlement_plans').select('id,order_id,tailor_id,customer_id,currency,status').in('status', ['ACTIVE','FROZEN'])
+    if (orderId) plansQuery = plansQuery.eq('order_id', orderId)
+    const { data: plans, error } = await plansQuery.limit(orderId ? 1 : 500)
     if (error) throw error
     let eligible = 0
     for (const plan of plans ?? []) {
@@ -196,16 +202,39 @@ Deno.serve(async (req) => {
           dedupeKey: `settlement-eligible:${tranche.id}`,
           metadata: { settlement_tranche_id: tranche.id, tranche_code: tranche.code, amount: tranche.amount, currency: tranche.currency, eligible_at: tranche.eligible_at, waiting_hours: waitingHours },
         })
-        await enqueuePushJob(supabase, { userId: plan.tailor_id, orderId: plan.order_id, source: FN, idempotencyKey: `settlement-eligible:${tranche.id}`, priority: 8, notification: { title: 'Earnings milestone verified', body: 'This order has an earnings tranche ready for Drapeon release review.', preferenceKey: 'paymentReleased', data: { orderId: plan.order_id, settlementTrancheId: tranche.id } } })
+        await enqueuePushJob(supabase, {
+          userId: plan.tailor_id,
+          orderId: plan.order_id,
+          source: FN,
+          idempotencyKey: `settlement-eligible:${tranche.id}`,
+          priority: 8,
+          notification: {
+            title: 'Earnings milestone verified',
+            body: 'This order has an earnings tranche ready for Drapeon release review.',
+            preferenceKey: 'paymentReleased',
+            data: { orderId: plan.order_id, settlementTrancheId: tranche.id, url: '/earnings' },
+            communication: {
+              category: 'PAYOUT',
+              purpose: 'TRANSACTIONAL',
+              severity: waitingHours >= 24 ? 'WARNING' : 'NOTICE',
+              mandatory: true,
+              inApp: true,
+              destinationKey: 'ORDER_DETAIL',
+              destinationParams: { orderId: plan.order_id, settlementTrancheId: tranche.id },
+              deduplicationKey: `settlement-eligible:${tranche.id}`,
+            },
+          },
+        })
         await enqueueOrderEventEmailJob(supabase, { recipientUserId: plan.tailor_id, audience: 'TAILOR', order: { id: plan.order_id }, subject: 'An earnings milestone is ready for review', headline: 'Settlement progress', body: 'Drapeon verified a handoff milestone. The eligible amount is now queued for controlled release review; remaining funds stay protected.', ctaLabel: 'View order', source: FN, priority: 8, idempotencyKey: `settlement-eligible:${tranche.id}` })
       }
     }
-    const { data: stripePayouts, error: stripePayoutError } = await supabase.from('payouts')
+    let stripePayoutQuery = supabase.from('payouts')
       .select('id,order_id,tailor_profile_id,amount,currency,status,provider_destination_id,provider_bank_payout_id,bank_settlement_status,bank_settlement_expected_at,initiated_at')
       .eq('provider', 'STRIPE')
       .in('status', ['PROCESSING'])
       .in('bank_settlement_status', ['PENDING', 'IN_TRANSIT', 'UNKNOWN'])
-      .limit(500)
+    if (orderId) stripePayoutQuery = stripePayoutQuery.eq('order_id', orderId)
+    const { data: stripePayouts, error: stripePayoutError } = await stripePayoutQuery.limit(orderId ? 10 : 500)
     if (stripePayoutError) throw stripePayoutError
     let staleStripe = 0
     let reconciledStripe = 0
@@ -214,8 +243,8 @@ Deno.serve(async (req) => {
       if (result.stale) staleStripe += 1
       if (result.reconciled) reconciledStripe += 1
     }
-    await audit(supabase, { event: 'settlement.monitor_completed', actor_role: 'SYSTEM', payload: { function: FN, plans: plans?.length ?? 0, eligible, stale_stripe: staleStripe, reconciled_stripe: reconciledStripe } })
-    return json({ ok: true, plans: plans?.length ?? 0, eligible, staleStripe, reconciledStripe }, 200, cors)
+    await audit(supabase, { event: 'settlement.monitor_completed', actor_role: 'SYSTEM', order_id: orderId, payload: { function: FN, scope: orderId ? 'ORDER' : 'SCHEDULED_BATCH', plans: plans?.length ?? 0, eligible, stale_stripe: staleStripe, reconciled_stripe: reconciledStripe } })
+    return json({ ok: true, orderId, plans: plans?.length ?? 0, eligible, staleStripe, reconciledStripe }, 200, cors)
   } catch (error) {
     await Sentry.captureMessage(error instanceof Error ? error.message : String(error), { level: 'error', tags: { function: FN } })
     log('error', FN, 'failed', { error: error instanceof Error ? error.message : String(error) })

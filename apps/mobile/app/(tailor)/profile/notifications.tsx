@@ -31,6 +31,7 @@ import { formatEmbeddedDateTimes } from '@drape/shared/display-text'
 import { appendToHistory, goBackOrFallback } from '@/lib/navigation'
 import {
   listCommunicationInbox,
+  markAllCommunicationInboxRead,
   markCommunicationInbox,
   type CommunicationInboxItem,
 } from '@/lib/communications'
@@ -248,6 +249,7 @@ export default function TailorNotificationsScreen() {
   const lastTailorNotifCheckRef = useRef<string | null>(null)
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [markingAllRead, setMarkingAllRead] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [retryTrigger, setRetryTrigger] = useState(0)
 
@@ -470,7 +472,14 @@ export default function TailorNotificationsScreen() {
       return
     }
     const destination = item.destinationKey?.toUpperCase() ?? ''
-    if (destination.includes('PAYOUT') || item.category === 'PAYOUT') {
+    if (destination === 'VERIFICATION') {
+      router.push({
+        pathname: '/(tailor)/profile/setup',
+        params: {
+          historyChain: appendToHistory(undefined, '/(tailor)/profile/notifications'),
+        },
+      })
+    } else if (destination.includes('PAYOUT') || item.category === 'PAYOUT') {
       router.push('/(tailor)/profile/payout-setup')
     } else if (destination.includes('NOTIFICATION') || destination.includes('COMMUNICATION')) {
       router.push('/(tailor)/profile/notification-settings')
@@ -499,6 +508,20 @@ export default function TailorNotificationsScreen() {
     }
   }
 
+  async function markAllRead() {
+    const previous = items
+    setMarkingAllRead(true)
+    setItems((current) => current.map((item) => ({ ...item, isNew: false })))
+    try {
+      await markAllCommunicationInboxRead()
+    } catch {
+      setItems(previous)
+      Alert.alert('Could not mark notifications read', 'Your notification history is unchanged. Please try again.')
+    } finally {
+      setMarkingAllRead(false)
+    }
+  }
+
   useEffect(() => {
     if (!userId) return
     const channel = supabase
@@ -517,6 +540,18 @@ export default function TailorNotificationsScreen() {
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
+        {items.some((item) => item.isNew) ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Mark all notifications as read"
+            style={styles.markAllButton}
+            onPress={() => void markAllRead()}
+            disabled={markingAllRead}
+          >
+            <Feather name="check-circle" size={15} color={Colors.needleGreen} />
+            <Text style={styles.markAllText}>{markingAllRead ? 'Marking…' : 'Mark all read'}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {loading ? (
@@ -645,7 +680,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  markAllButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderRadius: Radius.full, backgroundColor: Colors.needleGreenLight },
+  markAllText: { color: Colors.needleGreen, fontSize: FontSize.xs, fontWeight: FontWeight.bold },
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 10,

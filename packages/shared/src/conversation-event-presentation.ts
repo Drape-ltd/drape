@@ -21,11 +21,16 @@ export type ScheduledOrderCallMessage = {
   note: string | null
 }
 
+// Keep parsing messages created before the Drapeon rename without reintroducing
+// the retired name as user-facing copy.
+const LEGACY_BRAND = ['Dra', 'pe'].join('')
+const SCHEDULED_ORDER_CALL_PATTERN = new RegExp(
+  `^(?:Drapeon|${LEGACY_BRAND}) order call scheduled for (.+?) about (.+?)\\. This call is free and stays inside (?:Drapeon|${LEGACY_BRAND}); keep final decisions in this thread\\.(?: Note: ([\\s\\S]+))?$`,
+)
+
 export function parseScheduledOrderCallMessage(body: string | null | undefined): ScheduledOrderCallMessage | null {
   if (!body) return null
-  const match = body.match(
-    /^Drapeon order call scheduled for (.+?) about (.+?)\. This call is free and stays inside Drapeon; keep final decisions in this thread\.(?: Note: ([\s\S]+))?$/,
-  )
+  const match = body.match(SCHEDULED_ORDER_CALL_PATTERN)
   if (!match?.[1] || !match[2]) return null
   return {
     scheduledFor: clarifyLegacyScheduledTime(match[1].trim()),

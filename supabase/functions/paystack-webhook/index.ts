@@ -387,7 +387,7 @@ async function findOrderForTransaction(supabase: SupabaseClient, transaction: Pa
   if (orderId) {
     const { data, error } = await supabase
       .from('orders')
-      .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
+      .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, consultation_fee, special_note, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
       .eq('id', orderId)
       .maybeSingle()
 
@@ -577,8 +577,38 @@ async function markOrderConfirmed(supabase: SupabaseClient, order: OrderRow, tra
         sendPushToUser(supabase, order.tailor_id.toString(), {
           title: 'Consultation fee paid',
           body: 'The customer paid the consultation fee. The call can start at the scheduled time.',
-          preferenceKey: 'newOrders',
-          data: { orderId: order.id },
+          preferenceKey: 'paymentConfirmations',
+          data: { orderId: order.id, target: 'order-detail' },
+          communication: {
+            category: 'PAYMENT',
+            purpose: 'TRANSACTIONAL',
+            severity: 'NOTICE',
+            inApp: true,
+            destinationKey: 'ORDER_DETAIL',
+            destinationParams: { orderId: order.id },
+            deduplicationKey: `consultation-fee-paid:${order.id}`,
+          },
+        }),
+      )
+    }
+
+    if (order.customer_id) {
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, order.customer_id.toString(), {
+          title: 'Consultation payment confirmed',
+          body: 'Your consultation fee is paid and protected until attendance is verified.',
+          preferenceKey: 'paymentConfirmations',
+          data: { orderId: order.id, target: 'order-detail' },
+          communication: {
+            category: 'PAYMENT',
+            purpose: 'TRANSACTIONAL',
+            severity: 'NOTICE',
+            mandatory: true,
+            inApp: true,
+            destinationKey: 'ORDER_DETAIL',
+            destinationParams: { orderId: order.id },
+            deduplicationKey: `consultation-fee-paid:${order.id}:customer`,
+          },
         }),
       )
     }
@@ -750,6 +780,26 @@ async function markOrderConfirmed(supabase: SupabaseClient, order: OrderRow, tra
 
   if (order.customer_id) {
     EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, order.customer_id.toString(), {
+        title: order.order_kind === 'READY_MADE' ? 'Order confirmed' : 'Payment confirmed',
+        body: order.order_kind === 'READY_MADE'
+          ? 'Your ready-made order is paid and the tailor can prepare it inside Drapeon.'
+          : 'Your order is funded. The tailor can continue production inside Drapeon.',
+        preferenceKey: 'paymentConfirmations',
+        data: { orderId: order.id },
+        communication: {
+          category: 'PAYMENT',
+          purpose: 'TRANSACTIONAL',
+          severity: 'NOTICE',
+          mandatory: true,
+          inApp: true,
+          destinationKey: 'ORDER_DETAIL',
+          destinationParams: { orderId: order.id },
+          deduplicationKey: `payment-confirmed:${order.id}:${transaction.reference}:customer`,
+        },
+      }),
+    )
+    EdgeRuntime.waitUntil(
       sendSmsToUser({
         supabase,
         userId: order.customer_id.toString(),
@@ -784,7 +834,10 @@ function isInitialPaymentStage(stage: string) {
 }
 
 function isFulfillmentPaymentStage(order: OrderRow) {
-  return order.stage === 'FINISHING' || !!order.fulfillment_payment_paid_at
+  return (
+    ['FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)
+    && order.delivery_method !== 'LOCAL_COLLECTION'
+  ) || !!order.fulfillment_payment_paid_at
 }
 
 async function markPaystackChargeReversed(

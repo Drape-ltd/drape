@@ -1,8 +1,10 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, ClipboardList, ImagePlus, MessageCircle, Search, Send, Video } from 'lucide-react'
 import {
   filterContactInfo,
   formatDatabaseEnumLabel,
@@ -74,13 +76,15 @@ function title(order: Order) {
   return order.item_title?.trim() || order.garment_type?.trim() || 'Drapeon order'
 }
 function party(order: Order, userId: string) {
-  const profile =
-    order.customer_id === userId ? first(order.tailor_profiles) : first(order.customer_profiles)
+  const profile = partyProfile(order, userId)
   return (
     profile?.business_name?.trim() ||
     profile?.display_name?.trim() ||
     (order.customer_id === userId ? 'Tailor' : 'Customer')
   )
+}
+function partyProfile(order: Order, userId: string) {
+  return order.customer_id === userId ? first(order.tailor_profiles) : first(order.customer_profiles)
 }
 function preview(message: Message | null) {
   if (!message) return 'No messages yet.'
@@ -165,11 +169,11 @@ async function load(userId: string): Promise<Data> {
       'id, order_id, sender_id, sender_name, type, body, photo_url, voice_url, read_at, created_at, is_deleted, edited_at, reply_to_id'
     )
     .in('order_id', ids)
-    .order('created_at', { ascending: true })
-    .limit(500)
+    .order('created_at', { ascending: false })
+    .limit(1000)
   if (messageResult.error)
     throw new Error('Messages could not load. Your records have not changed.')
-  return { tailorProfileId, orders, messages: (messageResult.data ?? []) as Message[] }
+  return { tailorProfileId, orders, messages: ((messageResult.data ?? []) as Message[]).reverse() }
 }
 
 function Media({ message }: { message: Message }) {
@@ -204,9 +208,12 @@ function Media({ message }: { message: Message }) {
     return <audio className="mt-2 h-10 w-full max-w-xs" controls preload="metadata" src={source} />
   return (
     <a href={source} target="_blank" rel="noreferrer" className="mt-2 block w-fit">
-      <img
+      <Image
         src={source}
         alt="Order conversation attachment"
+        width={720}
+        height={480}
+        unoptimized
         className="max-h-72 max-w-full rounded-[8px] object-contain"
       />
     </a>
@@ -290,7 +297,7 @@ function Composer({ order, onSaved }: { order: Order; onSaved: () => void }) {
     }
   }
   return (
-    <div className="border-t border-ui-border bg-white p-3">
+    <div className="border-t border-ui-border bg-white px-3 py-3 sm:px-5">
       {disabled ? (
         <p className="rounded-[8px] bg-ink/5 px-3 py-2 text-xs text-ink/58">
           This conversation is read-only because the order is closed.
@@ -317,17 +324,8 @@ function Composer({ order, onSaved }: { order: Order; onSaved: () => void }) {
               </button>
             </div>
           ) : null}
-          <textarea
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            rows={3}
-            maxLength={2000}
-            placeholder="Message inside this protected order"
-            aria-label="Message"
-            className="w-full resize-none rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm outline-none focus:border-needle"
-          />
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <label className="cursor-pointer rounded-[8px] border border-ui-border px-3 py-2 text-xs font-semibold">
+          <div className="flex items-end gap-2 rounded-[12px] border border-ui-border bg-ui-muted/35 p-2 focus-within:border-needle focus-within:ring-2 focus-within:ring-needle/10">
+            <label className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-[8px] text-needle transition hover:bg-white" title="Attach image">
               <input
                 ref={input}
                 type="file"
@@ -335,11 +333,10 @@ function Composer({ order, onSaved }: { order: Order; onSaved: () => void }) {
                 className="sr-only"
                 onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               />
-              Attach image
+              <ImagePlus className="size-5" /><span className="sr-only">Attach image</span>
             </label>
-            <Button size="sm" disabled={busy} onClick={() => void send()}>
-              {busy ? 'Sending…' : 'Send'}
-            </Button>
+            <textarea value={body} onChange={(event) => setBody(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} rows={1} maxLength={2000} placeholder="Message about this order" aria-label="Message" className="max-h-32 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-1 py-2.5 text-sm outline-none" />
+            <button type="button" disabled={busy || (!body.trim() && !file)} onClick={() => void send()} className="grid size-10 shrink-0 place-items-center rounded-[8px] bg-needle text-white transition hover:bg-needle/90 disabled:cursor-not-allowed disabled:opacity-35" aria-label={busy ? 'Sending message' : 'Send message'}>{busy ? <span className="size-4 animate-spin rounded-full border-2 border-white/35 border-t-white" /> : <Send className="size-4" />}</button>
           </div>
         </>
       )}
@@ -361,6 +358,7 @@ function MessagesContent({
   const [selectedId, setSelectedId] = useState<string | null>(() => requested)
   const [filter, setFilter] = useState<'active' | 'completed'>('active')
   const [query, setQuery] = useState('')
+  const messageEndRef = useRef<HTMLDivElement | null>(null)
   const messagesByOrder = useMemo(() => {
     const result = new Map<string, Message[]>()
     for (const message of data.messages)
@@ -377,7 +375,24 @@ function MessagesContent({
           .includes(query.trim().toLowerCase())
     )
   const selected = data.orders.find((order) => order.id === selectedId) ?? null
-  const selectedMessages = selected ? (messagesByOrder.get(selected.id) ?? []) : []
+  const selectedMessages = useMemo(
+    () => selected ? (messagesByOrder.get(selected.id) ?? []) : [],
+    [messagesByOrder, selected]
+  )
+  useEffect(() => {
+    if (selectedId || typeof window === 'undefined' || !window.matchMedia('(min-width: 768px)').matches) return
+    const firstVisible = visibleOrders[0]
+    if (firstVisible) queueMicrotask(() => setSelectedId(firstVisible.id))
+  }, [selectedId, visibleOrders])
+  useEffect(() => {
+    if (!selectedId) return
+    const url = new URL(window.location.href)
+    url.searchParams.set('orderId', selectedId)
+    window.history.replaceState(window.history.state, '', url)
+  }, [selectedId])
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [selectedId, selectedMessages.length])
   useEffect(() => {
     if (!selected || !selectedMessages.length) return
     const unread = selectedMessages
@@ -393,7 +408,7 @@ function MessagesContent({
   return (
     <div
       data-route-content-ready="true"
-      className="grid min-h-[calc(100vh-7rem)] overflow-hidden rounded-[8px] border border-ui-border bg-white shadow-sm md:grid-cols-[20rem_minmax(0,1fr)]"
+      className="grid h-[calc(100dvh-2rem)] min-h-[38rem] overflow-hidden rounded-[12px] border border-ui-border bg-white shadow-sm md:grid-cols-[21rem_minmax(0,1fr)]"
     >
       <aside
         className={`${selected ? 'hidden md:flex' : 'flex'} min-h-0 flex-col border-r border-ui-border`}
@@ -404,19 +419,13 @@ function MessagesContent({
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">
                 Messages
               </p>
-              <h1 className="mt-1 text-2xl font-semibold text-ink">Order conversations</h1>
+              <h1 className="mt-1 text-2xl font-semibold text-ink">Conversations</h1>
             </div>
             <Link href="/account/orders" className="text-xs font-semibold text-needle">
               Orders
             </Link>
           </div>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search conversations"
-            aria-label="Search conversations"
-            className="mt-3 h-10 w-full rounded-[8px] border border-ui-border px-3 text-sm outline-none focus:border-needle"
-          />
+          <label className="mt-3 flex h-10 items-center gap-2 rounded-[8px] border border-ui-border bg-ui-muted/35 px-3 focus-within:border-needle"><Search className="size-4 text-ink/40" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
           <div className="mt-2 flex gap-1 rounded-[8px] bg-ink/4 p-1">
             {(['active', 'completed'] as const).map((value) => (
               <button
@@ -438,17 +447,20 @@ function MessagesContent({
               const unread = messages.filter(
                 (message) => message.sender_id !== userId && !message.read_at
               ).length
+              const contact = partyProfile(order, userId)
+              const contactName = party(order, userId)
               return (
                 <button
                   key={order.id}
                   type="button"
                   onClick={() => setSelectedId(order.id)}
-                  className={`w-full border-b border-ui-border p-4 text-left hover:bg-ink/3 ${selectedId === order.id ? 'bg-needle/6' : ''}`}
+                  className={`w-full border-b border-ui-border p-3 text-left transition hover:bg-ink/3 ${selectedId === order.id ? 'bg-needle/[0.08]' : ''}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="flex items-center gap-3">
+                    <div className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-full bg-needle/10 text-sm font-bold text-needle">{contact?.avatar_url ? <Image src={contact.avatar_url} alt="" width={44} height={44} unoptimized className="size-full object-cover" /> : contactName.slice(0, 1).toUpperCase()}</div>
+                    <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-ink">
-                        {party(order, userId)}
+                        {contactName}
                       </p>
                       <p className="truncate text-xs text-ink/48">{title(order)}</p>
                     </div>
@@ -458,10 +470,7 @@ function MessagesContent({
                       </span>
                     ) : null}
                   </div>
-                  <p className="mt-2 truncate text-xs text-ink/52">{preview(latest)}</p>
-                  <p className="mt-1 text-[0.68rem] text-ink/38">
-                    {formatRelative(latest?.created_at ?? order.updated_at)}
-                  </p>
+                  <div className="mt-2 flex items-center justify-between gap-3 pl-14"><p className="min-w-0 truncate text-xs text-ink/52">{preview(latest)}</p><p className="shrink-0 text-[0.68rem] text-ink/38">{formatRelative(latest?.created_at ?? order.updated_at)}</p></div>
                 </button>
               )
             })
@@ -485,10 +494,11 @@ function MessagesContent({
               <button
                 type="button"
                 onClick={() => setSelectedId(null)}
-                className="rounded-[8px] border border-ui-border px-2.5 py-1.5 text-xs font-semibold md:hidden"
+                className="grid size-9 place-items-center rounded-[8px] border border-ui-border md:hidden"
               >
-                Back
+                <ArrowLeft className="size-4" /><span className="sr-only">Back to conversations</span>
               </button>
+              <div className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-full bg-needle/10 font-bold text-needle">{partyProfile(selected, userId)?.avatar_url ? <Image src={partyProfile(selected, userId)!.avatar_url!} alt="" width={40} height={40} unoptimized className="size-full object-cover" /> : party(selected, userId).slice(0, 1).toUpperCase()}</div>
               <div className="min-w-0 flex-1">
                 <h2 className="truncate font-semibold text-ink">{party(selected, userId)}</h2>
                 <p className="truncate text-xs text-ink/48">
@@ -497,31 +507,29 @@ function MessagesContent({
               </div>
               <StatusChip status={selected.stage} fallback="Order" />
               {selected.video_call_url ? (
-                <a
-                  href={selected.video_call_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-[8px] bg-needle px-3 py-2 text-xs font-semibold text-white"
+                <Link
+                  href={`/account/call-join?orderId=${encodeURIComponent(selected.id)}`}
+                  className="grid size-9 place-items-center rounded-[8px] bg-needle text-white"
                 >
-                  Join call
-                </a>
+                  <Video className="size-4" /><span className="sr-only">Join video call</span>
+                </Link>
               ) : null}
               <Link
                 href={`/account/orders/${selected.id}`}
-                className="rounded-[8px] border border-ui-border px-3 py-2 text-xs font-semibold"
+                className="grid size-9 place-items-center rounded-[8px] border border-ui-border"
               >
-                Order
+                <ClipboardList className="size-4" /><span className="sr-only">Open order</span>
               </Link>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto bg-ui-canvas p-4" aria-live="polite">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#f7f5f0_0%,#f2eee6_100%)] p-4 sm:p-6" aria-live="polite">
               {selectedMessages.length ? (
-                <div className="mx-auto grid max-w-3xl gap-3">
+                <div className="mx-auto grid max-w-[46rem] gap-2.5">
                   {selectedMessages.map((message) => {
                     const mine = message.sender_id === userId
                     return (
                       <article
                         key={message.id}
-                        className={`max-w-[82%] rounded-[10px] px-3 py-2 ${mine ? 'justify-self-end bg-needle text-white' : 'justify-self-start border border-ui-border bg-white text-ink'}`}
+                        className={`max-w-[82%] rounded-[14px] px-3.5 py-2.5 shadow-sm ${mine ? 'justify-self-end rounded-br-[4px] bg-needle text-white' : 'justify-self-start rounded-bl-[4px] border border-ui-border bg-white text-ink'}`}
                       >
                         <p
                           className={`text-[0.65rem] font-semibold ${mine ? 'text-white/65' : 'text-ink/42'}`}
@@ -547,11 +555,12 @@ function MessagesContent({
                       </article>
                     )
                   })}
+                  <div ref={messageEndRef} aria-hidden="true" />
                 </div>
               ) : (
                 <div className="grid h-full place-items-center">
                   <div className="text-center">
-                    <h3 className="font-semibold text-ink">Start this order conversation.</h3>
+                    <MessageCircle className="mx-auto size-8 text-needle/45" /><h3 className="mt-3 font-semibold text-ink">Start this order conversation.</h3>
                     <p className="mt-1 text-sm text-ink/52">
                       Messages and attachments stay with the order.
                     </p>

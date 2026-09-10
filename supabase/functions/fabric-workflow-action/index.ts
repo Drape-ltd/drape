@@ -174,7 +174,17 @@ Deno.serve(async (req) => {
           fabricSource: order.fabric_source,
           policyVersion: order.fabric_funding_policy_version,
         },
-        allocation: allocationResult.data,
+        allocation: allocationResult.data
+          ? {
+              ...allocationResult.data,
+              remaining_funded_amount: Math.max(
+                0,
+                Number(allocationResult.data.funded_amount ?? 0) -
+                  Number(allocationResult.data.released_amount ?? 0) -
+                  Number(allocationResult.data.refunded_amount ?? 0),
+              ),
+            }
+          : null,
         candidates,
         handoff,
         cuttingBlockers: (blockersResult.data ?? []).map((blocker: Record<string, unknown>) => ({

@@ -1,73 +1,103 @@
 'use client'
 
-import { useEffect, useMemo } from 'react'
-import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import type { Route } from 'next'
+import { useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { createClient } from '../../../../lib/supabase'
+
+const PAYMENT_RETURN_KEY = 'drapeon:payment-return'
+
+type PaymentReturn = { orderId: string; returnTo: Route }
 
 function buildAppUrl(reference: string | null, status: string | null) {
   const params = new URLSearchParams()
-
   if (reference) {
     params.set('reference', reference)
     params.set('trxref', reference)
   }
-
-  if (status) {
-    params.set('status', status)
-  }
-
+  if (status) params.set('status', status)
   const query = params.toString()
   return `drape:///paystack-redirect${query ? `?${query}` : ''}`
 }
 
+function readStoredReturn(): PaymentReturn | null {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(PAYMENT_RETURN_KEY) ?? '') as Partial<PaymentReturn>
+    if (!value.orderId || value.returnTo !== `/account/orders/${value.orderId}`) return null
+    return { orderId: value.orderId, returnTo: value.returnTo as Route }
+  } catch {
+    return null
+  }
+}
+
 export default function PaystackCallbackPage(): React.JSX.Element {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const reference = searchParams.get('reference') ?? searchParams.get('trxref')
   const status = searchParams.get('status')
   const appUrl = useMemo(() => buildAppUrl(reference, status), [reference, status])
+  const [accountReturn, setAccountReturn] = useState<PaymentReturn | null>(null)
+  const [resolving, setResolving] = useState(true)
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      window.location.replace(appUrl)
-    }, 150)
-    const fallback = window.setTimeout(() => {
-      window.location.href = appUrl
-    }, 1200)
+    let cancelled = false
+    async function resolveReturn() {
+      const stored = readStoredReturn()
+      const supabase = createClient()
+      const { data: auth } = await supabase.auth.getUser()
+      let resolved = stored
 
-    return () => {
-      window.clearTimeout(timeout)
-      window.clearTimeout(fallback)
+      if (!resolved && auth.user && reference && /^[A-Za-z0-9_-]+$/u.test(reference)) {
+        const { data: order } = await supabase
+          .from('orders')
+          .select('id')
+          .eq('customer_id', auth.user.id)
+          .or(`payment_intent_id.eq.${reference},fulfillment_payment_intent_id.eq.${reference}`)
+          .maybeSingle()
+        if (order?.id) resolved = { orderId: order.id, returnTo: `/account/orders/${order.id}` as Route }
+      }
+
+      if (cancelled) return
+      setAccountReturn(resolved)
+      setResolving(false)
+      if (!resolved) return
+
+      window.sessionStorage.removeItem(PAYMENT_RETURN_KEY)
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(
+          { type: 'drapeon:payment-return', orderId: resolved.orderId, reference, status },
+          window.location.origin
+        )
+        window.close()
+        return
+      }
+      router.replace(resolved.returnTo)
     }
-  }, [appUrl])
+    void resolveReturn()
+    return () => { cancelled = true }
+  }, [reference, router, status])
+
+  if (resolving || accountReturn) {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-lg flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle">Payment received</p>
+        <h1 className="font-display text-3xl text-ink">Returning to your order</h1>
+        <p className="text-sm leading-6 text-ink/60">We are confirming the provider result and refreshing your Drapeon receipt.</p>
+      </main>
+    )
+  }
 
   return (
-    <main className="mx-auto flex min-h-[100dvh] max-w-xl flex-col items-center justify-center gap-6 px-6 pb-36 pt-16 text-center">
-      <div className="space-y-3">
-        <p className="text-sm uppercase tracking-[0.28em] text-needleGreen">Return To Drapeon</p>
-        <h1 className="text-3xl font-semibold text-ink">Heading back to your checkout</h1>
-        <p className="text-base leading-7 text-ink/70">
-          If your browser asks, tap Continue. If Drapeon does not reopen automatically, use the button below.
-        </p>
+    <main className="mx-auto flex min-h-[100dvh] max-w-lg flex-col items-center justify-center gap-5 px-6 text-center">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle">Payment return</p>
+      <h1 className="font-display text-3xl text-ink">Continue securely</h1>
+      <p className="text-sm leading-6 text-ink/60">Sign in to review the order receipt, or return to the Drapeon app if you started there.</p>
+      <div className="flex flex-wrap justify-center gap-3">
+        <Link href="/sign-in" className="rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">Sign in</Link>
+        <a href={appUrl} className="rounded-full border border-ink/14 bg-white px-5 py-3 text-sm font-semibold text-ink">Open app</a>
       </div>
-
-      <a
-        href={appUrl}
-        className="rounded-full bg-needleGreen px-6 py-3 text-sm font-semibold text-bone transition hover:bg-needleGreen/90"
-      >
-        Open Drapeon
-      </a>
-
-      {reference ? (
-        <p className="text-xs text-ink/60">Reference: {reference}</p>
-      ) : null}
-
-      <div className="fixed inset-x-0 bottom-0 border-t border-ink/10 bg-bone/95 px-5 py-4 shadow-[0_-16px_40px_rgba(26,26,24,0.08)] backdrop-blur">
-        <a
-          href={appUrl}
-          className="mx-auto block max-w-sm rounded-full bg-needleGreen px-6 py-4 text-center text-base font-semibold text-bone transition hover:bg-needleGreen/90"
-        >
-          Open Drapeon
-        </a>
-      </div>
+      {reference ? <p className="text-xs text-ink/45">Reference: {reference}</p> : null}
     </main>
   )
 }

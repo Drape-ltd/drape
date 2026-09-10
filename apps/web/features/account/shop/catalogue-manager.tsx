@@ -1,6 +1,6 @@
 'use client'
 
-import { ImagePlus, PackagePlus, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ImagePlus, PackagePlus, Pencil, Star, Trash2, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { createClient } from '../../../lib/supabase'
@@ -39,6 +39,22 @@ type Draft = {
   fitNotes: string
   publish: boolean
 }
+
+const ITEM_CATEGORIES = [
+  'Agbada',
+  'Kaftan',
+  'Suit',
+  'Dress',
+  'Crochet',
+  'Ready-made',
+  'Two-piece Set',
+  'Native Wear',
+  'Fila',
+  'Gele',
+  'Headwear',
+] as const
+const COMMON_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'One size'] as const
+const CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const
 
 const emptyDraft = (currency = 'USD'): Draft => ({
   id: null,
@@ -103,6 +119,7 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
   const [draft, setDraft] = useState(() => emptyDraft(profile.currency || 'USD'))
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'error' | 'success'; text: string } | null>(null)
+  const [showEditor, setShowEditor] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const canPublish =
     profile.supports_ready_made === true &&
@@ -162,12 +179,14 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
       fitNotes: String(guide.fitNotes ?? ''),
       publish: false,
     })
+    setShowEditor(true)
     setNotice(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
-  async function addMedia(file: File | null) {
-    if (!file) return
-    if (draft.media.length >= 8) {
+  async function addMedia(files: FileList | null) {
+    if (!files?.length) return
+    const selected = Array.from(files).slice(0, 8 - draft.media.length)
+    if (!selected.length) {
       setNotice({ tone: 'error', text: 'Listings can contain up to 8 photos or videos.' })
       return
     }
@@ -179,7 +198,7 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
       'video/quicktime',
       'video/webm',
     ]
-    if (!allowed.includes(file.type) || file.size > 50 * 1024 * 1024) {
+    if (selected.some((file) => !allowed.includes(file.type) || file.size > 50 * 1024 * 1024)) {
       setNotice({
         tone: 'error',
         text: 'Choose a JPG, PNG, WebP, MP4, MOV, or WebM file under 50 MB.',
@@ -188,23 +207,30 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
     }
     setBusy('media')
     try {
-      const ext =
-        file.name.split('.').pop()?.toLowerCase() ||
-        (file.type.startsWith('video/') ? 'mp4' : 'jpg')
-      const path = `shop/${userId}/${crypto.randomUUID()}.${ext}`
-      const { error } = await createClient()
-        .storage.from('seller-item-media')
-        .upload(path, file, { contentType: file.type, cacheControl: '31536000', upsert: false })
-      if (error) throw error
-      const { data } = createClient().storage.from('seller-item-media').getPublicUrl(path)
-      update('media', [...draft.media, data.publicUrl])
-      setNotice({ tone: 'success', text: 'Media added. It will lead the listing in this order.' })
+      const uploaded: string[] = []
+      for (const file of selected) {
+        const ext = file.name.split('.').pop()?.toLowerCase() || (file.type.startsWith('video/') ? 'mp4' : 'jpg')
+        const path = `shop/${userId}/${crypto.randomUUID()}.${ext}`
+        const { error } = await createClient().storage.from('seller-item-media').upload(path, file, { contentType: file.type, cacheControl: '31536000', upsert: false })
+        if (error) throw error
+        uploaded.push(createClient().storage.from('seller-item-media').getPublicUrl(path).data.publicUrl)
+      }
+      update('media', [...draft.media, ...uploaded])
+      setNotice({ tone: 'success', text: `${uploaded.length} ${uploaded.length === 1 ? 'asset' : 'assets'} added. Reorder them below; the first is the cover.` })
     } catch {
       setNotice({ tone: 'error', text: 'That media could not upload. Try again.' })
     } finally {
       setBusy(null)
       if (fileRef.current) fileRef.current.value = ''
     }
+  }
+  function moveMedia(index: number, destination: number) {
+    if (destination < 0 || destination >= draft.media.length || destination === index) return
+    const next = [...draft.media]
+    const [asset] = next.splice(index, 1)
+    if (!asset) return
+    next.splice(destination, 0, asset)
+    update('media', next)
   }
   async function save() {
     setNotice(null)
@@ -302,6 +328,7 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
         isLive: draft.publish,
       })
       setDraft(emptyDraft(profile.currency || 'USD'))
+      setShowEditor(false)
       setNotice({ tone: 'success', text: draft.publish ? 'Listing published.' : 'Draft saved.' })
       onRefresh()
     } catch (error) {
@@ -345,7 +372,9 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
   const input =
     'h-10 w-full rounded-[8px] border border-ui-border bg-white px-3 text-sm outline-none focus:border-needle focus:ring-2 focus:ring-needle/15'
   return (
-    <div className="grid gap-5 pb-10 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)] lg:items-start">
+    <div className="grid gap-4 pb-10">
+      <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Your shop</p><h1 className="mt-1 text-2xl text-ink">{items.length} listing{items.length === 1 ? '' : 's'}</h1></div><button type="button" aria-expanded={showEditor} onClick={() => { if (showEditor) { setShowEditor(false); return } setDraft(emptyDraft(profile.currency || 'USD')); setShowEditor(true) }} className={`inline-flex h-9 items-center gap-2 rounded-[8px] px-3 text-sm font-semibold ${showEditor ? 'border border-ui-border bg-white text-ink' : 'bg-drape-green text-white'}`}>{showEditor ? <X className="size-4" /> : <PackagePlus className="size-4" />} {showEditor ? 'Close' : 'Add piece'}</button></div>
+      {showEditor ? (
       <section className="app-surface p-5 sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -362,7 +391,7 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
         {notice ? (
           <p
             role={notice.tone === 'error' ? 'alert' : 'status'}
-            className={`mt-4 rounded-[8px] border p-3 text-sm ${notice.tone === 'error' ? 'border-rust/25 bg-rust/8 text-rust' : 'border-needle/20 bg-needle/8 text-needle'}`}
+            className={`fixed bottom-5 right-5 z-[100] max-w-sm rounded-[8px] border bg-white p-4 text-sm shadow-2xl ${notice.tone === 'error' ? 'border-rust/30 text-rust' : 'border-needle/25 text-needle'}`}
           >
             {notice.text}
           </p>
@@ -383,12 +412,14 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
           </label>
           <label className="grid gap-1.5 text-sm font-semibold">
             Category
-            <input
+            <select
               className={input}
               value={draft.category}
               onChange={(e) => update('category', e.target.value)}
-              placeholder="Jackets, dresses, trousers…"
-            />
+            >
+              <option value="">Choose a category</option>
+              {ITEM_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
           </label>
           <label className="grid gap-1.5 text-sm font-semibold sm:col-span-2">
             Description
@@ -413,6 +444,12 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
             </div>
           </label>
           <label className="grid gap-1.5 text-sm font-semibold">
+            Currency
+            <select className={input} value={draft.currency} onChange={(event) => update('currency', event.target.value)}>
+              {CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold">
             Total stock
             <input
               className={input}
@@ -422,14 +459,15 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
               onChange={(e) => update('inventory', e.target.value)}
             />
           </label>
-          <label className="grid gap-1.5 text-sm font-semibold sm:col-span-2">
-            Sizes <span className="font-normal text-ink/50">comma separated</span>
-            <input
-              className={input}
-              value={draft.sizes}
-              onChange={(e) => update('sizes', e.target.value)}
-            />
-          </label>
+          <fieldset className="grid gap-2 sm:col-span-2">
+            <legend className="text-sm font-semibold">Available sizes</legend>
+            <div className="flex flex-wrap gap-2">
+              {COMMON_SIZES.map((size) => {
+                const active = sizes.includes(size)
+                return <button key={size} type="button" aria-pressed={active} onClick={() => update('sizes', (active ? sizes.filter((value) => value !== size) : [...sizes, size]).join(', '))} className={`min-h-9 rounded-[8px] border px-3 text-xs font-semibold transition ${active ? 'border-needle bg-needle text-white' : 'border-ui-border bg-white text-ink hover:border-needle/40'}`}>{size}</button>
+              })}
+            </div>
+          </fieldset>
         </div>
         <fieldset className="mt-5 border-t border-ui-border pt-4">
           <legend className="text-sm font-semibold">
@@ -527,36 +565,31 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
               <input
                 ref={fileRef}
                 type="file"
+                multiple
                 accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
                 className="sr-only"
-                onChange={(e) => void addMedia(e.target.files?.[0] || null)}
+                onChange={(e) => void addMedia(e.target.files)}
               />
             </label>
             <span className="text-xs text-ink/50">{draft.media.length}/8</span>
           </div>
           {draft.media.length ? (
-            <div className="mt-3 grid grid-cols-4 gap-2">
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               {draft.media.map((url, index) => (
-                <button
-                  key={url}
-                  type="button"
-                  onClick={() =>
-                    update(
-                      'media',
-                      draft.media.filter((_, i) => i !== index)
-                    )
-                  }
-                  title="Remove media"
-                  className="relative aspect-square overflow-hidden rounded-[8px] border border-ui-border"
-                >
-                  <MarketplaceMediaTile
-                    media={legacyItemMedia([url], draft.title || 'Listing media')[0] || null}
-                    title={draft.title || 'Listing media'}
-                  />
-                  <span className="absolute right-1 top-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] text-white">
-                    Remove
-                  </span>
-                </button>
+                <div key={url} className="overflow-hidden rounded-[8px] border border-ui-border bg-white">
+                  <div className="relative aspect-[4/5] overflow-hidden">
+                    <MarketplaceMediaTile media={legacyItemMedia([url], draft.title || 'Listing media')[0] || null} title={draft.title || 'Listing media'} />
+                    {index === 0 ? <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-[6px] bg-ink/88 px-2 py-1 text-[10px] font-semibold text-white"><Star className="size-3" /> Cover</span> : null}
+                  </div>
+                  <div className="flex items-center justify-between gap-1 p-1.5">
+                    <button type="button" disabled={index === 0} onClick={() => moveMedia(index, 0)} className="rounded-[6px] px-2 py-1 text-[10px] font-semibold text-needle disabled:opacity-30">Make cover</button>
+                    <div className="flex gap-1">
+                      <button type="button" aria-label="Move media left" disabled={index === 0} onClick={() => moveMedia(index, index - 1)} className="grid size-7 place-items-center rounded-[6px] border border-ui-border disabled:opacity-30"><ArrowLeft className="size-3" /></button>
+                      <button type="button" aria-label="Move media right" disabled={index === draft.media.length - 1} onClick={() => moveMedia(index, index + 1)} className="grid size-7 place-items-center rounded-[6px] border border-ui-border disabled:opacity-30"><ArrowRight className="size-3" /></button>
+                      <button type="button" aria-label="Remove media" onClick={() => update('media', draft.media.filter((_, i) => i !== index))} className="grid size-7 place-items-center rounded-[6px] border border-rust/20 text-rust"><X className="size-3" /></button>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           ) : null}
@@ -578,31 +611,25 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
           >
             {busy === 'save' ? 'Saving…' : draft.id ? 'Save changes' : 'Save listing'}
           </button>
-          {draft.id ? (
-            <button
-              type="button"
-              onClick={() => setDraft(emptyDraft(profile.currency || 'USD'))}
-              className="h-10 rounded-[8px] border border-ui-border px-4 text-sm font-semibold"
-            >
-              Cancel
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => { setDraft(emptyDraft(profile.currency || 'USD')); setShowEditor(false) }}
+            className="h-10 rounded-[8px] border border-ui-border px-4 text-sm font-semibold"
+          >
+            Cancel
+          </button>
         </div>
       </section>
+      ) : null}
       <section className="grid gap-3" aria-label="Your listings">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">Your shop</p>
-          <h2 className="mt-1 text-2xl text-ink">
-            {items.length} listing{items.length === 1 ? '' : 's'}
-          </h2>
-        </div>
         {items.length === 0 ? (
           <div className="app-surface p-5 text-sm text-ink/60">
             Your drafts and published pieces will appear here.
           </div>
         ) : (
-          items.map((item) => (
-            <article key={item.id} className="app-surface grid grid-cols-[5.5rem_1fr] gap-3 p-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {items.map((item) => (
+            <article key={item.id} className="app-surface grid grid-cols-[4.5rem_1fr] gap-2.5 p-2.5">
               <div className="aspect-[4/5] overflow-hidden rounded-[8px] bg-needle/8">
                 <MarketplaceMediaTile
                   media={legacyItemMedia(item.photo_urls, item.title || 'Listing')[0] || null}
@@ -647,7 +674,8 @@ export function CatalogueManager({ userId, profile, items, onRefresh }: Props) {
                 </div>
               </div>
             </article>
-          ))
+          ))}
+          </div>
         )}
       </section>
     </div>

@@ -9,10 +9,30 @@ import {
 
 type Props = {
   onSelect: (address: StructuredAddressFields & { displayValue: string; reference: string }) => void
+  label?: string
+  placeholder?: string
+  value?: string
+  allowManualFallback?: boolean
+  className?: string
 }
 
-export function StructuredAddressSearch({ onSelect }: Props) {
-  const [query, setQuery] = useState('')
+export function StructuredAddressSearch({
+  value,
+  ...props
+}: Props) {
+  return <StructuredAddressSearchInput key={value ?? ''} {...props} value={value} />
+}
+
+function StructuredAddressSearchInput({
+  onSelect,
+  label = 'Find address',
+  placeholder = 'Search address, area, or landmark',
+  value,
+  allowManualFallback = true,
+  className = 'md:col-span-2',
+}: Props) {
+  const [query, setQuery] = useState(value ?? '')
+  const [hasEdited, setHasEdited] = useState(false)
   const [results, setResults] = useState<AddressSearchSuggestion[]>([])
   const [state, setState] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle')
   const [retryKey, setRetryKey] = useState(0)
@@ -20,7 +40,7 @@ export function StructuredAddressSearch({ onSelect }: Props) {
 
   useEffect(() => {
     const text = query.trim()
-    if (text.length < 5) {
+    if (!hasEdited || text.length < 5) {
       return
     }
     const request = ++sequence.current
@@ -50,16 +70,17 @@ export function StructuredAddressSearch({ onSelect }: Props) {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [query, retryKey])
+  }, [hasEdited, query, retryKey])
 
   return (
-    <div className="grid gap-1.5 md:col-span-2">
+    <div className={`grid gap-1.5 ${className}`}>
       <label className="grid gap-1.5">
-        <span className="text-xs font-semibold text-ink">Find address</span>
+        <span className="text-xs font-semibold text-ink">{label}</span>
         <input
           value={query}
           onChange={(event) => {
             const next = event.target.value
+            setHasEdited(true)
             sequence.current += 1
             setQuery(next)
             if (next.trim().length < 5) {
@@ -67,16 +88,16 @@ export function StructuredAddressSearch({ onSelect }: Props) {
               setState('idle')
             }
           }}
-          placeholder="Search address, area, or landmark"
+          placeholder={placeholder}
           autoComplete="street-address"
           className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
         />
       </label>
       {state === 'loading' ? <p role="status" className="text-xs text-ink/52">Searching addresses…</p> : null}
-      {state === 'empty' ? <p role="status" className="text-xs text-ink/52">No exact match. Try a nearby landmark, or enter it manually.</p> : null}
+      {state === 'empty' ? <p role="status" className="text-xs text-ink/52">No exact match. Try a nearby landmark{allowManualFallback ? ', or enter it manually' : ''}.</p> : null}
       {state === 'error' ? (
         <p role="alert" className="text-xs text-ink/52">
-          Suggestions are unavailable. Enter it manually or{' '}
+          Suggestions are unavailable. {allowManualFallback ? 'Enter it manually or ' : ''}
           <button type="button" onClick={() => setRetryKey((key) => key + 1)} className="font-semibold text-needle underline">try again</button>.
         </p>
       ) : null}
@@ -89,6 +110,7 @@ export function StructuredAddressSearch({ onSelect }: Props) {
               onClick={() => {
                 const parsed = parseAddressSearchSuggestion(result)
                 setQuery(parsed.displayValue)
+                setHasEdited(false)
                 setResults([])
                 setState('idle')
                 onSelect({ ...parsed, reference: String(result.place_id ?? result.display_name ?? '') })

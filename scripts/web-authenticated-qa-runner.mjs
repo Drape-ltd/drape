@@ -15,6 +15,8 @@ const enableAppendOnlyProofs = process.env.WEB_QA_ENABLE_APPEND_ONLY_PROOFS === 
 const enableEmailSmoke = process.env.WEB_QA_ENABLE_EMAILS === '1'
 const publicOnly = process.env.WEB_QA_PUBLIC_ONLY === '1'
 const flowFilter = process.env.WEB_QA_FLOW_FILTER?.trim().toLowerCase() ?? ''
+const targetReadyMadeItemId = process.env.WEB_QA_READY_MADE_ITEM_ID?.trim() ?? ''
+const visualOnly = process.env.WEB_QA_VISUAL_ONLY === '1'
 const allowProdWaitlistMutation = process.env.WEB_QA_ALLOW_PROD_WAITLIST_MUTATION === '1'
 const enableOpsQa = process.env.WEB_QA_ENABLE_OPS_QA !== '0'
 const enableOpsProviderMutations = process.env.WEB_QA_ENABLE_OPS_PROVIDER_MUTATIONS === '1'
@@ -39,6 +41,7 @@ const accountPaths = [
   '/account/measurements',
   '/account/shop',
   '/account/work',
+  '/account/clients',
   '/account/tailor',
   '/account/profile',
   '/account/earnings',
@@ -845,6 +848,7 @@ async function createDisposableQaFixtures() {
         availability: 'OPEN',
         is_verified: true,
         is_live: true,
+        is_test_profile: true,
         supports_custom_orders: true,
         supports_ready_made: true,
         pickup_available: true,
@@ -3338,7 +3342,7 @@ async function main() {
     })
   }
 
-  for (const accountPath of accountPaths) {
+  for (const accountPath of visualOnly ? [] : accountPaths) {
     const response = await page
       .goto(`${baseUrl}${accountPath}`, { waitUntil: 'domcontentloaded', timeout: 12_000 })
       .catch((error) => {
@@ -3476,6 +3480,21 @@ async function main() {
         tailor_profile_id: disposableQa.tailorProfileId,
       }
     : null
+  if (targetReadyMadeItemId) {
+    try {
+      const items = await selectRest(
+        'seller_items',
+        `select=id,title,tailor_profile_id,is_live,stock_status&id=eq.${encodeURIComponent(targetReadyMadeItemId)}&limit=1`,
+        'Select requested ready-made item fixture'
+      )
+      fixtureReadyMadeItem = Array.isArray(items) ? (items[0] ?? null) : null
+    } catch (error) {
+      events.push({
+        type: 'fixture-lookup',
+        text: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
   if (!fixtureTailor?.id) {
     try {
       const tailors = await selectRest(
@@ -3505,6 +3524,58 @@ async function main() {
         text: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  if (visualOnly && fixtureReadyMadeItem?.id) {
+    const itemUrl = `${baseUrl}/account/items/${fixtureReadyMadeItem.id}`
+    await page.setViewportSize({ width: 1440, height: 1100 })
+    const desktopResponse = await page.goto(itemUrl, {
+      waitUntil: 'networkidle',
+      timeout: 20_000,
+    })
+    await waitForWorkspaceReady()
+    await screenshot('visual-item-desktop')
+    const fitGuide = page.getByText('View seller size guide', { exact: true })
+    if (await fitGuide.count()) {
+      await fitGuide.click()
+      await screenshot('visual-item-desktop-fit-guide')
+    }
+    const reviewTotal = page.getByRole('button', { name: 'Review order total' })
+    if (await reviewTotal.count()) {
+      await reviewTotal.click()
+      const accountCurrencyEstimate = page.getByText('Approx. in your account currency', { exact: true })
+      await accountCurrencyEstimate.waitFor({ timeout: 15_000 })
+      await accountCurrencyEstimate.scrollIntoViewIfNeeded()
+      await screenshot('visual-item-desktop-currency')
+    }
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.reload({ waitUntil: 'networkidle', timeout: 20_000 })
+    await waitForWorkspaceReady()
+    await screenshot('visual-item-mobile')
+    const mobileCheckout = page.getByRole('heading', { name: 'Choose your options' })
+    if (await mobileCheckout.count()) {
+      await mobileCheckout.scrollIntoViewIfNeeded()
+      await screenshot('visual-item-mobile-checkout')
+    }
+    disposableQaCleanup = await cleanupDisposableQaFixtures(disposableQa)
+    if (accountUserId && creationMode === 'admin-confirmed-fallback') await deleteAuthUser(accountUserId)
+    const report = {
+      visualOnly: true,
+      itemId: fixtureReadyMadeItem.id,
+      title: fixtureReadyMadeItem.title ?? null,
+      desktopStatus: desktopResponse?.status() ?? null,
+      desktopScreenshot: path.join(outDir, 'visual-item-desktop.png'),
+      desktopFitGuideScreenshot: path.join(outDir, 'visual-item-desktop-fit-guide.png'),
+      desktopCurrencyScreenshot: path.join(outDir, 'visual-item-desktop-currency.png'),
+      mobileScreenshot: path.join(outDir, 'visual-item-mobile.png'),
+      mobileCheckoutScreenshot: path.join(outDir, 'visual-item-mobile-checkout.png'),
+      events,
+      badResponses,
+    }
+    await writeFile(path.join(outDir, 'authenticated-report.json'), JSON.stringify(report, null, 2))
+    console.log(JSON.stringify(report, null, 2))
+    await browser.close()
+    return
   }
 
   await runFlow('explore search/filter', async () => {
@@ -3767,6 +3838,7 @@ async function main() {
         const tailorRouteResults = []
         for (const tailorPath of [
           '/account/work',
+          '/account/clients',
           '/account/tailor',
           '/account/profile',
           '/account/shop',
@@ -3816,6 +3888,17 @@ async function main() {
             }
             if (!(await tailorPage.getByLabel('Earnings status').count())) {
               throw new Error('Earnings filters were not accessible by label.')
+            }
+          }
+          if (tailorPath === '/account/clients') {
+            await tailorPage
+              .getByRole('tab', { name: /Customers/u })
+              .waitFor({ state: 'visible', timeout: 12_000 })
+            if (!(await tailorPage.getByRole('tab', { name: /Diary/u }).count())) {
+              throw new Error('Clients did not expose the private diary tab.')
+            }
+            if (!(await tailorPage.getByPlaceholder('Search customers').count())) {
+              throw new Error('Clients did not expose its customer search control.')
             }
           }
           if (tailorPath === '/account/payout') {
@@ -3959,29 +4042,40 @@ async function main() {
         .count()
         .catch(() => 0)
       const checkoutVisible = await page
-        .getByRole('heading', { name: 'Checkout', exact: true })
+        .getByRole('heading', { name: 'Choose your options', exact: true })
         .isVisible()
       const inquiryVisible = await page.getByRole('button', { name: 'Ask tailor' }).isVisible()
       if (!titleVisible || !checkoutVisible || !inquiryVisible)
         throw new Error('Item detail did not expose media, checkout and inquiry context.')
       const mediaBox = await page.getByTestId('item-media-panel').boundingBox()
-      const checkoutBox = await page
-        .getByRole('heading', { name: 'Checkout', exact: true })
+      const productBox = await page
+        .getByRole('heading', { name: fixtureReadyMadeItem.title || 'Web QA Ready-made', exact: false })
+        .first()
         .boundingBox()
-      const desktopTwoColumn = Boolean(
-        mediaBox && checkoutBox && checkoutBox.x > mediaBox.x + mediaBox.width * 0.7
+      const checkoutBox = await page
+        .getByRole('heading', { name: 'Choose your options', exact: true })
+        .boundingBox()
+      const desktopThreeZone = Boolean(
+        mediaBox && productBox && checkoutBox &&
+        productBox.x > mediaBox.x + mediaBox.width * 0.7 &&
+        checkoutBox.x > productBox.x + productBox.width * 0.55 &&
+        mediaBox.width <= 370
       )
-      if (!desktopTwoColumn)
+      if (!desktopThreeZone)
         throw new Error(
-          `Item detail did not use a compact desktop split: ${JSON.stringify({ mediaBox, checkoutBox })}`
+          `Item detail did not use the compact gallery, details, and buy-box structure: ${JSON.stringify({ mediaBox, productBox, checkoutBox })}`
         )
+      await page.getByRole('button', { name: 'Expand product media' }).click()
+      const expandedMediaVisible = await page.getByRole('dialog').isVisible()
+      if (!expandedMediaVisible) throw new Error('Product media did not open in the gallery viewer.')
+      await page.keyboard.press('Escape')
       await screenshot('flow-shop-item-detail-desktop')
       await page.setViewportSize({ width: 390, height: 844 })
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 12_000 })
       await waitForWorkspaceReady()
       const mobileMediaBox = await page.getByTestId('item-media-panel').boundingBox()
       const mobileCheckoutBox = await page
-        .getByRole('heading', { name: 'Checkout', exact: true })
+        .getByRole('heading', { name: 'Choose your options', exact: true })
         .boundingBox()
       const mobileStacked = Boolean(
         mobileMediaBox &&
@@ -4001,7 +4095,8 @@ async function main() {
         imageVisible: imageVisible > 0,
         checkoutVisible,
         inquiryVisible,
-        desktopTwoColumn,
+        desktopThreeZone,
+        expandedMediaVisible,
         mobileStacked,
       }
     })

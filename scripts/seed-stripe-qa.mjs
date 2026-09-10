@@ -311,6 +311,7 @@ await upsert(
       id: tailorUserId,
       email: QA_TAILOR_EMAIL,
       display_name: QA_TAILOR_NAME,
+      is_test_profile: true,
       role: 'TAILOR',
       phone: '+15550109090',
       default_currency: 'USD',

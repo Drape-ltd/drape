@@ -8,8 +8,6 @@ import {
   validatePasswordStrength,
 } from '@drape/shared/auth-security'
 
-const APP_RESET_URL = 'drape://reset-password'
-
 export function RecoveryBridge(): any {
   const [sessionReady, setSessionReady] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -22,23 +20,8 @@ export function RecoveryBridge(): any {
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
 
   useEffect(() => {
-    // Try to hand off to the mobile app silently in the background
-    const suffix =
-      typeof window !== 'undefined'
-        ? window.location.href.slice(
-            window.location.origin.length + window.location.pathname.length,
-          )
-        : ''
-    const appUrl = `${APP_RESET_URL}${suffix}`
-    const deepLinkTimer = window.setTimeout(() => {
-      try {
-        window.location.href = appUrl
-      } catch {
-        /* ignore */
-      }
-    }, 120)
-
-    // Establish recovery session from URL for the web form
+    // Establish the recovery session from the email link. Web recovery stays on
+    // the web; it must never require an installed mobile app to finish.
     async function applyRecoverySession() {
       if (typeof window === 'undefined') return
       const supabase = createClient()
@@ -98,9 +81,6 @@ export function RecoveryBridge(): any {
     }
 
     void applyRecoverySession()
-    return () => {
-      window.clearTimeout(deepLinkTimer)
-    }
   }, [])
 
   async function resetPassword() {
@@ -121,10 +101,25 @@ export function RecoveryBridge(): any {
       )
       return
     }
+
+    const [{ error: revokeError }, { error: noticeError }] = await Promise.all([
+      supabase.functions.invoke('trusted-device-action', {
+        body: { action: 'revoke-all' },
+      }),
+      supabase.functions.invoke('account-security-notification', {
+        body: { event: 'PASSWORD_CHANGED' },
+      }),
+    ])
+    if (revokeError || noticeError) {
+      setError(
+        'Your password changed, but Drapeon could not finish every security cleanup step. Sign in with your new password and review Login & security.',
+      )
+      return
+    }
+
+    await supabase.auth.signOut({ scope: 'others' })
+    await supabase.auth.signOut({ scope: 'local' })
     setDone(true)
-    window.setTimeout(() => {
-      window.location.replace('/account/orders')
-    }, 2000)
   }
 
   return (
@@ -136,7 +131,15 @@ export function RecoveryBridge(): any {
           {done ? (
             <>
               <h1 className="mt-3 text-3xl text-ink">Password updated.</h1>
-              <p className="mt-3 text-sm leading-7 text-ink/66">Opening your workspace now…</p>
+              <p className="mt-3 text-sm leading-7 text-ink/66">
+                Your other sessions and remembered devices have been signed out. Use your new password to sign in again.
+              </p>
+              <a
+                href="/sign-in?password_reset=1"
+                className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Sign in securely
+              </a>
             </>
           ) : sessionError ? (
             <>
@@ -176,7 +179,7 @@ export function RecoveryBridge(): any {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       type={showPassword ? 'text' : 'password'}
-                      placeholder="8+ characters"
+                      placeholder="10+ characters"
                       autoComplete="new-password"
                       maxLength={MAX_PASSWORD_LENGTH}
                       className="min-h-12 w-full rounded-lg border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"

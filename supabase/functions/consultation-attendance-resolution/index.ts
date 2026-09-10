@@ -77,6 +77,7 @@ Deno.serve(async (request) => {
         body: copy.body,
         preferenceKey: 'orderUpdates',
         data: notificationDestinationData({ kind: 'ORDER', orderId: result.orderId! }),
+        communication: { category: 'PAYMENT', purpose: 'TRANSACTIONAL', severity: 'WARNING', mandatory: true, inApp: true, destinationKey: 'ORDER_DETAIL', destinationParams: { orderId: result.orderId! }, deduplicationKey: `${FN}:${result.bookingId}:${parsed.data.decision}:${userId}:in-app` },
       },
     })),
     enqueueOrderEventEmailJob(supabase, {

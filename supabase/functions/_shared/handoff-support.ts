@@ -1,4 +1,9 @@
-export const HANDOFF_STAGES = ['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'] as const
+import {
+  HANDOFF_SUPPORT_STAGES,
+  isHandoffSupportStage,
+} from '../../../packages/shared/src/order-machine.ts'
+
+export const HANDOFF_STAGES = HANDOFF_SUPPORT_STAGES
 
 export const HANDOFF_ISSUE_TYPES = [
   'AT_PICKUP',
@@ -12,7 +17,7 @@ export const HANDOFF_ISSUE_TYPES = [
 export type HandoffIssueType = typeof HANDOFF_ISSUE_TYPES[number]
 
 export function isHandoffStage(stage: string | null | undefined) {
-  return typeof stage === 'string' && HANDOFF_STAGES.includes(stage as typeof HANDOFF_STAGES[number])
+  return isHandoffSupportStage(stage)
 }
 
 export function isPickupIssueType(issueType: HandoffIssueType) {

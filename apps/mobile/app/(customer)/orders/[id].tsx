@@ -317,6 +317,7 @@ type OrderQueryRow = {
   fulfillment_contact_phone: string | null
   reference_photos: unknown
   collection_code: string | null
+  collection_code_expiry: string | null
   video_call_url: string | null
   handoff_completed_at: string | null
   customer_handoff_confirmed_at: string | null
@@ -534,6 +535,7 @@ type OrderDetail = {
   fulfillmentContactPhone: string | null
   referencePhotos: string[]
   collectionCode: string | null
+  collectionCodeExpiry: string | null
   videoCallUrl: string | null
   handoffCompletedAt: string | null
   customerHandoffConfirmedAt: string | null
@@ -1289,7 +1291,7 @@ export default function OrderTrackingScreen() {
             fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
             fabric_source, fabric_funding_policy_version, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
             fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos,
-            collection_code, video_call_url, handoff_completed_at, customer_handoff_confirmed_at, special_note, customer_measurements_snapshot, created_at,
+            collection_code, collection_code_expiry, video_call_url, handoff_completed_at, customer_handoff_confirmed_at, special_note, customer_measurements_snapshot, created_at,
             tailor_profiles!tailor_profile_id(display_name, location),
             custom_order_details(garment_type_other, gender_presentation, social_reference_links, style_notes, body_note, fabric_approval_required, fabric_approval_status, fabric_description, fabric_budget_amount, fabric_budget_currency, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at, shipping_preference, delivery_instructions, target_delivery_date),
             order_stage_updates(id, stage, note, photo_url, evidence_media, created_at)
@@ -1533,6 +1535,7 @@ export default function OrderTrackingScreen() {
             fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
             referencePhotos: asStringList(d.reference_photos),
             collectionCode: d.collection_code,
+            collectionCodeExpiry: d.collection_code_expiry ?? null,
             videoCallUrl: d.video_call_url ?? null,
             handoffCompletedAt: d.handoff_completed_at ?? null,
             customerHandoffConfirmedAt: d.customer_handoff_confirmed_at ?? null,
@@ -1603,10 +1606,36 @@ export default function OrderTrackingScreen() {
     [id, setFabricTracking, setOrder, userId]
   )
   const fetchOrderRef = useRef(fetchOrder)
+  const ensuredCollectionCredentialRef = useRef<string | null>(null)
 
   useEffect(() => {
     fetchOrderRef.current = fetchOrder
   }, [fetchOrder])
+
+  useEffect(() => {
+    if (
+      !order
+      || order.stage !== 'READY_FOR_COLLECTION'
+      || order.deliveryMethod !== 'LOCAL_COLLECTION'
+      || ensuredCollectionCredentialRef.current === order.id
+    ) return
+    const expiry = order.collectionCodeExpiry ? Date.parse(order.collectionCodeExpiry) : Number.NaN
+    if (Number.isFinite(expiry) && expiry > Date.now()) return
+
+    ensuredCollectionCredentialRef.current = order.id
+    void invokeFunction('customer-order-action', {
+      body: {
+        action: 'refresh-collection-code',
+        orderId: order.id,
+        force: false,
+      },
+    }).then(({ error }) => {
+      if (error) throw error
+      return fetchOrderRef.current({ silent: true })
+    }).catch(() => {
+      ensuredCollectionCredentialRef.current = null
+    })
+  }, [order])
 
   useEffect(() => {
     completionPromptShownRef.current = false
@@ -2700,6 +2729,8 @@ export default function OrderTrackingScreen() {
   const consultationPaymentRequired =
     order.stage === 'CONSULTATION' &&
     !!consultationMeta?.feeAmount &&
+    consultationMeta.status !== 'REQUESTED' &&
+    consultationMeta.status !== 'DECLINED' &&
     consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS' &&
     !consultationMeta.paidAt
   const consultationPaymentPaid =
@@ -3148,6 +3179,35 @@ export default function OrderTrackingScreen() {
               <Text style={styles.collectionHint}>
                 This is not your order number. Inspect the order first, then share the code so Drapeon can record the pickup handoff.
               </Text>
+              {order.collectionCodeExpiry ? (
+                <Text style={styles.collectionExpiry}>
+                  Available until {formatExplicitZonedDateTime(order.collectionCodeExpiry)}.
+                </Text>
+              ) : null}
+              <Button
+                label="Generate new code"
+                variant="secondary"
+                onPress={() => Alert.alert(
+                  'Generate a new pickup code?',
+                  'The current code will stop working immediately.',
+                  [
+                    { text: 'Keep current code', style: 'cancel' },
+                    {
+                      text: 'Generate',
+                      onPress: () => { void invokeFunction('customer-order-action', {
+                        body: {
+                          action: 'refresh-collection-code',
+                          orderId: order.id,
+                          force: true,
+                        },
+                      }).then(({ error }) => {
+                        if (error) throw error
+                        return fetchOrder({ silent: true })
+                      }).catch(() => Alert.alert('Could not refresh code', 'Try again in a moment.')) },
+                    },
+                  ],
+                )}
+              />
               <TouchableOpacity onPress={() => setShowDispute(true)} accessibilityRole="button">
                 <Text style={styles.disputeLink}>Something wrong? Report issue</Text>
               </TouchableOpacity>
@@ -3858,13 +3918,14 @@ export default function OrderTrackingScreen() {
           {consultationMeta?.scheduledStartAt ? (
             <ConsultationAttendancePanel orderId={order.id} actorRole="CUSTOMER" />
           ) : null}
-          {order.stage === 'CONSULTATION' ? (
+          {consultationMeta?.scheduledStartAt ? (
             <ConsultationReschedulePanel
               orderId={order.id}
               actorRole="CUSTOMER"
               actorId={userId}
               counterpartName={order.tailorName.split(' ')[0]}
               onOpenChat={openOrderMessages}
+              onOpenCall={(callType) => { void startConsultationCall(callType) }}
               onUpdated={() => { void fetchOrder({ silent: true }) }}
               onPendingChange={setConsultationReschedulePending}
               onRescheduleRequiredChange={setConsultationRescheduleRequired}
@@ -8121,48 +8182,44 @@ function QuoteReviewScreen({
         title="Quote actions"
         subtitle="Ask a question, request a formal revision, or close this quote."
         onDismiss={() => setActionSheetVisible(false)}
+        primaryAction={negotiationAvailable && !openRevision && !conversationActions.revisionLimitReached ? {
+          label: 'Request changes',
+          tone: 'secondary',
+          testID: 'quote-request-changes-btn',
+          onPress: () => {
+            setActionSheetVisible(false)
+            openRevisionEditor()
+          },
+          disabled: accepting || declining,
+        } : undefined}
+        secondaryAction={{
+          label: `Message ${order.tailorName.split(' ')[0]}`,
+          tone: 'secondary',
+          onPress: () => {
+            setActionSheetVisible(false)
+            router.navigate({
+              pathname: '/(customer)/messages/[orderId]',
+              params: {
+                orderId: order.id,
+                returnTo: `/(customer)/orders/${order.id}`,
+                historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
+              },
+            })
+          },
+          disabled: accepting || declining,
+        }}
+        destructiveAction={{
+          label: 'Decline quote',
+          tone: 'destructive',
+          onPress: () => {
+            setActionSheetVisible(false)
+            void decline()
+          },
+          loading: declining,
+          disabled: accepting || declining,
+        }}
       >
-        <View style={styles.quoteSecondaryActions}>
-          {negotiationAvailable && !openRevision && !conversationActions.revisionLimitReached ? (
-            <DrapeCapsuleButton
-              label="Request changes"
-              tone="secondary"
-              icon="edit-3"
-              onPress={() => {
-                setActionSheetVisible(false)
-                openRevisionEditor()
-              }}
-              disabled={accepting || declining}
-              testID="quote-request-changes-btn"
-            />
-          ) : null}
-          <DrapeCapsuleButton
-            label={`Message ${order.tailorName.split(' ')[0]}`}
-            tone="secondary"
-            icon="message-circle"
-            onPress={() => {
-              setActionSheetVisible(false)
-              router.navigate({
-                pathname: '/(customer)/messages/[orderId]',
-                params: {
-                  orderId: order.id,
-                  returnTo: `/(customer)/orders/${order.id}`,
-                  historyChain: appendToHistory(historyChain, `/(customer)/orders/${order.id}`),
-                },
-              })
-            }}
-          />
-          <DrapeCapsuleButton
-            label="Decline quote"
-            tone="destructive"
-            onPress={() => {
-              setActionSheetVisible(false)
-              void decline()
-            }}
-            loading={declining}
-            disabled={accepting || declining}
-          />
-        </View>
+        {null}
       </DrapeSheet>
 
       <DrapeSheet
@@ -8270,7 +8327,6 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.xl, gap: Spacing.md },
   quoteActionBar: { paddingHorizontal: 0, paddingVertical: 0, justifyContent: 'center', flexWrap: 'wrap' },
   quotePrimaryAction: { minWidth: 190, flexGrow: 1 },
-  quoteSecondaryActions: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: Spacing.sm },
   revisionReasonList: { gap: Spacing.sm },
   revisionFieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   revisionReasonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
@@ -8495,6 +8551,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
+  collectionExpiry: { fontSize: FontSize.xs, color: Colors.inkLight, textAlign: 'center' },
   codeBox: { flexDirection: 'row', gap: Spacing.md },
   codeDigit: {
     width: 56,

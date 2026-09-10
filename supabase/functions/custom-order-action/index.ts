@@ -6,8 +6,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
-import { sendOrderEventEmail } from '../_shared/order-email.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { serializeOrderSupportMeta } from '../_shared/order-support.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { normalizeStoredPhone, validateRecipientPhone } from '../_shared/phone.ts'
@@ -912,7 +911,6 @@ Deno.serve(async (req) => {
         order_kind: 'CUSTOM',
         reference: orderReference,
         garment_type: body.garmentType,
-        description: body.description,
         garment_description: body.description,
         occasion: body.occasion?.trim() || null,
         deadline: body.deadline ?? null,
@@ -1152,18 +1150,36 @@ Deno.serve(async (req) => {
       currency: orderCurrency,
     }
     const notificationTitle = 'New custom order request'
-    const notificationBody = `A customer sent a ${body.garmentType} brief. Review it and send a quote when you are ready.`
+    const garmentArticle = /^[aeiou]/iu.test(body.garmentType.trim()) ? 'an' : 'a'
+    const notificationBody = `A customer sent ${garmentArticle} ${body.garmentType} brief. Review it and send a quote when you are ready.`
+    const customerConfirmationTitle = 'Custom brief submitted'
+    const customerConfirmationBody =
+      `Your ${body.garmentType} brief was sent. We will notify you when the tailor replies or sends a quote.`
 
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, tailorProfile.user_id.toString(), {
-        title: notificationTitle,
-        body: notificationBody,
-        preferenceKey: 'newOrders',
-        data: { orderId: created.id, type: 'custom_order_created' },
+    const communicationResults = await Promise.all([
+      enqueuePushJob(supabase, {
+        userId: tailorProfile.user_id.toString(),
+        orderId: created.id,
+        source: FN,
+        idempotencyKey: `custom-order-created:${created.id}:tailor`,
+        notification: {
+          title: notificationTitle,
+          body: notificationBody,
+          preferenceKey: 'newOrders',
+          data: { destination: 'ORDER', orderId: created.id, type: 'custom_order_created' },
+          communication: {
+            category: 'ORDER',
+            purpose: 'TRANSACTIONAL',
+            severity: 'NOTICE',
+            mandatory: true,
+            inApp: true,
+            destinationKey: 'ORDER_DETAIL',
+            destinationParams: { orderId: created.id },
+            deduplicationKey: `custom-order-created:${created.id}:tailor`,
+          },
+        },
       }),
-    )
-    EdgeRuntime.waitUntil(
-      sendOrderEventEmail(supabase, {
+      enqueueOrderEventEmailJob(supabase, {
         order: orderNotificationContext,
         recipientUserId: tailorProfile.user_id.toString(),
         audience: 'TAILOR',
@@ -1171,21 +1187,32 @@ Deno.serve(async (req) => {
         headline: 'A customer sent you a new custom brief',
         body: notificationBody,
         ctaLabel: 'Review order',
+        source: FN,
+        idempotencyKey: `custom-order-created:${created.id}:tailor`,
       }),
-    )
-    const customerConfirmationTitle = 'Custom brief submitted'
-    const customerConfirmationBody = "Your " + body.garmentType + " brief was sent. We will notify you when the tailor replies or sends a quote."
-
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, caller.id, {
-        title: customerConfirmationTitle,
-        body: customerConfirmationBody,
-        preferenceKey: 'orderUpdates',
-        data: { orderId: created.id, type: 'custom_order_submitted' },
+      enqueuePushJob(supabase, {
+        userId: caller.id,
+        orderId: created.id,
+        source: FN,
+        idempotencyKey: `custom-order-created:${created.id}:customer`,
+        notification: {
+          title: customerConfirmationTitle,
+          body: customerConfirmationBody,
+          preferenceKey: 'orderUpdates',
+          data: { destination: 'ORDER', orderId: created.id, type: 'custom_order_submitted' },
+          communication: {
+            category: 'ORDER',
+            purpose: 'TRANSACTIONAL',
+            severity: 'INFO',
+            mandatory: true,
+            inApp: true,
+            destinationKey: 'ORDER_DETAIL',
+            destinationParams: { orderId: created.id },
+            deduplicationKey: `custom-order-created:${created.id}:customer`,
+          },
+        },
       }),
-    )
-    EdgeRuntime.waitUntil(
-      sendOrderEventEmail(supabase, {
+      enqueueOrderEventEmailJob(supabase, {
         order: orderNotificationContext,
         recipientUserId: caller.id,
         audience: 'CUSTOMER',
@@ -1193,8 +1220,16 @@ Deno.serve(async (req) => {
         headline: 'Your custom brief was sent',
         body: customerConfirmationBody,
         ctaLabel: 'View order',
+        source: FN,
+        idempotencyKey: `custom-order-created:${created.id}:customer`,
       }),
-    )
+    ])
+    if (communicationResults.some((queued) => !queued)) {
+      log('warn', FN, 'custom_order.communication_enqueue_incomplete', {
+        order_id: created.id,
+        queued: communicationResults,
+      })
+    }
 
     return jsonResponse({ ok: true, orderId: created.id }, 200, cors)
   } catch (error) {

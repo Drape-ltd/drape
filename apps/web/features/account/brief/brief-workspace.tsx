@@ -21,22 +21,33 @@ type LoadState =
 
 async function loadBrief(userId: string, tailorId: string): Promise<BriefRenderData> {
   const supabase = createClient()
-  const [tailorResult, measurementsResult, customerResult, accountResult] = await Promise.all([
+  const [tailorResult, measurementsResult, customerResult, accountResult, existingOrderResult] = await Promise.all([
     supabase.from('tailor_profiles').select(publicTailorProfileSelect).eq('id', tailorId).maybeSingle(),
     supabase.from('customer_measurement_profiles').select('id, label, relationship, source, unit_preference, measurements, is_default, last_measured_at, updated_at').eq('customer_id', userId).order('is_default', { ascending: false }).order('updated_at', { ascending: false }).limit(10),
     supabase.from('customer_profiles').select('user_id, display_name, measurements, unit_preference, updated_at').eq('user_id', userId).maybeSingle(),
     supabase.from('users').select('default_currency').eq('id', userId).maybeSingle(),
+    supabase.from('orders')
+      .select('id, reference, stage, created_at')
+      .eq('customer_id', userId)
+      .eq('tailor_profile_id', tailorId)
+      .eq('order_kind', 'CUSTOM')
+      .in('stage', ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   if (tailorResult.error) throw new Error('The tailor profile could not load. Refresh to retry.')
   if (measurementsResult.error || customerResult.error) throw new Error('Your measurement context could not load. Refresh to retry.')
   if (accountResult.error) throw new Error('Your account currency could not load. Refresh to retry.')
+  if (existingOrderResult.error) throw new Error('Your existing custom requests could not load. Refresh to retry.')
 
   return {
     tailor: (tailorResult.data ?? null) as BriefTailorProfile | null,
     measurementProfiles: (measurementsResult.data ?? []) as BriefMeasurementProfile[],
     customerProfile: (customerResult.data ?? null) as BriefCustomerProfile | null,
     accountCurrency: (accountResult.data as { default_currency?: string | null } | null)?.default_currency ?? null,
+    existingOrder: (existingOrderResult.data ?? null) as BriefRenderData['existingOrder'],
     userId,
     warning: null,
   }

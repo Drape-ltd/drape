@@ -127,7 +127,13 @@ function createFakeSupabase(options?: {
 Deno.test('performVerificationDecision approves a pending tailor, resolves ops issue, audits, and sends email', async () => {
   const fake = createFakeSupabase()
   const messages: VerificationEmailMessage[] = []
-  const pushes: Array<{ userId: string; title: string; body: string }> = []
+  const pushes: Array<{
+    userId: string
+    title: string
+    body: string
+    destinationKey?: string
+    profileId?: string
+  }> = []
 
   const result = await performVerificationDecision(
     fake.client,
@@ -144,7 +150,13 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
         messages.push(message)
       },
       sendPush: async (userId, message) => {
-        pushes.push({ userId, title: message.title, body: message.body })
+        pushes.push({
+          userId,
+          title: message.title,
+          body: message.body,
+          destinationKey: message.communication?.destinationKey,
+          profileId: message.communication?.destinationParams.profileId,
+        })
         return { status: 'SENT' }
       },
       now: () => new Date('2026-05-01T12:00:00.000Z'),
@@ -182,6 +194,8 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
   expectEquals(pushes.length, 1, 'approval should send one tailor push notification')
   expectEquals(pushes[0]?.userId, 'tailor-1', 'approval push should target the tailor')
   expect(pushes[0]!.title.includes('live'), 'approval push should tell the tailor they are live')
+  expectEquals(pushes[0]?.destinationKey, 'VERIFICATION', 'approval should persist to the verification inbox destination')
+  expectEquals(pushes[0]?.profileId, 'profile-1', 'approval inbox destination should preserve the profile context')
 })
 
 Deno.test('performVerificationDecision recovers setup portfolio photos when normalized items are missing', async () => {

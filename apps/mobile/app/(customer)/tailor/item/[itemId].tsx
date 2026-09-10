@@ -17,7 +17,7 @@ import {
   normalizeReadyMadeSizeGuide,
   READY_MADE_FIT_FIELDS,
   recommendReadyMadeSize,
-} from '@/lib/ready-made-fit'
+} from '@drape/shared/ready-made-fit'
 import {
   Button,
   DrapeCapsuleButton,

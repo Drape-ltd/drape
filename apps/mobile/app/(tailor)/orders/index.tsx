@@ -75,7 +75,7 @@ export default function TailorOrdersScreen() {
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(userId, tab)
   const consultationOrderIdsKey = orders
-    .filter((order) => order.stage === 'CONSULTATION')
+    .filter((order) => order.stage === 'CONSULTATION' || order.makeUpConsultationScheduledAt)
     .map((order) => order.id)
     .sort()
     .join(',')
@@ -89,6 +89,11 @@ export default function TailorOrdersScreen() {
         channel.on(
           'postgres_changes',
           { event, schema: 'public', table: 'consultation_attendance_reviews', filter: `order_id=eq.${orderId}` },
+          () => { void refetch() }
+        )
+        channel.on(
+          'postgres_changes',
+          { event, schema: 'public', table: 'consultation_bookings', filter: `order_id=eq.${orderId}` },
           () => { void refetch() }
         )
       }
@@ -257,7 +262,7 @@ export default function TailorOrdersScreen() {
           }
           renderItem={({ item }) => {
             const isPending = item.stage === 'PENDING_QUOTE'
-            const isConsultation = item.stage === 'CONSULTATION'
+            const isConsultation = item.stage === 'CONSULTATION' || !!item.makeUpConsultationScheduledAt
             const stagePresentation = deriveFulfillmentAwareOrderStagePresentation({
               orderStage: item.stage,
               effectiveMethod: item.deliveryMethod,
@@ -268,7 +273,11 @@ export default function TailorOrdersScreen() {
                 : 'Drapeon Dispatch is arranging delivery. No collection code is needed.'
               : orderHintForItem(item)
             const consultationState = isConsultation
-              ? consultationOrderListState({ actorRole: 'TAILOR', review: item.consultationReview })
+              ? consultationOrderListState({
+                  actorRole: 'TAILOR',
+                  review: item.consultationReview,
+                  makeUpScheduledAt: item.makeUpConsultationScheduledAt,
+                })
               : null
             return (
               <TouchableOpacity

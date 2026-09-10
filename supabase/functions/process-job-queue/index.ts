@@ -9,6 +9,7 @@ import {
   asRecord,
   asString,
   claimDueJobs,
+  claimDueJobsById,
   createWorkerId,
   enqueueBackgroundJob,
   finishJob,
@@ -39,6 +40,8 @@ import {
 
 const FN = "process-job-queue";
 const DEFAULT_LIMIT = 25;
+const JOB_EXECUTION_TIMEOUT_MS = 25_000;
+const JOB_CONCURRENCY = 10;
 const PAUSE_VALUES = new Set(["1", "true", "yes", "on"]);
 const ALLOWED_JOB_TYPES = new Set<JobType>([
   "SEND_PUSH",
@@ -63,7 +66,7 @@ const ALLOWED_JOB_TYPES = new Set<JobType>([
 
 type NotificationDeliveryResult = {
   channel: "PUSH" | "EMAIL" | "SMS";
-  status: "DELIVERED" | "SKIPPED";
+  status: "ACCEPTED" | "DELIVERED" | "SKIPPED";
   reason?: string | null;
   provider?: string | null;
   providerReference?: string | null;
@@ -90,12 +93,26 @@ function backgroundWorkersPaused() {
   return value ? PAUSE_VALUES.has(value) : false;
 }
 
+async function withJobDeadline<T>(job: JobRow, operation: Promise<T>): Promise<T> {
+  let timeout: number | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`Job ${job.job_type} exceeded the ${JOB_EXECUTION_TIMEOUT_MS}ms execution deadline.`));
+    }, JOB_EXECUTION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 function isAllowedJobType(value: string | null): value is JobType {
   return !!value && ALLOWED_JOB_TYPES.has(value as JobType);
 }
 
 async function readProcessingOptions(req: Request) {
-  const fallback = { limit: DEFAULT_LIMIT, jobTypes: null as JobType[] | null };
+  const fallback = { limit: DEFAULT_LIMIT, jobTypes: null as JobType[] | null, jobIds: null as string[] | null };
   if (req.method !== "POST") return fallback;
 
   try {
@@ -110,10 +127,17 @@ async function readProcessingOptions(req: Request) {
         .map((item) => asString(item))
         .filter(isAllowedJobType)
       : null;
+    const jobIds = Array.isArray(payload.jobIds)
+      ? payload.jobIds
+        .map((item) => asString(item))
+        .filter((item): item is string => !!item && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(item))
+        .slice(0, 25)
+      : null;
 
     return {
       limit,
       jobTypes: jobTypes && jobTypes.length > 0 ? jobTypes : null,
+      jobIds: jobIds && jobIds.length > 0 ? jobIds : null,
     };
   } catch {
     return fallback;
@@ -500,6 +524,7 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         interruptionLevel: optionalInterruptionLevel(
           notification.interruptionLevel,
         ),
+        communication: notification.communication as PushPayload['communication'],
       });
       if (result.status === "ERROR") {
         throw new Error(`Push delivery failed: ${result.reason}`);
@@ -563,6 +588,7 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         webPath: requireString(payload, "webPath"),
         appUrl: asString(payload.appUrl),
         details,
+        idempotencyKey: job.dedupe_key,
       });
       return {
         channel: "EMAIL",
@@ -624,6 +650,7 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
           asString(payload.evidenceStorageBucket) === "commercial-evidence"
             ? "commercial-evidence"
             : "order-photos",
+        idempotencyKey: job.dedupe_key,
       });
       return {
         channel: "EMAIL",
@@ -644,7 +671,7 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
       );
       return {
         channel: "EMAIL",
-        status: "DELIVERED",
+        status: "ACCEPTED",
         provider: "RESEND",
       } satisfies NotificationDeliveryResult;
     }
@@ -676,8 +703,9 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
       }
       return {
         channel: "EMAIL",
-        status: "DELIVERED",
+        status: "ACCEPTED",
         provider: "RESEND",
+        providerReference: asString(response.deliveryId),
       } satisfies NotificationDeliveryResult;
     }
 
@@ -1007,17 +1035,19 @@ Deno.serve(async (req) => {
   if (unauthorized) return unauthorized;
 
   const workerId = createWorkerId(FN);
-  const { limit, jobTypes } = await readProcessingOptions(req);
+  const { limit, jobTypes, jobIds } = await readProcessingOptions(req);
   if (backgroundWorkersPaused()) {
     log("warn", FN, "background_workers.paused", {
       worker_id: workerId,
       job_types: jobTypes,
+      job_ids: jobIds,
     });
     return jsonResponse(
       {
         ok: true,
         workerId,
         jobTypes,
+        jobIds,
         paused: true,
         claimed: 0,
         succeeded: 0,
@@ -1031,9 +1061,11 @@ Deno.serve(async (req) => {
   }
 
   const supabase = createClient(getSupabaseUrl(), getServiceRoleKey());
-  const watchdogNeeded = !jobTypes || jobTypes.includes("CREATE_OPS_ISSUE");
+  const watchdogNeeded = !jobIds && (!jobTypes || jobTypes.includes("CREATE_OPS_ISSUE"));
   if (watchdogNeeded) await runPayoutWatchdog(supabase);
-  const jobs = await claimDueJobs(supabase, workerId, limit, jobTypes);
+  const jobs = jobIds
+    ? await claimDueJobsById(supabase, workerId, jobIds)
+    : await claimDueJobs(supabase, workerId, limit, jobTypes);
   const results: Array<{
     id: string;
     jobType: string;
@@ -1041,10 +1073,10 @@ Deno.serve(async (req) => {
     error?: string;
   }> = [];
 
-  for (const job of jobs) {
+  async function handleJob(job: JobRow) {
     const startedAt = performance.now();
     try {
-      const deliveryResult = await processJob(supabase, job);
+      const deliveryResult = await withJobDeadline(job, processJob(supabase, job));
       await finishNotificationJob(
         supabase,
         job,
@@ -1105,11 +1137,27 @@ Deno.serve(async (req) => {
     }
   }
 
+  let nextJobIndex = 0;
+  async function workQueue() {
+    while (nextJobIndex < jobs.length) {
+      const job = jobs[nextJobIndex];
+      nextJobIndex += 1;
+      if (job) await handleJob(job);
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(JOB_CONCURRENCY, jobs.length) },
+      () => workQueue(),
+    ),
+  );
+
   return jsonResponse(
     {
       ok: true,
       workerId,
       jobTypes,
+      jobIds,
       watchdogRan: watchdogNeeded,
       claimed: jobs.length,
       succeeded: results.filter((result) =>

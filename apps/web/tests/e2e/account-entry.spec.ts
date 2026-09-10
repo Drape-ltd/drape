@@ -17,10 +17,27 @@ test.describe('authenticated web entry contract', () => {
     await expect(page.getByText(/join (the )?waitlist/i)).toHaveCount(0)
   })
 
-  test('tailor entry separates sign-in from application', async ({ page }) => {
+  test('tailor entry separates sign-in from onboarding', async ({ page }) => {
     await page.goto('/account/tailor')
-    await expect(page.locator('a[href="/apply?source=account"]')).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Join as a tailor' }).first()).toBeVisible()
     await expect(page.getByText(/join (the )?waitlist/i)).toHaveCount(0)
+  })
+
+  test('public tailor recruitment explains the real setup and opens onboarding', async ({ page }) => {
+    await page.goto('/tailors')
+
+    await expect(page.getByRole('heading', { level: 1, name: 'Your craft. A clearer business.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Your identity' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Setup and verification' })).toBeVisible()
+    await expect(page.getByText('Private randomized challenge video')).toBeVisible()
+    await page.locator('summary').filter({ hasText: 'Who can see my trust video?' }).click()
+    await expect(page.getByText(/not placed on your public profile/i)).toBeVisible()
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    expect(overflow, '/tailors horizontal overflow').toBeLessThanOrEqual(1)
+
+    await page.getByRole('link', { name: 'Start tailor setup' }).first().click()
+    await expect(page).toHaveURL(/\/sign-up\?role=TAILOR$/)
   })
 
   test('account entry pages never overflow the viewport horizontally', async ({ page }) => {
@@ -31,9 +48,8 @@ test.describe('authenticated web entry contract', () => {
     }
   })
 
-  test('legacy account Explore resolves to the canonical marketplace', async ({ page }) => {
+  test('account Explore stays inside the authenticated workspace', async ({ page }) => {
     await page.goto('/account/explore')
-    await expect(page).toHaveURL(/\/explore$/)
-    await expect(page.getByRole('heading', { name: /find the right tailor/i })).toBeVisible()
+    await expect(page).toHaveURL(/\/account\/explore|\/sign-in/)
   })
 })

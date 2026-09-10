@@ -17,6 +17,7 @@ import {
 import { createClient } from '../../../lib/supabase'
 import { Button } from '../../../components/ui/button'
 import { StatusChip } from '../../../components/ui/status-chip'
+import { CommercialBenefitControl, type WebBenefitReservation } from '../../../components/commercial-benefit-control'
 import { AccountRouteRuntime } from '../account-route-runtime'
 
 type Order = {
@@ -33,6 +34,14 @@ type Order = {
   quoted_currency: string | null
   quoted_amount: number | null
   total_amount: number | null
+  consultation_fee: number | null
+  fulfillment_fee: number | null
+  fulfillment_payment_requested_at: string | null
+  fulfillment_payment_paid_at: string | null
+  fulfillment_payment_provider: string | null
+  fulfillment_payment_intent_id: string | null
+  fulfillment_payment_checkout_url: string | null
+  special_note: string | null
   subtotal_amount: number | null
   platform_fee_amount: number | null
   shipping_amount: number | null
@@ -99,7 +108,74 @@ type LoadState =
   | { status: 'error'; message: string }
 const payableStages = new Set(['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED'])
 const orderSelect =
-  'id, reference, order_kind, garment_type, item_title, stage, customer_id, payment_provider, delivery_method, currency, quoted_currency, quoted_amount, total_amount, subtotal_amount, platform_fee_amount, shipping_amount, tax_amount, import_tax_amount, duty_amount, tax_region, tax_rate_bps, tax_fallback, tax_collection_mode, tax_responsible_party, created_at, updated_at'
+  'id, reference, order_kind, garment_type, item_title, stage, customer_id, payment_provider, delivery_method, currency, quoted_currency, quoted_amount, total_amount, subtotal_amount, consultation_fee, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url, special_note, platform_fee_amount, shipping_amount, tax_amount, import_tax_amount, duty_amount, tax_region, tax_rate_bps, tax_fallback, tax_collection_mode, tax_responsible_party, created_at, updated_at'
+
+type CheckoutPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
+
+type CheckoutConsultation = {
+  status?: string | null
+  feeAmount?: number | null
+  feeCurrency?: string | null
+  feeCreditable?: boolean | null
+  paymentTiming?: string | null
+  paidAt?: string | null
+  scheduledStartAt?: string | null
+  timezone?: string | null
+  callType?: string | null
+}
+
+function consultationFor(order: Order): CheckoutConsultation | null {
+  if (!order.special_note?.trim()) return null
+  try {
+    const parsed = JSON.parse(order.special_note) as { consultation?: CheckoutConsultation }
+    return parsed.consultation ?? null
+  } catch {
+    return null
+  }
+}
+
+function isConsultationPaymentWaiting(order: Order) {
+  const consultation = consultationFor(order)
+  return Boolean(
+    order.stage === 'CONSULTATION' &&
+      consultation?.status === 'SCHEDULED' &&
+      (consultation.feeAmount ?? order.consultation_fee ?? 0) > 0 &&
+      consultation.paymentTiming === 'BEFORE_CALL_STARTS' &&
+      !consultation.paidAt
+  )
+}
+
+function hasFulfillmentPayment(order: Order) {
+  return Boolean(
+    order.delivery_method &&
+      order.delivery_method !== 'PICKUP' &&
+      order.delivery_method !== 'LOCAL_COLLECTION' &&
+      (order.fulfillment_fee ?? 0) > 0 &&
+      order.fulfillment_payment_requested_at
+  )
+}
+
+function isFulfillmentPaymentWaiting(order: Order) {
+  return Boolean(
+    ['FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage ?? '') &&
+      hasFulfillmentPayment(order) &&
+      !order.fulfillment_payment_paid_at
+  )
+}
+
+function activePaymentPhase(order: Order): CheckoutPhase {
+  if (isConsultationPaymentWaiting(order)) return 'CONSULTATION'
+  if (isFulfillmentPaymentWaiting(order)) return 'FULFILLMENT'
+  return 'INITIAL_ORDER'
+}
+
+function isPaymentWaiting(order: Order) {
+  return (
+    payableStages.has(order.stage ?? '') ||
+    isConsultationPaymentWaiting(order) ||
+    isFulfillmentPaymentWaiting(order)
+  )
+}
 
 function title(order: Order) {
   return order.item_title?.trim() || order.garment_type?.trim() || 'Drapeon order'
@@ -107,7 +183,11 @@ function title(order: Order) {
 function currency(order: Order) {
   return order.currency || order.quoted_currency || 'USD'
 }
-function total(order: Order) {
+function total(order: Order, phase: CheckoutPhase) {
+  if (phase === 'CONSULTATION') {
+    return consultationFor(order)?.feeAmount ?? order.consultation_fee ?? 0
+  }
+  if (phase === 'FULFILLMENT') return order.fulfillment_fee ?? 0
   return order.total_amount ?? order.quoted_amount ?? 0
 }
 function isPaid(payment: Payment) {
@@ -235,10 +315,12 @@ function loadStripe() {
 function StripeAuthorization({
   clientSecret,
   orderId,
+  phase,
   onDone,
 }: {
   clientSecret: string
   orderId: string
+  phase: CheckoutPhase
   onDone: () => void
 }) {
   const mount = useRef<HTMLDivElement | null>(null)
@@ -291,6 +373,7 @@ function StripeAuthorization({
         action: 'confirm-payment',
         orderId,
         paymentIntentId: result.paymentIntent.id,
+        expectedPhase: phase,
       })
       onDone()
     } catch (cause) {
@@ -323,17 +406,32 @@ function StripeAuthorization({
 function CheckoutAction({
   order,
   quote,
+  phase,
   refresh,
+  reconcileOnly = false,
 }: {
   order: Order
   quote: Quote | null
+  phase: CheckoutPhase
   refresh: () => void
+  reconcileOnly?: boolean
 }) {
   const [busy, setBusy] = useState(false)
   const [armed, setArmed] = useState(false)
   const [notice, setNotice] = useState<{ tone: 'error' | 'success'; copy: string } | null>(null)
   const [clientSecret, setClientSecret] = useState<string | null>(null)
-  const taxBlocked = taxSnapshotNeedsRefresh({
+  useEffect(() => {
+    function handlePaymentReturn(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return
+      const payload = event.data as { type?: string; orderId?: string } | null
+      if (payload?.type !== 'drapeon:payment-return' || payload.orderId !== order.id) return
+      setNotice({ tone: 'success', copy: 'Payment returned securely. Confirming your receipt…' })
+      refresh()
+    }
+    window.addEventListener('message', handlePaymentReturn)
+    return () => window.removeEventListener('message', handlePaymentReturn)
+  }, [order.id, refresh])
+  const taxBlocked = phase === 'INITIAL_ORDER' && taxSnapshotNeedsRefresh({
     taxRegion: order.tax_region,
     taxRateBps: order.tax_rate_bps,
     taxFallback: order.tax_fallback,
@@ -346,13 +444,26 @@ function CheckoutAction({
       })
       return
     }
-    if (order.order_kind === 'CUSTOM' && order.stage === 'QUOTE_SENT' && !quote) {
+    if (phase === 'INITIAL_ORDER' && order.order_kind === 'CUSTOM' && order.stage === 'QUOTE_SENT' && !quote) {
       setNotice({ tone: 'error', copy: 'The active quote is unavailable. Refresh before paying.' })
       return
     }
+    const expectsPaystack = order.payment_provider === 'PAYSTACK' || ['NGN', 'GHS', 'KES'].includes((order.currency ?? order.quoted_currency ?? '').toUpperCase())
+    const providerWindow = expectsPaystack && !reconcileOnly
+      ? window.open('', 'drapeon-secure-payment', 'popup=yes,width=520,height=760,resizable=yes,scrollbars=yes')
+      : null
+    if (providerWindow) {
+      providerWindow.document.title = 'Drapeon secure checkout'
+      providerWindow.document.body.innerHTML = '<p style="font: 600 15px system-ui; padding: 32px; color: #173f31">Preparing secure checkout…</p>'
+    }
     setBusy(true)
     setClientSecret(null)
-    setNotice({ tone: 'success', copy: 'Preparing payment. Do not open another checkout.' })
+    setNotice({
+      tone: 'success',
+      copy: reconcileOnly
+        ? 'Checking the existing provider payment. You will not be charged again.'
+        : 'Preparing payment. Do not open another checkout.',
+    })
     try {
       const result = await invoke<{
         confirmed?: boolean
@@ -361,33 +472,56 @@ function CheckoutAction({
         authorizationUrl?: string
         clientSecret?: string
       }>('payment-action', {
-        action: 'prepare-payment',
+        action: reconcileOnly ? 'confirm-payment' : 'prepare-payment',
         orderId: order.id,
-        ...(quote ? { quoteId: quote.id, expectedQuoteVersion: quote.version } : {}),
+        expectedPhase: phase,
+        ...(reconcileOnly && order.fulfillment_payment_intent_id
+          ? { paymentIntentId: order.fulfillment_payment_intent_id }
+          : {}),
+        ...(phase === 'INITIAL_ORDER' && quote ? { quoteId: quote.id, expectedQuoteVersion: quote.version } : {}),
       })
       if (result.confirmed || result.alreadyPaid) {
+        providerWindow?.close()
         setNotice({
           tone: 'success',
-          copy: 'Payment is already confirmed. The existing receipt is shown here.',
+          copy: reconcileOnly
+            ? 'Payment confirmation is complete. The order is ready to continue.'
+            : 'Payment is already confirmed. The existing receipt is shown here.',
         })
         refresh()
         return
       }
-      if (result.authorizationUrl) {
-        setNotice({ tone: 'success', copy: 'Opening the secure provider checkout.' })
-        window.location.assign(result.authorizationUrl)
+      if (result.authorizationUrl && !reconcileOnly) {
+        window.sessionStorage.setItem('drapeon:payment-return', JSON.stringify({
+          orderId: order.id,
+          returnTo: `/account/checkout/${order.id}?phase=${phase}`,
+          createdAt: new Date().toISOString(),
+        }))
+        if (providerWindow) {
+          providerWindow.location.replace(result.authorizationUrl)
+          providerWindow.focus()
+          setNotice({ tone: 'success', copy: 'Secure checkout opened. This order will refresh when payment returns.' })
+        } else {
+          setNotice({ tone: 'success', copy: 'Opening the secure provider checkout.' })
+          window.location.assign(result.authorizationUrl)
+        }
         return
       }
       if (result.provider === 'STRIPE' && result.clientSecret) {
+        providerWindow?.close()
         setClientSecret(result.clientSecret)
         setNotice({ tone: 'success', copy: 'Secure card authorization is ready.' })
         return
       }
       setNotice({
         tone: 'error',
-        copy: 'The provider did not return a checkout. Refresh once, then contact Support.',
+        copy: reconcileOnly
+          ? 'The existing payment could not be reconciled. Do not pay again; open Support with this order attached.'
+          : 'The provider did not return a checkout. Refresh once, then contact Support.',
       })
+      providerWindow?.close()
     } catch (cause) {
+      providerWindow?.close()
       setNotice({
         tone: 'error',
         copy: cause instanceof Error ? cause.message : 'Payment could not start.',
@@ -429,7 +563,7 @@ function CheckoutAction({
       setBusy(false)
     }
   }
-  if (!payableStages.has(order.stage ?? ''))
+  if (!isPaymentWaiting(order))
     return (
       <p className="rounded-[8px] bg-ink/5 p-4 text-sm text-ink/60">
         This order is not awaiting payment. Open its timeline for the current next step.
@@ -447,14 +581,18 @@ function CheckoutAction({
       ) : null}
       <Button disabled={busy || taxBlocked} onClick={() => void pay()}>
         {busy
-          ? 'Preparing checkout…'
+          ? reconcileOnly
+            ? 'Checking payment…'
+            : 'Preparing checkout…'
           : taxBlocked
             ? 'Tax update needed'
+            : reconcileOnly
+              ? 'Finish payment confirmation'
             : order.stage === 'PAYMENT_FAILED'
               ? 'Retry payment'
               : 'Continue securely'}
       </Button>
-      {order.order_kind === 'CUSTOM' && order.stage === 'QUOTE_SENT' ? (
+      {phase === 'INITIAL_ORDER' && order.order_kind === 'CUSTOM' && order.stage === 'QUOTE_SENT' ? (
         <Button
           variant="secondary"
           disabled={busy}
@@ -468,6 +606,7 @@ function CheckoutAction({
         <StripeAuthorization
           clientSecret={clientSecret}
           orderId={order.id}
+          phase={phase}
           onDone={() => {
             setClientSecret(null)
             refresh()
@@ -484,16 +623,19 @@ function CheckoutAction({
 
 function CheckoutContent({
   requestedId,
+  requestedPhase,
   data,
   refresh,
 }: {
   requestedId: string | null
+  requestedPhase: CheckoutPhase | null
   data: Data
   refresh: () => void
 }) {
+  const [benefit, setBenefit] = useState<WebBenefitReservation | null>(null)
   const order = requestedId
     ? (data.orders.find((entry) => entry.id === requestedId) ?? null)
-    : (data.orders.find((entry) => payableStages.has(entry.stage ?? '')) ?? data.orders[0] ?? null)
+    : (data.orders.find((entry) => isPaymentWaiting(entry)) ?? data.orders[0] ?? null)
   if (!order)
     return (
       <section data-route-content-ready="true" className="app-surface p-7">
@@ -511,7 +653,25 @@ function CheckoutContent({
   const receipt = data.receipts.find((entry) => entry.order_id === order.id) ?? null
   const quote =
     data.quotes.find((entry) => entry.order_id === order.id && entry.status === 'ACTIVE') ?? null
-  const paid = payments.some(isPaid)
+  const consultation = consultationFor(order)
+  const consultationPaymentRecord = payments.find((entry) => entry.phase === 'CONSULTATION') ?? null
+  const canShowRequestedPhase =
+    requestedPhase === 'FULFILLMENT'
+      ? hasFulfillmentPayment(order)
+      : requestedPhase === 'CONSULTATION'
+        ? Boolean(consultation && (isConsultationPaymentWaiting(order) || consultationPaymentRecord))
+        : requestedPhase === 'INITIAL_ORDER'
+  const phase = canShowRequestedPhase && requestedPhase ? requestedPhase : activePaymentPhase(order)
+  const consultationCheckout = phase === 'CONSULTATION'
+  const fulfillmentCheckout = phase === 'FULFILLMENT'
+  const relevantPayments = payments.filter((entry) => (entry.phase ?? 'INITIAL_ORDER') === phase)
+  const phaseReceipt = phase === 'INITIAL_ORDER' ? receipt : null
+  const paid =
+    relevantPayments.some(isPaid) ||
+    (fulfillmentCheckout && Boolean(order.fulfillment_payment_paid_at)) ||
+    (consultationCheckout && Boolean(consultation?.paidAt))
+  const fulfillmentReconciliationNeeded =
+    fulfillmentCheckout && relevantPayments.some(isPaid) && !order.fulfillment_payment_paid_at
   const taxLines = taxLinesForSnapshot({
     taxRegion: order.tax_region,
     taxRateBps: order.tax_rate_bps,
@@ -520,11 +680,11 @@ function CheckoutContent({
       0
     ),
   })
-  const receiptTaxLines = receipt
+  const receiptTaxLines = phaseReceipt
     ? taxLinesForReceiptSnapshot({
-        taxJurisdiction: receipt.tax_jurisdiction,
+        taxJurisdiction: phaseReceipt.tax_jurisdiction,
         taxAmount: Math.max(
-          receipt.tax_amount - receipt.import_tax_amount - receipt.duty_amount,
+          phaseReceipt.tax_amount - phaseReceipt.import_tax_amount - phaseReceipt.duty_amount,
           0
         ),
       })
@@ -549,9 +709,11 @@ function CheckoutContent({
     >
       <section className="app-surface p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle">
-          {paid || receipt
-            ? 'Payment confirmed'
-            : payableStages.has(order.stage ?? '')
+          {fulfillmentReconciliationNeeded
+            ? 'Payment syncing'
+            : paid || phaseReceipt
+              ? 'Payment confirmed'
+            : isPaymentWaiting(order)
               ? 'Payment needed'
               : 'Payment status'}
         </p>
@@ -566,21 +728,63 @@ function CheckoutContent({
             value={order.reference || order.id.slice(0, 8).toUpperCase()}
           />
           <Row label="Status" value={<StatusChip status={order.stage} fallback="Order" />} />
-          <Row
-            label="Fulfillment"
-            value={formatDatabaseEnumLabel(order.delivery_method, 'Not selected')}
-          />
+          {consultationCheckout ? (
+            <Row
+              label="Scheduled for"
+              value={
+                formatExplicitZonedDateTime(
+                  consultation?.scheduledStartAt,
+                  consultation?.timezone ? { timeZone: consultation.timezone } : undefined
+                ) || 'Scheduled consultation'
+              }
+            />
+          ) : (
+            <Row
+              label="Fulfillment"
+              value={formatDatabaseEnumLabel(order.delivery_method, 'Not selected')}
+            />
+          )}
           <Row
             label="Provider"
-            value={formatDatabaseEnumLabel(order.payment_provider, 'Selected at payment')}
+            value={formatDatabaseEnumLabel(
+              consultationCheckout
+                ? consultationPaymentRecord?.provider
+                : fulfillmentCheckout
+                  ? order.fulfillment_payment_provider
+                  : order.payment_provider,
+              'Selected at payment'
+            )}
           />
         </dl>
         <div className="mt-5 rounded-[8px] border border-ui-border bg-ui-canvas p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.15em] text-needle">
-            Locked checkout
+            {consultationCheckout
+              ? 'Consultation payment'
+              : fulfillmentCheckout
+                ? 'Drapeon Dispatch payment'
+                : 'Locked checkout'}
           </p>
           <dl className="mt-2">
-            {quote?.fabric_funding_policy_version &&
+            {consultationCheckout ? (
+              <>
+                <Row
+                  label="Published consultation fee"
+                  value={formatMoney(
+                    consultationPaymentRecord?.amount ?? consultation?.feeAmount ?? order.consultation_fee ?? 0,
+                    consultationPaymentRecord?.currency ?? consultation?.feeCurrency ?? currency(order)
+                  )}
+                />
+                <Row
+                  label="Fee treatment"
+                  value={consultation?.feeCreditable ? 'Credited if you continue' : 'Separate consultation fee'}
+                />
+              </>
+            ) : fulfillmentCheckout ? (
+              <Row
+                label={order.delivery_method === 'SHIPPING' ? 'Shipping fee' : 'Delivery fee'}
+                value={formatMoney(order.fulfillment_fee, currency(order))}
+              />
+            ) : quote?.fabric_funding_policy_version &&
             quote.tailoring_amount != null &&
             quote.fabric_allowance_amount != null ? (
               <>
@@ -599,58 +803,95 @@ function CheckoutContent({
                 value={formatMoney(order.subtotal_amount, currency(order))}
               />
             )}
-            {(order.platform_fee_amount ?? 0) > 0 ? (
+            {phase === 'INITIAL_ORDER' && (order.platform_fee_amount ?? 0) > 0 ? (
               <Row
                 label="Drapeon service fee"
                 value={formatMoney(order.platform_fee_amount, currency(order))}
               />
             ) : null}
-            <Row
+            {phase === 'INITIAL_ORDER' ? <Row
               label="Fulfillment"
               value={
                 (order.shipping_amount ?? 0) > 0
                   ? formatMoney(order.shipping_amount, currency(order))
                   : 'Free'
               }
-            />
-            {taxLines.map((line) => (
+            /> : null}
+            {phase === 'INITIAL_ORDER' ? taxLines.map((line) => (
               <Row
                 key={line.key}
                 label={`${order.tax_fallback ? 'Estimated ' : ''}${line.label}${line.rateBps ? ` (${formatTaxRate(line.rateBps)})` : ''}`}
                 value={formatMoney(line.amount, currency(order))}
               />
-            ))}
-            {(order.import_tax_amount ?? 0) > 0 ? (
+            )) : null}
+            {phase === 'INITIAL_ORDER' && (order.import_tax_amount ?? 0) > 0 ? (
               <Row
                 label="Import tax"
                 value={formatMoney(order.import_tax_amount, currency(order))}
               />
             ) : null}
-            {(order.duty_amount ?? 0) > 0 ? (
+            {phase === 'INITIAL_ORDER' && (order.duty_amount ?? 0) > 0 ? (
               <Row label="Customs duty" value={formatMoney(order.duty_amount, currency(order))} />
             ) : null}
-            <Row label="Total due" value={formatMoney(total(order), currency(order))} strong />
-            {quote?.expires_at ? (
+            {phase === 'INITIAL_ORDER' && benefit ? <Row label="Drapeon-funded benefit" value={`−${formatMoney(benefit.total_benefit_amount, benefit.currency)}`} /> : null}
+            <Row
+              label={paid || phaseReceipt ? 'Amount paid' : 'Total due'}
+              value={
+                consultationCheckout
+                  ? formatMoney(
+                      consultationPaymentRecord?.amount ?? consultation?.feeAmount ?? order.consultation_fee ?? 0,
+                      consultationPaymentRecord?.currency ?? consultation?.feeCurrency ?? currency(order)
+                    )
+                  : formatMoney(
+                      phase === 'INITIAL_ORDER'
+                        ? benefit?.customer_due_amount ?? total(order, phase)
+                        : total(order, phase),
+                      benefit?.currency ?? currency(order)
+                    )
+              }
+              strong
+            />
+            {phase === 'INITIAL_ORDER' && quote?.expires_at ? (
               <Row
                 label="Quote valid until"
                 value={formatExplicitZonedDateTime(quote.expires_at) || quote.expires_at}
               />
             ) : null}
           </dl>
-          {promise ? (
+          {phase === 'INITIAL_ORDER' && promise ? (
             <div className="mt-3 rounded-[8px] bg-white p-3">
               <p className="text-sm font-semibold text-ink">{promise.title}</p>
               <p className="mt-1 text-xs text-ink/55">{promise.body}</p>
             </div>
           ) : null}
         </div>
+        {phase === 'INITIAL_ORDER' && !paid && !phaseReceipt && isPaymentWaiting(order) ? (
+          <CommercialBenefitControl orderId={order.id} onChanged={setBenefit} />
+        ) : null}
         <div className="mt-5">
-          {paid || receipt ? (
+          {fulfillmentReconciliationNeeded ? (
+            <div className="grid gap-3 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
+              <div>
+                <p className="text-sm font-semibold text-ink">Finish confirming this payment</p>
+                <p className="mt-1 text-xs leading-5 text-ink/58">
+                  The provider recorded the charge, but the delivery workflow has not caught up
+                  yet. This verifies the existing reference and cannot create another charge.
+                </p>
+              </div>
+              <CheckoutAction
+                order={order}
+                quote={quote}
+                phase={phase}
+                refresh={refresh}
+                reconcileOnly
+              />
+            </div>
+          ) : paid || phaseReceipt ? (
             <div className="rounded-[8px] bg-needle/8 p-4 text-sm font-semibold text-needle">
               Payment is recorded. Continue from the order timeline.
             </div>
           ) : (
-            <CheckoutAction order={order} quote={quote} refresh={refresh} />
+            <CheckoutAction order={order} quote={quote} phase={phase} refresh={refresh} />
           )}
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
@@ -664,53 +905,53 @@ function CheckoutContent({
       </section>
       <aside className="app-surface h-fit p-6">
         <h2 className="text-2xl font-semibold text-ink">
-          {receipt ? 'Receipt' : 'Payment ledger'}
+          {phaseReceipt ? 'Receipt' : `${formatOrderPaymentPhase(phase)} ledger`}
         </h2>
-        {receipt ? (
+        {phaseReceipt ? (
           <dl className="mt-4">
-            <Row label="Receipt" value={receipt.receipt_number} />
-            {receipt.fabric_funding_policy_version &&
-            receipt.tailoring_amount != null &&
-            receipt.fabric_allowance_amount != null ? (
+            <Row label="Receipt" value={phaseReceipt.receipt_number} />
+            {phaseReceipt.fabric_funding_policy_version &&
+            phaseReceipt.tailoring_amount != null &&
+            phaseReceipt.fabric_allowance_amount != null ? (
               <>
                 <Row
                   label="Tailoring and construction"
                   value={formatMoney(
-                    receipt.tailoring_amount + receipt.consultation_credit_amount,
-                    receipt.currency
+                    phaseReceipt.tailoring_amount + phaseReceipt.consultation_credit_amount,
+                    phaseReceipt.currency
                   )}
                 />
                 <Row
                   label="Protected fabric allowance"
-                  value={formatMoney(receipt.fabric_allowance_amount, receipt.currency)}
+                  value={formatMoney(phaseReceipt.fabric_allowance_amount, phaseReceipt.currency)}
                 />
               </>
             ) : (
               <Row
                 label="Tailor work and materials"
                 value={formatMoney(
-                  receipt.subtotal_amount + receipt.consultation_credit_amount,
-                  receipt.currency
+                  phaseReceipt.subtotal_amount + phaseReceipt.consultation_credit_amount,
+                  phaseReceipt.currency
                 )}
               />
             )}
-            {receipt.promotion_amount > 0 ? (
+            {phaseReceipt.promotion_amount > 0 ? (
               <Row
                 label="Drapeon-funded benefit"
-                value={`−${formatMoney(receipt.promotion_amount, receipt.currency)}`}
+                value={`−${formatMoney(phaseReceipt.promotion_amount, phaseReceipt.currency)}`}
               />
             ) : null}
-            {receipt.platform_fee_amount > 0 ? (
+            {phaseReceipt.platform_fee_amount > 0 ? (
               <Row
                 label="Service fee"
-                value={formatMoney(receipt.platform_fee_amount, receipt.currency)}
+                value={formatMoney(phaseReceipt.platform_fee_amount, phaseReceipt.currency)}
               />
             ) : null}
             <Row
               label="Fulfillment"
               value={
-                receipt.shipping_amount > 0
-                  ? formatMoney(receipt.shipping_amount, receipt.currency)
+                phaseReceipt.shipping_amount > 0
+                  ? formatMoney(phaseReceipt.shipping_amount, phaseReceipt.currency)
                   : 'Free'
               }
             />
@@ -718,23 +959,23 @@ function CheckoutContent({
               <Row
                 key={line.key}
                 label={`${line.label}${line.rateBps ? ` (${formatTaxRate(line.rateBps)})` : ''}`}
-                value={formatMoney(line.amount, receipt.currency)}
+                value={formatMoney(line.amount, phaseReceipt.currency)}
               />
             ))}
             <Row
               label="Total paid"
-              value={formatMoney(receipt.total_amount, receipt.currency)}
+              value={formatMoney(phaseReceipt.total_amount, phaseReceipt.currency)}
               strong
             />
             <Row
               label="Provider reference"
-              value={`${formatDatabaseEnumLabel(receipt.provider, 'Provider')} · ${receipt.provider_reference}`}
+              value={`${formatDatabaseEnumLabel(phaseReceipt.provider, 'Provider')} · ${phaseReceipt.provider_reference}`}
             />
-            <Row label="Paid" value={formatExplicitZonedDateTime(receipt.paid_at) || 'Recorded'} />
+            <Row label="Paid" value={formatExplicitZonedDateTime(phaseReceipt.paid_at) || 'Recorded'} />
           </dl>
-        ) : payments.length ? (
+        ) : relevantPayments.length ? (
           <div className="mt-4 grid gap-3">
-            {payments.map((payment) => (
+            {relevantPayments.map((payment) => (
               <div key={payment.id} className="rounded-[8px] border border-ui-border p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-ink">
@@ -763,7 +1004,15 @@ function CheckoutContent({
   )
 }
 
-function CheckoutRoute({ userId, orderId }: { userId: string; orderId: string | null }) {
+function CheckoutRoute({
+  userId,
+  orderId,
+  phase,
+}: {
+  userId: string
+  orderId: string | null
+  phase: CheckoutPhase | null
+}) {
   const [revision, setRevision] = useState(0)
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   const refresh = useCallback(() => setRevision((value) => value + 1), [])
@@ -851,15 +1100,31 @@ function CheckoutRoute({ userId, orderId }: { userId: string; orderId: string | 
         </Link>
       </section>
     )
-  return <CheckoutContent requestedId={orderId} data={state.data} refresh={refresh} />
+  return (
+    <CheckoutContent
+      requestedId={orderId}
+      requestedPhase={phase}
+      data={state.data}
+      refresh={refresh}
+    />
+  )
 }
 
 export function CheckoutWorkspace({ orderId }: { orderId?: string }) {
   const params = useSearchParams()
   const requestedId = orderId || params.get('orderId') || null
+  const requestedPhase = params.get('phase')
+  const phase: CheckoutPhase | null =
+    requestedPhase === 'INITIAL_ORDER' ||
+    requestedPhase === 'FULFILLMENT' ||
+    requestedPhase === 'CONSULTATION'
+      ? requestedPhase
+      : null
   return (
     <AccountRouteRuntime surface="checkout">
-      {({ session }) => <CheckoutRoute userId={session.user.id} orderId={requestedId} />}
+      {({ session }) => (
+        <CheckoutRoute userId={session.user.id} orderId={requestedId} phase={phase} />
+      )}
     </AccountRouteRuntime>
   )
 }

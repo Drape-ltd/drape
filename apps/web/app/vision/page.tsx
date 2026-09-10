@@ -41,7 +41,7 @@ export default function VisionPage(): React.JSX.Element {
       eyebrow="Drapeon Vision"
       title="Your measurements, from your phone camera."
       description="Drapeon Vision guides you through a body scan using computer vision. No tape measure, no guesswork — just reviewed measurements you can use on any order."
-      visual={<div className="relative aspect-[4/3] overflow-hidden rounded-[12px] bg-[#e7dfd0]"><Image src="/editorial/drapeon-vision-figure-head-v3.png" alt="An abstract fitting figure with clothing and head measurement guides" fill sizes="(min-width:1024px) 40vw,100vw" className="object-cover object-center" /></div>}
+      visual={<div className="relative aspect-[4/3] overflow-hidden rounded-[12px] bg-[#e7dfd0]"><Image src="/editorial/drapeon-vision-figure-head-v3.jpg" alt="An abstract fitting figure with clothing and head measurement guides" fill sizes="(min-width:1024px) 40vw,100vw" className="object-cover object-center" /></div>}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link

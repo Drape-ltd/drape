@@ -29,14 +29,19 @@ enabled = true
 enabled = true
 site_url = "https://drapeon.co"
 additional_redirect_urls = [
+  "exp://192.168.1.28:8081/--/reset-password",
+  "exp://192.168.1.28:8081/--/callback",
   "https://drapeon.co/auth/callback",
   "https://drapeon.co/auth/recover",
   "https://www.drapeon.co/auth/callback",
   "https://www.drapeon.co/auth/recover",
   "drape://callback",
   "drape:///callback",
+  "drape://reset-password",
   "http://localhost:3000/auth/callback",
   "http://localhost:3000/auth/recover",
+  "http://localhost:3004/auth/callback",
+  "http://localhost:3004/auth/recover",
   "https://localhost:3000/auth/callback",
   "https://localhost:3000/auth/recover",
 ]
@@ -48,13 +53,22 @@ enable_signup = true
 double_confirm_changes = true
 enable_confirmations = true
 
-[auth.email.notification.email_changed]
+[auth.email.template.recovery]
+subject = "Reset your Drapeon password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.captcha]
 enabled = true
+provider = "turnstile"
+secret = "env(TURNSTILE_SECRET_KEY)"
+
+[auth.email.notification.email_changed]
+enabled = false
 subject = "Your Drapeon email address was changed"
 content_path = "./templates/email_changed_notification.html"
 
 [auth.email.notification.password_changed]
-enabled = true
+enabled = false
 subject = "Your Drapeon password was changed"
 content_path = "./templates/password_changed_notification.html"
 
@@ -312,4 +326,10 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.communications-action]
+verify_jwt = false
+
+[functions.media-report-action]
+verify_jwt = false
+
+[functions.trusted-device-action]
 verify_jwt = false
