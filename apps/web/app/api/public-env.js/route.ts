@@ -1,4 +1,8 @@
-import { getSupabasePublishableKey, getSupabaseUrl } from '../../../lib/supabase-config'
+import {
+  getSupabasePublishableKey,
+  getSupabaseUrl,
+  getTurnstileSiteKey,
+} from '../../../lib/supabase-config'
 import {
   isProductionWebHostname,
   validateSupabaseTarget,
@@ -13,13 +17,18 @@ function scriptFor(payload: unknown) {
 export function GET(request: Request) {
   const supabaseUrl = getSupabaseUrl()
   const supabasePublishableKey = getSupabasePublishableKey()
+  const turnstileSiteKey = getTurnstileSiteKey()
   const hostname = new URL(request.url).hostname
 
   if (
     isProductionWebHostname(hostname) &&
     !validateSupabaseTarget(supabaseUrl, 'production').isValid
   ) {
-    return new Response(scriptFor({ supabaseUrl: null, supabasePublishableKey: null }), {
+    return new Response(scriptFor({
+      supabaseUrl: null,
+      supabasePublishableKey: null,
+      turnstileSiteKey,
+    }), {
       status: 503,
       headers: {
         'Cache-Control': 'no-store, max-age=0',
@@ -34,6 +43,7 @@ export function GET(request: Request) {
     scriptFor({
       supabaseUrl,
       supabasePublishableKey,
+      turnstileSiteKey,
     }),
     {
       headers: {

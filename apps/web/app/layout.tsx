@@ -14,7 +14,11 @@ import {
   siteUrl,
   socialUrls,
 } from '../lib/metadata'
-import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
+import {
+  getSupabasePublishableKey,
+  getSupabaseUrl,
+  getTurnstileSiteKey,
+} from '../lib/supabase-config'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -71,6 +75,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const publicSupabaseEnv = {
     supabaseUrl: getSupabaseUrl(),
     supabasePublishableKey: getSupabasePublishableKey(),
+    turnstileSiteKey: getTurnstileSiteKey(),
   }
   const hasPublicSupabaseEnv = Boolean(publicSupabaseEnv.supabaseUrl && publicSupabaseEnv.supabasePublishableKey)
   const logoUrl = `${siteUrl}/icon-512.png`

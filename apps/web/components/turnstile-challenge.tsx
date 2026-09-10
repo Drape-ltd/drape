@@ -44,7 +44,12 @@ export function TurnstileChallenge({
   const onTokenChangeRef = useRef(onTokenChange)
   const [scriptReady, setScriptReady] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
-  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
+  const siteKey = (
+    process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
+    (typeof window !== 'undefined'
+      ? window.__DRAPEON_PUBLIC_ENV__?.turnstileSiteKey?.trim()
+      : '')
+  )
   const [challengeError, setChallengeError] = useState<string | null>(
     siteKey ? null : 'Security verification is not configured for this environment.',
   )

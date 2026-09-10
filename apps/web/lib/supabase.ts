@@ -5,6 +5,7 @@ import { assertSupabaseTarget, isProductionWebHostname } from './supabase-enviro
 type DrapeonPublicEnv = {
   supabaseUrl?: string | null
   supabasePublishableKey?: string | null
+  turnstileSiteKey?: string | null
 }
 
 declare global {

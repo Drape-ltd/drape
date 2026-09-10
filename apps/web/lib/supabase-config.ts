@@ -30,6 +30,13 @@ export function getSupabasePublishableKey() {
   )
 }
 
+export function getTurnstileSiteKey() {
+  return firstNonEmptyEnv(
+    process.env.DRAPEON_PUBLIC_TURNSTILE_SITE_KEY,
+    process.env['NEXT_PUBLIC_TURNSTILE_SITE_KEY']
+  )
+}
+
 export function getSupabaseServiceRoleKey() {
   return firstNonEmptyEnv(process.env.SUPABASE_SECRET_KEY, process.env.SUPABASE_SERVICE_ROLE_KEY)
 }
