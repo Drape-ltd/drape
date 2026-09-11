@@ -3,6 +3,8 @@ import { PageHead } from '../../../components/page-head'
 import { OpsServiceCatalogue } from '../../../components/ops-service-catalogue'
 import { OPS_QUEUE_CATALOGUE, OPS_SERVICE_CATALOGUE } from '../../../lib/service-catalogue'
 
+export const dynamic = 'force-dynamic'
+
 const runbooks = [
   { key: 'orders', title: 'Order operations', owner: 'Marketplace Ops', file: 'docs/ops-order-runbook.md', scope: 'Stages, cancellation, fulfilment, settlement, evidence' },
   { key: 'health', title: 'Service health & monitoring', owner: 'Engineering', file: 'docs/service-health-and-monitoring.md', scope: 'Provider signals, synthetics, incidents, Slack recovery' },
