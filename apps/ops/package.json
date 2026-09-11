@@ -23,9 +23,9 @@
     "producers:verify": "node ./scripts/verify-production-notification-producers.mjs --source-only",
     "prod:producers:verify": "node ./scripts/verify-production-notification-producers.mjs",
     "db:bind-environment": "node ./scripts/configure-database-environment.mjs",
-    "cf:build": "NEXT_DIST_DIR=.next opennextjs-cloudflare build",
+    "cf:build": "node ./scripts/cloudflare-artifact.mjs build",
     "cf:preview": "opennextjs-cloudflare preview",
-    "cf:deploy": "opennextjs-cloudflare deploy"
+    "cf:deploy": "node ./scripts/cloudflare-artifact.mjs deploy"
   },
   "dependencies": {
     "@drape/shared": "workspace:*",

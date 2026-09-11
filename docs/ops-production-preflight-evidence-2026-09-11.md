@@ -59,8 +59,10 @@ A production-specific Web Push keypair was installed without exposing the privat
 - Wrangler authenticated to Cloudflare account `d2c21d3b898b789689684f815f222ae6`, which owns the active `drapeon.co` zone.
 - The dashboard-authoritative inventory verified the existing `ops` self-hosted application for `ops.drapeon.co`, its `Drape Staff Allow` policy, and the One-time PIN identity provider.
 - A separate `Drapeon Ops Sensitive` application now protects `ops.drapeon.co/ops/sensitive` with an allowlisted workforce email and a 15-minute policy session. Its audience is distinct from the normal Ops audience.
-- The standalone `drape-ops` Worker was deployed as version `286a6849-dbb4-4b54-b16c-20049289d124` and owns only `ops.drapeon.co/*`. The conflicting route was removed from the legacy `drape` Worker before activation.
+- The standalone `drape-ops` Worker was replaced by sanitized version `b790939b-967e-4686-a335-2ce1bee7a090` and owns only `ops.drapeon.co/*`. The conflicting route was removed from the legacy `drape` Worker before activation.
 - An unauthenticated production browser request was redirected to the expected Cloudflare Access sign-in page for the verified normal audience; no Ops application data rendered before authentication.
+
+The first standalone artifact had been packaged while the local Ops `.env.local` link and repository `.env` were visible to OpenNext. The production runtime boundary detected the resulting development target and bootstrap configuration after Access and returned the intentional generic `503`; no Ops data rendered. Production packaging now temporarily isolates and restores both local environment files, passes only an allowlisted host environment plus reviewed Wrangler variables to the build, and rejects an artifact containing bootstrap values, privileged database credentials, payment secrets, private push material, or any non-production Supabase reference before deployment. The guarded rebuild, TypeScript, ESLint, runtime tests, environment verification, and artifact scan passed before version `b790939b-967e-4686-a335-2ce1bee7a090` was deployed.
 
 ## Production schema promotion evidence
 

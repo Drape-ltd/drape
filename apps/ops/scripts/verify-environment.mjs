@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const config = JSON.parse(readFileSync(resolve(scriptDir, '..', 'wrangler.jsonc'), 'utf8'))
 const middleware = readFileSync(resolve(scriptDir, '..', 'middleware.ts'), 'utf8')
+const packageJson = JSON.parse(readFileSync(resolve(scriptDir, '..', 'package.json'), 'utf8'))
 const productionProjectRef = 'wkfsrunetmgjdtcurmoj'
 const vars = config.vars ?? {}
 const requiredSecrets = new Set(config.secrets?.required ?? [])
@@ -59,6 +60,8 @@ for (const directive of ["default-src 'self'", "frame-ancestors 'none'", "object
 }
 if (!middleware.includes("requestHeaders.set('x-nonce', nonce)")) failures.push('Runtime middleware must pass a per-request nonce into Next.js')
 if (!middleware.includes("response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')")) failures.push('Runtime middleware must suppress search indexing')
+if (packageJson.scripts?.['cf:build'] !== 'node ./scripts/cloudflare-artifact.mjs build') failures.push('Cloudflare builds must use the production artifact guard')
+if (packageJson.scripts?.['cf:deploy'] !== 'node ./scripts/cloudflare-artifact.mjs deploy') failures.push('Cloudflare deploys must verify the production artifact')
 
 if (failures.length > 0) {
   console.error(`[ops env] Production environment contract failed:\n- ${failures.join('\n- ')}`)
