@@ -60,6 +60,7 @@ for (const directive of ["default-src 'self'", "frame-ancestors 'none'", "object
 }
 if (!middleware.includes("requestHeaders.set('x-nonce', nonce)")) failures.push('Runtime middleware must pass a per-request nonce into Next.js')
 if (!middleware.includes("response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')")) failures.push('Runtime middleware must suppress search indexing')
+if (!middleware.includes("NextResponse.redirect(new URL('/ops/my-work', request.url), 307)")) failures.push('Runtime middleware must redirect canonical Ops entry paths before the React server render')
 if (packageJson.scripts?.['cf:build'] !== 'node ./scripts/cloudflare-artifact.mjs build') failures.push('Cloudflare builds must use the production artifact guard')
 if (packageJson.scripts?.['cf:deploy'] !== 'node ./scripts/cloudflare-artifact.mjs deploy') failures.push('Cloudflare deploys must verify the production artifact')
 

@@ -60,6 +60,18 @@ function contentSecurityPolicy(nonce: string) {
   ].filter(Boolean).join('; ')
 }
 
+function canonicalOpsRedirect(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
+  if (pathname !== '/' && pathname !== '/ops' && pathname !== '/ops/') return null
+
+  const response = NextResponse.redirect(new URL('/ops/my-work', request.url), 307)
+  response.headers.set('Cache-Control', 'private, no-store, max-age=0')
+  response.headers.set('Referrer-Policy', 'no-referrer')
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')
+  return response
+}
+
 function productionContractError(request: NextRequest) {
   const result = evaluateOpsRuntimeBoundary({
     nodeEnvironment: process.env.NODE_ENV,
@@ -84,6 +96,9 @@ function productionContractError(request: NextRequest) {
 export function middleware(request: NextRequest) {
   const contractError = productionContractError(request)
   if (contractError) return contractError
+
+  const canonicalRedirect = canonicalOpsRedirect(request)
+  if (canonicalRedirect) return canonicalRedirect
 
   const nonce = createNonce()
   const requestHeaders = new Headers(request.headers)
