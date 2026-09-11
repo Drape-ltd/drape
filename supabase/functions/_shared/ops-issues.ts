@@ -7,6 +7,8 @@ import {
 import { sendCriticalOpsIssueNotification } from './ops-notifications.ts'
 import { sendWebPushToOps } from './web-push.ts'
 import { Sentry } from './sentry.ts'
+import { log } from './logger.ts'
+import { shouldPersistRoutineOpsIssue } from './ops-issue-generation-policy.ts'
 
 type CreateOpsIssueInput = {
   issueType: OpsIssueType
@@ -32,6 +34,7 @@ type CreateOpsIssueInput = {
 type OpsIssueRow = {
   id: string
   issue_number: number
+  case_number: string
   status: OpsIssueStatus
   severity: OpsIssueSeverity
   metadata: Record<string, unknown> | null
@@ -47,6 +50,13 @@ type OpsIssueRow = {
   title: string
   description: string
   recommended_action: string
+}
+
+function opsCasePushPayload(caseNumber: string) {
+  const safeCaseNumber = /^OPS-[A-Z0-9-]{1,40}$/u.test(caseNumber) ? caseNumber : ''
+  return safeCaseNumber
+    ? { path: `/ops/cases/${safeCaseNumber}`, correlationKey: `ops-case:${safeCaseNumber}` }
+    : { path: '/ops/my-work', correlationKey: 'ops-attention' }
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -77,20 +87,26 @@ export async function createOrRefreshOpsIssue(
   supabase: SupabaseClient,
   input: CreateOpsIssueInput,
 ) {
+  if (!shouldPersistRoutineOpsIssue(input.source, Deno.env.get('DRAPE_ROUTINE_OPS_CASES_ENABLED'))) {
+    log('info', 'ops-issues', 'issue.prelaunch_routine_suppressed', {
+      issue_type: input.issueType,
+      source: input.source,
+      dedupe_key: input.dedupeKey,
+    })
+    return null
+  }
+
   const existingResponse = await supabase
     .from('ops_issues')
-    .select('id, issue_number, status, severity, metadata, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action')
+    .select('id, issue_number, case_number, status, severity, metadata, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action')
     .eq('dedupe_key', input.dedupeKey)
     .maybeSingle()
 
   if (existingResponse.error) {
-    console.error(JSON.stringify({
-      level: 'error',
-      fn: 'ops-issues',
-      event: 'issue.lookup_failed',
+    log('error', 'ops-issues', 'issue.lookup_failed', {
       error: existingResponse.error.message,
       dedupe_key: input.dedupeKey,
-    }))
+    })
     await captureOpsIssueFailure('issue.lookup_failed', existingResponse.error.message, input)
     return null
   }
@@ -135,17 +151,14 @@ export async function createOrRefreshOpsIssue(
       .from('ops_issues')
       .update(payload)
       .eq('id', existing.id)
-      .select('id, issue_number')
+      .select('id, issue_number, case_number')
       .single()
 
     if (updateResponse.error) {
-      console.error(JSON.stringify({
-        level: 'error',
-        fn: 'ops-issues',
-        event: 'issue.update_failed',
+      log('error', 'ops-issues', 'issue.update_failed', {
         error: updateResponse.error.message,
         dedupe_key: input.dedupeKey,
-      }))
+      })
       await captureOpsIssueFailure('issue.update_failed', updateResponse.error.message, input)
       return null
     }
@@ -182,7 +195,7 @@ export async function createOrRefreshOpsIssue(
         provider: input.provider ?? null,
         stage: input.stage ?? null,
       })
-      await sendWebPushToOps(supabase)
+      await sendWebPushToOps(supabase, opsCasePushPayload(String(updateResponse.data.case_number)))
     }
 
     return updateResponse.data as { id: string; issue_number: number }
@@ -191,17 +204,14 @@ export async function createOrRefreshOpsIssue(
   const insertResponse = await supabase
     .from('ops_issues')
     .insert(payload)
-    .select('id, issue_number')
+    .select('id, issue_number, case_number')
     .single()
 
   if (insertResponse.error) {
-    console.error(JSON.stringify({
-      level: 'error',
-      fn: 'ops-issues',
-      event: 'issue.insert_failed',
+    log('error', 'ops-issues', 'issue.insert_failed', {
       error: insertResponse.error.message,
       dedupe_key: input.dedupeKey,
-    }))
+    })
     await captureOpsIssueFailure('issue.insert_failed', insertResponse.error.message, input)
     return null
   }
@@ -238,7 +248,7 @@ export async function createOrRefreshOpsIssue(
       provider: input.provider ?? null,
       stage: input.stage ?? null,
     })
-    await sendWebPushToOps(supabase)
+    await sendWebPushToOps(supabase, opsCasePushPayload(String(insertResponse.data.case_number)))
   }
 
   return insertResponse.data as { id: string; issue_number: number }
@@ -256,13 +266,10 @@ export async function resolveOpsIssueByDedupeKey(
     .maybeSingle()
 
   if (lookup.error) {
-    console.error(JSON.stringify({
-      level: 'error',
-      fn: 'ops-issues',
-      event: 'issue.resolve_lookup_failed',
+    log('error', 'ops-issues', 'issue.resolve_lookup_failed', {
       error: lookup.error.message,
       dedupe_key: dedupeKey,
-    }))
+    })
     await captureOpsIssueFailure('issue.resolve_lookup_failed', lookup.error.message, { dedupeKey })
     return
   }
@@ -292,13 +299,10 @@ export async function resolveOpsIssueByDedupeKey(
     .eq('id', existing.id)
 
   if (update.error) {
-    console.error(JSON.stringify({
-      level: 'error',
-      fn: 'ops-issues',
-      event: 'issue.resolve_failed',
+    log('error', 'ops-issues', 'issue.resolve_failed', {
       error: update.error.message,
       dedupe_key: dedupeKey,
-    }))
+    })
     await captureOpsIssueFailure('issue.resolve_failed', update.error.message, { dedupeKey })
     return
   }

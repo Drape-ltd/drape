@@ -18,6 +18,10 @@ type WebPushRegistrationResult =
   | { ok: true; subscription: SerializableWebPushSubscription }
   | { ok: false; reason: 'unsupported' | 'not-configured' | 'permission-denied' | 'registration-failed' }
 
+type WebPushUnsubscribeResult =
+  | { ok: true; subscription: SerializableWebPushSubscription | null }
+  | { ok: false; reason: 'unsupported' | 'unsubscribe-failed' }
+
 function base64UrlToUint8Array(value: string) {
   const padding = '='.repeat((4 - (value.length % 4)) % 4)
   const base64 = `${value}${padding}`.replace(/-/g, '+').replace(/_/g, '/')
@@ -82,5 +86,25 @@ export async function registerWebPushSubscription(scope: '/account' | '/ops'): P
   } catch (error) {
     console.warn('[web push] Subscription registration failed.', error)
     return { ok: false, reason: 'registration-failed' }
+  }
+}
+
+export async function unsubscribeWebPushSubscription(scope: '/account' | '/ops'): Promise<WebPushUnsubscribeResult> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+    return { ok: false, reason: 'unsupported' }
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.getRegistration(scope)
+    const subscription = await registration?.pushManager.getSubscription()
+    if (!subscription) return { ok: true, subscription: null }
+    const serialized = serializeSubscription(subscription)
+    const unsubscribed = await subscription.unsubscribe()
+    return unsubscribed
+      ? { ok: true, subscription: serialized }
+      : { ok: false, reason: 'unsubscribe-failed' }
+  } catch (error) {
+    console.warn('[web push] Subscription removal failed.', error)
+    return { ok: false, reason: 'unsubscribe-failed' }
   }
 }

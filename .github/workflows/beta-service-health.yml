@@ -2,8 +2,6 @@ name: Drapeon Service Health
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/5 * * * *"
 
 permissions:
   actions: read
@@ -25,6 +23,15 @@ jobs:
     steps:
       - name: Check out monitor
         uses: actions/checkout@v7
+
+      - name: Require production fallback credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$DRAPE_PROD_HEALTHCHECK_SECRET" ]] || {
+            echo "::error::DRAPE_PROD_HEALTHCHECK_SECRET is required for a production fallback check."
+            exit 1
+          }
 
       - name: Find previous health state
         id: previous
@@ -66,12 +73,11 @@ jobs:
             echo "summary=$(jq -r '.summary | gsub("[\\r\\n]+"; " ")' /tmp/current-health/report.json)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Report missing protected-readiness secrets
-        if: ${{ env.DRAPE_HEALTHCHECK_SECRET == '' || env.DRAPE_PROD_HEALTHCHECK_SECRET == '' }}
+      - name: Report optional development-readiness secret
+        if: ${{ env.DRAPE_HEALTHCHECK_SECRET == '' }}
         shell: bash
         run: |
-          [[ -n "$DRAPE_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_HEALTHCHECK_SECRET is missing; DEV protected readiness is not monitored."
-          [[ -n "$DRAPE_PROD_HEALTHCHECK_SECRET" ]] || echo "::warning::DRAPE_PROD_HEALTHCHECK_SECRET is missing; PROD protected readiness is not monitored."
+          echo "::notice::DRAPE_HEALTHCHECK_SECRET is missing; this manual fallback run will omit DEV protected readiness."
 
       - name: Notify only when the incident changes
         if: ${{ always() }}

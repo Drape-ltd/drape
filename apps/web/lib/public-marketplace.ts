@@ -195,18 +195,7 @@ function fulfillmentLabels(input: { pickup?: boolean | null; delivery?: boolean 
   ].filter((value): value is 'Pickup' | 'Local delivery' | 'Shipping' => value !== null)
 }
 
-type RegionalCache = {
-  match(request: Request): Promise<Response | undefined>
-  put(request: Request, response: Response): Promise<void>
-}
-
-type RegionalCacheStorage = {
-  open(name: string): Promise<RegionalCache>
-}
-
 const publicReadInFlight = new Map<string, Promise<unknown>>()
-const publicLastKnownGood = new Map<string, { value: unknown; storedAt: number }>()
-const PUBLIC_LAST_KNOWN_GOOD_MAX_AGE_MS = 15 * 60_000
 
 class PublicReadGatewayError extends Error {
   constructor(message: string) {
@@ -215,74 +204,11 @@ class PublicReadGatewayError extends Error {
   }
 }
 
-function publicCacheKind(key: string) {
-  return key.startsWith('approved-tailor-v2:') ? 'tailor-profile' : 'tailor-list'
-}
-
-function getRegionalCacheStorage() {
-  return (globalThis as typeof globalThis & { caches?: RegionalCacheStorage }).caches
-}
-
-async function cachedPublicRead<T>(key: string, ttlSeconds: number, loader: () => Promise<T>): Promise<T> {
-  const cacheStorage = getRegionalCacheStorage()
-  if (!cacheStorage) return loader()
-
-  let regionalCache: RegionalCache | null = null
-  const cacheKey = new Request(`https://drapeon.co/__drape-public-data-cache/${encodeURIComponent(key)}`)
-  try {
-    regionalCache = await cacheStorage.open('drapeon-public-data-v1')
-    const cachedResponse = await regionalCache.match(cacheKey)
-    if (cachedResponse) {
-      const value = await cachedResponse.json() as T
-      publicLastKnownGood.set(key, { value, storedAt: Date.now() })
-      return value
-    }
-  } catch (error) {
-    console.warn('[public-marketplace] Regional cache read failed; using the gateway.', {
-      cacheKind: publicCacheKind(key),
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }
-
+async function deduplicatedPublicRead<T>(key: string, loader: () => Promise<T>): Promise<T> {
   const existingRead = publicReadInFlight.get(key) as Promise<T> | undefined
   if (existingRead) return existingRead
 
-  console.info('[public-marketplace] Regional cache miss; loading public data.', {
-    cacheKind: publicCacheKind(key),
-  })
-
-  const pendingRead = loader().then(async (value) => {
-    publicLastKnownGood.set(key, { value, storedAt: Date.now() })
-    if (regionalCache) {
-      try {
-        await regionalCache.put(
-          cacheKey,
-          new Response(JSON.stringify(value), {
-            headers: {
-              'Cache-Control': `public, max-age=${ttlSeconds}`,
-              'Content-Type': 'application/json',
-            },
-          }),
-        )
-      } catch (error) {
-        console.warn('[public-marketplace] Regional cache write failed; returning fresh data.', {
-          cacheKind: publicCacheKind(key),
-          message: error instanceof Error ? error.message : String(error),
-        })
-      }
-    }
-    return value
-  }).catch((error) => {
-    const fallback = publicLastKnownGood.get(key)
-    if (fallback && Date.now() - fallback.storedAt <= PUBLIC_LAST_KNOWN_GOOD_MAX_AGE_MS) {
-      console.warn('[public-marketplace] Public gateway failed; returning bounded last-known-good data.', {
-        cacheKind: publicCacheKind(key),
-        message: error instanceof Error ? error.message : String(error),
-      })
-      return fallback.value as T
-    }
-    throw error
-  }).finally(() => {
+  const pendingRead = loader().finally(() => {
     publicReadInFlight.delete(key)
   })
 
@@ -372,7 +298,7 @@ async function readApprovedPublicTailors(limit = 40, offset = 0, query = ''): Pr
   const safeOffset = Math.max(0, Math.trunc(offset))
   const safeQuery = query.trim().slice(0, 80)
   const cacheKey = `approved-tailors-v5:${safeLimit}:${safeOffset}:${encodeURIComponent(safeQuery)}`
-  return cachedPublicRead(cacheKey, 60, async () => {
+  return deduplicatedPublicRead(cacheKey, async () => {
     const rows = await invokePublicReadGateway<PublicTailorGatewayRow[]>({
       action: 'explore-tailors',
       limit: safeLimit,
@@ -435,9 +361,10 @@ async function readApprovedPublicTailor(profileId: string, fresh = false) {
       })),
     }
   }
-  return fresh ? load() : cachedPublicRead(`approved-tailor-v2:${profileId}`, 60, load)
+  return fresh ? load() : deduplicatedPublicRead(`approved-tailor-v2:${profileId}`, load)
 }
 
-// React cache deduplicates generateMetadata + page reads during one render;
-// Cloudflare's regional Cache API protects Supabase across requests in a region.
+// React cache deduplicates generateMetadata + page reads during one render. Cross-request
+// caching is deliberately disabled until public-safety tombstones and coherent invalidation
+// are authoritative across every marketplace reader.
 export const getApprovedPublicTailor = cache(readApprovedPublicTailor)

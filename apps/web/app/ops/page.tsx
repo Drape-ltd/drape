@@ -27,7 +27,6 @@ import {
   getOpsDashboardTokenStatus,
   getOpsSession,
   hasOpsWorkforceAccessConfig,
-  hasFreshOpsMfa,
   isNamedOpsWorkforceSession,
   type OpsSession,
 } from '../../lib/ops-auth'
@@ -161,6 +160,7 @@ const NOTICE_COPY: Record<string, string> = {
   'incident-communication-created': 'Incident communication created and linked to the service incident.',
   'seller-item-hidden': 'Ready-made item is hidden from buyers.',
   'seller-item-restored': 'Ready-made item is live again.',
+  'sensitive-step-up-ready': 'Protected actions are unlocked through the dedicated Cloudflare Access policy for 15 minutes.',
   'money-desk-elevated': 'Money Desk elevation is active for 15 minutes.',
   'money-desk-requested': 'Money action submitted for independent approval.',
   'money-desk-approved': 'Money action approval recorded.',
@@ -207,7 +207,9 @@ const ERROR_COPY: Record<string, string> = {
   'dispatch-event-save-failed': 'The delivery update was not saved. Review the current step and required proof, then try again.',
   'verification-rejection-reason-required': 'Add a rejection reason before rejecting verification.',
   'verification-elevation-required': 'Re-authenticate through workforce access with MFA before approving or rejecting a trust review.',
+  'sensitive-step-up-required': 'Open the protected-action gate and complete Cloudflare Access MFA before continuing.',
   'money-desk-required': 'Direct money movement is disabled. Prepare this action in Money Desk for independent approval.',
+  'ops-app-required': 'This decision has moved to the isolated Ops workspace, where protected access and durable receipts are required.',
   'refund-resolution-prepared': 'Exact refund restoration is locked and ready for Money Desk approval.',
   'money-desk-elevation-required': 'Start a fresh 15-minute Money Desk elevation before continuing.',
   'money-desk-request-invalid': 'Add a valid target and keep amount and currency together.',
@@ -1003,7 +1005,6 @@ function DisputeCard({
   const activeDispute = editable && dispute.orderStage === 'IN_DISPUTE'
   const namedMfaSession = isNamedOpsWorkforceSession(context.session)
     && Boolean(context.session.email)
-    && hasFreshOpsMfa(context.session)
   const canPrepareCancellation = activeDispute
     && dispute.refundablePaymentCount > 0
     && namedMfaSession
@@ -1542,7 +1543,7 @@ function VerificationCard({
   redirectTo: string
   session: OpsSession
 }): React.JSX.Element {
-  const canDecide = isNamedOpsWorkforceSession(session) && Boolean(session.email) && hasFreshOpsMfa(session)
+  const canDecide = isNamedOpsWorkforceSession(session) && Boolean(session.email)
 
   return (
     <CardCollapse
@@ -1622,19 +1623,48 @@ function VerificationCard({
         <div className="rounded-[8px] border border-ink/6 bg-bone/56 p-4">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink/36">Private challenge video</p>
           <p className="mt-3 text-sm leading-7 text-ink/66">
-            Private evidence remains behind a short-lived signed Supabase Storage URL. Drapeon does not collect a government ID.
+            Private evidence streams through Drapeon Ops and is never exposed as a shareable storage link. Every request and delivery is audited. Drapeon does not collect a government ID.
           </p>
           {profile.trustVideoUrl ? (
-            <a
-              href={profile.trustVideoUrl}
+            <form
+              action={profile.trustVideoUrl}
+              method="post"
               target="_blank"
-              rel="noreferrer"
-              className="mt-3 inline-flex items-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle/90"
+              className="mt-4 grid gap-3"
             >
-              Open challenge video
-            </a>
+              <label className="grid gap-2 text-sm text-ink/72">
+                Case reference
+                <input
+                  required
+                  name="caseNumber"
+                  defaultValue={profile.displayId}
+                  pattern="[A-Za-z0-9][A-Za-z0-9_-]{3,79}"
+                  className="h-11 rounded-2xl border border-ink/10 bg-white px-4 text-sm text-ink outline-none transition focus:border-needle/40"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-ink/72">
+                Access reason
+                <select
+                  required
+                  name="accessReason"
+                  defaultValue="INITIAL_TRUST_REVIEW"
+                  className="h-11 rounded-2xl border border-ink/10 bg-white px-4 text-sm text-ink outline-none transition focus:border-needle/40"
+                >
+                  <option value="INITIAL_TRUST_REVIEW">Initial trust review</option>
+                  <option value="TRUST_APPEAL_REVIEW">Trust appeal review</option>
+                  <option value="SAFETY_INVESTIGATION">Safety investigation</option>
+                  <option value="QUALITY_ASSURANCE">Quality assurance</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle/90"
+              >
+                Open audited challenge video
+              </button>
+            </form>
           ) : (
-            <p className="mt-3 text-sm font-semibold text-rust-700">Signed challenge-video link unavailable</p>
+            <p className="mt-3 text-sm font-semibold text-rust-700">Challenge video unavailable</p>
           )}
         </div>
       </div>
@@ -1642,7 +1672,17 @@ function VerificationCard({
       <VerificationEvidencePanel profile={profile} />
 
       <div className="mt-5 border-t border-ink/8 pt-5">
-        <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink/38">Actions</p>
+          {session.mode === 'cloudflare-access' ? (
+            <a
+              href={`/ops/action?kind=step-up&returnTo=${encodeURIComponent(redirectTo)}`}
+              className="inline-flex min-h-10 items-center justify-center rounded-full border border-needle/20 bg-mint/56 px-4 py-2 text-xs font-semibold text-needle-700 transition hover:bg-mint"
+            >
+              Verify protected access
+            </a>
+          ) : null}
+        </div>
         {!canDecide ? (
           <p className="mb-3 rounded-lg border border-rust/14 bg-rust/8 px-4 py-3 text-sm font-semibold leading-6 text-rust-700">
             Re-authenticate through workforce access with MFA to approve or reject this trust review.
@@ -1773,33 +1813,21 @@ function DeletionRequestCard({
               : 'Privacy Ops rejected this request. The terminal decision remains read-only in the audit trail.'}
           </div>
         ) : (
-          <form action="/ops/action" method="post" className="flex flex-col gap-3 rounded-[8px] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-end">
-            <input type="hidden" name="kind" value="deletion-status" />
-            <input type="hidden" name="redirectTo" value={redirectTo} />
-            <input type="hidden" name="deletionRequestId" value={request.id} />
-            <label className="grid gap-2 text-sm text-ink/70">
-              Deletion status
-              <select
-                name="status"
-                defaultValue={request.status}
-                className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
-              >
-                <option value="PENDING">Pending</option>
-                <option value="BLOCKED">Blocked by an active obligation</option>
-                <option value="READY_FOR_FINALIZATION">Approve deletion now</option>
-                <option value="REJECTED">Rejected</option>
-              </select>
-            </label>
-            <button
-              type="submit"
-              className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          <div className="rounded-[8px] border border-needle/15 bg-mint/35 p-4">
+            <p className="text-sm font-semibold text-ink">Deletion decisions now use the isolated Ops workspace.</p>
+            <p className="mt-2 text-sm leading-7 text-ink/66">
+              Acknowledgement, blockers, and finalization are protected by workforce identity, fresh MFA, optimistic concurrency, and durable action receipts.
+            </p>
+            <a
+              href={process.env.NODE_ENV === 'production' ? 'https://ops.drapeon.co/ops/queues/privacy' : 'http://localhost:3005/ops/queues/privacy'}
+              className="mt-4 inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
             >
-              Save deletion status
-            </button>
-          </form>
+              Open secure Privacy queue
+            </a>
+          </div>
         )}
         <p className="mt-3 text-xs leading-6 text-ink/48">
-          Approving runs the deletion worker immediately. It either completes deletion and revokes access, or returns a precise active-order, dispute, or payout blocker.
+          The finalizer rechecks active orders, disputes, payouts, and retention obligations before it can anonymize data or revoke access.
         </p>
       </div>
 
@@ -3703,10 +3731,14 @@ const OPS_LOGIN_SECTIONS = [
 
 function LoginView({
   error,
+  accessMode,
 }: {
   error: string | null
+  accessMode: 'bootstrap-token' | 'cloudflare-access' | 'local-workforce'
 }): React.JSX.Element {
   const bootstrapRole = getOpsBootstrapRole()
+  const isWorkforceDryRun = accessMode === 'local-workforce'
+  const isWorkforceSession = accessMode === 'cloudflare-access'
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
@@ -3731,10 +3763,16 @@ function LoginView({
           </div>
 
           <div className="rounded-[8px] border border-white/70 bg-white/88 p-8 shadow-[0_28px_90px_rgba(22,28,24,0.10)] backdrop-blur">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle/80">Bootstrap token</p>
-            <h2 className="mt-3 text-3xl text-ink">Unlock ops</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-needle/80">
+              {isWorkforceSession ? 'Workforce session' : isWorkforceDryRun ? 'Local workforce dry run' : 'Development bootstrap'}
+            </p>
+            <h2 className="mt-3 text-3xl text-ink">{isWorkforceSession ? 'Ops data is unavailable' : 'Unlock local Ops'}</h2>
             <p className="mt-2 text-sm leading-7 text-ink/60">
-              Enter the shared ops token to open a scoped session on this device.
+              {isWorkforceSession
+                ? 'Your workforce identity is valid, but the internal data service could not load. No bootstrap fallback is available in production.'
+                : isWorkforceDryRun
+                ? 'Enter the local token to open the named test identity configured for this machine.'
+                : 'Enter the development token to open a role-scoped session on this machine.'}
             </p>
 
             {error ? (
@@ -3743,28 +3781,49 @@ function LoginView({
               </div>
             ) : null}
 
-            <form action="/ops/login" method="post" className="mt-6 grid gap-3">
-              <input type="hidden" name="redirectTo" value="/ops" />
-              <input
-                required
-                type="password"
-                name="token"
-                autoFocus
-                className="h-12 rounded-2xl border border-ink/10 bg-white px-5 text-sm text-ink outline-none transition placeholder:text-ink/32 focus:border-needle/40"
-                placeholder="Enter the internal token"
-              />
-              <button
-                type="submit"
-                className="inline-flex h-12 items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white transition hover:bg-needle/90"
-              >
-                Open ops dashboard
-              </button>
-            </form>
+            {isWorkforceSession ? (
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                <a href="/ops" className="inline-flex h-12 items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white transition hover:bg-needle/90">
+                  Retry safely
+                </a>
+                <form action="/ops/logout" method="post">
+                  <button type="submit" className="inline-flex h-12 w-full items-center justify-center rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold text-ink transition hover:bg-bone">
+                    Sign out
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <form action="/ops/login" method="post" className="mt-6 grid gap-3">
+                <input type="hidden" name="redirectTo" value="/ops" />
+                <input
+                  required
+                  type="password"
+                  name="token"
+                  autoFocus
+                  className="h-12 rounded-2xl border border-ink/10 bg-white px-5 text-sm text-ink outline-none transition placeholder:text-ink/32 focus:border-needle/40"
+                  placeholder="Enter the internal token"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex h-12 items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white transition hover:bg-needle/90"
+                >
+                  Open ops dashboard
+                </button>
+              </form>
+            )}
 
             <div className="mt-6 rounded-[8px] border border-ink/6 bg-bone/60 px-4 py-3 text-[11px] leading-6 text-ink/50">
-              Bootstrap role: <span className="font-semibold text-ink/68">{formatDatabaseEnumLabel(bootstrapRole)}</span>
-              {' · '}
-              Per-person enforcement moves to workforce SSO.
+              {isWorkforceSession ? (
+                <>Named Cloudflare Access identity · authoritative data remains fail closed.</>
+              ) : isWorkforceDryRun ? (
+                <>Named local identity · production always requires Cloudflare Access.</>
+              ) : (
+                <>
+                  Development role: <span className="font-semibold text-ink/68">{bootstrapRole ? formatDatabaseEnumLabel(bootstrapRole) : 'Not configured'}</span>
+                  {' · '}
+                  Never available in production.
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -3841,11 +3900,7 @@ function SetupView(): React.JSX.Element {
   const workforceConfigured = hasOpsWorkforceAccessConfig()
   const tokenStatus = getOpsDashboardTokenStatus()
   const hasWeakToken = tokenStatus === 'weak'
-  const productionBootstrapBlocked =
-    process.env.NODE_ENV === 'production' &&
-    !workforceConfigured &&
-    tokenStatus === 'ready' &&
-    process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION !== '1'
+  const isProduction = process.env.NODE_ENV === 'production'
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f1e8_0%,#efe7da_100%)]">
@@ -3853,28 +3908,34 @@ function SetupView(): React.JSX.Element {
         <section className="w-full rounded-lg border border-ink/8 bg-white/86 p-8 shadow-[0_24px_80px_rgba(22,28,24,0.08)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
           <h1 className="mt-4 text-4xl text-ink sm:text-5xl">
-            {productionBootstrapBlocked
+            {isProduction
               ? 'Connect workforce access before this surface opens.'
               : hasWeakToken
                 ? 'Strengthen the ops token before this surface opens.'
                 : 'Set one token to bring the ops surface online.'}
           </h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
-            {productionBootstrapBlocked
-              ? 'Production ops requires Cloudflare Access by default. Use OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION=1 only for a documented emergency window.'
+            {isProduction
+              ? 'Production Ops fails closed unless Cloudflare Access has a valid team domain and application audience. Shared bootstrap tokens are never accepted.'
               : hasWeakToken
                 ? 'The configured bootstrap token is too short or uses a placeholder value. Use Cloudflare Access for production, or set a 32+ character emergency token.'
                 : 'This route is intentionally locked until the shared ops token is configured in the web environment.'}
           </p>
           <div className="mt-8 rounded-[8px] border border-ink/8 bg-bone/70 p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/46">Required env</p>
-            {workforceConfigured ? (
+            {workforceConfigured || isProduction ? (
               <>
                 <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   CF_ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
                 </code>
                 <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
                   CF_ACCESS_AUD=your_access_application_audience
+                </code>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  CF_ACCESS_SENSITIVE_AUD=your_sensitive_access_application_audience
+                </code>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  OPS_CANONICAL_ORIGIN=https://ops.drapeon.co
                 </code>
               </>
             ) : (
@@ -3883,7 +3944,7 @@ function SetupView(): React.JSX.Element {
                   OPS_DASHBOARD_TOKEN=your_shared_internal_token
                 </code>
                 <code className="mt-3 block whitespace-pre-wrap rounded-[8px] bg-ink px-4 py-4 text-sm leading-7 text-white">
-                  OPS_DASHBOARD_BOOTSTRAP_ROLE={bootstrapRole}
+                  OPS_DASHBOARD_BOOTSTRAP_ROLE={bootstrapRole ?? 'ops'}
                 </code>
               </>
             )}
@@ -4703,7 +4764,7 @@ function MoneyDeskRequestCard({
   redirectTo: string
 }) {
   const mayApprove = ['finance', 'admin'].includes(context.session.role)
-  const namedMfaSession = isNamedOpsWorkforceSession(context.session) && context.session.mfaVerified
+  const namedMfaSession = isNamedOpsWorkforceSession(context.session) && Boolean(context.session.email)
   const currentApproverDecision = item.decisions.find(
     (decision) => decision.approverEmail.toLowerCase() === context.session.email?.toLowerCase(),
   )
@@ -4922,7 +4983,7 @@ function MoneyDeskSurface({
 }) {
   const redirectTo = buildOpsRedirectTarget(currentView, 'money-desk')
   const namedSession = isNamedOpsWorkforceSession(context.session) && Boolean(context.session.email)
-  const namedMfaSession = namedSession && hasFreshOpsMfa(context.session)
+  const namedMfaSession = namedSession
   const canPrepare = getOpsRoleActions(context.session.role).includes('money-desk-request')
   const canPrepareRefundRestoration = getOpsRoleActions(context.session.role).includes('return-refund-prepare')
   const canCreateCampaign = getOpsRoleActions(context.session.role).includes('benefit-campaign-create')
@@ -4953,8 +5014,8 @@ function MoneyDeskSurface({
               {namedMfaSession
                 ? context.session.mode === 'local-workforce'
                   ? `${context.session.email} is active through the development-only workforce dry-run bridge.`
-                  : `${context.session.email} has a fresh Cloudflare Access MFA assertion.`
-                : 'Read-only: enter or re-authenticate through Cloudflare Access with a named MFA-backed workforce identity.'}
+                  : `${context.session.email} is active. Cloudflare will require the protected-action MFA policy before any mutation is accepted.`
+                : 'Read-only: enter through Cloudflare Access with a named workforce identity.'}
             </p>
             {elevationAcknowledged ? (
               <p className="mt-2 inline-flex rounded-full border border-needle/18 bg-needle/10 px-3 py-1 text-xs font-semibold text-needle-700">
@@ -4962,6 +5023,15 @@ function MoneyDeskSurface({
               </p>
             ) : null}
           </div>
+          <div className="grid w-full gap-3 lg:max-w-xl">
+          {context.session.mode === 'cloudflare-access' ? (
+            <a
+              href={`/ops/action?kind=step-up&returnTo=${encodeURIComponent(redirectTo)}`}
+              className="inline-flex min-h-11 items-center justify-center rounded-full border border-needle/20 bg-white px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-mint"
+            >
+              Verify protected access
+            </a>
+          ) : null}
           {namedMfaSession && canPrepare ? (
             <form method="POST" action="/ops/action" className="grid w-full gap-2 lg:max-w-xl lg:grid-cols-[minmax(0,1fr)_auto]">
               <input type="hidden" name="kind" value="money-desk-elevation" />
@@ -4976,6 +5046,7 @@ function MoneyDeskSurface({
               </button>
             </form>
           ) : null}
+          </div>
         </div>
       </div>
 
@@ -5628,7 +5699,7 @@ export default async function OpsPage({
       return <WorkforceAccessView error={error} identity={identity} retryHref={buildOpsHref(view)} />
     }
 
-    return <LoginView error={error} />
+    return <LoginView error={error} accessMode={accessMode} />
   }
 
   const visibleSections = getVisibleOpsSections(session.role)
@@ -5640,7 +5711,7 @@ export default async function OpsPage({
   if (safeView === 'deletions') {
     const deletionRequests = await loadOpsDeletionRequests()
     if (!deletionRequests) {
-      return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} />
+      return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} accessMode={accessMode} />
     }
 
     return (
@@ -5697,9 +5768,9 @@ export default async function OpsPage({
     )
   }
 
-  const loadedData = await loadOpsDashboardData({ bypassCache: Boolean(noticeKey || errorKey) })
+  const loadedData = await loadOpsDashboardData()
   if (!loadedData) {
-    return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} />
+    return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} accessMode={accessMode} />
   }
   const filteredByQuery = filterOpsDashboardData(loadedData, query)
   const data = applyOpsChipFilter(filteredByQuery, safeView, filter)

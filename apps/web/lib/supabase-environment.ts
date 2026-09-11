@@ -25,6 +25,37 @@ export function getSupabaseProjectRef(url: string | null | undefined) {
   }
 }
 
+export function getSupabaseJwtProjectRef(key: string | null | undefined) {
+  if (!key) return null
+  const encodedPayload = key.split('.')[1]
+  if (!encodedPayload) return null
+
+  try {
+    const normalizedPayload = encodedPayload.replace(/-/gu, '+').replace(/_/gu, '/')
+    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, '=')
+    const payload = JSON.parse(globalThis.atob(paddedPayload)) as { ref?: unknown }
+    return typeof payload.ref === 'string' && /^[a-z0-9]+$/u.test(payload.ref)
+      ? payload.ref
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function validateServiceRoleTarget(
+  url: string | null | undefined,
+  key: string | null | undefined,
+  declaredKeyProjectRef: string | null | undefined,
+) {
+  const urlProjectRef = getSupabaseProjectRef(url)
+  const keyProjectRef = getSupabaseJwtProjectRef(key) ?? declaredKeyProjectRef?.trim() ?? null
+  return {
+    urlProjectRef,
+    keyProjectRef,
+    isValid: Boolean(urlProjectRef && keyProjectRef && urlProjectRef === keyProjectRef),
+  }
+}
+
 export function isProductionWebHostname(hostname: string | null | undefined) {
   const normalized = hostname?.trim().toLowerCase().split(':')[0] ?? ''
   return PRODUCTION_WEB_HOSTNAMES.has(normalized)

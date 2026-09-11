@@ -1,5 +1,29 @@
 # Service Health And Monitoring
 
+Status: Current-state runbook with a required Phase 0 correction. The canonical
+target is defined in
+`docs/drapeon-ops-control-plane-post-submission-rebuild.md`.
+
+## Known Temporary Duplication
+
+Production is currently observed by both the Cloudflare Worker and the scheduled
+GitHub workflow, and both reports combine development and production. Their
+missing-secret behavior differs, so they are not a coherent source of truth.
+
+Before the Ops route redesign begins:
+
+- make the Cloudflare Worker the only scheduled production synthetic and the
+  owner of production incident state;
+- give development a separate deployment, state key/namespace, cadence, and
+  non-paging notification destination;
+- make missing production readiness credentials fail critically everywhere;
+- change the GitHub workflow to manual/fallback operation rather than a second
+  five-minute production scheduler.
+
+Until that change is deployed, operators must treat conflicting observer output
+as a monitoring incident and verify the Cloudflare Worker state plus the actual
+production readiness endpoint.
+
 ## Rule
 
 Do not point uptime monitors at webhook endpoints.

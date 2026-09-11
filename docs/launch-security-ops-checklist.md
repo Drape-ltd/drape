@@ -41,13 +41,15 @@ Required web runtime variables:
 ```text
 CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
 CF_ACCESS_AUD=<cloudflare-access-audience>
+CF_ACCESS_SENSITIVE_AUD=<cloudflare-sensitive-access-audience>
 OPS_ALLOWED_EMAIL_DOMAIN=drapeon.co
-OPS_ADMIN_EMAILS=<comma-separated admin emails>
+OPS_ALLOWED_EMAILS=<comma-separated exceptional workforce emails>
 ```
 
-The app also fails closed in production when `/ops` is reached without
-Cloudflare Access configuration, unless `OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION=1`
-is set for a documented emergency window.
+The app fails closed in production when `/ops` is reached without Cloudflare
+Access configuration. Shared bootstrap tokens are development-only. Configure a
+normal Access application for the Ops shell and a second, short-lived MFA Access
+application for `/ops/action` and `/ops/identity-document/*`.
 
 ## CSP Readiness
 

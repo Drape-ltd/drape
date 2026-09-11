@@ -7,7 +7,6 @@ import { canAccessOpsSection, canPerformOpsAction, type OpsActionKind } from '..
 import { sendOpsCustomerRefundEmail } from '../../../lib/ops-customer-email'
 import { sendSmsToUser } from '../../../lib/sms'
 import { checkPublicRateLimit, getClientIp } from '../../../lib/request-security'
-import { invalidateOpsDashboardDataCache } from '../../../lib/ops-data'
 import { buildOrderReviewRefundTerminalRequest, buildRefundOrderPaymentsRequest } from '@drape/shared'
 import { OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
 import {
@@ -34,6 +33,11 @@ import {
   submitMoneyDeskRequest,
 } from '../../../lib/money-desk'
 import { isMoneyDeskActionType, type MoneyDeskActionType } from '@drape/shared/money-desk'
+import {
+  buildCanonicalOpsUrl,
+  sanitizeOpsRedirect,
+  validateOpsMutationOrigin,
+} from '../../../lib/ops-request-security'
 
 const APPLICATION_STATUSES = new Set(['PENDING', 'REVIEWING', 'CONTACTED', 'APPROVED', 'REJECTED'])
 const DISPUTE_STATUSES = new Set(['OPEN', 'UNDER_REVIEW'])
@@ -154,11 +158,6 @@ type OrderSupportMeta = {
 
 type DispatchServiceLevel =
   NonNullable<NonNullable<OrderSupportMeta['dispatchRecord']>['serviceLevel']>
-
-function sanitizeRedirect(value: FormDataEntryValue | null) {
-  if (typeof value !== 'string' || !value.startsWith('/ops')) return '/ops'
-  return value
-}
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key)
@@ -312,14 +311,6 @@ function restoreStageForReview(reviewType: 'CANCELLATION' | 'DELIVERY', requeste
 
 function invalidateOpsActionCaches() {
   opsPulseCache = null
-  invalidateOpsDashboardDataCache()
-}
-
-function requestOrigin(request: Request) {
-  const host = request.headers.get('host')?.trim()
-  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
-  const protocol = forwardedProto || (process.env.NODE_ENV === 'production' ? 'https' : 'http')
-  return host ? `${protocol}://${host}` : request.url
 }
 
 function redirectWithMessage(
@@ -330,7 +321,7 @@ function redirectWithMessage(
   detail?: string | null,
 ) {
   invalidateOpsActionCaches()
-  const url = new URL(redirectTo, requestOrigin(request))
+  const url = buildCanonicalOpsUrl(request, redirectTo)
   url.searchParams.set(key, value)
   if (detail?.trim()) {
     url.searchParams.set(`${key}Detail`, detail.trim().slice(0, 300))
@@ -463,7 +454,21 @@ async function checkOpsActionRateLimit(
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
-  if (url.searchParams.get('kind') !== 'pulse') {
+  const kind = url.searchParams.get('kind')
+
+  if (kind === 'step-up') {
+    const redirectTo = sanitizeOpsRedirect(request, url.searchParams.get('returnTo'))
+    const session = await getOpsSession()
+    if (!session || !isNamedOpsWorkforceSession(session) || !session.email) {
+      return redirectWithMessage(request, redirectTo, 'error', 'workforce-login-required')
+    }
+    if (!hasFreshOpsMfa(session)) {
+      return redirectWithMessage(request, redirectTo, 'error', 'sensitive-step-up-required')
+    }
+    return redirectWithMessage(request, redirectTo, 'notice', 'sensitive-step-up-ready')
+  }
+
+  if (kind !== 'pulse') {
     return opsJson({ ok: false, error: 'not-found' }, 404)
   }
 
@@ -1141,6 +1146,11 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
   materialAdvanceId?: string | null
   includeUnreleasedMaterialAdvances?: boolean
   allowedPhases?: Array<'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT' | 'MATERIAL_ADVANCE'>
+  operationContext?: {
+    kind: 'ORDER_CANCELLATION'
+    moneyDeskRequestId: string
+    disputeId: string
+  }
 }) {
   const supabaseUrl = getSupabaseUrl()
   const serviceRoleKey = getSupabaseServiceRoleKey()
@@ -1160,6 +1170,7 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
       ...buildRefundOrderPaymentsRequest({ orderId, ...input }),
       refundResolutionId: input.refundResolutionId ?? undefined,
       materialAdvanceId: input.materialAdvanceId ?? undefined,
+      operationContext: input.operationContext,
     }),
   })
 
@@ -1612,9 +1623,14 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
 }
 
 export async function POST(request: Request) {
+  const originCheck = validateOpsMutationOrigin(request)
+  if (!originCheck.ok) {
+    return opsJson({ ok: false, error: 'invalid-origin' }, 403)
+  }
+
   const session = await getOpsSession()
   const formData = await request.formData()
-  const redirectTo = sanitizeRedirect(formData.get('redirectTo'))
+  const redirectTo = sanitizeOpsRedirect(request, formData.get('redirectTo'))
 
   if (!session) {
     return redirectWithMessage(request, redirectTo, 'error', 'locked')
@@ -1652,6 +1668,13 @@ export async function POST(request: Request) {
     (kind === 'dispute-resolution' && DISPUTE_OUTCOMES.has(readString(formData, 'outcome').toUpperCase()))
   if (legacyDirectMoneyActions.has(kind) || isLegacyMoneyDecision) {
     return redirectWithMessage(request, redirectTo, 'error', 'money-desk-required')
+  }
+
+  // Account deletion decisions have moved to the isolated Ops application.
+  // Fail closed here so stale tabs cannot bypass workforce step-up, typed RPC
+  // validation, optimistic concurrency, or durable action receipts.
+  if (kind === 'deletion-status') {
+    return redirectWithMessage(request, redirectTo, 'error', 'ops-app-required')
   }
 
   try {
@@ -2372,8 +2395,13 @@ export async function POST(request: Request) {
             const refund = await refundOrderPaymentsForReview(snapshot.order.id, {
               reason: typeof actionPayload.note === 'string' ? actionPayload.note : moneyRequest.reason,
               includeUnreleasedMaterialAdvances: snapshot.claims.some((claim) => claim.phase === 'MATERIAL_ADVANCE'),
+              operationContext: {
+                kind: 'ORDER_CANCELLATION',
+                moneyDeskRequestId: moneyRequest.id,
+                disputeId: snapshot.dispute.id,
+              },
             })
-            if (!refund.ok) {
+            if (!refund.ok || refund.pending) {
               executionResult = refund
             } else {
               const now = new Date().toISOString()
@@ -2580,7 +2608,7 @@ export async function POST(request: Request) {
           requestId,
           attemptId,
           actionType: moneyRequest.action_type,
-          error: executionResult.error,
+          outcome: executionResult.pending ? 'PENDING' : 'FAILED',
         })
         return redirectWithMessage(request, redirectTo, 'error', 'money-desk-execution-failed', executionResult.error)
       }
@@ -2928,13 +2956,7 @@ export async function POST(request: Request) {
 
     if (kind === 'deletion-status') {
       const deletionRequestId = readString(formData, 'deletionRequestId')
-      const requestedStatus = readString(formData, 'status').toUpperCase()
-      // Older open Ops tabs used ACKNOWLEDGED as a separate waiting state.
-      // Treat that legacy action as approval so the request reaches a terminal
-      // worker outcome instead of becoming a customer-facing dead end.
-      const status = requestedStatus === 'ACKNOWLEDGED'
-        ? 'READY_FOR_FINALIZATION'
-        : requestedStatus
+      const status = readString(formData, 'status').toUpperCase()
 
       if (!deletionRequestId || !DELETION_STATUSES.has(status)) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
@@ -5179,7 +5201,7 @@ export async function POST(request: Request) {
         p_metadata: { provider, target_stage: targetStage, service_level: normalizedServiceLevel },
       })
       if (settlementEvidenceError && !settlementEvidenceError.message.includes('ledger-recorded initial payment')) {
-        console.error('ops_dispatch_settlement_evidence_failed', { orderId, targetStage, error: settlementEvidenceError.message })
+        console.error('ops_dispatch_settlement_evidence_failed', { orderId, targetStage, code: settlementEvidenceError.code ?? 'unknown' })
       }
 
       await client.from('audit_logs').insert({
@@ -5251,7 +5273,7 @@ export async function POST(request: Request) {
     return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Unknown control-plane error.'
-    console.error('ops_action_failed', { kind, actor: session.email ?? session.subject, detail })
+    console.error('ops_action_failed', { kind, failureType: error instanceof Error ? error.name : 'UnknownError' })
     return redirectWithMessage(
       request,
       redirectTo,

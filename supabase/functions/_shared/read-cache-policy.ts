@@ -4,7 +4,10 @@ export type ReadCacheAction =
   | 'explore-tailors'
   | 'tailor-profile'
 
-export const PUBLIC_READ_CACHE_CONTROL = 'public, s-maxage=30, stale-while-revalidate=120'
+// Marketplace visibility can change for trust, fraud, legal, or inventory reasons.
+// Cross-request caching stays disabled until every reader consumes authoritative
+// safety tombstones and one shared invalidation contract.
+export const PUBLIC_READ_CACHE_CONTROL = 'no-store, max-age=0'
 export const PRIVATE_READ_CACHE_CONTROL = 'private, no-store'
 
 export function cacheControlForReadAction(action: ReadCacheAction) {

@@ -110,7 +110,7 @@ export async function sendOpsCustomerRefundEmail(input: {
 
     console.error('[ops customer email] Failed to enqueue refund email.', {
       orderReference: input.orderReference,
-      error: error.message,
+      code: error.code ?? 'unknown',
     })
   }
 
@@ -165,11 +165,10 @@ export async function sendOpsCustomerRefundEmail(input: {
   })
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
+    await response.body?.cancel().catch(() => undefined)
     console.error('[ops customer email] Failed to send refund email.', {
       orderReference: input.orderReference,
       status: response.status,
-      body,
     })
     return { ok: false as const, skipped: false as const }
   }

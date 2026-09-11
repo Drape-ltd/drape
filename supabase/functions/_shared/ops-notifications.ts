@@ -1,4 +1,5 @@
 import { normalizeDrapeonSender } from './email-template.ts'
+import { log } from './logger.ts'
 
 const RESEND_API = 'https://api.resend.com/emails'
 const OPS_EMAIL = 'ops@drapeon.co'
@@ -59,18 +60,18 @@ export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNo
   const priorityLabel = severity === 'CRITICAL' ? 'Critical ops issue' : 'Priority ops issue'
   const apiKey = Deno.env.get('RESEND_API_KEY')
   if (!apiKey) {
-    console.warn('[ops notification] Missing RESEND_API_KEY; skipping critical issue email.', {
-      issueType: input.issueType,
-      issueNumber: input.issueNumber,
+    log('warn', 'ops-notifications', 'critical_email.configuration_missing', {
+      issue_type: input.issueType,
+      issue_number: input.issueNumber,
     })
     return { ok: false as const, skipped: true as const }
   }
 
   const recipients = getOpsRecipients()
   if (recipients.length === 0) {
-    console.warn('[ops notification] No recipients configured; skipping critical issue email.', {
-      issueType: input.issueType,
-      issueNumber: input.issueNumber,
+    log('warn', 'ops-notifications', 'critical_email.recipient_missing', {
+      issue_type: input.issueType,
+      issue_number: input.issueNumber,
     })
     return { ok: false as const, skipped: true as const }
   }
@@ -157,12 +158,11 @@ export async function sendCriticalOpsIssueNotification(input: CriticalOpsIssueNo
   })
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    console.error('[ops notification] Failed to send critical issue email.', {
-      issueType: input.issueType,
-      issueNumber: input.issueNumber,
+    await response.body?.cancel().catch(() => undefined)
+    log('error', 'ops-notifications', 'critical_email.provider_failed', {
+      issue_type: input.issueType,
+      issue_number: input.issueNumber,
       status: response.status,
-      body,
     })
     return { ok: false as const, skipped: false as const }
   }

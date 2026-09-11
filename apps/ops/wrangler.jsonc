@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "drape-ops",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-09-27",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "ops.drapeon.co/*",
+      "zone_name": "drapeon.co"
+    }
+  ],
+  "vars": {
+    "DRAPE_OPS_ENV": "production",
+    "DRAPE_EXPECTED_SUPABASE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",
+    "NEXT_PUBLIC_SITE_URL": "https://ops.drapeon.co",
+    "NEXT_PUBLIC_SUPABASE_URL": "https://wkfsrunetmgjdtcurmoj.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndrZnNydW5ldG1namR0Y3VybW9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyMzIzODksImV4cCI6MjA4OTgwODM4OX0.O--hKpkahwpyU4SEFh_IDNFyN5tBm3xKmYZc-EmBC18",
+    "CF_ACCESS_TEAM_DOMAIN": "drapeon.cloudflareaccess.com",
+    "OPS_ALLOWED_EMAILS": "dimowoope@gmail.com",
+    "OPS_HOSTNAME": "ops.drapeon.co",
+    "OPS_CANONICAL_ORIGIN": "https://ops.drapeon.co"
+  },
+  "secrets": {
+    "required": [
+      "CF_ACCESS_AUD",
+      "CF_ACCESS_SENSITIVE_AUD",
+      "WEB_PUSH_VAPID_PUBLIC_KEY"
+    ]
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

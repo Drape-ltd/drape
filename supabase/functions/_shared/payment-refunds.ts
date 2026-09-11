@@ -25,6 +25,12 @@ export type ExactRefundRestoration = {
   drapeonFundedAmount: number
 }
 
+export type RefundOperationContext = {
+  kind: 'ORDER_CANCELLATION'
+  moneyDeskRequestId: string
+  disputeId: string
+}
+
 export type RefundablePaymentAttemptRow = {
   id: string
   order_id: string
@@ -100,11 +106,22 @@ function activeProviderRefundRequest(attempt: RefundablePaymentAttemptRow) {
   if (!['pending', 'processing', 'needs-attention', 'requires_action'].includes(status)) return null
   const refundAmount = (request as Record<string, unknown>).refund_amount
   const rawId = (response as Record<string, unknown>).id ?? (response as Record<string, unknown>).refund_reference
+  const operationContext = (request as Record<string, unknown>).operation_context
   return {
     amount: typeof refundAmount === 'number' ? refundAmount : null,
     id: typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId) : null,
     status: status.toUpperCase(),
+    operationContext: operationContext && typeof operationContext === 'object' && !Array.isArray(operationContext)
+      ? operationContext as Record<string, unknown>
+      : null,
   }
+}
+
+function sameOperationContext(existing: Record<string, unknown> | null, requested?: RefundOperationContext) {
+  if (!requested) return existing === null
+  return existing?.kind === requested.kind
+    && existing.moneyDeskRequestId === requested.moneyDeskRequestId
+    && existing.disputeId === requested.disputeId
 }
 
 async function recordPendingRefundRequest(
@@ -117,6 +134,7 @@ async function recordPendingRefundRequest(
     actorId?: string | null
     reason?: string | null
     exactRestoration?: ExactRefundRestoration
+    operationContext?: RefundOperationContext
   },
 ) {
   const existing = input.attempt.provider_response && typeof input.attempt.provider_response === 'object'
@@ -131,6 +149,7 @@ async function recordPendingRefundRequest(
     reason: input.reason ?? null,
     refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null,
     exact_restoration: input.exactRestoration ?? null,
+    operation_context: input.operationContext ?? null,
     response: input.providerResponse,
   }
   const pendingRefunds = Array.isArray(existing.pending_refunds) ? existing.pending_refunds : []
@@ -183,6 +202,7 @@ async function assertRefundAttemptReady(
     actorRole: ActorRole
     actorId?: string | null
     exactRestoration?: ExactRefundRestoration
+    operationContext?: RefundOperationContext
   },
   deps: RefundDependencies,
 ) {
@@ -387,6 +407,7 @@ export async function refundSettledOrderPayments(
     actorId?: string | null
     allowedPhases?: PaymentPhase[]
     exactRestoration?: ExactRefundRestoration
+    operationContext?: RefundOperationContext
   },
   deps: RefundDependencies = DEFAULT_DEPS,
 ): Promise<RefundSettledOrderPaymentsResult> {
@@ -449,6 +470,9 @@ export async function refundSettledOrderPayments(
     try {
       const activeRefund = activeProviderRefundRequest(attempt)
       if (activeRefund) {
+        if (!sameOperationContext(activeRefund.operationContext, input.operationContext)) {
+          throw new Error('A provider refund is already processing under a different approved operation. Do not create a second refund.')
+        }
         if (activeRefund.amount !== refundAmount) {
           throw new Error(`A different ${attempt.provider === 'STRIPE' ? 'Stripe' : 'Paystack'} refund is already processing for this payment. Do not create a second refund.`)
         }
@@ -478,7 +502,13 @@ export async function refundSettledOrderPayments(
             amount: refundAmount,
             idempotencyKey: `refund:${attempt.id}:${currentRefundedAmount(attempt)}:${refundAmount}`,
             reasonNote: input.reason ?? null,
-            metadata: { drapeon_payment_id: attempt.id, drapeon_order_id: attempt.order_id, refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null },
+            metadata: {
+              drapeon_payment_id: attempt.id,
+              drapeon_order_id: attempt.order_id,
+              refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null,
+              money_desk_request_id: input.operationContext?.moneyDeskRequestId ?? null,
+              cancellation_dispute_id: input.operationContext?.disputeId ?? null,
+            },
           })
         : await deps.refundPaystackTransaction({
             reference: providerPaymentId,
@@ -499,6 +529,7 @@ export async function refundSettledOrderPayments(
           actorId: input.actorId ?? null,
           reason: input.reason ?? null,
           exactRestoration: input.exactRestoration,
+          operationContext: input.operationContext,
         })
         pendingAttempts.push({
           id: attempt.id,
@@ -594,6 +625,7 @@ export async function partiallyRefundOrderPayments(
     actorId?: string | null
     allowedPhases?: PaymentPhase[]
     exactRestoration?: ExactRefundRestoration
+    operationContext?: RefundOperationContext
   },
   deps: RefundDependencies = DEFAULT_DEPS,
 ): Promise<PartialRefundOrderPaymentsResult> {
@@ -637,6 +669,9 @@ export async function partiallyRefundOrderPayments(
     const providerPaymentId = attempt.provider_payment_id.trim()
     const activeRefund = activeProviderRefundRequest(attempt)
     if (activeRefund) {
+      if (!sameOperationContext(activeRefund.operationContext, input.operationContext)) {
+        throw new Error('A provider refund is already processing under a different approved operation. Do not create a second refund.')
+      }
       if (activeRefund.amount !== refundAmount) {
         throw new Error(`A different ${attempt.provider === 'STRIPE' ? 'Stripe' : 'Paystack'} refund is already processing for this payment. Do not create a second refund.`)
       }
@@ -667,7 +702,13 @@ export async function partiallyRefundOrderPayments(
           amount: refundAmount,
           idempotencyKey: `partial-refund:${attempt.id}:${currentRefundedAmount(attempt)}:${refundAmount}`,
           reasonNote: input.reason ?? null,
-          metadata: { drapeon_payment_id: attempt.id, drapeon_order_id: attempt.order_id, refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null },
+          metadata: {
+            drapeon_payment_id: attempt.id,
+            drapeon_order_id: attempt.order_id,
+            refund_resolution_id: input.exactRestoration?.refundResolutionId ?? null,
+            money_desk_request_id: input.operationContext?.moneyDeskRequestId ?? null,
+            cancellation_dispute_id: input.operationContext?.disputeId ?? null,
+          },
         })
       : await deps.refundPaystackTransaction({
           reference: providerPaymentId,
@@ -688,6 +729,7 @@ export async function partiallyRefundOrderPayments(
         actorId: input.actorId ?? null,
         reason: input.reason ?? null,
         exactRestoration: input.exactRestoration,
+        operationContext: input.operationContext,
       })
       pendingAttempts.push({
         id: attempt.id,

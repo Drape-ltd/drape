@@ -16,6 +16,7 @@ const ALLOWED_ORIGINS = new Set([
   'https://drapeon.co',
   'https://www.drapeon.co',
   'https://admin.drapeon.co',
+  'https://ops.drapeon.co',
 ])
 
 const DEV_ALLOWED_ORIGINS = new Set([
@@ -33,7 +34,7 @@ const DEV_ALLOWED_ORIGINS = new Set([
   'http://localhost:3005',
 ])
 
-const ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type'
+const ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type, x-correlation-id, x-drape-ops-access-assertion'
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',

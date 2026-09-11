@@ -1,14 +1,9 @@
-const STATE_KEY = 'drapeon-health-state-v1'
+const STATE_KEY = 'drapeon-prod-health-state-v2'
+const MONITOR_KEY = 'cloudflare-production-synthetic'
 const REQUEST_TIMEOUT_MS = 12_000
 const WARN_LATENCY_MS = 3_000
 
 const targets = [
-  {
-    id: 'dev-ready',
-    name: 'Drape DEV readiness',
-    url: 'https://pqptfuqogvrajozfsqzi.supabase.co/functions/v1/service-health?check=ready&tier=beta',
-    secret: 'DRAPE_HEALTHCHECK_SECRET',
-  },
   {
     id: 'prod-ready',
     name: 'Drape PROD readiness',
@@ -88,7 +83,7 @@ function fingerprint(results) {
 
 function summaryFor(results) {
   const failures = results.filter((result) => !result.ok)
-  if (failures.length === 0) return 'Drapeon development and production readiness are healthy.'
+    if (failures.length === 0) return 'Drapeon production readiness is healthy.'
   return failures.map((result) => `${result.name}: ${result.detail}; HTTP ${result.httpStatus}; ${result.latencyMs} ms`).join('\n')
 }
 
@@ -101,7 +96,7 @@ async function postSlack(env, heading, summary) {
     },
     body: JSON.stringify({
       channel: env.SLACK_CHANNEL_ID,
-      text: `${heading}\n${summary}\nhttps://ops.drapeon.co/ops?view=workflow-issues`,
+      text: `${heading}\n${summary}\nhttps://ops.drapeon.co/ops/incidents`,
       unfurl_links: false,
     }),
   })
@@ -116,22 +111,70 @@ async function postSlack(env, heading, summary) {
   }
 }
 
+async function persistMonitorResult(env, result, checkedAt, currentFingerprint, correlationId, slackDelivery = null) {
+  if (!env.OPS_HEALTH_INGEST_URL || !env.DRAPE_HEALTH_MONITOR_INGEST_SECRET || !env.SUPABASE_ANON_KEY) {
+    throw new Error('Production monitor ledger configuration is missing')
+  }
+  const response = await fetch(env.OPS_HEALTH_INGEST_URL, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_ANON_KEY,
+      authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+      'content-type': 'application/json',
+      'x-correlation-id': correlationId,
+      'x-drape-monitor-secret': env.DRAPE_HEALTH_MONITOR_INGEST_SECRET,
+    },
+    body: JSON.stringify({
+      environment: 'PRODUCTION',
+      monitorKey: MONITOR_KEY,
+      fingerprint: currentFingerprint,
+      checkedAt,
+      result,
+      slackDelivery,
+      correlationId,
+      sourceReference: 'cloudflare-cron:drapeon-health-monitor',
+      runbookUrl: 'https://ops.drapeon.co/ops/knowledge?runbook=production-health',
+    }),
+  })
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body?.ok !== true) {
+    throw new Error(`Production monitor ledger write failed: ${body?.error ?? `HTTP ${response.status}`}`)
+  }
+  return body.state
+}
+
 async function runChecks(env) {
+  if (env.MONITOR_ENVIRONMENT !== 'production') {
+    throw new Error('Production health monitor requires MONITOR_ENVIRONMENT=production')
+  }
   const checkedAt = new Date().toISOString()
   const results = await Promise.all(targets.map((target) => checkTarget(target, env)))
   const currentFingerprint = fingerprint(results)
   const healthy = results.every((result) => result.ok)
-  const previous = await env.HEALTH_STATE.get(STATE_KEY, 'json')
-  const changed = previous?.fingerprint !== currentFingerprint
-  let slackDelivery = previous?.slackDelivery ?? null
+  const correlationId = crypto.randomUUID()
+  const ledgerStates = await Promise.all(results.map((result) => persistMonitorResult(env, result, checkedAt, currentFingerprint, correlationId)))
+  const transitions = ledgerStates.map((state) => state?.transition ?? 'NONE')
+  let slackDelivery = null
 
-  if (changed && !healthy) {
+  if (transitions.some((transition) => transition === 'DEGRADED' || transition === 'CHANGED')) {
     slackDelivery = await postSlack(env, ':rotating_light: *Drapeon service incident changed*', summaryFor(results))
-  } else if (changed && healthy && previous && previous.healthy === false) {
+  } else if (transitions.some((transition) => transition === 'RECOVERED')) {
     slackDelivery = await postSlack(env, ':white_check_mark: *Drapeon services recovered*', summaryFor(results))
   }
+  if (slackDelivery) {
+    await Promise.all(results.map((result) => persistMonitorResult(env, result, checkedAt, currentFingerprint, correlationId, slackDelivery)))
+  }
 
-  const state = { checkedAt, healthy, fingerprint: currentFingerprint, results, slackDelivery }
+  const state = {
+    environment: 'production',
+    checkedAt,
+    healthy,
+    fingerprint: currentFingerprint,
+    results,
+    slackDelivery,
+    correlationId,
+    ledgerTransitions: transitions,
+  }
   await env.HEALTH_STATE.put(STATE_KEY, JSON.stringify(state))
   console.log(JSON.stringify({ event: 'health_check_completed', ...state }))
   return state

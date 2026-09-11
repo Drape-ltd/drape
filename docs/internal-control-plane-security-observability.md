@@ -1,5 +1,10 @@
 # Drape Internal Security And Observability Plan
 
+Status: Supporting security document. The production auth, database-authority,
+step-up, and delivery decisions in
+`docs/drapeon-ops-control-plane-post-submission-rebuild.md` are canonical when
+this document describes an older bootstrap state.
+
 This document defines the intended security and observability model for the Drape control plane.
 
 ## Security Principles
@@ -61,14 +66,21 @@ Role assignment can come from either email allowlists or Access-forwarded groups
 - `OPS_FINANCE_GROUPS`
 - `OPS_ENGINEERING_GROUPS`
 
-Bootstrap fallback remains available only when workforce mode is not configured:
+Bootstrap access may remain available only in local development while the
+legacy surface is being retired:
 
 - `OPS_DASHBOARD_TOKEN`
 - `OPS_DASHBOARD_BOOTSTRAP_ROLE`
 
-Production defaults to fail-closed for `/ops` unless Cloudflare Access is
-configured. `OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION=1` is a break-glass override only
-and must be paired with a short operational window and immediate token rotation.
+Production fails closed unless Cloudflare Access is configured. Production must
+reject `OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION` and `OPS_DASHBOARD_TOKEN`; neither is
+a break-glass mechanism. The canonical design replaces them with named,
+time-boxed, stepped-up, audited founder override behavior.
+
+Before enabling the hostname, query Cloudflare's authoritative Access application
+and identity-provider inventory. Environment variables or database secret names
+alone do not prove that an Access policy exists. An empty inventory blocks the
+Ops Worker deployment even when `CF_ACCESS_AUD` is present elsewhere.
 
 ### App-Level RBAC
 
@@ -97,6 +109,22 @@ Suggested rules:
 - Ops and customer-success roles may prepare reviewed actions. Finance or admin must independently approve and execute them. The preparer cannot approve their own request.
 - All manual money actions need one approver; high-risk types, unresolved FX, and USD 500-equivalent or greater require two.
 - Direct legacy money routes fail closed. Execution adapters are allowlisted by action type and every attempt records a terminal outcome.
+
+### Interactive Database Authorization Boundary
+
+- New interactive Ops routes use short-lived, environment-bound, per-operator
+  workforce claims and role-scoped database views/RPCs.
+- General Supabase service-role access is restricted to isolated automation,
+  reconciliation, and provisioning jobs; it is not the authorization model for
+  interactive Ops routes.
+- Canonical Ops Edge gateways retain Supabase JWT verification as an outer
+  defense-in-depth layer. The public anon JWT only reaches the function; a
+  verified Cloudflare assertion plus the active, environment-bound workforce
+  principal remains mandatory before request parsing, reads, or mutations.
+- High-risk routes require the dedicated sensitive Cloudflare Access
+  application/audience. A normal Access JWT `iat` does not prove recent MFA.
+- The signing, rotation, revocation, claim, and database-policy details must be
+  settled in an ADR before canonical route migration begins.
 
 ## Audit Requirements
 

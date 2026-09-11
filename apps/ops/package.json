@@ -1,0 +1,51 @@
+{
+  "name": "@drape/ops",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "NEXT_DIST_DIR=.next-dev next dev -p 3005",
+    "build": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-build} next build",
+    "start": "next start -p 3005",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "env:verify": "node ./scripts/verify-environment.mjs",
+    "runtime:verify": "node --test ./scripts/runtime-boundary.test.mjs",
+    "edge:auth:verify": "node ./scripts/verify-edge-auth-boundary.mjs",
+    "ui:verify": "node ./scripts/verify-interaction-contract.mjs",
+    "metrics:verify": "node --test ./scripts/metric-eligibility.test.mjs",
+    "telemetry:verify": "node ./scripts/verify-telemetry-boundary.mjs && deno test --allow-env ../../supabase/functions/_shared/logger_test.ts ../../supabase/functions/_shared/sentry_test.ts",
+    "pwa:verify": "node ./scripts/verify-pwa-contract.mjs",
+    "prod:evidence:verify": "node ./scripts/verify-production-evidence.mjs",
+    "prod:certify": "node ./scripts/verify-production-readiness.mjs",
+    "prod:certify:test": "node --test ./scripts/production-readiness-policy.test.mjs",
+    "prod:edge:deny": "node ./scripts/verify-production-edge-denials.mjs",
+    "producers:verify": "node ./scripts/verify-production-notification-producers.mjs --source-only",
+    "prod:producers:verify": "node ./scripts/verify-production-notification-producers.mjs",
+    "db:bind-environment": "node ./scripts/configure-database-environment.mjs",
+    "cf:build": "NEXT_DIST_DIR=.next opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare deploy"
+  },
+  "dependencies": {
+    "@drape/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.47.0",
+    "lucide-react": "^1.25.0",
+    "next": "15.5.24",
+    "qrcode.react": "^4.2.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
+    "@eslint/js": "^9.39.4",
+    "@opennextjs/cloudflare": "1.20.3",
+    "@types/node": "^22.0.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^15.1.0",
+    "typescript": "^5.7.2",
+    "wrangler": "4.126.0"
+  }
+}

@@ -10,6 +10,11 @@ import {
 } from 'node:crypto'
 import { cookies, headers } from 'next/headers'
 import type { OpsRole } from './ops-console'
+import {
+  accessCertificateAllowsSensitiveAction,
+  accessCertificateFallbackState,
+} from './ops-access-certificate-policy.mjs'
+import { hasValidOpsAccessTokenClaims } from './ops-access-token-policy.mjs'
 
 export const OPS_SESSION_COOKIE = 'drape_ops_session'
 export const OPS_DASHBOARD_TOKEN_MIN_LENGTH = 32
@@ -21,15 +26,29 @@ export type OpsSession = {
   allowed: boolean
   mode: OpsAccessMode
   role: OpsRole
+  principalId: string | null
   email: string | null
   subject: string
+  audiences: string[]
   authenticationMethods: string[]
   authenticatedAt: number | null
   expiresAt: number | null
   mfaVerified: boolean
+  accessKeyState: 'fresh' | 'stale' | 'not-applicable'
+  accessKeyAgeMs: number | null
 }
 
 export function hasFreshOpsMfa(session: OpsSession, maxAgeSeconds = 15 * 60) {
+  if (session.mode === 'local-workforce') {
+    if (!session.mfaVerified || session.authenticatedAt == null) return false
+    return Math.floor(Date.now() / 1000) - session.authenticatedAt <= maxAgeSeconds
+  }
+
+  if (session.mode !== 'cloudflare-access') return false
+  if (!accessCertificateAllowsSensitiveAction(session.accessKeyState)) return false
+  const sensitiveAudiences = parseCsv(process.env.CF_ACCESS_SENSITIVE_AUD)
+  if (sensitiveAudiences.size === 0) return false
+  if (!session.audiences.some((audience) => sensitiveAudiences.has(audience.toLowerCase()))) return false
   if (!session.mfaVerified || session.authenticatedAt == null) return false
   return Math.floor(Date.now() / 1000) - session.authenticatedAt <= maxAgeSeconds
 }
@@ -108,7 +127,7 @@ export function hasOpsDashboardToken() {
   return getOpsDashboardToken() !== null
 }
 
-function normalizeOpsRole(value: string | null | undefined): OpsRole {
+function normalizeOpsRole(value: string | null | undefined): OpsRole | null {
   const normalized = value?.trim().toLowerCase()
 
   switch (normalized) {
@@ -126,8 +145,9 @@ function normalizeOpsRole(value: string | null | undefined): OpsRole {
     case 'eng':
       return 'engineering'
     case 'admin':
-    default:
       return 'admin'
+    default:
+      return null
   }
 }
 
@@ -152,7 +172,7 @@ function emailMatchesAllowedDomainOrList(email: string, allowedDomain: string | 
   return normalizedEmail.endsWith(`@${allowedDomain}`)
 }
 
-export function getOpsBootstrapRole(): OpsRole {
+export function getOpsBootstrapRole(): OpsRole | null {
   return normalizeOpsRole(process.env.OPS_DASHBOARD_BOOTSTRAP_ROLE)
 }
 
@@ -160,22 +180,21 @@ function getLocalWorkforceDryRunIdentity() {
   if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return null
   const email = process.env.OPS_LOCAL_WORKFORCE_EMAIL?.trim().toLowerCase() ?? ''
   if (!email.endsWith('@drapeon.co')) return null
+  const role = normalizeOpsRole(process.env.OPS_LOCAL_WORKFORCE_ROLE)
+  if (!role) return null
   return {
     email,
-    role: normalizeOpsRole(process.env.OPS_LOCAL_WORKFORCE_ROLE),
+    role,
   }
 }
 
 export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
   const teamDomain = normalizeHost(process.env.CF_ACCESS_TEAM_DOMAIN)
   const audiences = parseCsv(process.env.CF_ACCESS_AUD)
-  const bootstrapAllowed =
-    process.env.NODE_ENV !== 'production' ||
-    process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION === '1'
-
   if (teamDomain && audiences.size > 0) return 'cloudflare-access'
+  if (process.env.NODE_ENV === 'production') return 'unconfigured'
   if (getLocalWorkforceDryRunIdentity() && hasOpsDashboardToken()) return 'local-workforce'
-  if (bootstrapAllowed && hasOpsDashboardToken()) return 'bootstrap-token'
+  if (hasOpsDashboardToken() && getOpsBootstrapRole()) return 'bootstrap-token'
   return 'unconfigured'
 }
 
@@ -268,49 +287,50 @@ async function getAccessPublicKeys(teamDomain: string) {
   const now = Date.now()
 
   if (cachedAccessCerts && cachedAccessCerts.key === cacheKey && now - cachedAccessCerts.fetchedAt < ACCESS_CERT_CACHE_TTL_MS) {
-    return cachedAccessCerts.keys
+    return { keys: cachedAccessCerts.keys, state: 'fresh' as const, ageMs: now - cachedAccessCerts.fetchedAt }
   }
 
-  const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`, {
-    headers: {
-      Accept: 'application/json',
-    },
-    cache: 'no-store',
-  })
+  try {
+    const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`, {
+      headers: {
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    })
 
-  if (!response.ok) {
-    throw new Error(`Cloudflare Access cert fetch failed with ${response.status}`)
+    if (!response.ok) {
+      throw new Error(`Cloudflare Access cert fetch failed with ${response.status}`)
+    }
+
+    const json = (await response.json()) as AccessCertResponse
+    const keys = createPublicKeysFromResponse(json)
+
+    if (keys.length === 0) {
+      throw new Error('Cloudflare Access cert response did not contain usable signing keys')
+    }
+
+    cachedAccessCerts = {
+      key: cacheKey,
+      fetchedAt: now,
+      keys,
+    }
+
+    return { keys, state: 'fresh' as const, ageMs: 0 }
+  } catch (error) {
+    const ageMs = cachedAccessCerts ? now - cachedAccessCerts.fetchedAt : Number.POSITIVE_INFINITY
+    if (accessCertificateFallbackState({
+      ageMs,
+      issuerMatches: cachedAccessCerts?.key === cacheKey,
+      keyCount: cachedAccessCerts?.keys.length ?? 0,
+    }) === 'stale' && cachedAccessCerts) {
+      console.warn('[ops-auth] Cloudflare Access certificates are temporarily stale.', {
+        ageMs,
+        failureType: error instanceof Error ? error.name : 'UnknownError',
+      })
+      return { keys: cachedAccessCerts.keys, state: 'stale' as const, ageMs }
+    }
+    throw error
   }
-
-  const json = (await response.json()) as AccessCertResponse
-  const keys = createPublicKeysFromResponse(json)
-
-  if (keys.length === 0) {
-    throw new Error('Cloudflare Access cert response did not contain usable signing keys')
-  }
-
-  cachedAccessCerts = {
-    key: cacheKey,
-    fetchedAt: now,
-    keys,
-  }
-
-  return keys
-}
-
-function normalizeGroups(groups: AccessJwtPayload['groups']) {
-  if (Array.isArray(groups)) {
-    return groups.map((group) => group.trim().toLowerCase()).filter(Boolean)
-  }
-
-  if (typeof groups === 'string') {
-    return groups
-      .split(',')
-      .map((group) => group.trim().toLowerCase())
-      .filter(Boolean)
-  }
-
-  return []
 }
 
 function normalizeAuthenticationMethods(value: AccessJwtPayload['amr']) {
@@ -320,44 +340,12 @@ function normalizeAuthenticationMethods(value: AccessJwtPayload['amr']) {
 
 const MFA_AUTHENTICATION_METHODS = new Set(['mfa', 'hwk', 'swk', 'otp', 'face', 'fpt', 'iris', 'retina', 'vbm'])
 
-function determineWorkforceRole(email: string, groups: string[]): OpsRole | null {
-  const normalizedEmail = email.trim().toLowerCase()
-  const emailSets = {
-    admin: parseCsv(process.env.OPS_ADMIN_EMAILS),
-    ops: parseCsv(process.env.OPS_OPS_EMAILS),
-    customer_success: parseCsv(process.env.OPS_CUSTOMER_SUCCESS_EMAILS),
-    trust: parseCsv(process.env.OPS_TRUST_EMAILS),
-    finance: parseCsv(process.env.OPS_FINANCE_EMAILS),
-    engineering: parseCsv(process.env.OPS_ENGINEERING_EMAILS),
-  }
-
-  const groupSets = {
-    admin: parseCsv(process.env.OPS_ADMIN_GROUPS),
-    ops: parseCsv(process.env.OPS_OPS_GROUPS),
-    customer_success: parseCsv(process.env.OPS_CUSTOMER_SUCCESS_GROUPS),
-    trust: parseCsv(process.env.OPS_TRUST_GROUPS),
-    finance: parseCsv(process.env.OPS_FINANCE_GROUPS),
-    engineering: parseCsv(process.env.OPS_ENGINEERING_GROUPS),
-  }
-
-  const groupList = new Set(groups)
-  const roleOrder: OpsRole[] = ['admin', 'engineering', 'finance', 'trust', 'customer_success', 'ops']
-
-  for (const role of roleOrder) {
-    if (emailSets[role].has(normalizedEmail)) return role
-
-    for (const group of groupSets[role]) {
-      if (groupList.has(group)) return role
-    }
-  }
-
-  return null
-}
-
 async function getWorkforceSession(): Promise<OpsSession | null> {
   const teamDomain = normalizeHost(process.env.CF_ACCESS_TEAM_DOMAIN)
-  const audiences = [...parseCsv(process.env.CF_ACCESS_AUD)]
-  if (!teamDomain || audiences.length === 0) return null
+  const primaryAudiences = [...parseCsv(process.env.CF_ACCESS_AUD)]
+  const sensitiveAudiences = [...parseCsv(process.env.CF_ACCESS_SENSITIVE_AUD)]
+  const acceptedAudiences = [...new Set([...primaryAudiences, ...sensitiveAudiences])]
+  if (!teamDomain || primaryAudiences.length === 0) return null
 
   const allowedDomain = normalizeHost(process.env.OPS_ALLOWED_EMAIL_DOMAIN) ?? 'drapeon.co'
   const allowedEmails = parseCsv(process.env.OPS_ALLOWED_EMAILS)
@@ -378,7 +366,7 @@ async function getWorkforceSession(): Promise<OpsSession | null> {
       ? [parsed.payload.aud]
       : []
 
-  if (!payloadAudiences.some((audience) => audiences.includes(audience.toLowerCase()))) {
+  if (!payloadAudiences.some((audience) => acceptedAudiences.includes(audience.toLowerCase()))) {
     return null
   }
 
@@ -388,10 +376,22 @@ async function getWorkforceSession(): Promise<OpsSession | null> {
   }
 
   const now = Math.floor(Date.now() / 1000)
-  if (typeof parsed.payload.nbf === 'number' && parsed.payload.nbf > now) return null
-  if (typeof parsed.payload.exp === 'number' && parsed.payload.exp <= now) return null
+  const issuedAt = parsed.payload.iat
+  const expiresAt = parsed.payload.exp
+  const signedSubject = parsed.payload.sub
+  const signedEmail = parsed.payload.email
+  if (
+    typeof issuedAt !== 'number' ||
+    typeof expiresAt !== 'number' ||
+    typeof signedSubject !== 'string' ||
+    typeof signedEmail !== 'string'
+  ) {
+    return null
+  }
+  if (!hasValidOpsAccessTokenClaims(parsed.payload, now)) return null
 
-  const candidateKeys = (await getAccessPublicKeys(teamDomain)).filter(
+  const accessKeys = await getAccessPublicKeys(teamDomain)
+  const candidateKeys = accessKeys.keys.filter(
     (key) => !parsed.header.kid || !key.kid || key.kid === parsed.header.kid,
   )
 
@@ -404,7 +404,7 @@ async function getWorkforceSession(): Promise<OpsSession | null> {
 
   if (!verified) return null
 
-  const email = parsed.payload.email?.trim().toLowerCase() ?? assertedEmail
+  const email = signedEmail.trim().toLowerCase()
   if (!email || !emailMatchesAllowedDomainOrList(email, allowedDomain, allowedEmails)) {
     return null
   }
@@ -413,19 +413,29 @@ async function getWorkforceSession(): Promise<OpsSession | null> {
     return null
   }
 
-  const role = determineWorkforceRole(email, normalizeGroups(parsed.payload.groups))
-  if (!role) return null
+  const subject = signedSubject.trim()
+  const { getActiveOpsWorkforcePrincipal } = await import('./ops-workforce-principal')
+  const principal = await getActiveOpsWorkforcePrincipal({
+    email,
+    subject,
+    tokenIssuedAt: issuedAt,
+  })
+  if (!principal) return null
 
   return {
     allowed: true,
     mode: 'cloudflare-access',
-    role,
+    role: principal.role,
+    principalId: principal.id,
     email,
-    subject: parsed.payload.sub?.trim() || email,
+    subject,
+    audiences: payloadAudiences,
     authenticationMethods: normalizeAuthenticationMethods(parsed.payload.amr),
-    authenticatedAt: typeof parsed.payload.iat === 'number' ? parsed.payload.iat : null,
-    expiresAt: typeof parsed.payload.exp === 'number' ? parsed.payload.exp : null,
+    authenticatedAt: issuedAt,
+    expiresAt,
     mfaVerified: normalizeAuthenticationMethods(parsed.payload.amr).some((method) => MFA_AUTHENTICATION_METHODS.has(method)),
+    accessKeyState: accessKeys.state,
+    accessKeyAgeMs: accessKeys.ageMs,
   }
 }
 
@@ -444,25 +454,35 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
       allowed: true,
       mode: 'local-workforce',
       role: localIdentity.role,
+      principalId: null,
       email: localIdentity.email,
       subject: `local-dry-run:${localIdentity.email}`,
+      audiences: ['local-workforce'],
       authenticationMethods: ['mfa', 'local-dry-run'],
       authenticatedAt,
       expiresAt: authenticatedAt + 15 * 60,
       mfaVerified: true,
+      accessKeyState: 'not-applicable',
+      accessKeyAgeMs: null,
     }
   }
 
+  const role = getOpsBootstrapRole()
+  if (!role) return null
   return {
     allowed: true,
     mode: 'bootstrap-token',
-    role: getOpsBootstrapRole(),
+    role,
+    principalId: null,
     email: null,
-    subject: `bootstrap:${getOpsBootstrapRole()}`,
+    subject: `bootstrap:${role}`,
+    audiences: [],
     authenticationMethods: [],
     authenticatedAt: null,
     expiresAt: null,
     mfaVerified: false,
+    accessKeyState: 'not-applicable',
+    accessKeyAgeMs: null,
   }
 }
 

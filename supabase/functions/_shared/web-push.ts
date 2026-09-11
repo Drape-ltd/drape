@@ -7,6 +7,13 @@ const DEFAULT_VAPID_SUBJECT = 'mailto:ops@drapeon.co'
 type WebPushSubscriptionRow = {
   id: string
   endpoint: string
+  p256dh: string | null
+  auth: string | null
+}
+
+export type WebPushPayload = {
+  path: string
+  correlationKey: string
 }
 
 export type WebPushFanoutResult = {
@@ -35,6 +42,83 @@ function bytesToBase64Url(bytes: Uint8Array) {
 
 function textToBase64Url(value: string) {
   return bytesToBase64Url(new TextEncoder().encode(value))
+}
+
+function concatBytes(...parts: Uint8Array[]) {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    output.set(part, offset)
+    offset += part.length
+  }
+  return output
+}
+
+function bytesBuffer(bytes: Uint8Array) {
+  return bytes.slice().buffer as ArrayBuffer
+}
+
+async function hmacSha256(keyBytes: Uint8Array, value: Uint8Array) {
+  const key = await crypto.subtle.importKey('raw', bytesBuffer(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, bytesBuffer(value)))
+}
+
+async function hkdfExpand(prk: Uint8Array, info: Uint8Array, length: number) {
+  if (length > 32) throw new Error('Web Push HKDF output exceeds one SHA-256 block.')
+  const block = await hmacSha256(prk, concatBytes(info, new Uint8Array([1])))
+  return block.slice(0, length)
+}
+
+export async function encryptWebPushPayload(
+  subscription: Pick<WebPushSubscriptionRow, 'p256dh' | 'auth'>,
+  payload: WebPushPayload,
+) {
+  if (!subscription.p256dh || !subscription.auth) throw new Error('The Web Push subscription is missing encryption keys.')
+  const clientPublicBytes = base64UrlToBytes(subscription.p256dh)
+  const authSecret = base64UrlToBytes(subscription.auth)
+  if (clientPublicBytes.length !== 65 || clientPublicBytes[0] !== 4 || authSecret.length < 16) {
+    throw new Error('The Web Push subscription has invalid encryption keys.')
+  }
+
+  const clientPublicKey = await crypto.subtle.importKey(
+    'raw',
+    clientPublicBytes,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
+  )
+  const serverKeys = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  )
+  const serverPublicBytes = new Uint8Array(await crypto.subtle.exportKey('raw', serverKeys.publicKey))
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: clientPublicKey },
+    serverKeys.privateKey,
+    256,
+  ))
+  const authenticationPrk = await hmacSha256(authSecret, sharedSecret)
+  const keyInfo = concatBytes(
+    new TextEncoder().encode('WebPush: info\0'),
+    clientPublicBytes,
+    serverPublicBytes,
+  )
+  const ikm = await hkdfExpand(authenticationPrk, keyInfo, 32)
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const contentPrk = await hmacSha256(salt, ikm)
+  const contentEncryptionKey = await hkdfExpand(contentPrk, new TextEncoder().encode('Content-Encoding: aes128gcm\0'), 16)
+  const nonce = await hkdfExpand(contentPrk, new TextEncoder().encode('Content-Encoding: nonce\0'), 12)
+  const plaintext = concatBytes(
+    new TextEncoder().encode(JSON.stringify(payload)),
+    new Uint8Array([2]),
+  )
+  const key = await crypto.subtle.importKey('raw', contentEncryptionKey, 'AES-GCM', false, ['encrypt'])
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, plaintext))
+  const recordHeader = new Uint8Array(5)
+  new DataView(recordHeader.buffer).setUint32(0, 4_096)
+  recordHeader[4] = serverPublicBytes.length
+  return concatBytes(salt, recordHeader, serverPublicBytes, ciphertext)
 }
 
 function derToJose(signature: Uint8Array) {
@@ -124,38 +208,58 @@ async function markSubscriptionFailed(
   disable: boolean,
 ) {
   await supabase
-    .from('web_push_subscriptions')
-    .update({
-      ...(disable ? { enabled: false } : {}),
-      failed_at: new Date().toISOString(),
-      failure_reason: reason,
+    .rpc('record_web_push_delivery_result', {
+      p_endpoint: endpoint,
+      p_delivered: false,
+      p_failure_reason: reason,
+      p_disable: disable,
     })
-    .eq('endpoint', endpoint)
 }
 
-async function sendWebPushEndpoint(supabase: SupabaseClient, endpoint: string) {
-  const authorization = await buildVapidAuthorization(endpoint)
-  if (!authorization) return 'skipped' as const
+async function markSubscriptionDelivered(supabase: SupabaseClient, endpoint: string) {
+  await supabase.rpc('record_web_push_delivery_result', {
+    p_endpoint: endpoint,
+    p_delivered: true,
+    p_failure_reason: null,
+    p_disable: false,
+  })
+}
 
-  const response = await fetch(endpoint, {
+async function sendWebPushEndpoint(
+  supabase: SupabaseClient,
+  subscription: WebPushSubscriptionRow,
+  payload: WebPushPayload,
+) {
+  const authorization = await buildVapidAuthorization(subscription.endpoint)
+  if (!authorization) return 'skipped' as const
+  const encryptedPayload = await encryptWebPushPayload(subscription, payload)
+
+  const response = await fetch(subscription.endpoint, {
     method: 'POST',
     headers: {
       Authorization: authorization,
       TTL: '3600',
       Urgency: 'high',
+      'Content-Type': 'application/octet-stream',
+      'Content-Encoding': 'aes128gcm',
     },
+    body: encryptedPayload,
   })
 
-  if (response.ok || response.status === 201 || response.status === 202) return 'sent' as const
+  if (response.ok || response.status === 201 || response.status === 202) {
+    await markSubscriptionDelivered(supabase, subscription.endpoint)
+    return 'sent' as const
+  }
 
   const reason = `http-${response.status}`
-  await markSubscriptionFailed(supabase, endpoint, reason, response.status === 404 || response.status === 410)
+  await markSubscriptionFailed(supabase, subscription.endpoint, reason, response.status === 404 || response.status === 410)
   return 'failed' as const
 }
 
 async function fanoutWebPush(
   supabase: SupabaseClient,
   subscriptions: WebPushSubscriptionRow[],
+  payload: WebPushPayload,
 ): Promise<WebPushFanoutResult> {
   const result: WebPushFanoutResult = { sent: 0, skipped: 0, failed: 0 }
   if (subscriptions.length === 0) {
@@ -165,7 +269,7 @@ async function fanoutWebPush(
 
   for (const subscription of subscriptions) {
     try {
-      const status = await sendWebPushEndpoint(supabase, subscription.endpoint)
+      const status = await sendWebPushEndpoint(supabase, subscription, payload)
       result[status] += 1
     } catch (error) {
       result.failed += 1
@@ -185,7 +289,7 @@ export async function sendWebPushToUser(
 ): Promise<WebPushFanoutResult> {
   const { data, error } = await supabase
     .from('web_push_subscriptions')
-    .select('id, endpoint')
+    .select('id, endpoint, p256dh, auth')
     .eq('audience', 'ACCOUNT')
     .eq('user_id', userId)
     .eq('enabled', true)
@@ -197,15 +301,54 @@ export async function sendWebPushToUser(
     return { sent: 0, skipped: 0, failed: 1 }
   }
 
-  return fanoutWebPush(supabase, (data ?? []) as WebPushSubscriptionRow[])
+  return fanoutWebPush(supabase, (data ?? []) as WebPushSubscriptionRow[], {
+    path: '/account',
+    correlationKey: `account:${userId}`,
+  })
 }
 
-export async function sendWebPushToOps(supabase: SupabaseClient): Promise<WebPushFanoutResult> {
+export async function sendWebPushToOps(
+  supabase: SupabaseClient,
+  payload: WebPushPayload = { path: '/ops/my-work', correlationKey: 'ops-attention' },
+): Promise<WebPushFanoutResult> {
+  const configuredEnvironment = (Deno.env.get('DRAPE_OPS_ENV') ?? Deno.env.get('DRAPE_ENV') ?? Deno.env.get('ENVIRONMENT') ?? '')
+    .trim()
+    .toLowerCase()
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+  const inferredEnvironment = supabaseUrl.includes('wkfsrunetmgjdtcurmoj')
+    ? 'production'
+    : supabaseUrl.includes('pqptfuqogvrajozfsqzi')
+      ? 'development'
+      : null
+  const environment = configuredEnvironment === 'production' || configuredEnvironment === 'development'
+    ? configuredEnvironment
+    : inferredEnvironment
+  if (!environment) {
+    log('error', FN, 'ops.environment_unresolved', {})
+    return { sent: 0, skipped: 0, failed: 1 }
+  }
+  const { data: principals, error: principalError } = await supabase
+    .from('ops_workforce_principals')
+    .select('id')
+    .eq('status', 'ACTIVE')
+    .contains('permitted_environments', [environment])
+
+  if (principalError) {
+    log('warn', FN, 'ops.principal_lookup_failed', { error: principalError.message })
+    return { sent: 0, skipped: 0, failed: 1 }
+  }
+
+  const principalIds = (principals ?? []).map((principal) => principal.id).filter(Boolean)
+  if (principalIds.length === 0) return { sent: 0, skipped: 1, failed: 0 }
+
   const { data, error } = await supabase
     .from('web_push_subscriptions')
-    .select('id, endpoint')
+    .select('id, endpoint, p256dh, auth')
     .eq('audience', 'OPS')
+    .eq('ops_environment', environment)
     .eq('enabled', true)
+    .in('ops_principal_id', principalIds)
+    .gt('expires_at', new Date().toISOString())
     .order('last_seen_at', { ascending: false })
     .limit(25)
 
@@ -214,5 +357,5 @@ export async function sendWebPushToOps(supabase: SupabaseClient): Promise<WebPus
     return { sent: 0, skipped: 0, failed: 1 }
   }
 
-  return fanoutWebPush(supabase, (data ?? []) as WebPushSubscriptionRow[])
+  return fanoutWebPush(supabase, (data ?? []) as WebPushSubscriptionRow[], payload)
 }

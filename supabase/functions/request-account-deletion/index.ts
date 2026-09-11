@@ -436,6 +436,7 @@ Deno.serve(async (req) => {
       actorId: caller.id,
       actorRole: role,
       userId: caller.id,
+      tailorProfileId: tailorProfile?.id ?? null,
       relatedEntityType: 'account_deletion_request',
       relatedEntityId: (insertedRequest as { id?: string } | null)?.id ?? null,
       title: 'Account deletion request',

@@ -9,35 +9,28 @@ import {
 } from '../../../lib/ops-auth'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { checkPublicRateLimit, getClientIp } from '../../../lib/request-security'
-
-function sanitizeRedirect(value: FormDataEntryValue | null) {
-  if (typeof value !== 'string') return '/ops'
-
-  try {
-    const url = new URL(value, 'https://drapeon.co')
-    if (url.origin !== 'https://drapeon.co' || url.pathname !== '/ops') return '/ops'
-    return `${url.pathname}${url.search}${url.hash}`
-  } catch {
-    return '/ops'
-  }
-}
-
-function requestOrigin(request: Request) {
-  const host = request.headers.get('host')?.trim()
-  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
-  const protocol = forwardedProto || (process.env.NODE_ENV === 'production' ? 'https' : 'http')
-  return host ? `${protocol}://${host}` : request.url
-}
+import {
+  buildCanonicalOpsUrl,
+  sanitizeOpsRedirect,
+  validateOpsMutationOrigin,
+} from '../../../lib/ops-request-security'
 
 function buildRedirect(request: Request, redirectTo: string, key: 'notice' | 'error', value: string) {
-  const url = new URL(redirectTo, requestOrigin(request))
+  const url = buildCanonicalOpsUrl(request, redirectTo)
   url.searchParams.set(key, value)
   return url
 }
 
 export async function POST(request: Request) {
+  if (!validateOpsMutationOrigin(request).ok) {
+    return NextResponse.json(
+      { ok: false, error: 'invalid-origin' },
+      { status: 403, headers: { 'Cache-Control': 'no-store, max-age=0' } },
+    )
+  }
+
   const formData = await request.formData()
-  const redirectTo = sanitizeRedirect(formData.get('redirectTo'))
+  const redirectTo = sanitizeOpsRedirect(request, formData.get('redirectTo'))
   const submitted = typeof formData.get('token') === 'string' ? formData.get('token')?.toString().trim() ?? '' : ''
   const expected = getOpsDashboardToken()
   const tokenStatus = getOpsDashboardTokenStatus()

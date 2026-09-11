@@ -7,6 +7,7 @@ import {
   getSupabaseUrl,
   logMissingServerSupabaseConfig,
 } from './supabase-config'
+import { validateServiceRoleTarget } from './supabase-environment'
 
 export function createPublicServerClient() {
   const supabaseUrl = getSupabaseUrl()
@@ -28,6 +29,19 @@ export function createServiceRoleClient() {
 
   if (!supabaseUrl || missing.length) {
     logMissingServerSupabaseConfig('server-supabase', missing)
+    return null
+  }
+
+  const target = validateServiceRoleTarget(
+    supabaseUrl,
+    serviceRoleKey,
+    process.env.SUPABASE_SERVICE_ROLE_PROJECT_REF,
+  )
+  if (!target.isValid) {
+    console.error('[server-supabase] Refusing service-role access because the key target does not match the configured Supabase URL.', {
+      urlProjectRef: target.urlProjectRef,
+      keyProjectRef: target.keyProjectRef,
+    })
     return null
   }
 

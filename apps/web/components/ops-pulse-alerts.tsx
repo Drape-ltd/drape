@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useRouter } from 'next/navigation'
-import { registerWebPushSubscription } from '../lib/web-push-client'
+import { registerWebPushSubscription, unsubscribeWebPushSubscription } from '../lib/web-push-client'
 
 const OPS_WEB_PUSH_SAVED_KEY = 'drapeon:ops:web-push-saved'
 
@@ -30,7 +30,7 @@ type OpsPulseAlertsProps = {
   workflowHref: string
 }
 
-type WebPushStatus = 'idle' | 'saving' | 'saved' | 'unavailable' | 'failed'
+type WebPushStatus = 'idle' | 'saving' | 'removing' | 'saved' | 'unavailable' | 'failed'
 
 function currentPermission(): NotificationPermission | 'unsupported' {
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
@@ -302,10 +302,39 @@ export function OpsPulseAlerts({
     await saveClosedBrowserAlerts()
   }
 
+  async function disableAlerts() {
+    setWebPushStatus('removing')
+    const result = await unsubscribeWebPushSubscription('/ops')
+    if (!result.ok) {
+      setWebPushStatus('failed')
+      return
+    }
+
+    if (result.subscription) {
+      const response = await fetch('/ops/web-push', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ subscription: result.subscription }),
+      }).catch(() => null)
+      if (!response?.ok) {
+        setWebPushStatus('failed')
+        return
+      }
+    }
+
+    forgetOpsWebPushSaved()
+    setWebPushStatus('idle')
+  }
+
   const buttonCopy = (() => {
     if (!browserReady) return 'Checking desktop alerts...'
     if (webPushStatus === 'saving') return 'Saving alerts...'
-    if (webPushStatus === 'saved') return 'Closed-browser alerts on'
+    if (webPushStatus === 'removing') return 'Turning alerts off...'
+    if (webPushStatus === 'saved') return 'Turn off closed-browser alerts'
     if (webPushStatus === 'unavailable') return 'Web push not configured'
     if (webPushStatus === 'failed') return 'Alert save failed'
     if (permission === 'unsupported') return 'Desktop alerts unavailable'
@@ -316,7 +345,7 @@ export function OpsPulseAlerts({
   const buttonDisabled =
     !browserReady ||
     webPushStatus === 'saving' ||
-    webPushStatus === 'saved' ||
+    webPushStatus === 'removing' ||
     webPushStatus === 'unavailable' ||
     permission === 'unsupported' ||
     permission === 'denied'
@@ -336,7 +365,7 @@ export function OpsPulseAlerts({
         </span>
         <button
           type="button"
-          onClick={() => { void enableAlerts() }}
+          onClick={() => { void (webPushStatus === 'saved' ? disableAlerts() : enableAlerts()) }}
           disabled={buttonDisabled}
           className="rounded-full border border-ink/10 bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-55"
         >

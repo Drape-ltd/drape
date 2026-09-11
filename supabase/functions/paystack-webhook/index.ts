@@ -49,6 +49,11 @@ import { authorizeCronRequest } from '../_shared/cron.ts'
 import { enqueueFabricReleaseOutcomeSideEffects } from '../_shared/fabric-release.ts'
 import { markDispatchRefundTerminal } from '../_shared/drapeon-dispatch-refund.ts'
 import { finalizeDispatchShortfallFunding } from '../_shared/drapeon-dispatch.ts'
+import {
+  failOrderCancellationRefund,
+  finalizeOrderCancellationRefund,
+  readOrderCancellationRefundContext,
+} from '../_shared/order-cancellation-refund.ts'
 
 const FN = 'paystack-webhook'
 const textEncoder = new TextEncoder()
@@ -1202,6 +1207,7 @@ Deno.serve(async (req) => {
       const latestRequest = existingProviderResponse.latest_refund_request && typeof existingProviderResponse.latest_refund_request === 'object'
         ? existingProviderResponse.latest_refund_request as Record<string, unknown>
         : null
+      const cancellationContext = readOrderCancellationRefundContext(latestRequest?.operation_context)
       const resolutionId = typeof latestRequest?.refund_resolution_id === 'string' ? latestRequest.refund_resolution_id : null
       const pendingExactRestoration = latestRequest?.exact_restoration && typeof latestRequest.exact_restoration === 'object'
         ? latestRequest.exact_restoration as Record<string, unknown>
@@ -1240,6 +1246,16 @@ Deno.serve(async (req) => {
       }
 
       if (event.event === 'refund.failed') {
+        if (cancellationContext) {
+          await failOrderCancellationRefund(supabase, {
+            context: cancellationContext,
+            orderId: payment.order_id,
+            providerReference: typeof event.data?.refund_reference === 'string' || typeof event.data?.refund_reference === 'number' ? String(event.data.refund_reference) : null,
+            failureCode: 'PROVIDER_REFUND_FAILED',
+            failureSummary: 'Paystack reported that the refund failed.',
+            source: FN,
+          })
+        }
         if (resolution?.id) await supabase.from('order_refund_resolutions').update({ status: 'FAILED', failure_summary: 'Paystack reported that the refund failed.', updated_at: new Date().toISOString() }).eq('id', resolution.id)
         if (resolution?.money_desk_request_id) {
           const { data: attempt } = await supabase.from('money_desk_execution_attempts').select('id').eq('request_id', resolution.money_desk_request_id).eq('status', 'PROCESSING').order('started_at', { ascending: false }).limit(1).maybeSingle()
@@ -1334,6 +1350,15 @@ Deno.serve(async (req) => {
           : typeof resolution?.provider_reference === 'string'
             ? resolution.provider_reference
             : null
+      if (cancellationContext) {
+        await finalizeOrderCancellationRefund(supabase, {
+          context: cancellationContext,
+          orderId: payment.order_id,
+          providerReference: providerRefundReference,
+          actorRole: 'SYSTEM',
+          source: FN,
+        })
+      }
       if (resolution?.id) {
         await supabase.from('order_refund_resolutions').update({ status: 'SUCCEEDED', provider_reference: providerRefundReference, failure_summary: null, updated_at: nowIso }).eq('id', resolution.id)
       }
@@ -1386,7 +1411,7 @@ Deno.serve(async (req) => {
         if (attempt?.id) await supabase.rpc('complete_money_desk_execution', { p_attempt_id: attempt.id, p_status: 'SUCCEEDED', p_provider_reference: providerRefundReference, p_failure_code: null, p_failure_summary: null })
       }
       const { data: refundOrder } = await supabase.from('orders').select('id,customer_id,tailor_id').eq('id', payment.order_id).maybeSingle()
-      if (refundOrder?.id) {
+      if (!cancellationContext && refundOrder?.id) {
         const title = 'Order refund is complete'
         for (const recipient of [{ id: refundOrder.customer_id, audience: 'CUSTOMER' as const }, { id: refundOrder.tailor_id, audience: 'TAILOR' as const }]) {
           if (!recipient.id) continue

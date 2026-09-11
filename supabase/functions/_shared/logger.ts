@@ -17,8 +17,9 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { serializeTelemetryEntry, type TelemetryLevel } from './telemetry-scrub.ts'
 
-type Level = 'info' | 'warn' | 'error'
+type Level = TelemetryLevel
 
 export function log(
   level: Level,
@@ -26,13 +27,7 @@ export function log(
   event: string,
   data?: Record<string, unknown>,
 ): void {
-  const entry = JSON.stringify({
-    level,
-    fn,
-    event,
-    ts: new Date().toISOString(),
-    ...data,
-  })
+  const entry = serializeTelemetryEntry(level, fn, event, data)
 
   if (level === 'error') {
     console.error(entry)
@@ -69,6 +64,6 @@ export async function audit(
   })
   if (error) {
     // Don't throw — audit failure must never break the request
-    console.error(JSON.stringify({ level: 'error', fn: 'logger', event: 'audit.write_failed', error: error.message }))
+    console.error(serializeTelemetryEntry('error', 'logger', 'audit.write_failed', { database_code: error.code ?? 'unknown' }))
   }
 }

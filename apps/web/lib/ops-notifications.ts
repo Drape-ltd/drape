@@ -61,11 +61,10 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
     const client = createServiceRoleClient()
     if (!client) return null
     return sendOpsWebPush(client)
-  })().catch((error: unknown) => {
+  })().catch(() => {
     console.warn('[ops notification] Critical issue web push skipped.', {
       issueType: input.issueType,
       issueNumber: input.issueNumber,
-      error: error instanceof Error ? error.message : String(error),
     })
     return null
   })
@@ -144,12 +143,11 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
   })
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
+    await response.body?.cancel().catch(() => undefined)
     console.error('[ops notification] Failed to send critical issue email.', {
       issueType: input.issueType,
       issueNumber: input.issueNumber,
       status: response.status,
-      body,
     })
     await webPushPromise
     return { ok: false as const, skipped: false as const }

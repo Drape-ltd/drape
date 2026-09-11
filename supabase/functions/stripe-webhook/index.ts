@@ -57,6 +57,11 @@ import { finalizeRefundOnAttempt } from '../_shared/payment-refunds.ts'
 import { finalizeDispatchShortfallFunding } from '../_shared/drapeon-dispatch.ts'
 import { refundOutcomeMessage, refundTimingMessage } from '../_shared/refund-guidance.ts'
 import { authorizeCronRequest } from '../_shared/cron.ts'
+import {
+  failOrderCancellationRefund,
+  finalizeOrderCancellationRefund,
+  readOrderCancellationRefundContext,
+} from '../_shared/order-cancellation-refund.ts'
 
 const FN = 'stripe-webhook'
 
@@ -1260,6 +1265,7 @@ async function handleStripeRefundLifecycle(
   const latestRequest = existingProviderResponse.latest_refund_request && typeof existingProviderResponse.latest_refund_request === 'object'
     ? existingProviderResponse.latest_refund_request as Record<string, unknown>
     : null
+  const cancellationContext = readOrderCancellationRefundContext(latestRequest?.operation_context)
   const resolutionId = input.refund.metadata?.refund_resolution_id?.trim()
     || (typeof latestRequest?.refund_resolution_id === 'string' ? latestRequest.refund_resolution_id : null)
   const pendingExactRestoration = latestRequest?.exact_restoration && typeof latestRequest.exact_restoration === 'object'
@@ -1276,6 +1282,15 @@ async function handleStripeRefundLifecycle(
     ? latestRefund.response as Record<string, unknown>
     : null
   if (latestResponse?.id === input.refund.id && ['REFUNDED', 'PARTIAL_REFUND'].includes(payment.status)) {
+    if (cancellationContext) {
+      await finalizeOrderCancellationRefund(supabase, {
+        context: cancellationContext,
+        orderId: payment.order_id,
+        providerReference: input.refund.id,
+        actorRole: 'SYSTEM',
+        source: FN,
+      })
+    }
     await markWebhookEventProcessed(supabase, input.webhookEventId, {
       orderId: payment.order_id,
       paymentId: payment.id,
@@ -1318,6 +1333,16 @@ async function handleStripeRefundLifecycle(
 
   if (status === 'failed' || status === 'canceled') {
     const failureSummary = `Stripe reported that the refund ${status}.`
+    if (cancellationContext) {
+      await failOrderCancellationRefund(supabase, {
+        context: cancellationContext,
+        orderId: payment.order_id,
+        providerReference: input.refund.id,
+        failureCode: 'PROVIDER_REFUND_FAILED',
+        failureSummary,
+        source: FN,
+      })
+    }
     if (resolution?.id) await supabase.from('order_refund_resolutions').update({ status: 'FAILED', failure_summary: failureSummary, updated_at: new Date().toISOString() }).eq('id', resolution.id)
     if (resolution?.money_desk_request_id) {
       const { data: attempt } = await supabase.from('money_desk_execution_attempts').select('id').eq('request_id', resolution.money_desk_request_id).eq('status', 'PROCESSING').order('started_at', { ascending: false }).limit(1).maybeSingle()
@@ -1401,6 +1426,15 @@ async function handleStripeRefundLifecycle(
     exactRestoration,
   })
   await markDispatchRefundTerminal(supabase, { resolutionId, succeeded: true, providerReference: input.refund.id })
+  if (cancellationContext) {
+    await finalizeOrderCancellationRefund(supabase, {
+      context: cancellationContext,
+      orderId: payment.order_id,
+      providerReference: input.refund.id,
+      actorRole: 'SYSTEM',
+      source: FN,
+    })
+  }
   const nowIso = new Date().toISOString()
   if (resolution?.id) {
     await supabase.from('order_refund_resolutions').update({ status: 'SUCCEEDED', provider_reference: input.refund.id, failure_summary: null, updated_at: nowIso }).eq('id', resolution.id)
@@ -1426,7 +1460,7 @@ async function handleStripeRefundLifecycle(
     if (attempt?.id) await supabase.rpc('complete_money_desk_execution', { p_attempt_id: attempt.id, p_status: 'SUCCEEDED', p_provider_reference: input.refund.id, p_failure_code: null, p_failure_summary: null })
   }
   const { data: order } = await supabase.from('orders').select('id,customer_id,tailor_id').eq('id', payment.order_id).maybeSingle()
-  if (order?.id) {
+  if (!cancellationContext && order?.id) {
     for (const recipient of [{ id: order.customer_id, audience: 'CUSTOMER' as const }, { id: order.tailor_id, audience: 'TAILOR' as const }]) {
       if (!recipient.id) continue
       const body = `${refundTimingMessage('STRIPE', recipient.audience)} ${resolution?.id ? refundOutcomeMessage(resolution.order_outcome, resolution.resume_stage) : ''}`.trim()

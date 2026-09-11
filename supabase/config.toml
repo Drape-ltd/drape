@@ -333,3 +333,33 @@ verify_jwt = false
 
 [functions.trusted-device-action]
 verify_jwt = false
+
+[functions.ops-account-deletion-action]
+verify_jwt = true
+
+[functions.ops-case-action]
+verify_jwt = true
+
+[functions.ops-trust-action]
+verify_jwt = true
+
+[functions.ops-health-monitor-ingest]
+verify_jwt = true
+
+[functions.ops-incident-action]
+verify_jwt = true
+
+[functions.ops-read-gateway]
+verify_jwt = true
+
+[functions.ops-web-push-action]
+verify_jwt = true
+
+[functions.ops-money-action]
+verify_jwt = true
+
+[functions.ops-export-action]
+verify_jwt = true
+
+[functions.ops-workforce-action]
+verify_jwt = true

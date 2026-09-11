@@ -38,10 +38,6 @@ function hasCloudflareAccessConfig() {
   )
 }
 
-function isExplicitOpsBreakGlassEnabled() {
-  return process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION === '1'
-}
-
 function getHostname(request: NextRequest) {
   const host = request.headers.get('host')?.trim().toLowerCase() ?? ''
   return host.split(':')[0] ?? ''
@@ -74,18 +70,12 @@ function isPublicProductionOpsRequest(request: NextRequest) {
   return isProductionRequest(request) && isOpsPath(request.nextUrl.pathname) && !isOpsHostname(request)
 }
 
-function notFoundResponse() {
-  return new Response('Not found', {
-    status: 404,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Referrer-Policy': 'no-referrer',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Robots-Tag': 'noindex, nofollow',
-    },
-  })
+function legacyOpsRedirect(request: NextRequest) {
+  const destination = isProductionRequest(request)
+    ? new URL(request.nextUrl.pathname + request.nextUrl.search, 'https://ops.drapeon.co')
+    : new URL(request.nextUrl.pathname + request.nextUrl.search, 'http://localhost:3005')
+
+  return NextResponse.redirect(destination, 307)
 }
 
 function invalidEnvironmentResponse() {
@@ -172,7 +162,11 @@ export function middleware(request: NextRequest) {
   }
 
   if (isPublicProductionOpsRequest(request)) {
-    return notFoundResponse()
+    return legacyOpsRedirect(request)
+  }
+
+  if (!isProductionRequest(request) && isOpsPath(request.nextUrl.pathname)) {
+    return legacyOpsRedirect(request)
   }
 
   if (
@@ -188,8 +182,7 @@ export function middleware(request: NextRequest) {
 
   if (
     isProductionOpsRequest(request) &&
-    !hasCloudflareAccessConfig() &&
-    !isExplicitOpsBreakGlassEnabled()
+    !hasCloudflareAccessConfig()
   ) {
     return new Response('Ops access requires Cloudflare Access in production.', {
       status: 503,

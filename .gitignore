@@ -7,6 +7,13 @@ node_modules
 # Build outputs
 dist
 .next
+apps/ops/.next-dev/
+apps/ops/.next-build/
+apps/ops/.next-qa/
+apps/ops/.next-dev-*/
+apps/ops/.next-live/
+apps/ops/.open-next/
+apps/ops/.wrangler/
 apps/web/test-results/
 apps/web/playwright-report/
 .expo

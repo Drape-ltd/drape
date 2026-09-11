@@ -10,6 +10,7 @@ import {
 } from '@drape/shared/money-desk'
 import {
   getOpsIdentityAssuranceSource,
+  hasFreshOpsMfa,
   isNamedOpsWorkforceSession,
   type OpsSession,
 } from './ops-auth'
@@ -39,12 +40,8 @@ export type MoneyDeskRequestInput = {
 }
 
 function requireNamedWorkforceSession(session: OpsSession) {
-  if (!isNamedOpsWorkforceSession(session) || !session.email || !session.mfaVerified) {
+  if (!isNamedOpsWorkforceSession(session) || !session.email || !hasFreshOpsMfa(session, MONEY_DESK_JIT_DURATION_MINUTES * 60)) {
     throw new Error('Money Desk requires a named workforce session with verified MFA assurance.')
-  }
-  const now = Math.floor(Date.now() / 1000)
-  if (!session.authenticatedAt || now - session.authenticatedAt > MONEY_DESK_JIT_DURATION_MINUTES * 60) {
-    throw new Error('Re-authenticate through Cloudflare Access with MFA before starting a Money Desk elevation.')
   }
 }
 

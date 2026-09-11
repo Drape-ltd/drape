@@ -2,6 +2,12 @@
 
 Date: April 2, 2026
 
+Status: Historical V1 authority rationale. Production identity, step-up,
+per-operator database authorization, and single-operator override behavior are
+superseded by
+`docs/drapeon-ops-control-plane-post-submission-rebuild.md`. The triage,
+decision, and escalation boundaries below remain product-policy inputs.
+
 ## Why This Exists
 
 Drape needs a practical answer to:

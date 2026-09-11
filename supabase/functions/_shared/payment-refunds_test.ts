@@ -295,6 +295,36 @@ Deno.test('pending Paystack refund remains financially unposted until the proces
   assertEquals(ledgerCalls,0)
 })
 
+Deno.test('pending cancellation refund preserves and enforces its Money Desk operation context', async () => {
+  const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_cancel',order_id:'order_cancel',phase:'INITIAL_ORDER',provider:'PAYSTACK',currency:'NGN',amount:100000,status:'SUCCEEDED',provider_payment_id:'paystack_cancel',refunded_amount:0,partial_refund_count:0,provider_response:{} }]
+  const supabase = makeSupabase(attempts)
+  const operationContext = { kind: 'ORDER_CANCELLATION' as const, moneyDeskRequestId: 'money_request_1', disputeId: 'dispute_1' }
+  let providerCalls = 0
+  const deps = {
+    refundStripePaymentIntent:async()=>{throw new Error('Stripe should not be called')},
+    refundPaystackTransaction:async()=>{providerCalls += 1;return {id:99,status:'pending',transaction:'paystack_cancel'}},
+    markPaymentAttemptStatus:async()=>null,
+    recordCommercialPaymentRefund:async()=>({transactionId:'never',entries:[]}),
+    assertCommercialPaymentRefundReady:async()=>({transactionId:null,entries:[],validated:true as const}),
+  }
+  await refundSettledOrderPayments(supabase as never,{ orderId:'order_cancel',actorRole:'OPS',operationContext },deps)
+  const latestRequest = (attempts[0].provider_response?.latest_refund_request ?? {}) as Record<string, unknown>
+  assertEquals(latestRequest.operation_context, operationContext)
+
+  let mismatch = ''
+  try {
+    await refundSettledOrderPayments(supabase as never,{
+      orderId:'order_cancel',
+      actorRole:'OPS',
+      operationContext:{ ...operationContext, moneyDeskRequestId:'money_request_2' },
+    },deps)
+  } catch (error) {
+    mismatch = error instanceof Error ? error.message : String(error)
+  }
+  assertEquals(mismatch,'A provider refund is already processing under a different approved operation. Do not create a second refund.')
+  assertEquals(providerCalls,1)
+})
+
 Deno.test('provider success with ledger failure is not reported as a successful refund', async () => {
   const attempts: RefundablePaymentAttemptRow[] = [{ id:'pay_reconcile',order_id:'order_reconcile',phase:'INITIAL_ORDER',provider:'PAYSTACK',currency:'NGN',amount:100000,status:'SUCCEEDED',provider_payment_id:'paystack_reconcile',refunded_amount:0,partial_refund_count:0,provider_response:{} }]
   const supabase = makeSupabase(attempts)

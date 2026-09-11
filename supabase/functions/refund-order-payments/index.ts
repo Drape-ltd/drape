@@ -19,6 +19,10 @@ import {
   recordCommercialPaymentRefund,
 } from '../_shared/commercial-ledger.ts'
 import { pendingRefundOutcomeMessage, refundOutcomeMessage, refundTimingMessage } from '../_shared/refund-guidance.ts'
+import {
+  finalizeOrderCancellationRefund,
+  type OrderCancellationRefundContext,
+} from '../_shared/order-cancellation-refund.ts'
 
 const FN = 'refund-order-payments'
 
@@ -30,6 +34,11 @@ const BodySchema = z.object({
   materialAdvanceId: uuid.optional(),
   includeUnreleasedMaterialAdvances: z.boolean().optional().default(false),
   allowedPhases: z.array(z.enum(['INITIAL_ORDER', 'CONSULTATION', 'FULFILLMENT', 'MATERIAL_ADVANCE'])).min(1).optional(),
+  operationContext: z.object({
+    kind: z.literal('ORDER_CANCELLATION'),
+    moneyDeskRequestId: uuid,
+    disputeId: uuid,
+  }).optional(),
   reconcileIssueNumber: z.number().int().positive().optional(),
 })
 
@@ -92,7 +101,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
-    const { orderId, reason, amount, refundResolutionId, materialAdvanceId, includeUnreleasedMaterialAdvances, allowedPhases, reconcileIssueNumber } = parsed.data
+    const { orderId, reason, amount, refundResolutionId, materialAdvanceId, includeUnreleasedMaterialAdvances, allowedPhases, operationContext, reconcileIssueNumber } = parsed.data
     if (reconcileIssueNumber) {
       if (amount || refundResolutionId || materialAdvanceId || includeUnreleasedMaterialAdvances) {
         return jsonResponse({ error: 'Ledger reconciliation cannot be combined with a new refund request.' }, 409, cors)
@@ -216,6 +225,33 @@ Deno.serve(async (req) => {
     if (refundResolutionId && materialAdvanceId) return jsonResponse({ error: 'Choose one reviewed refund source.' }, 409, cors)
     if (includeUnreleasedMaterialAdvances && (refundResolutionId || materialAdvanceId || typeof amount === 'number')) {
       return jsonResponse({ error: 'A cancellation refund cannot be combined with another partial or reviewed refund mode.' }, 409, cors)
+    }
+    if (includeUnreleasedMaterialAdvances && !operationContext) {
+      return jsonResponse({ error: 'An approved cancellation context is required for a combined cancellation refund.' }, 409, cors)
+    }
+    if (operationContext && (refundResolutionId || materialAdvanceId || typeof amount === 'number')) {
+      return jsonResponse({ error: 'An approved cancellation context cannot be combined with another refund mode.' }, 409, cors)
+    }
+    if (operationContext) {
+      const { data: moneyRequest, error: moneyRequestError } = await supabase.from('money_desk_requests')
+        .select('id,action_type,target_type,target_id,order_id,status,action_payload')
+        .eq('id', operationContext.moneyDeskRequestId)
+        .maybeSingle()
+      if (moneyRequestError) throw moneyRequestError
+      const requestDisputeId = moneyRequest?.action_payload && typeof moneyRequest.action_payload === 'object'
+        ? (moneyRequest.action_payload as Record<string, unknown>).disputeId
+        : null
+      if (
+        !moneyRequest?.id
+        || moneyRequest.action_type !== 'CUSTOMER_REFUND'
+        || moneyRequest.target_type !== 'ORDER_CANCELLATION'
+        || moneyRequest.target_id !== orderId
+        || moneyRequest.order_id !== orderId
+        || moneyRequest.status !== 'EXECUTING'
+        || requestDisputeId !== operationContext.disputeId
+      ) {
+        return jsonResponse({ error: 'The cancellation context does not match an executing approved Money Desk request.' }, 409, cors)
+      }
     }
     const { data: refundResolution, error: resolutionError } = refundResolutionId
       ? await supabase.from('order_refund_resolutions')
@@ -420,6 +456,7 @@ Deno.serve(async (req) => {
           reason: reason ?? null,
           actorRole: 'OPS',
           allowedPhases: [...refundablePhases],
+          operationContext: operationContext as OrderCancellationRefundContext | undefined,
         })
 
     if (result.pendingAttempts.length > 0) {
@@ -476,39 +513,16 @@ Deno.serve(async (req) => {
       if (cancelledAdvanceError) throw cancelledAdvanceError
     }
 
-    if (includeUnreleasedMaterialAdvances) {
-      const title = 'Your order cancellation refund is complete'
-      const body = 'Every captured payment that had not been released has been refunded to the original payment method. Provider timing may vary.'
-      for (const recipient of [
-        { id: order.customer_id, audience: 'CUSTOMER' as const },
-        { id: order.tailor_id, audience: 'TAILOR' as const },
-      ]) {
-        if (!recipient.id) continue
-        await enqueuePushJob(supabase, {
-          userId: recipient.id,
-          notification: {
-            title,
-            body,
-            preferenceKey: 'orderUpdates',
-            data: { orderId, type: 'order_cancellation_refund_completed' },
-          },
-          source: FN,
-          idempotencyKey: `order-cancellation-refund:${orderId}:${recipient.audience}:push`,
-          orderId,
-          priority: 30,
-        })
-        await enqueueOrderEventEmailJob(supabase, {
-          order,
-          recipientUserId: recipient.id,
-          audience: recipient.audience,
-          subject: title,
-          headline: title,
-          body,
-          ctaLabel: 'View refunded order',
-          source: FN,
-          idempotencyKey: `order-cancellation-refund:${orderId}:${recipient.audience}:email`,
-          priority: 30,
-        })
+    if (operationContext) {
+      const terminal = await finalizeOrderCancellationRefund(supabase, {
+        context: operationContext,
+        orderId,
+        providerReference: result.refundedAttempts[0]?.providerPaymentId ?? null,
+        actorRole: 'OPS',
+        source: FN,
+      })
+      if (!terminal.completed) {
+        throw new Error('Every provider refund returned terminally, but the approved cancellation snapshot is still incomplete.')
       }
     }
 
