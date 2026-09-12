@@ -14,7 +14,13 @@ import {
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
 import { markWebSessionScope } from '../lib/web-session-scope'
-import { deleteSignupMediaDraft, readSignupMediaDraft, type SignupMediaDraftDescriptor } from '../lib/signup-media-draft'
+import {
+  cleanupQuarantinedSignupMedia,
+  deleteSignupMediaDraft,
+  readSignupMediaDraft,
+  restoreQuarantinedSignupMedia,
+  type SignupMediaDraftDescriptor,
+} from '../lib/signup-media-draft'
 
 type EmailOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
 
@@ -386,7 +392,36 @@ export function AuthCallbackClient(): React.JSX.Element {
           throw userError ?? new Error('No authenticated account was found for this link.')
         }
 
-        const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
+        let onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
+        const mediaClaimToken = typeof data.user.user_metadata?.signup_media_claim_token === 'string'
+          ? data.user.user_metadata.signup_media_claim_token
+          : ''
+        let mediaAccessToken = ''
+        if (mediaClaimToken && onboarding) {
+          const { data: sessionData } = await supabase.auth.getSession()
+          mediaAccessToken = sessionData.session?.access_token ?? ''
+          if (mediaAccessToken) {
+            const restored = await restoreQuarantinedSignupMedia({
+              userId: data.user.id,
+              claimToken: mediaClaimToken,
+              accessToken: mediaAccessToken,
+            })
+            const avatarDraft = restored.find((entry) => entry.kind === 'avatar')
+            const portfolioImageDrafts = restored.filter((entry) => entry.kind === 'portfolio-image')
+            const portfolioVideoDrafts = restored.filter((entry) => entry.kind === 'portfolio-video')
+            const trustVideoDraft = restored.find((entry) => entry.kind === 'trust-video')
+            onboarding = {
+              ...onboarding,
+              avatarDraft: avatarDraft ?? onboarding.avatarDraft,
+              portfolioImageDrafts: portfolioImageDrafts.length ? portfolioImageDrafts : onboarding.portfolioImageDrafts,
+              portfolioVideoDrafts: portfolioVideoDrafts.length ? portfolioVideoDrafts : onboarding.portfolioVideoDrafts,
+              trustVideoDraft: trustVideoDraft ?? onboarding.trustVideoDraft,
+              trustChallengeId: typeof data.user.user_metadata?.signup_trust_challenge_id === 'string' ? data.user.user_metadata.signup_trust_challenge_id : onboarding.trustChallengeId,
+              trustChallengeText: typeof data.user.user_metadata?.signup_trust_challenge_text === 'string' ? data.user.user_metadata.signup_trust_challenge_text : onboarding.trustChallengeText,
+              trustConsentGranted: data.user.user_metadata?.signup_trust_consent_granted === true || onboarding.trustConsentGranted,
+            }
+          }
+        }
         const metadataRole = data.user.user_metadata?.role
         const { data: roleMirror } = await supabase
           .from('users')
@@ -477,6 +512,9 @@ export function AuthCallbackClient(): React.JSX.Element {
                 sellerType !== 'TAILOR',
               )
               preserveTailorSetupDraft(data.user.id, matchingOnboarding, trustResume)
+            }
+            if (mediaClaimToken && mediaAccessToken) {
+              await cleanupQuarantinedSignupMedia({ userId: data.user.id, claimToken: mediaClaimToken, accessToken: mediaAccessToken })
             }
           } else {
             await syncRoleMirror(role)

@@ -64,6 +64,8 @@ import {
   readSignupMediaDraft,
   readVideoDurationSeconds,
   saveSignupMediaDraft,
+  stageSignupMedia,
+  type QuarantineMediaEntry,
   type SignupMediaDraftDescriptor,
 } from '../lib/signup-media-draft'
 
@@ -174,6 +176,16 @@ function buildAuthCallbackUrl(nextPath = '/account/orders') {
   const url = new URL('/auth/callback', getPublicSiteOrigin())
   url.searchParams.set('next', nextPath)
   return url.toString()
+}
+
+function createMediaClaimToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function sha256(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function withAuthTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -1214,6 +1226,15 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       window.localStorage.setItem('drapeon.web.auth.roleIntent', role)
       window.localStorage.setItem('drapeon.web.auth.onboarding', JSON.stringify(onboarding))
 
+      const mediaClaimToken = createMediaClaimToken()
+      const mediaClaimHash = await sha256(mediaClaimToken)
+      const quarantineEntries: QuarantineMediaEntry[] = [
+        ...(onboarding.avatarDraft ? [{ ...onboarding.avatarDraft, kind: 'avatar' as const }] : []),
+        ...(onboarding.portfolioImageDrafts ?? []).map((entry) => ({ ...entry, kind: 'portfolio-image' as const })),
+        ...(onboarding.portfolioVideoDrafts ?? []).map((entry) => ({ ...entry, kind: 'portfolio-video' as const })),
+        ...(onboarding.trustVideoDraft ? [{ ...onboarding.trustVideoDraft, kind: 'trust-video' as const }] : []),
+      ]
+
       const { data, error } = await supabase.auth.signUp({
         email: normalizedEmail,
         password,
@@ -1225,6 +1246,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             phone: onboarding.phone,
             role,
             web_onboarding: persistedWebOnboardingPayload(onboarding),
+            signup_media_claim_token: quarantineEntries.length ? mediaClaimToken : undefined,
+            signup_media_claim_hash: quarantineEntries.length ? mediaClaimHash : undefined,
+            signup_trust_challenge_id: onboarding.trustChallengeId,
+            signup_trust_challenge_text: onboarding.trustChallengeText,
+            signup_trust_consent_granted: onboarding.trustConsentGranted === true,
           },
         },
       })
@@ -1232,18 +1258,30 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       setCaptchaToken(null)
       setCaptchaResetKey((current) => current + 1)
 
-      setLoading(false)
       if (error) {
+        setLoading(false)
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
         window.localStorage.removeItem('drapeon.web.auth.onboarding')
         setError(mapAuthError(error.message))
         return
       }
       if (!data.session) {
+        if (quarantineEntries.length && data.user?.id) {
+          try {
+            await stageSignupMedia({ userId: data.user.id, claimToken: mediaClaimToken, entries: quarantineEntries })
+          } catch (mediaError) {
+            setLoading(false)
+            setPendingConfirmationEmail(normalizedEmail)
+            setError(mediaError instanceof Error ? mediaError.message : 'Private signup media could not upload. Try again before confirming your email.')
+            return
+          }
+        }
         setPendingConfirmationEmail(normalizedEmail)
         setMessage('Check your email to confirm your Drapeon account. The link returns you to your account after confirmation.')
+        setLoading(false)
         return
       }
+      setLoading(false)
       markWebSessionScope(true)
       router.replace(`/auth/callback?next=${encodeURIComponent(accountHome)}`)
       return
@@ -1396,7 +1434,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       type: 'signup',
       email: pendingConfirmationEmail,
       options: {
-        emailRedirectTo: buildAuthCallbackUrl(accountHomeForRole(role)),
+        emailRedirectTo: buildAuthCallbackUrl(role === 'TAILOR' ? '/account/profile?setup=1' : accountHomeForRole(role)),
         captchaToken,
       },
     })
@@ -1438,8 +1476,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         </p>
         {role === 'TAILOR' ? (
           <div className="mt-4 rounded-[10px] border border-needle/18 bg-needle/7 px-4 py-3 text-left">
-            <p className="text-sm font-semibold text-ink">Finish on this same device and browser</p>
-            <p className="mt-1 text-xs leading-5 text-ink/58">Your private trust video and any portfolio media are staged securely in this browser until confirmation. Open the email link here and keep this page available while the upload finishes. If the upload is interrupted, your saved setup can be retried without recreating the profile.</p>
+            <p className="text-sm font-semibold text-ink">Continue from any browser or device</p>
+            <p className="mt-1 text-xs leading-5 text-ink/58">Your trust video and portfolio media are encrypted in transit and held in private temporary storage. They attach after confirmation and abandoned uploads are removed after 48 hours.</p>
           </div>
         ) : null}
         <p className="mt-2 text-xs text-ink/44">
@@ -1472,6 +1510,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         {error ? (
           <p className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
             {error}
+          </p>
+        ) : null}
+        {message ? (
+          <p role="status" aria-live="polite" className="mt-4 rounded-lg border border-needle/20 bg-needle/8 px-4 py-3 text-sm text-ink">
+            {message}
           </p>
         ) : null}
       </div>
@@ -1739,7 +1782,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-ink">Profile photo</p>
-                <p className="mt-1 text-xs leading-5 text-ink/52">Add a clear photo for your profile, orders, and messages. Confirm your email in this browser to attach it automatically; otherwise you can add it later in Settings.</p>
+                <p className="mt-1 text-xs leading-5 text-ink/52">Add a clear photo for your profile, orders, and messages. It is privately staged before confirmation and attaches even if you open the email on another browser or device.</p>
               </div>
               <input
                 ref={avatarInputRef}
@@ -2050,7 +2093,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <button type="button" onClick={() => portfolioInputRef.current?.click()} className="grid min-h-32 cursor-pointer place-items-center rounded-[12px] border border-dashed border-needle/35 bg-needle/5 p-5 text-center transition-colors hover:bg-needle/10 focus-visible:ring-2 focus-visible:ring-needle/35"><span><span className="mx-auto flex items-center justify-center gap-2 text-needle"><ImagePlus className="size-6" aria-hidden="true" /><Video className="size-6" aria-hidden="true" /></span><span className="mt-2 block text-sm font-semibold text-needle">Choose portfolio media</span><span className="mt-1 block text-xs text-ink/48">Photos or videos · 12 items total · up to 4 videos</span></span></button>
             {portfolioDataUrls.length || portfolioVideoDrafts.length ? <div className="grid grid-cols-2 gap-3" aria-label="Selected work samples">{portfolioDataUrls.map((url, index) => <div key={portfolioImageDrafts[index]?.key ?? `${url.slice(-12)}-${index}`} className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-ink/10 bg-bone"><Image src={url} alt={`Work sample photo ${index + 1}`} fill unoptimized className="object-cover" /><button type="button" aria-label={`Remove work sample photo ${index + 1}`} onClick={() => void removePortfolioImage(index)} className="absolute right-2 top-2 grid size-8 cursor-pointer place-items-center rounded-full bg-black/70 text-white"><X className="size-4" /></button><span className="absolute bottom-2 left-2 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-white">Photo</span></div>)}{portfolioVideoDrafts.map((draft, index) => <SignupDraftVideoPreview key={draft.key} draft={draft} label={`Work sample video ${index + 1}`} onRemove={() => void removePortfolioVideo(index)} />)}</div> : <p className="rounded-[8px] border border-ink/8 bg-bone/40 px-4 py-3 text-sm text-ink/56">No portfolio media selected yet.</p>}
             <div className="flex items-center justify-between text-xs text-ink/48"><span>{portfolioDataUrls.length + portfolioVideoDrafts.length}/12 media selected</span><span>{portfolioVideoDrafts.length}/4 videos</span></div>
-            <p className="text-xs leading-5 text-ink/48">Media stays in this browser until email confirmation, then uploads to your public portfolio. Keep this browser available until the confirmation link finishes.</p>
+            <p className="text-xs leading-5 text-ink/48">Media uploads to private temporary storage before confirmation, then attaches to your account. You can open the confirmation link on another browser or device.</p>
             {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
             <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(4) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="button" onClick={() => continueTailorSection(5)} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white">Continue</button></div>
           </div>
@@ -2068,7 +2111,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             {fulfillment.includes('PICKUP') ? <div className="grid gap-3 rounded-[8px] border border-ink/10 bg-bone/35 p-4"><StructuredAddressSearch label="Private pickup address · required for Pickup" value={pickupAddress} placeholder="Search full pickup address" allowManualFallback className="" onSelect={(address) => { setPickupAddress(address.displayValue); setPickupCity(address.city); setPickupRegion(address.stateRegion); setPickupPostalCode(address.postcode); setPickupCountryCode(address.countryCode ?? ''); setError(null) }} /><p className="text-xs leading-5 text-ink/48">Required only when Pickup is selected. Kept private until a confirmed customer needs collection details.</p></div> : null}
             <fieldset className="grid gap-3"><legend className="text-sm font-semibold text-ink">Consultations</legend><div className="grid grid-cols-3 gap-2">{(['UNAVAILABLE','FREE','PAID'] as const).map((value) => <button key={value} type="button" aria-pressed={consultationMode === value} onClick={() => setConsultationMode(value)} className={`min-h-11 rounded-full border px-2 text-xs font-semibold ${consultationMode === value ? 'border-needle bg-needle text-white' : 'border-ink/10 bg-white text-ink'}`}>{value === 'UNAVAILABLE' ? 'Not offered' : value === 'FREE' ? 'Free' : 'Paid'}</button>)}</div>{consultationMode !== 'UNAVAILABLE' ? <><label className="grid gap-2 text-sm font-semibold text-ink">Requirement<select value={consultationRequirement} onChange={(event) => setConsultationRequirement(event.target.value as 'OPTIONAL' | 'REQUIRED')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"><option value="OPTIONAL">Optional</option><option value="REQUIRED">Required before ordering</option></select></label><div className="grid grid-cols-2 gap-3"><label className="grid gap-2 text-sm font-semibold text-ink">Duration<select value={consultationDuration} onChange={(event) => setConsultationDuration(event.target.value as '15' | '30' | '45' | '60')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal">{['15','30','45','60'].map((value) => <option key={value} value={value}>{value} minutes</option>)}</select></label><label className="grid gap-2 text-sm font-semibold text-ink">Call type<select value={consultationCallType} onChange={(event) => setConsultationCallType(event.target.value as 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"><option value="VIDEO">Video</option><option value="AUDIO">Audio</option><option value="AUDIO_OR_VIDEO">Audio or video</option></select></label></div>{consultationMode === 'PAID' ? <><MoneyInput id="signup-consultation-fee" label="Consultation fee" value={consultationFee} onValueChange={setConsultationFee} currency={defaultCurrency} /><label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={consultationFeeCreditable} onChange={(event) => setConsultationFeeCreditable(event.target.checked)} /> Credit the fee toward an order</label></> : null}</> : null}</fieldset>
             <SignupTrustVideo challengeText={trustChallengeText} draft={trustVideoDraft} consentGranted={trustConsentGranted} onDraftChange={(nextDraft) => { setTrustVideoDraft(nextDraft); setError(null) }} onConsentChange={(granted) => { setTrustConsentGranted(granted); setError(null) }} onError={setError} />
-            <div className="rounded-[10px] border border-ink/8 bg-bone/40 px-4 py-3 text-xs leading-5 text-ink/58"><p><span className="font-semibold text-ink">What happens next:</span> create the account, then open the confirmation email on this same device and browser. Drapeon uploads the staged media and sends the profile, portfolio or first listing, and private video for review before the storefront can go live.</p><p className="mt-2">If the upload is interrupted, return in this browser to retry the saved setup—you will not need to recreate the account.</p></div>
+            <div className="rounded-[10px] border border-ink/8 bg-bone/40 px-4 py-3 text-xs leading-5 text-ink/58"><p><span className="font-semibold text-ink">What happens next:</span> create the account, then open the confirmation email on any browser or device. Drapeon attaches the privately staged profile media and trust video for review before the storefront can go live.</p><p className="mt-2">Keep this page open only until account creation finishes and the check-your-inbox screen appears.</p></div>
             <TurnstileChallenge key={captchaResetKey} action="signup" onTokenChange={setCaptchaToken} />
             {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
             <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(5) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="submit" disabled={loading || !captchaToken} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">{loading ? 'Creating…' : 'Create account'}</button></div>

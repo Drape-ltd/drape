@@ -26,7 +26,7 @@ const faqs = [
   },
   {
     question: 'Can I stop and finish later?',
-    answer: 'Yes. Drapeon saves the non-password parts of your setup in this browser, including selected media, so you can return without rebuilding the application. Keep the same browser available through email confirmation so saved media can finish uploading.',
+    answer: 'Yes. Drapeon saves the non-password parts of your setup and privately stages selected media before confirmation, so you can open the confirmation link on another browser or device without rebuilding the application.',
   },
   {
     question: 'Who can see my trust video?',
