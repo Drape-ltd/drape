@@ -3,6 +3,8 @@ import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { getOpsSession, hasFreshOpsMfa } from '../../../../../web/lib/ops-auth'
 import { validateOpsMutationOrigin } from '../../../../../web/lib/ops-request-security'
+import { getSupabaseServiceRoleKey } from '../../../../../web/lib/supabase-config'
+import { validateServiceRoleTarget } from '../../../../../web/lib/supabase-environment'
 import { isRestrictedOpsPhoneHeaders } from '../../../../lib/client-surface'
 
 export const dynamic = 'force-dynamic'
@@ -29,8 +31,15 @@ export async function POST(request: Request) {
   if (!['APPROVE', 'REJECT'].includes(decision)) return json({ error: 'invalid-decision' }, 400)
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? process.env.SUPABASE_URL?.trim()
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ?? process.env.SUPABASE_ANON_KEY?.trim()
-  if (!supabaseUrl || !anonKey) return json({ error: 'ops-broker-unavailable' }, 503)
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+  const serviceRoleTarget = validateServiceRoleTarget(
+    supabaseUrl,
+    serviceRoleKey,
+    process.env.SUPABASE_SERVICE_ROLE_PROJECT_REF,
+  )
+  if (!supabaseUrl || !serviceRoleKey || !serviceRoleTarget.isValid) {
+    return json({ error: 'ops-broker-unavailable' }, 503)
+  }
 
   const headerStore = await headers()
   const assertion = headerStore.get('cf-access-jwt-assertion')?.trim()
@@ -40,8 +49,8 @@ export async function POST(request: Request) {
   const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/ops-trust-action`, {
     method: 'POST',
     headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
       'Content-Type': 'application/json',
       'x-correlation-id': correlationId,
       'x-drape-ops-access-assertion': assertion,

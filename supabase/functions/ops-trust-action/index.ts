@@ -9,6 +9,16 @@ const FN = 'ops-trust-action'
 function list(value: string | undefined) { return (value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean) }
 function stringValue(value: unknown, maxLength = 1_000) { return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= maxLength ? value.trim() : null }
 function json(body: Record<string, unknown>, status: number, cors: HeadersInit) { return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store, max-age=0' } }) }
+function constantTimeEqual(left: string, right: string) {
+  const leftBytes = new TextEncoder().encode(left)
+  const rightBytes = new TextEncoder().encode(right)
+  if (leftBytes.length !== rightBytes.length) return false
+  let difference = 0
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    difference |= leftBytes[index]! ^ rightBytes[index]!
+  }
+  return difference === 0
+}
 
 async function completeReceipt(supabase: SupabaseClient, input: { receiptId: string; principalId: string; outcome: 'SUCCEEDED' | 'FAILED'; humanStatus: string; sideEffects?: unknown[]; blockers?: unknown[]; nextAction?: string | null; failureCode?: string | null }) {
   const { data, error } = await supabase.rpc('complete_ops_action_receipt', {
@@ -32,15 +42,27 @@ Deno.serve(async (request) => {
   const correlationId = request.headers.get('x-correlation-id')?.trim() || crypto.randomUUID()
 
   try {
+    const brokerCredential = request.headers.get('authorization')?.replace(/^Bearer\s+/iu, '').trim() ?? ''
+    if (!brokerCredential || !constantTimeEqual(brokerCredential, getServiceRoleKey())) {
+      return json({ error: 'Trusted Ops broker authentication is required.', correlationId }, 401, cors)
+    }
+    const sensitiveAudiences = list(Deno.env.get('CF_ACCESS_SENSITIVE_AUD')).map((audience) => audience.toLowerCase())
     const identity = await verifyCloudflareOpsAccess(request.headers.get('x-drape-ops-access-assertion')?.trim() ?? '', {
       teamDomain: Deno.env.get('CF_ACCESS_TEAM_DOMAIN') ?? '',
       normalAudiences: list(Deno.env.get('CF_ACCESS_AUD')),
-      sensitiveAudiences: list(Deno.env.get('CF_ACCESS_SENSITIVE_AUD')),
-      requireSensitive: true,
+      sensitiveAudiences,
+      requireSensitive: false,
       allowedEmailDomain: Deno.env.get('OPS_ALLOWED_EMAIL_DOMAIN') ?? 'drapeon.co',
       allowedEmails: list(Deno.env.get('OPS_ALLOWED_EMAILS')),
     })
-    if (!identity) return json({ error: 'Fresh protected workforce access is required.', correlationId }, 401, cors)
+    const brokeredSensitiveAssurance = Boolean(
+      identity &&
+      sensitiveAudiences.some((audience) => identity.audiences.includes(audience)) &&
+      Math.floor(Date.now() / 1000) - identity.issuedAt <= 15 * 60,
+    )
+    if (!identity || !brokeredSensitiveAssurance) {
+      return json({ error: 'Fresh protected workforce access is required.', correlationId }, 401, cors)
+    }
 
     const raw = await request.text()
     if (raw.length > 16_384) return json({ error: 'Request is too large.', correlationId }, 413, cors)
@@ -81,7 +103,7 @@ Deno.serve(async (request) => {
       p_actor_principal_id: principal.id,
       p_actor_label: identity.email,
       p_environment: environment,
-      p_sensitive_assurance: identity.sensitiveAssurance,
+      p_sensitive_assurance: brokeredSensitiveAssurance,
       p_correlation_id: requestCorrelationId,
     })
     if (prepareError) {
