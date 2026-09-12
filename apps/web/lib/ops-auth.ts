@@ -45,12 +45,33 @@ export function hasFreshOpsMfa(session: OpsSession, maxAgeSeconds = 15 * 60) {
   }
 
   if (session.mode !== 'cloudflare-access') return false
-  if (!accessCertificateAllowsSensitiveAction(session.accessKeyState)) return false
+  if (!accessCertificateAllowsSensitiveAction(session.accessKeyState)) {
+    console.warn('[ops-auth] sensitive access rejected', { reason: 'access-key-state', accessKeyState: session.accessKeyState })
+    return false
+  }
   const sensitiveAudiences = parseCsv(process.env.CF_ACCESS_SENSITIVE_AUD)
-  if (sensitiveAudiences.size === 0) return false
-  if (!session.audiences.some((audience) => sensitiveAudiences.has(audience.toLowerCase()))) return false
-  if (!session.mfaVerified || session.authenticatedAt == null) return false
-  return Math.floor(Date.now() / 1000) - session.authenticatedAt <= maxAgeSeconds
+  if (sensitiveAudiences.size === 0) {
+    console.warn('[ops-auth] sensitive access rejected', { reason: 'sensitive-audience-missing' })
+    return false
+  }
+  if (!session.audiences.some((audience) => sensitiveAudiences.has(audience.toLowerCase()))) {
+    console.warn('[ops-auth] sensitive access rejected', { reason: 'sensitive-audience-mismatch' })
+    return false
+  }
+  if (!session.mfaVerified || session.authenticatedAt == null) {
+    console.warn('[ops-auth] sensitive access rejected', {
+      reason: 'mfa-claim-missing',
+      authenticationMethods: session.authenticationMethods,
+      hasAuthenticatedAt: session.authenticatedAt != null,
+    })
+    return false
+  }
+  const tokenAgeSeconds = Math.floor(Date.now() / 1000) - session.authenticatedAt
+  if (tokenAgeSeconds > maxAgeSeconds) {
+    console.warn('[ops-auth] sensitive access rejected', { reason: 'token-too-old', tokenAgeSeconds, maxAgeSeconds })
+    return false
+  }
+  return true
 }
 
 export function isNamedOpsWorkforceSession(session: OpsSession) {
