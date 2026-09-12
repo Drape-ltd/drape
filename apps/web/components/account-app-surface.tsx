@@ -25620,7 +25620,7 @@ function IdentityHandoffCard({
       )
       setSession(result)
       setHandoffState('waiting')
-      setSuccess('Scan or send the secure phone link to record the private challenge.')
+      setSuccess('Scan the QR code or email yourself the secure recorder link.')
     } catch (handoffError) {
       setError(friendlyActionError(handoffError, 'Trust-video handoff could not start.'))
     } finally {
@@ -25630,18 +25630,22 @@ function IdentityHandoffCard({
 
   async function sendLink() {
     if (!session?.token) return
+    const email = delivery.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+      setError('Enter a valid email address.')
+      return
+    }
     setBusy('send')
     setError(null)
     setSuccess(null)
     try {
-      const channel = delivery.includes('@') ? 'EMAIL' : 'SMS'
       await invokeAccountFunction('identity-handoff-action', {
         action: 'send-link',
         token: session.token,
-        channel,
-        requestedDelivery: delivery,
+        channel: 'EMAIL',
+        requestedDelivery: email,
       })
-      setSuccess('Trust-video handoff link sent.')
+      setSuccess('Trust-video recorder link sent by email.')
     } catch (handoffError) {
       setError(friendlyActionError(handoffError, 'Trust-video handoff link could not send.'))
     } finally {
@@ -25806,9 +25810,13 @@ function IdentityHandoffCard({
               </a>
               <div className="grid w-full gap-2">
                 <input
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
                   value={delivery}
                   onChange={(event) => setDelivery(event.target.value)}
-                  placeholder="Email or phone"
+                  placeholder="Email address"
+                  aria-label="Email address"
                   className="rounded-[8px] border border-ui-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-needle/50"
                 />
                 <button
@@ -25816,10 +25824,10 @@ function IdentityHandoffCard({
                   onClick={() => {
                     void sendLink()
                   }}
-                  disabled={busy === 'send' || !delivery.trim()}
+                  disabled={busy === 'send' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(delivery.trim())}
                   className="rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white disabled:bg-ink/20"
                 >
-                  {busy === 'send' ? 'Sending...' : 'Send link to myself'}
+                  {busy === 'send' ? 'Sending...' : 'Email link to myself'}
                 </button>
               </div>
             </div>

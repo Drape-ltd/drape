@@ -9,6 +9,7 @@ import {
   TAILOR_TRUST_VIDEO_MIN_SECONDS,
 } from '@drape/shared/identity-trust'
 import { createClient } from '../../../lib/supabase'
+import { readVideoDurationSeconds } from '../../../lib/signup-media-draft'
 
 type TrustVideoContentType = 'video/mp4' | 'video/quicktime' | 'video/webm'
 
@@ -28,6 +29,13 @@ function isLikelyMobile() {
   const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
   return coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
+
+function isAppleMobile() {
+  if (typeof navigator === 'undefined') return false
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+const MAX_TRUST_VIDEO_BYTES = 30 * 1024 * 1024
 
 function functionError(payload: HandoffResponse | null | undefined, fallback: string) {
   return payload?.error || payload?.message || fallback
@@ -50,6 +58,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   const token = Array.isArray(rawToken) ? rawToken[0] ?? '' : rawToken
   const supabase = useMemo(() => createClient(), [])
   const liveVideoRef = useRef<HTMLVideoElement | null>(null)
+  const nativeCaptureInputRef = useRef<HTMLInputElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -70,6 +79,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   const [challengeText, setChallengeText] = useState('')
   const [consentGranted, setConsentGranted] = useState(false)
   const mobileReady = isLikelyMobile()
+  const preferNativeCapture = isAppleMobile()
 
   const clearRecordingTimers = useCallback(() => {
     if (recordingTimeoutRef.current != null) window.clearTimeout(recordingTimeoutRef.current)
@@ -113,6 +123,10 @@ export default function VerifyHandoffPage(): React.JSX.Element {
         setError('Open this secure link on your smartphone, or use the Drapeon mobile app to complete trust verification.')
         return
       }
+      if (preferNativeCapture) {
+        setCameraReady(true)
+        return
+      }
       if (!navigator.mediaDevices?.getUserMedia || !supportedRecorderType()) {
         setError('Video recording is not available in this browser. Open the link inside the Drapeon mobile app instead.')
         return
@@ -144,7 +158,45 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       stopCamera()
       if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current)
     }
-  }, [mobileReady, stopCamera, supabase, token])
+  }, [mobileReady, preferNativeCapture, stopCamera, supabase, token])
+
+  const chooseNativeCapture = useCallback(async (file: File | null) => {
+    if (!file || busy) return
+    clearRecordedVideo()
+    setError(null)
+    setBusy(true)
+    try {
+      const contentType: TrustVideoContentType =
+        file.type === 'video/quicktime' || file.name.toLowerCase().endsWith('.mov')
+          ? 'video/quicktime'
+          : file.type === 'video/webm'
+            ? 'video/webm'
+            : 'video/mp4'
+      if (file.size > MAX_TRUST_VIDEO_BYTES) {
+        throw new Error('Keep the private trust video under 30 MB.')
+      }
+      const seconds = await readVideoDurationSeconds(file)
+      if (
+        seconds < TAILOR_TRUST_VIDEO_MIN_SECONDS ||
+        seconds > TAILOR_TRUST_VIDEO_MAX_SECONDS + 0.75
+      ) {
+        throw new Error(
+          `Record ${TAILOR_TRUST_VIDEO_MIN_SECONDS}–${TAILOR_TRUST_VIDEO_MAX_SECONDS} seconds so your face, voice, and phrase are clear.`,
+        )
+      }
+      const url = URL.createObjectURL(file)
+      recordedUrlRef.current = url
+      setRecordedContentType(contentType)
+      setRecordingSeconds(seconds)
+      setRecordedBlob(file)
+      setRecordedUrl(url)
+    } catch (captureError) {
+      setError(captureError instanceof Error ? captureError.message : 'This video could not be prepared.')
+    } finally {
+      setBusy(false)
+      if (nativeCaptureInputRef.current) nativeCaptureInputRef.current.value = ''
+    }
+  }, [busy, clearRecordedVideo])
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current?.state === 'recording') recorderRef.current.stop()
@@ -295,6 +347,15 @@ export default function VerifyHandoffPage(): React.JSX.Element {
                     autoPlay={false}
                     className="h-full w-full object-contain"
                   />
+                ) : preferNativeCapture ? (
+                  <div className="grid h-full place-items-center px-6 text-center text-white">
+                    <div>
+                      <p className="text-lg font-semibold">Use your phone camera</p>
+                      <p className="mt-2 text-sm leading-6 text-white/70">
+                        Read the phrase above, then record one {TAILOR_TRUST_VIDEO_MIN_SECONDS}–{TAILOR_TRUST_VIDEO_MAX_SECONDS} second clip.
+                      </p>
+                    </div>
+                  </div>
                 ) : (
                   <video ref={liveVideoRef} muted={true} playsInline={true} autoPlay={true} className="h-full w-full object-cover" />
                 )}
@@ -332,6 +393,27 @@ export default function VerifyHandoffPage(): React.JSX.Element {
                         {busy ? 'Submitting...' : 'Submit video'}
                       </button>
                     </div>
+                  </>
+                ) : preferNativeCapture ? (
+                  <>
+                    <input
+                      ref={nativeCaptureInputRef}
+                      type="file"
+                      accept="video/mp4,video/quicktime,video/*"
+                      capture="user"
+                      className="sr-only"
+                      onChange={(event) => {
+                        void chooseNativeCapture(event.target.files?.[0] ?? null)
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => nativeCaptureInputRef.current?.click()}
+                      disabled={busy || !challengeText}
+                      className="flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:bg-ink/25"
+                    >
+                      {busy ? 'Preparing clip...' : 'Record with phone camera'}
+                    </button>
                   </>
                 ) : recording ? (
                   <button type="button" onClick={stopRecording} disabled={recordingSeconds < TAILOR_TRUST_VIDEO_MIN_SECONDS} className="flex w-full justify-center rounded-full bg-rust px-5 py-3 text-sm font-semibold text-white disabled:bg-ink/25">

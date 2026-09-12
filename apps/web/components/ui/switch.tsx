@@ -23,12 +23,12 @@ export function Switch({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-ink/16 p-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-drape-green/40 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
-        checked && 'bg-drape-green',
+        'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-ink/30 bg-ink/35 p-0.5 shadow-inner transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-drape-green/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
+        checked && 'border-drape-green bg-drape-green',
         className,
       )}
     >
-      <span className={cn('block size-5 rounded-full bg-white shadow-sm transition-transform', checked && 'translate-x-5')} />
+      <span className={cn('block size-5 rounded-full bg-white shadow-md ring-1 ring-black/10 transition-transform', checked && 'translate-x-5')} />
     </button>
   )
 }
