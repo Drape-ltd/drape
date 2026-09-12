@@ -9,15 +9,25 @@ const FN = 'ops-trust-action'
 function list(value: string | undefined) { return (value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean) }
 function stringValue(value: unknown, maxLength = 1_000) { return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= maxLength ? value.trim() : null }
 function json(body: Record<string, unknown>, status: number, cors: HeadersInit) { return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store, max-age=0' } }) }
-function constantTimeEqual(left: string, right: string) {
-  const leftBytes = new TextEncoder().encode(left)
-  const rightBytes = new TextEncoder().encode(right)
-  if (leftBytes.length !== rightBytes.length) return false
-  let difference = 0
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index]! ^ rightBytes[index]!
+function hasVerifiedServiceRoleBroker(request: Request) {
+  const authorization = request.headers.get('authorization')?.replace(/^Bearer\s+/iu, '').trim() ?? ''
+  const apiKey = request.headers.get('apikey')?.trim() ?? ''
+  const [encodedHeader, encodedPayload, encodedSignature, extra] = authorization.split('.')
+  if (!encodedHeader || !encodedPayload || !encodedSignature || extra || authorization !== apiKey) return false
+
+  try {
+    const normalized = encodedPayload.replaceAll('-', '+').replaceAll('_', '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const claims = JSON.parse(atob(padded)) as { exp?: unknown; iat?: unknown; ref?: unknown; role?: unknown }
+    const expectedProjectRef = new URL(getSupabaseUrl()).hostname.split('.')[0]
+    const now = Math.floor(Date.now() / 1000)
+    return claims.role === 'service_role' &&
+      claims.ref === expectedProjectRef &&
+      typeof claims.iat === 'number' && Number.isFinite(claims.iat) && claims.iat <= now + 30 &&
+      typeof claims.exp === 'number' && Number.isFinite(claims.exp) && claims.exp > now
+  } catch {
+    return false
   }
-  return difference === 0
 }
 
 async function completeReceipt(supabase: SupabaseClient, input: { receiptId: string; principalId: string; outcome: 'SUCCEEDED' | 'FAILED'; humanStatus: string; sideEffects?: unknown[]; blockers?: unknown[]; nextAction?: string | null; failureCode?: string | null }) {
@@ -42,8 +52,10 @@ Deno.serve(async (request) => {
   const correlationId = request.headers.get('x-correlation-id')?.trim() || crypto.randomUUID()
 
   try {
-    const brokerCredential = request.headers.get('authorization')?.replace(/^Bearer\s+/iu, '').trim() ?? ''
-    if (!brokerCredential || !constantTimeEqual(brokerCredential, getServiceRoleKey())) {
+    // Supabase's gateway verifies this JWT before invocation (`verify_jwt = true`).
+    // Bind that verified server credential to this exact project before accepting
+    // the separately signed Cloudflare workforce assertion below.
+    if (!hasVerifiedServiceRoleBroker(request)) {
       return json({ error: 'Trusted Ops broker authentication is required.', correlationId }, 401, cors)
     }
     const sensitiveAudiences = list(Deno.env.get('CF_ACCESS_SENSITIVE_AUD')).map((audience) => audience.toLowerCase())
