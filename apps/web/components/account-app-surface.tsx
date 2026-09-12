@@ -26031,6 +26031,22 @@ function RenderProfile({
     showStep(target)
   }
 
+  const setupSellerType = (() => {
+    if (!setupFlow || !data.userId || typeof window === 'undefined') return normalizedSellerType
+    try {
+      const stored = window.localStorage.getItem(tailorWebSetupDraftKey(data.userId))
+      const parsed = stored ? JSON.parse(stored) as Record<string, unknown> : null
+      const draftSellerType = parsed?.version === TAILOR_SETUP_DRAFT_VERSION
+        ? parsed.sellerType
+        : null
+      return draftSellerType === 'BOUTIQUE' || draftSellerType === 'TAILOR_SHOP'
+        ? draftSellerType
+        : 'TAILOR'
+    } catch {
+      return normalizedSellerType
+    }
+  })()
+
   if (setupFlow) {
     const persistedSetupBeforeTrust = currentSetupProgress({
       includeDraft: false,
@@ -26050,15 +26066,15 @@ function RenderProfile({
       },
       {
         title:
-          normalizedSellerType === 'BOUTIQUE'
+          setupSellerType === 'BOUTIQUE'
             ? 'Ready-made proof'
-            : normalizedSellerType === 'TAILOR_SHOP'
+            : setupSellerType === 'TAILOR_SHOP'
               ? 'Portfolio + ready-made proof'
               : 'Portfolio',
         body:
-          normalizedSellerType === 'BOUTIQUE'
+          setupSellerType === 'BOUTIQUE'
             ? 'Add the ready-made work that proves what customers can buy.'
-            : normalizedSellerType === 'TAILOR_SHOP'
+            : setupSellerType === 'TAILOR_SHOP'
               ? 'Add a real work sample and one ready-made item for setup review.'
               : 'Add at least one real work sample and control how every image is framed.',
       },
@@ -26128,10 +26144,10 @@ function RenderProfile({
 
         {setupStep === 2 ? (
           <>
-            {normalizedSellerType !== 'BOUTIQUE' ? (
+            {setupSellerType !== 'BOUTIQUE' ? (
               <PortfolioManager data={data} onRefresh={onRefresh} />
             ) : null}
-            {normalizedSellerType !== 'TAILOR' ? (
+            {setupSellerType !== 'TAILOR' ? (
               <SellerItemManager data={data} onRefresh={onRefresh} />
             ) : null}
           </>
