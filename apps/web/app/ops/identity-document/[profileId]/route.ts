@@ -52,9 +52,14 @@ function escapeHtml(value: string) {
 }
 
 function videoContentType(storagePath: string, reportedType: string) {
+  // iPhone uploads commonly use a QuickTime container with browser-compatible
+  // H.264/AAC tracks. Chromium skips `video/quicktime` sources before fetching
+  // them, so advertise that compatible container as MP4 to let it inspect and
+  // play the actual media tracks.
+  if (reportedType === 'video/quicktime') return 'video/mp4'
   if (reportedType.startsWith('video/')) return reportedType
   const extension = storagePath.split('?')[0]?.split('.').pop()?.toLowerCase()
-  if (extension === 'mov') return 'video/quicktime'
+  if (extension === 'mov') return 'video/mp4'
   if (extension === 'webm') return 'video/webm'
   if (extension === 'm4v') return 'video/x-m4v'
   return 'video/mp4'
