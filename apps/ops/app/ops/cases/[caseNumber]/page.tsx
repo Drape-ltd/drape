@@ -10,7 +10,7 @@ import { SupportCasePanel } from '../../../../components/support-case-panel'
 import { TrustCasePanel } from '../../../../components/trust-case-panel'
 import { loadSupportCaseContext, loadTrustCaseContext } from '../../../../lib/domain-data'
 import { isRestrictedOpsPhoneRequest } from '../../../../lib/client-surface'
-import { getOpsSession } from '../../../../../web/lib/ops-auth'
+import { getOpsSession, hasFreshOpsMfa } from '../../../../../web/lib/ops-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +31,7 @@ export default async function CasePage({
   const record = buildOpsWorkItems(data).find((entry) => entry.caseNumber.toLowerCase() === decodeURIComponent(caseNumber).toLowerCase())
   if (!record) notFound()
   const authorizedForQueue = Boolean(session?.role && record.permittedRoles.includes(session.role))
+  const protectedAccess = protectedState === 'verified' && Boolean(session && hasFreshOpsMfa(session))
   const visibleHistory = record.history.slice(0, 100)
   const sla = formatSla(record.slaDueAt, record.slaPaused)
   const sensitiveAction = record.caseType === 'ACCOUNT_DELETION_REQUEST'
@@ -71,7 +72,8 @@ export default async function CasePage({
           <span className="ops-chip" data-tone={sla.overdue ? 'critical' : 'healthy'}>{sla.label}</span>
         </div>
       </header>
-      {protectedState === 'verified' ? <div className="ops-status-banner" data-tone="healthy" role="status"><ShieldCheck size={16} />Protected workforce access is current. The case must still be reread before a sensitive action is submitted.</div> : null}
+      {protectedAccess ? <div className="ops-status-banner" data-tone="healthy" role="status"><ShieldCheck size={16} />Protected workforce access is current. The case must still be reread before a sensitive action is submitted.</div> : null}
+      {protectedState === 'verified' && !protectedAccess ? <div className="ops-status-banner" data-tone="warning" role="alert"><ShieldCheck size={16} />Protected access expired. Sign out and sign in again before reviewing private evidence or submitting a decision.</div> : null}
       {protectedState === 'step-up-required' ? <div className="ops-status-banner" data-tone="warning" role="alert"><ShieldCheck size={16} />Sensitive access is not current. In production, Cloudflare Access must complete the dedicated MFA policy before this action can unlock.</div> : null}
       {phoneRestricted ? <div className="ops-status-banner" data-tone="healthy" role="status"><ShieldCheck size={16} />Phone triage mode shows only the minimum case summary and safe collaboration actions. Sensitive evidence, related records, and irreversible controls were not loaded.</div> : null}
       <div className="ops-case-grid">
@@ -100,7 +102,7 @@ export default async function CasePage({
               </div>
             </div>
           </section>
-          {trustContext ? <TrustCasePanel context={trustContext} caseNumber={record.caseNumber} issueId={record.id} recordVersion={record.recordVersion} protectedAccess={protectedState === 'verified'} protectedCheckpoint={protectedCheckpoint} /> : null}
+          {trustContext ? <TrustCasePanel context={trustContext} caseNumber={record.caseNumber} issueId={record.id} recordVersion={record.recordVersion} protectedAccess={protectedAccess} protectedCheckpoint={protectedCheckpoint} /> : null}
           {supportContext ? <SupportCasePanel context={supportContext} /> : null}
           {!phoneRestricted ? <section className="ops-panel">
             <div className="ops-panel-head"><h2>Durable receipts</h2><span className="ops-muted" style={{ fontSize: 11 }}>{record.receipts.length} persisted</span></div>
@@ -135,7 +137,7 @@ export default async function CasePage({
             caseNumber={record.caseNumber}
             status={record.status}
             recordVersion={record.recordVersion}
-            protectedAccess={protectedState === 'verified'}
+            protectedAccess={protectedAccess}
             protectedCheckpoint={protectedCheckpoint}
             availableContext={availableLineageContext}
           /> : null}
@@ -150,7 +152,7 @@ export default async function CasePage({
                   requestId={record.relatedEntityId}
                   status={record.status}
                   recordVersion={record.recordVersion}
-                  protectedAccess={protectedState === 'verified'}
+                  protectedAccess={protectedAccess}
                   protectedCheckpoint={protectedCheckpoint}
                 />
               ) : <CaseCollaborationPanel
