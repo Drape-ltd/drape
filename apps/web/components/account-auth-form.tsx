@@ -1503,7 +1503,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           No email after resending? This address may already be confirmed.{' '}
           <Link href="/sign-in" className="font-semibold text-needle hover:underline">Sign in</Link>
           {' '}or{' '}
-          <Link href="/auth/recover" className="font-semibold text-needle hover:underline">reset your password</Link>.
+          <Link href="/account/recovery" className="font-semibold text-needle hover:underline">reset your password</Link>.
         </p>
         <div className="mt-5 text-left">
           <TurnstileChallenge

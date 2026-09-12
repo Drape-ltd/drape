@@ -153,10 +153,10 @@ export default function SignUpScreen() {
       if (requiresEmailConfirmation) {
         Alert.alert(
           'Check your email',
-          'We sent you a confirmation link. Open it to finish creating your account, then sign in.',
+          'We sent you a confirmation link. Open it to finish creating your account, then sign in. If no email arrives after retrying, this address may already be confirmed—sign in or use Forgot password instead.',
           [
             {
-              text: 'OK',
+              text: 'Go to sign in',
               onPress: () => {
                 router.replace('/(auth)/sign-in')
               },
