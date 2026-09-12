@@ -10603,9 +10603,11 @@ function MessageComposer({
 function SellerItemManager({
   data,
   onRefresh,
+  onboardingProofMode = false,
 }: {
   data: Pick<ShopRenderData, 'userId' | 'tailorProfile' | 'pickupDetails' | 'sellerItems'>
   onRefresh: () => void
+  onboardingProofMode?: boolean
 }) {
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('')
@@ -10637,7 +10639,8 @@ function SellerItemManager({
   const readiness = deriveWebTailorReadiness(data.tailorProfile)
   const sellerType = data.tailorProfile?.seller_type
   const isOnboardingProofMode =
-    !readiness.publicDiscoveryReady && (sellerType === 'BOUTIQUE' || sellerType === 'TAILOR_SHOP')
+    onboardingProofMode ||
+    (!readiness.publicDiscoveryReady && (sellerType === 'BOUTIQUE' || sellerType === 'TAILOR_SHOP'))
   const canPublishLive =
     data.tailorProfile?.supports_ready_made === true && readiness.canPublishPaidItems
   const hasPickupAddress = hasNonEmptyText(data.pickupDetails?.pickup_address)
@@ -26148,7 +26151,7 @@ function RenderProfile({
               <PortfolioManager data={data} onRefresh={onRefresh} />
             ) : null}
             {setupSellerType !== 'TAILOR' ? (
-              <SellerItemManager data={data} onRefresh={onRefresh} />
+              <SellerItemManager data={data} onRefresh={onRefresh} onboardingProofMode />
             ) : null}
           </>
         ) : (
