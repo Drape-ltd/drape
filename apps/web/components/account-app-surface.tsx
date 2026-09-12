@@ -26049,10 +26049,18 @@ function RenderProfile({
         body: 'Choose the same controlled specialties, business type, currency, and price guide used in the app.',
       },
       {
-        title: normalizedSellerType === 'BOUTIQUE' ? 'Ready-made proof' : 'Portfolio',
-        body: normalizedSellerType === 'BOUTIQUE'
-          ? 'Add the ready-made work that proves what customers can buy.'
-          : 'Add at least one real work sample and control how every image is framed.',
+        title:
+          normalizedSellerType === 'BOUTIQUE'
+            ? 'Ready-made proof'
+            : normalizedSellerType === 'TAILOR_SHOP'
+              ? 'Portfolio + ready-made proof'
+              : 'Portfolio',
+        body:
+          normalizedSellerType === 'BOUTIQUE'
+            ? 'Add the ready-made work that proves what customers can buy.'
+            : normalizedSellerType === 'TAILOR_SHOP'
+              ? 'Add a real work sample and one ready-made item for setup review.'
+              : 'Add at least one real work sample and control how every image is framed.',
       },
       {
         title: 'Setup & verification',
@@ -26119,7 +26127,14 @@ function RenderProfile({
         ) : null}
 
         {setupStep === 2 ? (
-          <PortfolioManager data={data} onRefresh={onRefresh} />
+          <>
+            {normalizedSellerType !== 'BOUTIQUE' ? (
+              <PortfolioManager data={data} onRefresh={onRefresh} />
+            ) : null}
+            {normalizedSellerType !== 'TAILOR' ? (
+              <SellerItemManager data={data} onRefresh={onRefresh} />
+            ) : null}
+          </>
         ) : (
           <Surface className="px-5 pb-5">
             <TailorSellingSetupEditor data={data} onRefresh={onRefresh} focusSection={setupStep as 0 | 1 | 3} />
