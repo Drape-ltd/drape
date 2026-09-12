@@ -28,6 +28,7 @@ type CreateOpsIssueInput = {
   recommendedAction: string
   dedupeKey: string
   metadata?: Record<string, unknown>
+  queueKey?: 'support' | 'privacy-deletion' | 'trust-safety' | 'money-desk' | 'delivery-supply' | 'reliability' | 'operations'
   notifyOps?: boolean
   notifyOpsPush?: boolean
 }
@@ -97,6 +98,20 @@ export async function createOrRefreshOpsIssue(
     return null
   }
 
+  const environmentResponse = await supabase.rpc('current_ops_environment')
+  const environment =
+    environmentResponse.error || !['DEVELOPMENT', 'PRODUCTION'].includes(String(environmentResponse.data))
+      ? 'UNKNOWN'
+      : String(environmentResponse.data)
+  const priority =
+    input.severity === 'CRITICAL'
+      ? 'P0'
+      : input.severity === 'HIGH'
+        ? 'P1'
+        : input.severity === 'MEDIUM'
+          ? 'P2'
+          : 'P3'
+
   const existingResponse = await supabase
     .from('ops_issues')
     .select('id, issue_number, case_number, status, severity, metadata, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action')
@@ -132,6 +147,11 @@ export async function createOrRefreshOpsIssue(
     recommended_action: input.recommendedAction.trim(),
     dedupe_key: input.dedupeKey.trim(),
     metadata: input.metadata ?? {},
+    queue_key: input.queueKey ?? null,
+    priority,
+    environment,
+    provenance:
+      environment === 'PRODUCTION' ? 'REAL' : environment === 'DEVELOPMENT' ? 'QA' : 'UNKNOWN',
     resolved_at: null,
     last_seen_at: now,
   }

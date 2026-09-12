@@ -598,6 +598,35 @@ ${opsDashboardUrl ? `<p style="margin-top:22px;font-family:sans-serif"><a href="
     })
 
     if (!resendRes.ok) {
+      // The immediate submission path and durable fallback share one delivery
+      // key. If the first request was accepted but a retry regenerated signed
+      // evidence URLs, Resend rejects the changed payload with 409. Only treat
+      // that conflict as delivered when our own durable audit proves the first
+      // request was accepted; concurrent or unrelated conflicts keep retrying.
+      if (resendRes.status === 409) {
+        const { data: acceptedDelivery } = await supabase
+          .from('audit_logs')
+          .select('id')
+          .eq('event', 'ops.verification_notification_sent')
+          .eq('payload->>delivery_key', deliveryKey)
+          .limit(1)
+          .maybeSingle()
+
+        if (acceptedDelivery?.id) {
+          await resendRes.body?.cancel().catch(() => undefined)
+          return jsonResponse(
+            {
+              ok: true,
+              deliveryId: null,
+              deduplicated: true,
+              recipientCount: recipients.length,
+            },
+            200,
+            corsHeaders
+          )
+        }
+      }
+
       console.error('[notify-ops-verification] Resend error', {
         status: resendRes.status,
         contentType: resendRes.headers.get('content-type'),

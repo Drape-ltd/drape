@@ -799,6 +799,7 @@ Deno.serve(async (req) => {
         recommendedAction:
           'Review the challenge video, profile photo, portfolio evidence, and onboarding proof item before approving or rejecting the tailor.',
         dedupeKey: `tailor-verification:${profileId ?? row.tailor_user_id}`,
+        queueKey: 'trust-safety',
         notifyOpsPush: true,
         metadata: {
           handoff_id: row.id,
