@@ -245,6 +245,9 @@ function StandaloneAccountRouteRuntime({ surface, children }: { surface: Account
   const invalidRoleSurface = !accountSurfaceAllowedForRole(state.identity.role, surface)
   const redirectingToSetup = state.identity.setupRequired && (pathname !== '/account/profile' || searchParams.get('setup') !== '1')
   if (invalidRoleSurface || redirectingToSetup) return <main className="grid min-h-screen place-items-center bg-ui-canvas"><p className="text-sm font-semibold text-ink/60">Opening your {redirectingToSetup ? 'tailor setup' : state.identity.role === 'TAILOR' ? 'tailor dashboard' : 'account'}…</p></main>
+  if (state.identity.setupRequired) {
+    return <>{children({ session: state.session, identity: state.identity })}</>
+  }
   return <AccountWorkspaceShell {...state.identity} surface={surface}>{children({ session: state.session, identity: state.identity })}</AccountWorkspaceShell>
 }
 
