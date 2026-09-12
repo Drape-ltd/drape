@@ -535,7 +535,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const [signupDraftHydrated, setSignupDraftHydrated] = useState(false)
   const signupDraftSnapshot = useMemo<Record<string, unknown>>(() => ({
-    role, displayName, phone, email, avatarDraft, tailorLocation, tailorBio,
+    step, pendingConfirmationEmail, role, displayName, phone, email, avatarDraft, tailorLocation, tailorBio,
     tailorLanguagesList, tailorSpecialtiesList, tailorSellerType, tailorAvailability,
     priceMin, priceMax, supportsCustomOrders, supportsReadyMade, fulfillment,
     pickupAddress, pickupCity, pickupRegion, pickupPostalCode, pickupCountryCode,
@@ -546,7 +546,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     avatarDraft, consultationCallType, consultationDuration, consultationFee,
     consultationFeeCreditable, consultationMode, consultationRequirement, displayName, email,
     fulfillment, phone, pickupAddress, pickupCity, pickupCountryCode, pickupPostalCode,
+    pendingConfirmationEmail,
     pickupRegion, portfolioImageDrafts, portfolioVideoDrafts, priceMax, priceMin, role,
+    step,
     supportsCustomOrders, supportsReadyMade, tailorAvailability, tailorBio,
     tailorLanguagesList, tailorLocation, tailorSellerType, tailorSpecialtiesList,
     trustChallengeId, trustConsentGranted, trustVideoDraft,
@@ -600,6 +602,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             (Array.isArray(draft.portfolioImageDrafts) && draft.portfolioImageDrafts.length) ||
             (Array.isArray(draft.portfolioVideoDrafts) && draft.portfolioVideoDrafts.length),
           )
+          if (draft.step === 1 || draft.step === 2 || draft.step === 3 || draft.step === 4 || draft.step === 5 || draft.step === 6) setStep(draft.step)
+          if (typeof draft.pendingConfirmationEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.pendingConfirmationEmail)) {
+            setPendingConfirmationEmail(draft.pendingConfirmationEmail.trim().toLowerCase())
+          }
           if (draft.role === 'CUSTOMER' || draft.role === 'TAILOR') setRole(draft.role)
           if (typeof draft.displayName === 'string') setDisplayName(draft.displayName)
           if (typeof draft.phone === 'string') setPhone(draft.phone)

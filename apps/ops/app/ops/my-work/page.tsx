@@ -4,6 +4,8 @@ import { OpsMetricCell } from '../../../components/ops-metric-cell'
 import { loadCanonicalOpsData } from '../../../lib/data'
 import { deriveOpsCaseMetricSets } from '../../../lib/metric-eligibility.mjs'
 import { buildOpsWorkItems, runtimeContract } from '../../../lib/work-items'
+import { ShieldCheck } from 'lucide-react'
+import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,6 +14,9 @@ export default async function MyWorkPage() {
   const items = buildOpsWorkItems(data)
   const contract = runtimeContract(data.canonicalColumnsAvailable)
   const metrics = deriveOpsCaseMetricSets(items, Date.now())
+  const pendingTailorApprovals = items.filter((item) =>
+    item.caseType === 'TAILOR_VERIFICATION' && !['RESOLVED', 'CLOSED', 'CANCELLED'].includes(item.status),
+  )
 
   return (
     <>
@@ -21,6 +26,16 @@ export default async function MyWorkPage() {
         description="One ordered queue across trust, privacy, orders, money, and reliability. Priority and SLA decide the order; departments do not compete for screen space."
         meta={<>Fresh authoritative read · {new Date(data.observedAt).toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })}</>}
       />
+      {pendingTailorApprovals.length > 0 ? (
+        <section className="ops-status-banner" data-tone="warning" role="alert" aria-label="Tailor approvals needed">
+          <ShieldCheck size={20} aria-hidden="true" />
+          <div style={{ flex: 1 }}>
+            <strong>{pendingTailorApprovals.length} tailor {pendingTailorApprovals.length === 1 ? 'approval needs' : 'approvals need'} review</strong>
+            <p style={{ margin: '4px 0 0' }}>Review the private challenge video and onboarding proof before marketplace access is granted.</p>
+          </div>
+          <Link className="ops-button ops-button-primary" href="/ops/queues/trust?q=tailor+verification">Review now</Link>
+        </section>
+      ) : null}
       <section className="ops-summary-grid" aria-label="Work summary">
         <OpsMetricCell metricKey="ops.open_cases" value={metrics.open.length} detail="Across all permitted queues" ariaLabel={`Open all ${metrics.open.length} work items`} />
         <OpsMetricCell metricKey="ops.urgent_cases" value={metrics.urgent.length} detail="Policy-ordered attention" ariaLabel={`Open ${metrics.urgent.length} P0 or P1 work items`} />

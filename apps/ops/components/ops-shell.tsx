@@ -41,6 +41,7 @@ const groups: NavGroup[] = [
   {
     label: 'Marketplace',
     items: [
+      { href: '/ops/queues/trust?q=tailor+verification', label: 'Tailor approvals', icon: ShieldCheck, area: 'trust' },
       { href: '/ops/customers', label: 'Customers', icon: Users, area: 'customers' },
       { href: '/ops/tailors', label: 'Tailors', icon: Store, area: 'tailors' },
       { href: '/ops/orders', label: 'Orders & Production', icon: Factory, area: 'orders' },

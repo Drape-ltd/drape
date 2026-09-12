@@ -191,4 +191,21 @@ test.describe('create-account flow', () => {
     await expect(page.getByRole('textbox', { name: 'Password', exact: true })).toHaveValue('')
     await expect(page.getByText(/saved signup draft was restored/i)).toBeVisible()
   })
+
+  test('restores the current signup step and post-submit confirmation state after reload', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem('drapeon.web.auth.signup-draft.v1', JSON.stringify({
+        step: 6,
+        pendingConfirmationEmail: 'resume@example.com',
+        role: 'TAILOR',
+        displayName: 'Resume Tailor',
+        phone: '+12025550123',
+        email: 'resume@example.com',
+      }))
+    })
+    await page.goto('/sign-up?role=TAILOR')
+
+    await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible()
+    await expect(page.getByText('resume@example.com')).toBeVisible()
+  })
 })
