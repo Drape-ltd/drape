@@ -147,5 +147,10 @@ test.describe('create-account flow', () => {
 
     await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible()
     await expect(page.getByText('resume@example.com')).toBeVisible()
+    await expect(page.getByText(/re-enter your password/i)).toHaveCount(0)
+    await expect(page.getByRole('link', { name: /i've confirmed.*continue/i })).toHaveAttribute(
+      'href',
+      '/sign-in?next=%2Faccount%2Fprofile%3Fsetup%3D1',
+    )
   })
 })

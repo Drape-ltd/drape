@@ -602,9 +602,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             (Array.isArray(draft.portfolioImageDrafts) && draft.portfolioImageDrafts.length) ||
             (Array.isArray(draft.portfolioVideoDrafts) && draft.portfolioVideoDrafts.length),
           )
+          const restoredPendingEmail =
+            typeof draft.pendingConfirmationEmail === 'string' &&
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.pendingConfirmationEmail)
+              ? draft.pendingConfirmationEmail.trim().toLowerCase()
+              : null
           if (draft.step === 1 || draft.step === 2 || draft.step === 3 || draft.step === 4 || draft.step === 5 || draft.step === 6) setStep(draft.step)
-          if (typeof draft.pendingConfirmationEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.pendingConfirmationEmail)) {
-            setPendingConfirmationEmail(draft.pendingConfirmationEmail.trim().toLowerCase())
+          if (restoredPendingEmail) {
+            setPendingConfirmationEmail(restoredPendingEmail)
           }
           if (draft.role === 'CUSTOMER' || draft.role === 'TAILOR') setRole(draft.role)
           if (typeof draft.displayName === 'string') setDisplayName(draft.displayName)
@@ -679,7 +684,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           const storedChallenge = TAILOR_TRUST_VIDEO_CHALLENGES.find((challenge) => challenge.id === draft.trustChallengeId)
           if (storedChallenge) { setTrustChallengeId(storedChallenge.id); setTrustChallengeText(storedChallenge.text) }
           if (typeof draft.trustConsentGranted === 'boolean') setTrustConsentGranted(draft.trustConsentGranted)
-          if (hasMeaningfulDraft) {
+          if (hasMeaningfulDraft && !restoredPendingEmail) {
             setMessage('Your saved signup draft was restored. Re-enter your password to continue.')
           }
         }
@@ -1504,6 +1509,15 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           <Link href="/sign-in" className="font-semibold text-needle hover:underline">Sign in</Link>
           {' '}or{' '}
           <Link href="/account/recovery" className="font-semibold text-needle hover:underline">reset your password</Link>.
+        </p>
+        <Link
+          href={role === 'TAILOR' ? '/sign-in?next=%2Faccount%2Fprofile%3Fsetup%3D1' : '/sign-in'}
+          className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600"
+        >
+          I&apos;ve confirmed — continue
+        </Link>
+        <p className="mt-2 text-xs leading-5 text-ink/44">
+          Confirmed in another browser or on your phone? Sign in here to securely continue on this device.
         </p>
         <div className="mt-5 text-left">
           <TurnstileChallenge
