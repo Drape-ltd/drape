@@ -1499,6 +1499,12 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         <p className="mt-2 text-xs text-ink/44">
           Check spam if it hasn&apos;t arrived in a few minutes.
         </p>
+        <p className="mt-2 text-xs leading-5 text-ink/52">
+          No email after resending? This address may already be confirmed.{' '}
+          <Link href="/sign-in" className="font-semibold text-needle hover:underline">Sign in</Link>
+          {' '}or{' '}
+          <Link href="/auth/recover" className="font-semibold text-needle hover:underline">reset your password</Link>.
+        </p>
         <div className="mt-5 text-left">
           <TurnstileChallenge
             key={captchaResetKey}
