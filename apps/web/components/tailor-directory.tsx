@@ -181,7 +181,7 @@ export function TailorDirectory({
       </div>
 
       {filtered.length ? (
-        <section className="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5" aria-label="Tailors">
+        <section className="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5" aria-label="Tailors">
           {filtered.map((tailor, index) => {
             const cover = tailor.media.find((media) => media.isPrimary) ?? tailor.media[0]
             const fallback = tailor.portfolioPhotos[0] ?? tailor.avatarUrl
@@ -189,7 +189,7 @@ export function TailorDirectory({
             const isVideo = cover?.kind === 'VIDEO'
             const serviceLabels = [tailor.acceptsCustomOrders ? 'Custom orders' : null, tailor.supportsReadyMade ? 'Ready-made' : null].filter((value): value is string => value !== null)
             const availability = availabilityLabel(tailor.availability)
-            const startingPrice = tailor.priceRangeMin !== null ? `From ${formatMoney(tailor.priceRangeMin, tailor.currency ?? 'USD')}` : null
+            const startingPrice = tailor.priceRangeMin !== null && tailor.priceRangeMin >= 1_000 ? `From ${formatMoney(tailor.priceRangeMin, tailor.currency ?? 'USD')}` : null
             return (
               <Link key={tailor.id} href={`${profileBasePath}/${tailor.id}` as Route} className="group min-w-0 rounded-[8px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle">
                 <article>
