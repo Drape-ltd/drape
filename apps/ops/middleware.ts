@@ -28,6 +28,16 @@ function lockedResponse(message: string, status: number) {
 
 function contentSecurityPolicy(nonce: string) {
   const development = process.env.NODE_ENV !== 'production'
+  let storageOrigin = ''
+  try {
+    const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL
+    const parsed = configuredUrl ? new URL(configuredUrl) : null
+    storageOrigin = parsed && (parsed.protocol === 'https:' || (development && parsed.protocol === 'http:'))
+      ? parsed.origin
+      : ''
+  } catch {
+    storageOrigin = ''
+  }
   const scriptSrc = [
     "'self'",
     `'nonce-${nonce}'`,
@@ -46,8 +56,8 @@ function contentSecurityPolicy(nonce: string) {
     "base-uri 'self'",
     "frame-ancestors 'none'",
     "object-src 'none'",
-    "img-src 'self' data: blob:",
-    "media-src 'self' blob:",
+    `img-src 'self' data: blob: ${storageOrigin}`.trim(),
+    `media-src 'self' blob: ${storageOrigin}`.trim(),
     `script-src ${scriptSrc}`,
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",
