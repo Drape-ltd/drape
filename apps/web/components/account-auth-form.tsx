@@ -1015,9 +1015,19 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     }
 
     if (skipOverride ?? skipProfileSetup) {
+      const minimalBase = {
+        source: base.source,
+        role: base.role,
+        displayName: base.displayName,
+        phone: base.phone,
+        defaultCurrency: base.defaultCurrency,
+        currencySource: base.currencySource,
+        regionCode: base.regionCode,
+        avatarDraft: base.avatarDraft,
+      }
       if (role === 'CUSTOMER') {
         return {
-          ...base,
+          ...minimalBase,
           customer: {
             unitPreference,
             garmentContext: 'BOTH',
@@ -1026,7 +1036,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       }
       // Tailor minimal defaults
       return {
-        ...base,
+        ...minimalBase,
         tailor: {
           location: 'Not set',
           bio: '',
@@ -1483,7 +1493,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         {role === 'TAILOR' ? (
           <div className="mt-4 rounded-[10px] border border-needle/18 bg-needle/7 px-4 py-3 text-left">
             <p className="text-sm font-semibold text-ink">Continue from any browser or device</p>
-            <p className="mt-1 text-xs leading-5 text-ink/58">Your trust video and portfolio media are encrypted in transit and held in private temporary storage. They attach after confirmation and abandoned uploads are removed after 48 hours.</p>
+            <p className="mt-1 text-xs leading-5 text-ink/58">After confirmation, Drapeon opens your required studio setup. You will add your portfolio or ready-made proof and private trust video there before submitting for review.</p>
           </div>
         ) : null}
         <p className="mt-2 text-xs text-ink/44">
