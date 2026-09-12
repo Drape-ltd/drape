@@ -45,6 +45,14 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
 ])
 
+const PORTFOLIO_CATEGORIES = new Set(['WEDDING', 'CASUAL', 'ASOEBI', 'FORMAL', 'OTHER'])
+
+function normalizePortfolioCategory(category?: string | null) {
+  const normalized = category?.trim().toUpperCase().replace(/[\s-]+/g, '_')
+  if (!normalized) return null
+  return PORTFOLIO_CATEGORIES.has(normalized) ? normalized : 'OTHER'
+}
+
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
   if (typeof body.error === 'string' && typeof body.message !== 'string') {
     body.message = body.error
@@ -182,7 +190,7 @@ Deno.serve(async (req) => {
           image_url: body.item.imageUrl,
           title: body.item.title,
           description: body.item.description?.trim() || null,
-          category: body.item.category?.trim() || null,
+          category: normalizePortfolioCategory(body.item.category),
           sort_order: 0,
         })
         .select('id')
@@ -233,7 +241,7 @@ Deno.serve(async (req) => {
           image_url: body.item.imageUrl,
           title: body.item.title,
           description: body.item.description?.trim() || null,
-          category: body.item.category?.trim() || null,
+          category: normalizePortfolioCategory(body.item.category),
         })
         .eq('id', body.itemId)
         .eq('tailor_profile_id', profile.id)
