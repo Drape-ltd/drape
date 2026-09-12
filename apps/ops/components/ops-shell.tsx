@@ -11,6 +11,7 @@ import {
   Factory,
   HeartPulse,
   KeyRound,
+  LogOut,
   MessageSquareText,
   PackageCheck,
   Ruler,
@@ -139,6 +140,10 @@ export function OpsShell({
           <span className="ops-env"><span className="ops-env-dot" />{environment}</span>
           <span className="ops-health" data-tone={staleAccessKeys ? 'warning' : 'healthy'} title={staleAccessKeys ? 'Cloudflare signing-key refresh is degraded; protected actions are locked.' : 'Named workforce identity verified.'}><span className="ops-health-dot" />{staleAccessKeys ? 'Access refresh degraded' : 'Workforce verified'}</span>
           <OpsPwaControl />
+          <a className="ops-pwa-install ops-sign-out" href="/cdn-cgi/access/logout" aria-label="Sign out of Drapeon Ops" title="Sign out of Drapeon Ops">
+            <LogOut size={14} aria-hidden="true" />
+            <span>Sign out</span>
+          </a>
           <span className="ops-avatar" title={`${email} · ${role}`} aria-label={`${email}, ${role}`}>{initials}</span>
         </header>
         {staleAccessKeys ? <div className="ops-auth-health-banner" role="alert"><AlertTriangle size={16} /><span><strong>Access signing-key refresh is degraded.</strong> This session used a previously trusted key set{accessKeyAgeMinutes ? ` refreshed ${accessKeyAgeMinutes} minutes ago` : ''}. Sensitive actions remain locked until Cloudflare keys refresh successfully.</span></div> : null}

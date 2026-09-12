@@ -507,6 +507,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .ops-health { display: none; }
   .ops-pwa-install, .ops-pwa-state { padding-inline: 7px; }
   .ops-pwa-controls .ops-pwa-install span, .ops-pwa-controls .ops-pwa-state span { display: none; }
+  .ops-sign-out span { display: none; }
   .ops-content { padding: 20px 14px 36px; }
   .ops-page-head { align-items: flex-start; flex-direction: column; }
   .ops-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
