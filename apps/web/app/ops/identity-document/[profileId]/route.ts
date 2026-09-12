@@ -65,7 +65,14 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ profileId: string }> },
 ) {
-  if (!validateOpsMutationOrigin(request).ok) {
+  const originCheck = validateOpsMutationOrigin(request)
+  const isSameOriginUserNavigation =
+    originCheck.receivedOrigin === null &&
+    originCheck.fetchSite === 'same-origin' &&
+    request.headers.get('sec-fetch-mode')?.trim().toLowerCase() === 'navigate' &&
+    request.headers.get('sec-fetch-dest')?.trim().toLowerCase() === 'document' &&
+    request.headers.get('sec-fetch-user')?.trim() === '?1'
+  if (!originCheck.ok && !isSameOriginUserNavigation) {
     return noStoreJson('Trust evidence request origin was rejected.', 403)
   }
 
