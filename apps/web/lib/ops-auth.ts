@@ -58,14 +58,14 @@ export function hasFreshOpsMfa(session: OpsSession, maxAgeSeconds = 15 * 60) {
     console.warn('[ops-auth] sensitive access rejected', { reason: 'sensitive-audience-mismatch' })
     return false
   }
-  if (!session.mfaVerified || session.authenticatedAt == null) {
-    console.warn('[ops-auth] sensitive access rejected', {
-      reason: 'mfa-claim-missing',
-      authenticationMethods: session.authenticationMethods,
-      hasAuthenticatedAt: session.authenticatedAt != null,
-    })
+  if (session.authenticatedAt == null) {
+    console.warn('[ops-auth] sensitive access rejected', { reason: 'authenticated-at-missing' })
     return false
   }
+  // Independent MFA is enforced by the dedicated Cloudflare Access application.
+  // Cloudflare's application JWT proves that policy was passed through its exact
+  // audience, while `amr` only reports methods asserted by the upstream IdP and
+  // is not populated when Access itself performs the second factor.
   const tokenAgeSeconds = Math.floor(Date.now() / 1000) - session.authenticatedAt
   if (tokenAgeSeconds > maxAgeSeconds) {
     console.warn('[ops-auth] sensitive access rejected', { reason: 'token-too-old', tokenAgeSeconds, maxAgeSeconds })
