@@ -29,6 +29,7 @@ type CreateOpsIssueInput = {
   dedupeKey: string
   metadata?: Record<string, unknown>
   notifyOps?: boolean
+  notifyOpsPush?: boolean
 }
 
 type OpsIssueRow = {
@@ -180,8 +181,9 @@ export async function createOrRefreshOpsIssue(
       },
     })
 
-    if ((input.severity === 'CRITICAL' || input.notifyOps === true) && existing.status === 'RESOLVED') {
-      await sendCriticalOpsIssueNotification({
+    if (existing.status === 'RESOLVED') {
+      const notifyByEmail = input.severity === 'CRITICAL' || input.notifyOps === true
+      if (notifyByEmail) await sendCriticalOpsIssueNotification({
         issueNumber: updateResponse.data.issue_number,
         issueType: input.issueType,
         severity: input.severity,
@@ -195,7 +197,9 @@ export async function createOrRefreshOpsIssue(
         provider: input.provider ?? null,
         stage: input.stage ?? null,
       })
-      await sendWebPushToOps(supabase, opsCasePushPayload(String(updateResponse.data.case_number)))
+      if (notifyByEmail || input.notifyOpsPush === true) {
+        await sendWebPushToOps(supabase, opsCasePushPayload(String(updateResponse.data.case_number)))
+      }
     }
 
     return updateResponse.data as { id: string; issue_number: number }
@@ -233,7 +237,8 @@ export async function createOrRefreshOpsIssue(
     },
   })
 
-  if (input.severity === 'CRITICAL' || input.notifyOps === true) {
+  const notifyByEmail = input.severity === 'CRITICAL' || input.notifyOps === true
+  if (notifyByEmail) {
     await sendCriticalOpsIssueNotification({
       issueNumber: insertResponse.data.issue_number,
       issueType: input.issueType,
@@ -248,6 +253,8 @@ export async function createOrRefreshOpsIssue(
       provider: input.provider ?? null,
       stage: input.stage ?? null,
     })
+  }
+  if (notifyByEmail || input.notifyOpsPush === true) {
     await sendWebPushToOps(supabase, opsCasePushPayload(String(insertResponse.data.case_number)))
   }
 
