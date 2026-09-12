@@ -205,6 +205,7 @@ export function SignupTrustVideo({
               <video src={previewUrl} controls playsInline preload="metadata" className="aspect-video w-full object-contain" aria-label="Private trust video preview" />
               <span className="absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[11px] font-semibold text-white">Private · {secondsLabel(draft.durationSeconds)}</span>
             </div>
+            <div role="status" className="rounded-[10px] border border-needle/18 bg-needle/7 px-4 py-3 text-sm"><p className="font-semibold text-ink">Video ready on this device</p><p className="mt-1 text-xs leading-5 text-ink/58">Not submitted yet. It uploads securely after you create the account and confirm your email in this browser.</p></div>
             <button type="button" onClick={() => void removeDraft()} className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-full border border-ink/10 bg-white px-4 text-sm font-semibold text-ink transition-colors hover:bg-bone"><RefreshCw className="size-4" />Record or choose again</button>
           </div>
         ) : (

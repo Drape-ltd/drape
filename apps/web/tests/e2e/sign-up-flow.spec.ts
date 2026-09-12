@@ -172,6 +172,9 @@ test.describe('create-account flow', () => {
     await expect(page.getByText('Your randomized phrase')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Use camera' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Upload video' })).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: 'Pickup' })).not.toBeChecked()
+    await expect(page.getByText(/choose at least one/i)).toBeVisible()
+    await expect(page.getByText(/open the confirmation email on this same device and browser/i)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Create account' })).toBeVisible()
   })
 
