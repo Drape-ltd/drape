@@ -7,6 +7,7 @@ import { checkPublicRateLimit } from '../../../../lib/request-security'
 import { createServiceRoleClient } from '../../../../lib/server-supabase'
 
 const TRUST_VIDEO_BUCKET = 'trust-verification'
+const TRUST_VIDEO_URL_TTL_SECONDS = 5 * 60
 const EVIDENCE_ACCESS_LIMIT_PER_HOUR = 30
 const EVIDENCE_ACCESS_ALERT_THRESHOLD = 10
 
@@ -38,6 +39,76 @@ function noStoreJson(message: string, status: number) {
       },
     },
   )
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/gu, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character] ?? character)
+}
+
+function videoContentType(storagePath: string, reportedType: string) {
+  if (reportedType.startsWith('video/')) return reportedType
+  const extension = storagePath.split('?')[0]?.split('.').pop()?.toLowerCase()
+  if (extension === 'mov') return 'video/quicktime'
+  if (extension === 'webm') return 'video/webm'
+  if (extension === 'm4v') return 'video/x-m4v'
+  return 'video/mp4'
+}
+
+function evidencePlayerHtml(input: {
+  caseNumber: string
+  contentType: string
+  nonce: string
+  signedUrl: string
+}) {
+  const caseHref = `/ops/cases/${encodeURIComponent(input.caseNumber)}?protected=verified`
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Private challenge video · Drapeon Ops</title>
+    <style nonce="${input.nonce}">
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0d1511; color: #f7f4ed; padding: 24px; }
+      main { width: min(100%, 960px); }
+      .eyebrow { margin: 0 0 8px; color: #8fc6a9; font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+      h1 { margin: 0 0 8px; font-family: Georgia, serif; font-size: clamp(30px, 5vw, 52px); font-weight: 500; }
+      .intro { margin: 0 0 22px; color: #b8c1bb; }
+      video { display: block; width: 100%; max-height: 70vh; border: 1px solid #31443a; border-radius: 18px; background: #000; box-shadow: 0 22px 70px rgba(0, 0, 0, .38); }
+      .actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 18px; }
+      button, a { min-height: 44px; border-radius: 999px; padding: 11px 20px; font: inherit; font-weight: 750; cursor: pointer; }
+      button { border: 0; background: #dff4e7; color: #10231a; }
+      a { display: inline-flex; align-items: center; border: 1px solid #496456; color: #f7f4ed; text-decoration: none; }
+      .notice { margin: 18px 0 0; color: #91a097; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Drapeon Ops · Private evidence</p>
+      <h1>Challenge video</h1>
+      <p class="intro">Review the submitted clip, then close this tab and continue the case.</p>
+      <video controls playsinline preload="metadata">
+        <source src="${escapeHtml(input.signedUrl)}" type="${escapeHtml(input.contentType)}" />
+        This browser could not play the submitted video.
+      </video>
+      <div class="actions">
+        <button id="close-tab" type="button">Close tab</button>
+        <a href="${escapeHtml(caseHref)}">Return to case</a>
+      </div>
+      <p class="notice">Access to this private evidence is audited. The media link expires in five minutes.</p>
+    </main>
+    <script nonce="${input.nonce}">
+      document.getElementById('close-tab')?.addEventListener('click', () => window.close())
+    </script>
+  </body>
+</html>`
 }
 
 function evidenceMetadata(input: {
@@ -176,7 +247,25 @@ export async function POST(
     return noStoreJson('Trust evidence could not be loaded.', 503)
   }
 
-  const contentType = evidence.type || 'application/octet-stream'
+  const contentType = videoContentType(videoPath, evidence.type || 'application/octet-stream')
+  const { data: signedEvidence, error: signedEvidenceError } = await client.storage
+    .from(TRUST_VIDEO_BUCKET)
+    .createSignedUrl(videoPath, TRUST_VIDEO_URL_TTL_SECONDS)
+
+  if (signedEvidenceError || !signedEvidence?.signedUrl) {
+    await client.from('identity_document_access_log').insert({
+      ...baseAccessLog,
+      metadata: evidenceMetadata({
+        event: 'FAILED',
+        requestId,
+        caseNumber,
+        accessMode: session.mode,
+        failure: signedEvidenceError?.message ?? 'Storage did not return a signed evidence URL.',
+      }),
+    })
+    return noStoreJson('Trust evidence could not be prepared for review.', 503)
+  }
+
   const { error: servedLogError } = await client
     .from('identity_document_access_log')
     .insert({
@@ -229,15 +318,22 @@ export async function POST(
     }, { onConflict: 'dedupe_key' })
   }
 
-  return new NextResponse(await evidence.arrayBuffer(), {
+  const nonce = randomUUID().replaceAll('-', '')
+  const mediaOrigin = new URL(signedEvidence.signedUrl).origin
+  return new NextResponse(evidencePlayerHtml({
+    caseNumber,
+    contentType,
+    nonce,
+    signedUrl: signedEvidence.signedUrl,
+  }), {
     status: 200,
     headers: {
       'Cache-Control': 'private, no-store, max-age=0',
-      'Content-Disposition': 'inline; filename="drapeon-trust-challenge-video"',
-      'Content-Length': String(evidence.size),
-      'Content-Type': contentType,
+      'Content-Security-Policy': `default-src 'none'; media-src ${mediaOrigin}; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
+      'Content-Type': 'text/html; charset=utf-8',
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
     },
   })
 }
