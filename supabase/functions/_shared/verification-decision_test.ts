@@ -61,6 +61,7 @@ function createFakeSupabase(options?: {
   const issue = {
     id: 'issue-1',
     status: 'OPEN',
+    canonical_status: 'IN_PROGRESS',
     assigned_to: null,
     resolved_at: null,
   }
@@ -174,9 +175,15 @@ Deno.test('performVerificationDecision approves a pending tailor, resolves ops i
     'approval should call the canonical verification RPC',
   )
   expect(
-    fake.calls.some((call) => call.type === 'update' && call.table === 'ops_issues' && call.payload?.status === 'RESOLVED'),
-    'approval should resolve the verification ops issue',
+    fake.calls.some((call) => (
+      call.type === 'update'
+      && call.table === 'ops_issues'
+      && call.payload?.status === 'RESOLVED'
+      && call.payload?.canonical_status === 'RESOLVED'
+    )),
+    'approval should resolve both legacy and canonical verification case state',
   )
+  expect(result.ok && result.caseResolved, 'approval should report a terminal Ops case outcome')
   expect(
     fake.calls.some((call) => (
       call.type === 'update'

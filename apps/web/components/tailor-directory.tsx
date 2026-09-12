@@ -4,6 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import type { Route } from 'next'
 import { ChevronDown, Search, ShieldCheck, SlidersHorizontal, Star, Tags } from 'lucide-react'
+import { formatMoney } from '@drape/shared'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef } from 'react'
 import type { PublicTailor } from '../lib/public-marketplace'
@@ -25,6 +26,13 @@ function filterLabel(value: string) {
   if (value === 'custom') return 'Custom orders'
   if (value === 'ready-made') return 'Ready-made'
   return value
+}
+
+function availabilityLabel(value: string | null) {
+  if (value === 'OPEN') return 'Open for orders'
+  if (value === 'LIMITED') return 'Limited availability'
+  if (value === 'FULLY_BOOKED') return 'Fully booked'
+  return null
 }
 
 const OUTFIT_FILTERS = [
@@ -179,6 +187,9 @@ export function TailorDirectory({
             const fallback = tailor.portfolioPhotos[0] ?? tailor.avatarUrl
             const source = cover?.url ?? fallback
             const isVideo = cover?.kind === 'VIDEO'
+            const serviceLabels = [tailor.acceptsCustomOrders ? 'Custom orders' : null, tailor.supportsReadyMade ? 'Ready-made' : null].filter((value): value is string => value !== null)
+            const availability = availabilityLabel(tailor.availability)
+            const startingPrice = tailor.priceRangeMin !== null ? `From ${formatMoney(tailor.priceRangeMin, tailor.currency ?? 'USD')}` : null
             return (
               <Link key={tailor.id} href={`${profileBasePath}/${tailor.id}` as Route} className="group min-w-0 rounded-[8px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-needle">
                 <article>
@@ -190,6 +201,9 @@ export function TailorDirectory({
                     <div className="flex items-start justify-between gap-2"><h2 className="truncate text-base font-semibold leading-tight text-ink">{tailor.displayName}</h2>{tailor.totalReviews ? <span className="flex shrink-0 items-center gap-1 text-xs text-ink/55"><Star aria-hidden="true" size={11} fill="currentColor" />{tailor.averageRating.toFixed(1)}</span> : null}</div>
                     <p className="mt-1 truncate text-xs text-ink/52">{tailor.location || 'Location available in profile'}</p>
                     <p className="mt-1.5 truncate text-xs text-ink/60">{tailor.specialties.slice(0, 2).join(' · ') || (tailor.acceptsCustomOrders ? 'Custom tailoring' : 'Ready-made')}</p>
+                    {serviceLabels.length ? <div className="mt-2 flex flex-wrap gap-1.5">{serviceLabels.map((label) => <span key={label} className="rounded-full bg-needle/8 px-2 py-1 text-[10px] font-semibold text-needle">{label}</span>)}</div> : null}
+                    {(availability || startingPrice) ? <p className="mt-2 flex items-center justify-between gap-2 text-[11px] font-medium text-ink/58"><span className="truncate">{availability}</span><span className="shrink-0 text-ink/72">{startingPrice}</span></p> : null}
+                    {tailor.fulfillment.length ? <p className="mt-1 truncate text-[11px] text-ink/45">{tailor.fulfillment.join(' · ')}</p> : null}
                   </div>
                 </article>
               </Link>

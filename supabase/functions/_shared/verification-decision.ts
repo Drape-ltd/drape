@@ -93,6 +93,8 @@ export type VerificationDecisionResult =
       emailError: string | null
       pushStatus: VerificationPushResult['status'] | null
       pushError: string | null
+      caseResolved: boolean
+      caseResolutionError: string | null
     }
   | {
       ok: false
@@ -531,24 +533,36 @@ export async function performVerificationDecision(
 
   const { data: verificationIssue } = await supabase
     .from('ops_issues')
-    .select('id, status, assigned_to, resolved_at')
+    .select('id, status, canonical_status, assigned_to, resolved_at')
     .eq('issue_type', VERIFICATION_ISSUE_TYPE)
     .eq('user_id', tailorUserId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  if (verificationIssue?.id) {
-    const resolvedAt = (options.now?.() ?? new Date()).toISOString()
+  const resolvedAt = (options.now?.() ?? new Date()).toISOString()
+  let caseResolved = verificationIssue?.status === 'RESOLVED' && verificationIssue?.canonical_status === 'RESOLVED'
+  let caseResolutionError: string | null = verificationIssue?.id ? null : 'Verification Ops case was not found.'
+
+  // The database trigger resolves the case atomically with the profile decision.
+  // Retain this bounded repair for mixed-version deployments and make its outcome
+  // explicit in the durable trust receipt.
+  if (verificationIssue?.id && !caseResolved) {
     const issueUpdate: Record<string, unknown> = {
       status: 'RESOLVED',
+      canonical_status: 'RESOLVED',
+      recommended_action: 'No action. The tailor trust review is complete.',
       assigned_to: performedBy,
       resolved_at: resolvedAt,
     }
     if (profileId) issueUpdate.tailor_profile_id = profileId
 
-    await supabase.from('ops_issues').update(issueUpdate).eq('id', verificationIssue.id)
+    const { error: issueUpdateError } = await supabase.from('ops_issues').update(issueUpdate).eq('id', verificationIssue.id)
+    caseResolutionError = issueUpdateError?.message ?? null
+    caseResolved = !issueUpdateError
+  }
 
+  if (verificationIssue?.id) {
     await safeInsert(supabase, 'ops_audit_logs', {
       issue_id: verificationIssue.id,
       action_taken: decision === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
@@ -557,15 +571,18 @@ export async function performVerificationDecision(
       reason,
       before_state: {
         status: verificationIssue.status,
+        canonical_status: verificationIssue.canonical_status,
         assigned_to: verificationIssue.assigned_to ?? null,
         resolved_at: verificationIssue.resolved_at ?? null,
       },
       after_state: {
         status: 'RESOLVED',
+        canonical_status: caseResolved ? 'RESOLVED' : verificationIssue.canonical_status,
         assigned_to: performedBy,
         resolved_at: resolvedAt,
         decision,
         rejection_code: rejectionCode,
+        case_resolution_error: caseResolutionError,
       },
     })
   }
@@ -645,6 +662,8 @@ export async function performVerificationDecision(
       push_status: pushStatus,
       push_error: pushError,
       portfolio_sync_error: portfolioSyncError,
+      case_resolved: caseResolved,
+      case_resolution_error: caseResolutionError,
     },
   })
 
@@ -657,5 +676,7 @@ export async function performVerificationDecision(
     emailError,
     pushStatus,
     pushError,
+    caseResolved,
+    caseResolutionError,
   }
 }

@@ -139,22 +139,24 @@ Deno.serve(async (request) => {
 
     const emailSent = outcome.emailSent === true
     const pushStatus = typeof outcome.pushStatus === 'string' ? outcome.pushStatus : null
-    const communicationNeedsAttention = !emailSent || pushStatus === 'ERROR'
+    const caseResolved = outcome.caseResolved === true
+    const completionNeedsAttention = !caseResolved || !emailSent || pushStatus === 'ERROR'
     const receipt = await completeReceipt(supabase, {
       receiptId: preflight.receiptId,
       principalId: principal.id,
       outcome: 'SUCCEEDED',
-      humanStatus: communicationNeedsAttention ? 'Trust decision persisted; one or more notification outcomes need review.' : 'Trust decision persisted and notification outcomes were recorded.',
+      humanStatus: completionNeedsAttention ? 'Trust decision persisted; one or more case or notification outcomes need review.' : 'Trust decision persisted, the case closed, and notification outcomes were recorded.',
       sideEffects: [
         { type: 'VERIFICATION_DECISION', status: 'COMPLETED', decision, profileId },
+        { type: 'OPS_CASE', status: caseResolved ? 'RESOLVED' : 'FAILED' },
         { type: 'EMAIL', status: emailSent ? 'SENT' : 'FAILED' },
         { type: 'PUSH', status: pushStatus ?? 'UNKNOWN' },
       ],
-      blockers: communicationNeedsAttention ? [{ code: 'COMMUNICATION_OUTCOME_NEEDS_ATTENTION' }] : [],
-      nextAction: communicationNeedsAttention ? 'Retry or reconcile the failed communication without repeating the trust decision.' : null,
-      failureCode: communicationNeedsAttention ? 'COMMUNICATION_OUTCOME_NEEDS_ATTENTION' : null,
+      blockers: completionNeedsAttention ? [{ code: !caseResolved ? 'CASE_RESOLUTION_NEEDS_ATTENTION' : 'COMMUNICATION_OUTCOME_NEEDS_ATTENTION' }] : [],
+      nextAction: completionNeedsAttention ? 'Reconcile the recorded side effect without repeating the trust decision.' : null,
+      failureCode: completionNeedsAttention ? (!caseResolved ? 'CASE_RESOLUTION_NEEDS_ATTENTION' : 'COMMUNICATION_OUTCOME_NEEDS_ATTENTION') : null,
     })
-    return json({ ok: true, receipt, decision: outcome, warning: communicationNeedsAttention ? 'Decision saved; notification follow-up is required.' : undefined, correlationId }, communicationNeedsAttention ? 207 : 200, cors)
+    return json({ ok: true, receipt, decision: outcome, warning: completionNeedsAttention ? 'Decision saved; case or notification follow-up is required.' : undefined, correlationId }, completionNeedsAttention ? 207 : 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { correlation_id: correlationId, error: error instanceof Error ? error.message : String(error) })
     return json({ error: 'The protected trust decision could not be completed.', correlationId }, 500, cors)
