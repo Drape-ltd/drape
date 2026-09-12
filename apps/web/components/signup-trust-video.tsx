@@ -172,7 +172,9 @@ export function SignupTrustVideo({
     startedAtRef.current = Date.now()
     setElapsedSeconds(0)
     setRecording(true)
-    recorder.start(250)
+    // Keep iOS recordings as one finalized clip. Timed MP4 fragments can be
+    // interpreted by Safari as an endless “Live Broadcast” during review.
+    recorder.start()
     timerRef.current = setInterval(() => {
       const elapsed = (Date.now() - startedAtRef.current) / 1000
       setElapsedSeconds(elapsed)

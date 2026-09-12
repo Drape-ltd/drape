@@ -194,7 +194,10 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       setRecordedUrl(url)
     }
 
-    recorder.start(250)
+    // Let the browser finalize one complete recording on stop. Splitting iOS MP4
+    // output into timed fragments makes the review blob look like an endless
+    // live stream (Safari labels it “Live Broadcast”) instead of a finite clip.
+    recorder.start()
     setRecording(true)
     recordingIntervalRef.current = window.setInterval(() => {
       setRecordingSeconds(Math.min(
@@ -283,7 +286,15 @@ export default function VerifyHandoffPage(): React.JSX.Element {
               </div>
               <div className="relative aspect-[3/4] overflow-hidden bg-ink">
                 {recordedUrl ? (
-                  <video src={recordedUrl} controls={true} playsInline={true} className="h-full w-full object-contain" />
+                  <video
+                    src={recordedUrl}
+                    controls={true}
+                    playsInline={true}
+                    preload="metadata"
+                    loop={false}
+                    autoPlay={false}
+                    className="h-full w-full object-contain"
+                  />
                 ) : (
                   <video ref={liveVideoRef} muted={true} playsInline={true} autoPlay={true} className="h-full w-full object-cover" />
                 )}
