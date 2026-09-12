@@ -25596,6 +25596,7 @@ function IdentityHandoffCard({
           }
           if (nextStatus === 'SUBMITTED') {
             setHandoffState('submitted')
+            onRefresh()
           }
         }
       )
@@ -25604,7 +25605,7 @@ function IdentityHandoffCard({
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [pending, session?.handoffId, verified])
+  }, [onRefresh, pending, session?.handoffId, verified])
 
   async function startSession() {
     if (!userId) return
