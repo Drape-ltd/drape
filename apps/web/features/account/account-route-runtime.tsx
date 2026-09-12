@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { createClient } from '../../lib/supabase'
@@ -26,6 +26,7 @@ export type AccountRouteIdentity = {
   unreadNotifications: number
   checkoutPendingCount: number
   payoutNeedsSetup: boolean
+  setupRequired: boolean
 }
 
 type RuntimeState =
@@ -84,7 +85,7 @@ async function loadIdentity(session: Session): Promise<AccountRouteIdentity> {
   const supabase = createClient()
   const [customerResult, tailorResult, userResult] = await Promise.all([
     supabase.from('customer_profiles').select('display_name, avatar_url').eq('user_id', userId).maybeSingle(),
-    supabase.from('tailor_profiles').select('id, display_name, business_name, avatar_url').eq('user_id', userId).maybeSingle(),
+    supabase.from('tailor_profiles').select('id, display_name, business_name, avatar_url, profile_completed, is_live').eq('user_id', userId).maybeSingle(),
     supabase.from('users').select('role').eq('id', userId).maybeSingle(),
   ])
   if (customerResult.error && tailorResult.error) throw new Error('Your account could not load.')
@@ -140,6 +141,7 @@ async function loadIdentity(session: Session): Promise<AccountRouteIdentity> {
     activeOrders: role === 'TAILOR' ? tailorActive.length : customerActive.length,
     unreadMessages, unreadNotifications, checkoutPendingCount,
     payoutNeedsSetup: role === 'TAILOR' && payoutNeedsSetup(tailor),
+    setupRequired: role === 'TAILOR' && tailor?.profile_completed !== true && tailor?.is_live !== true,
   }
 }
 
@@ -166,6 +168,8 @@ function SignedOut() {
 
 function StandaloneAccountRouteRuntime({ surface, children }: { surface: AccountSurface; children: (context: AccountRuntimeContextValue) => ReactNode }) {
   const router = useRouter()
+  const pathname = usePathname() || '/account'
+  const searchParams = useSearchParams()
   const [state, setState] = useState<RuntimeState>({ status: 'loading' })
   const userId = state.status === 'ready' ? state.session.user.id : null
   useSessionTimeout({ enabled: Boolean(userId) })
@@ -205,7 +209,11 @@ function StandaloneAccountRouteRuntime({ surface, children }: { surface: Account
   useEffect(() => {
     if (state.status !== 'ready') return
     if (!accountSurfaceAllowedForRole(state.identity.role, surface)) router.replace(accountHomeRoute(state.identity.role))
-  }, [router, state, surface])
+    else if (
+      state.identity.setupRequired &&
+      (pathname !== '/account/profile' || searchParams.get('setup') !== '1')
+    ) router.replace('/account/profile?setup=1')
+  }, [pathname, router, searchParams, state, surface])
 
   useEffect(() => {
     const invalidate = () => { identityCache.clear(); identityRequests.clear(); invalidateAccountData() }
@@ -235,7 +243,8 @@ function StandaloneAccountRouteRuntime({ surface, children }: { surface: Account
   if (state.status === 'signed-out') return <SignedOut />
   if (state.status === 'error') return <main className="grid min-h-screen place-items-center bg-ui-canvas"><div className="app-surface max-w-md p-7"><h1 className="text-2xl font-semibold text-ink">Account unavailable</h1><p className="mt-3 text-sm leading-6 text-ink/64">{state.message} Refresh to retry.</p></div></main>
   const invalidRoleSurface = !accountSurfaceAllowedForRole(state.identity.role, surface)
-  if (invalidRoleSurface) return <main className="grid min-h-screen place-items-center bg-ui-canvas"><p className="text-sm font-semibold text-ink/60">Opening your {state.identity.role === 'TAILOR' ? 'tailor dashboard' : 'account'}…</p></main>
+  const redirectingToSetup = state.identity.setupRequired && (pathname !== '/account/profile' || searchParams.get('setup') !== '1')
+  if (invalidRoleSurface || redirectingToSetup) return <main className="grid min-h-screen place-items-center bg-ui-canvas"><p className="text-sm font-semibold text-ink/60">Opening your {redirectingToSetup ? 'tailor setup' : state.identity.role === 'TAILOR' ? 'tailor dashboard' : 'account'}…</p></main>
   return <AccountWorkspaceShell {...state.identity} surface={surface}>{children({ session: state.session, identity: state.identity })}</AccountWorkspaceShell>
 }
 

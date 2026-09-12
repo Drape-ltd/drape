@@ -60,16 +60,10 @@ test.describe('create-account flow', () => {
 
     await page.getByRole('button', { name: /Tailor Build your storefront/ }).click()
     await expect(page.getByRole('button', { name: /Tailor Build your storefront/ })).toHaveAttribute('aria-pressed', 'true')
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
+    await expect(page.getByText(/studio setup follows confirmation/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Create account' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Your identity.' })).toHaveCount(0)
 
-    await expect(page.getByRole('heading', { name: 'Your identity.' })).toBeVisible()
-    await expectHeadingBelowStickyHeader(page, 'Your identity.')
-    await expect(page.getByRole('textbox', { name: 'City or base location' })).toBeVisible()
-    await expect(page.getByRole('textbox', { name: /About your work/ })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Languages' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
-
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page.getByRole('img', { name: 'Profile photo preview' })).toBeVisible()
     await page.getByRole('button', { name: 'Remove', exact: true }).click()
@@ -111,71 +105,17 @@ test.describe('create-account flow', () => {
     }
   })
 
-  test('tailor setup is interactive before email confirmation', async ({ page }) => {
-    await page.route('https://nominatim.openstreetmap.org/**', async (route) => {
-      await route.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify([{
-          place_id: 1,
-          display_name: 'Chicago, Cook County, Illinois, United States',
-          address: { city: 'Chicago', state: 'Illinois', country: 'United States', country_code: 'us' },
-        }]),
-      })
-    })
-    await page.goto('/sign-up')
-    await page.locator('input[type="file"]').first().setInputFiles(avatarFixture)
+  test('tailor registration confirms the account before mandatory studio setup', async ({ page }) => {
+    await page.goto('/sign-up?role=TAILOR')
     await fillValidCredentials(page)
     await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await page.getByRole('button', { name: /Tailor Build your storefront/ }).click()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
 
-    await page.getByRole('textbox', { name: 'City or base location' }).fill('Chicago')
-    await page.getByRole('button', { name: /Chicago, Cook County/ }).click()
-    await page.getByRole('textbox', { name: /About your work/ }).fill(
-      'I create tailored occasionwear with careful fittings, clear timelines, and detailed finishing for every Drapeon customer.',
-    )
-    await page.getByRole('button', { name: 'Languages' }).click()
-    await page.getByRole('checkbox', { name: 'Yoruba', exact: true }).click()
-    await page.getByRole('button', { name: /Done · 2 selected/ }).click()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'What you make.' })).toBeVisible()
-
-    await page.getByRole('button', { name: 'Specialties' }).click()
-    await page.getByRole('checkbox', { name: 'Suits', exact: true }).click()
-    await page.getByRole('button', { name: /Done · 1 selected/ }).click()
-    await page.getByRole('textbox', { name: /Typical project minimum/ }).fill('100')
-    await page.getByRole('textbox', { name: /Typical project maximum/ }).fill('500')
-    await page.getByRole('button', { name: /Tailor Custom and bespoke/ }).click()
-    await page.getByRole('radio', { name: /Boutique Ready-made/ }).click()
-    await expect(page.getByRole('checkbox', { name: 'Custom orders' })).not.toBeChecked()
-    await expect(page.getByRole('checkbox', { name: 'Ready-made shop' })).toBeChecked()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Shop proof.' })).toBeVisible()
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
-    await page.getByRole('button', { name: /Boutique Ready-made/ }).click()
-    await page.getByRole('radio', { name: /Tailor shop A full studio/ }).click()
-    await expect(page.getByRole('checkbox', { name: 'Custom orders' })).toBeChecked()
-    await expect(page.getByRole('checkbox', { name: 'Ready-made shop' })).toBeChecked()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Public proof.' })).toBeVisible()
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
-    await page.getByRole('button', { name: /Tailor shop A full studio/ }).click()
-    await page.getByRole('radio', { name: /Tailor Custom and bespoke/ }).click()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Portfolio.' })).toBeVisible()
-
-    await page.locator('input[accept*="video/mp4"][multiple]').setInputFiles(avatarFixture)
-    await expect(page.getByRole('img', { name: 'Work sample photo 1' })).toBeVisible()
-    await page.getByRole('button', { name: 'Continue', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Setup & verification.' })).toBeVisible()
-    await expect(page.getByText('Private marketplace trust video')).toBeVisible()
-    await expect(page.getByText('Your randomized phrase')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Use camera' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Upload video' })).toBeVisible()
-    await expect(page.getByRole('checkbox', { name: 'Pickup' })).not.toBeChecked()
-    await expect(page.getByText(/choose at least one/i)).toBeVisible()
-    await expect(page.getByText(/open the confirmation email on this same device and browser/i)).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Create account' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Tailor Build your storefront/ })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByText(/studio setup follows confirmation/i)).toBeVisible()
+    await expect(page.getByText(/Boutique and Tailor Shop accounts must add their first hidden ready-made proof item/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Create account' })).toBeDisabled()
+    await expect(page.getByRole('heading', { name: 'Your identity.' })).toHaveCount(0)
+    await expect(page.getByRole('textbox', { name: 'City or base location' })).toHaveCount(0)
   })
 
   test('restores the public studio draft after a reload without restoring passwords', async ({ page }) => {

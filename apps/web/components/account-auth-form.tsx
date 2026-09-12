@@ -1738,8 +1738,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   return (
     <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
       {/* Step indicator */}
-      <div className="mb-6 flex items-center gap-2" aria-label={`Step ${step} of ${role === 'TAILOR' ? 6 : 3}`}>
-        {Array.from({ length: role === 'TAILOR' ? 6 : 3 }, (_, index) => index + 1).map((n) => (
+      <div className="mb-6 flex items-center gap-2" aria-label={`Step ${step} of ${role === 'TAILOR' ? 2 : 3}`}>
+        {Array.from({ length: role === 'TAILOR' ? 2 : 3 }, (_, index) => index + 1).map((n) => (
           <div
             key={n}
             className={`h-1.5 flex-1 rounded-full transition-all ${step >= n ? 'bg-needle' : 'bg-ink/12'}`}
@@ -2002,6 +2002,20 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </div>
           ) : null}
 
+          {role === 'TAILOR' ? (
+            <div className="mt-5 grid gap-3">
+              <div className="rounded-[8px] border border-needle/14 bg-needle/6 px-4 py-3">
+                <p className="text-sm font-semibold text-ink">Your studio setup follows confirmation</p>
+                <p className="mt-1 text-xs leading-5 text-ink/58">After confirming your email, Drapeon opens the required four-step setup. Boutique and Tailor Shop accounts must add their first hidden ready-made proof item before trust review can begin.</p>
+              </div>
+              <TurnstileChallenge
+                key={captchaResetKey}
+                action="signup"
+                onTokenChange={setCaptchaToken}
+              />
+            </div>
+          ) : null}
+
           <div className="mt-5 flex justify-between gap-3">
             <button
               type="button"
@@ -2012,10 +2026,15 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </button>
             <button
               type="button"
-              onClick={() => { setError(null); setStep(3) }}
+              onClick={() => {
+                setError(null)
+                if (role === 'TAILOR') void submit(true)
+                else setStep(3)
+              }}
+              disabled={loading || (role === 'TAILOR' && !captchaToken)}
               className="min-h-11 rounded-[8px] bg-needle px-6 py-2.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(45,106,79,0.16)] transition hover:bg-needle-600"
             >
-              Continue
+              {role === 'TAILOR' ? (loading ? 'Creating…' : 'Create account') : 'Continue'}
             </button>
           </div>
         </>

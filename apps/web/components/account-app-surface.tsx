@@ -26064,7 +26064,7 @@ function RenderProfile({
     return (
       <div className="grid gap-5">
         <Surface className="p-5 sm:p-6">
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">
                 Tailor setup · {setupStep + 1} of 4
@@ -26072,9 +26072,6 @@ function RenderProfile({
               <h2 className="mt-2 text-3xl text-ink">{active.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/62">{active.body}</p>
             </div>
-            <Link href="/account/profile" className="shrink-0 text-sm font-semibold text-needle">
-              Finish later
-            </Link>
           </div>
           <div className="mt-5 flex gap-2" aria-label={`Tailor setup step ${setupStep + 1} of 4`}>
             {sections.map((section, index) => (
