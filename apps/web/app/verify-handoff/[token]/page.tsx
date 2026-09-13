@@ -77,6 +77,14 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   const [consentGranted, setConsentGranted] = useState(false)
   const preferNativeCapture = isAppleMobile()
 
+  useEffect(() => {
+    if (!success) return undefined
+    const redirectTimer = window.setTimeout(() => {
+      window.location.replace('/account/profile?setup=1&step=3&trust=submitted')
+    }, 1200)
+    return () => window.clearTimeout(redirectTimer)
+  }, [success])
+
   const clearRecordingTimers = useCallback(() => {
     if (recordingTimeoutRef.current != null) window.clearTimeout(recordingTimeoutRef.current)
     if (recordingIntervalRef.current != null) window.clearInterval(recordingIntervalRef.current)
@@ -325,8 +333,14 @@ export default function VerifyHandoffPage(): React.JSX.Element {
             <div className="p-6">
               <p className="text-sm font-semibold text-needle">Trust video submitted</p>
               <p className="mt-2 text-sm leading-6 text-ink/64">
-                Your private video is ready for the Drapeon Trust team. You can return to setup now.
+                Your private video is ready for the Drapeon Trust team. Returning you to setup…
               </p>
+              <a
+                href="/account/profile?setup=1&step=3&trust=submitted"
+                className="mt-5 inline-flex rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
+              >
+                Return to setup
+              </a>
             </div>
           ) : error && !cameraReady ? (
             <div className="p-6">
