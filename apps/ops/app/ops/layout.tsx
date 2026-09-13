@@ -1,8 +1,22 @@
 import type { ReactNode } from 'react'
-import Link from 'next/link'
 import { headers } from 'next/headers'
 import { OpsShell } from '../../components/ops-shell'
 import { getOpsAccessMode, getOpsSession } from '../../../web/lib/ops-auth'
+
+function LocalIdentityButtons() {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 18 }}>
+      <form action="/ops/local-unlock" method="post">
+        <input name="identity" type="hidden" value="reviewer" />
+        <button className="ops-button" type="submit">Continue as Ops reviewer</button>
+      </form>
+      <form action="/ops/local-unlock" method="post">
+        <input name="identity" type="hidden" value="founder" />
+        <button className="ops-button ops-button-primary" type="submit">Continue as founder approver</button>
+      </form>
+    </div>
+  )
+}
 
 function LockScreen({ mode, signedOut }: { mode: string; signedOut: boolean }) {
   const production = process.env.DRAPE_OPS_ENV === 'production' || process.env.NODE_ENV === 'production'
@@ -16,7 +30,7 @@ function LockScreen({ mode, signedOut }: { mode: string; signedOut: boolean }) {
           <div className="ops-lock-note">
             Operational data stays hidden until you open a new authenticated session.
           </div>
-          <Link className="ops-button ops-button-primary" style={{ marginTop: 18 }} href="/ops/local-unlock">Sign back in</Link>
+          <LocalIdentityButtons />
         </section>
       </main>
     )
@@ -36,7 +50,7 @@ function LockScreen({ mode, signedOut }: { mode: string; signedOut: boolean }) {
           <strong>Fail-closed state</strong><br />
           Access mode: {mode}. No customer, tailor, payment, evidence, or incident data was requested.
         </div>
-        {!production ? <Link className="ops-button ops-button-primary" style={{ marginTop: 18 }} href="/ops/local-unlock">Open local workforce unlock</Link> : null}
+        {!production ? <LocalIdentityButtons /> : null}
       </section>
     </main>
   )

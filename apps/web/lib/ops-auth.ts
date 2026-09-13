@@ -2,6 +2,7 @@ import 'server-only'
 
 import {
   createHash,
+  createHmac,
   createPublicKey,
   timingSafeEqual,
   verify as verifySignature,
@@ -197,16 +198,54 @@ export function getOpsBootstrapRole(): OpsRole | null {
   return normalizeOpsRole(process.env.OPS_DASHBOARD_BOOTSTRAP_ROLE)
 }
 
-function getLocalWorkforceDryRunIdentity() {
-  if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return null
+export type LocalWorkforceDryRunIdentity = {
+  key: 'reviewer' | 'founder'
+  label: string
+  email: string
+  role: OpsRole
+}
+
+export function getLocalWorkforceDryRunIdentities(): LocalWorkforceDryRunIdentity[] {
+  if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return []
   const email = process.env.OPS_LOCAL_WORKFORCE_EMAIL?.trim().toLowerCase() ?? ''
-  if (!email.endsWith('@drapeon.co')) return null
   const role = normalizeOpsRole(process.env.OPS_LOCAL_WORKFORCE_ROLE)
-  if (!role) return null
-  return {
-    email,
-    role,
+  const identities: LocalWorkforceDryRunIdentity[] = []
+
+  if (email.endsWith('@drapeon.co') && role) {
+    identities.push({
+      key: 'reviewer',
+      label: 'Ops reviewer',
+      email,
+      role,
+    })
   }
+
+  const founderEmail = (process.env.OPS_MONEY_APPROVER_EMAILS ?? 'founders@drapeon.co')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .find((entry) => entry.endsWith('@drapeon.co'))
+
+  if (founderEmail && founderEmail !== email) {
+    identities.push({
+      key: 'founder',
+      label: 'Founder approver',
+      email: founderEmail,
+      role: 'admin',
+    })
+  } else if (founderEmail && founderEmail === email && role === 'admin') {
+    identities[0] = {
+      key: 'founder',
+      label: 'Founder approver',
+      email: founderEmail,
+      role: 'admin',
+    }
+  }
+
+  return identities
+}
+
+function getLocalWorkforceDryRunIdentity() {
+  return getLocalWorkforceDryRunIdentities()[0] ?? null
 }
 
 export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
@@ -225,6 +264,14 @@ export function hasOpsWorkforceAccessConfig() {
 
 export function hashOpsToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
+}
+
+export function createLocalWorkforceSessionValue(identity: LocalWorkforceDryRunIdentity) {
+  const token = getOpsDashboardToken()
+  if (!token) return null
+  return createHmac('sha256', token)
+    .update(`local-workforce:${identity.key}:${identity.email}:${identity.role}`)
+    .digest('hex')
 }
 
 function safeCompare(left: string | null | undefined, right: string | null | undefined) {
@@ -466,12 +513,16 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
 
   const cookieStore = await cookies()
   const expectedSession = hashOpsToken(token)
-  const hasValidSession = cookieStore
-    .getAll(OPS_SESSION_COOKIE)
-    .some((cookie) => safeCompare(cookie.value, expectedSession))
-  if (!hasValidSession) return null
+  const sessionCookies = cookieStore.getAll(OPS_SESSION_COOKIE)
+  const localIdentities = getLocalWorkforceDryRunIdentities()
+  const selectedLocalIdentity = localIdentities.find((identity) => {
+    const expected = createLocalWorkforceSessionValue(identity)
+    return expected && sessionCookies.some((cookie) => safeCompare(cookie.value, expected))
+  })
+  const hasLegacySession = sessionCookies.some((cookie) => safeCompare(cookie.value, expectedSession))
+  const localIdentity = selectedLocalIdentity ?? (hasLegacySession ? getLocalWorkforceDryRunIdentity() : null)
+  if (!localIdentity && !hasLegacySession) return null
 
-  const localIdentity = getLocalWorkforceDryRunIdentity()
   if (localIdentity) {
     const authenticatedAt = Math.floor(Date.now() / 1000)
     return {
