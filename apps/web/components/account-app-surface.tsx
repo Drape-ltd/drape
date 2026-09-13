@@ -25733,6 +25733,12 @@ function IdentityHandoffCard({
             ? 'Your private challenge video and public profile have passed review.'
             : 'Our team completes reviews within 24 hours. Keep your profile details accurate while Drapeon Trust reviews them.'}
         </p>
+        <Link
+          href="/account/work"
+          className="mt-4 inline-flex rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white"
+        >
+          Continue to dashboard
+        </Link>
       </section>
     )
   }
@@ -26245,21 +26251,7 @@ function RenderProfile({
             <Button onClick={() => openSetupStep(Math.min(3, setupStep + 1) as TailorSetupStep)}>
               Continue
             </Button>
-          ) : !setupSavedForTrust ? (
-            <div className="flex flex-col items-end gap-1.5">
-              <Button disabled>Save setup to unlock video</Button>
-              <p className="text-xs text-ink/52">Store every required section before recording.</p>
-            </div>
-          ) : !trustReviewSubmitted ? (
-            <div className="flex flex-col items-end gap-1.5">
-              <Button disabled>Submit trust video to finish</Button>
-              <p className="text-xs text-ink/52">Record the private challenge above before completing setup.</p>
-            </div>
-          ) : (
-            <Button asChild>
-              <Link href="/account/profile">Finish setup</Link>
-            </Button>
-          )}
+          ) : null}
         </div>
       </div>
     )
