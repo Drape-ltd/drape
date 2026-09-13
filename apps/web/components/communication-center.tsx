@@ -139,6 +139,8 @@ function inboxDestination(item: InboxItem): string | null {
         : '/account/messages'
     case 'PAYOUT_SETUP': return '/account/payout'
     case 'VERIFICATION': return '/account/profile?setup=1'
+    case 'TAILOR_PROFILE': return '/account/profile'
+    case 'TAILOR_SHOP': return '/account/shop'
     case 'ACCOUNT_SETTINGS': return '/account/settings'
     case 'SERVICE_STATUS': return '/status'
     case 'SUPPORT_CASE': return caseId ? `/account/support?caseId=${encodeURIComponent(caseId)}` : '/account/support'

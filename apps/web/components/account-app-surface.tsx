@@ -25984,10 +25984,27 @@ function RenderProfile({
   const setupProfile = profile
 
   const profileId = profile.id
-  function handleShareProfile() {
-    void navigator.clipboard?.writeText(`https://drapeon.co/tailors/${profileId}`)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  async function handleShareProfile() {
+    const url = `https://drapeon.co/tailors/${profileId}`
+    const shareData = {
+      title: `${setupProfile.display_name || setupProfile.business_name || 'My profile'} on Drapeon`,
+      text: 'Explore my work and request custom clothing through Drapeon.',
+      url,
+    }
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData)
+        return
+      }
+      await navigator.clipboard?.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      await navigator.clipboard?.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
 
   const availPillStyle =

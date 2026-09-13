@@ -104,6 +104,7 @@ const manifest = {
   'seller-item-action': ['user'],
   'send-consultation-reminders': ['cron'],
   'send-tailor-readiness-reminders': ['cron'],
+  'send-tailor-activity-nudges': ['cron'],
   'service-health': ['serviceHealth'],
   'sentry-ops-webhook': ['sentryWebhook'],
   'stripe-webhook': ['stripeWebhook'],

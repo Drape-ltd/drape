@@ -479,6 +479,10 @@ export default function TailorNotificationsScreen() {
           historyChain: appendToHistory(undefined, '/(tailor)/profile/notifications'),
         },
       })
+    } else if (destination === 'TAILOR_PROFILE') {
+      router.push('/(tailor)/profile')
+    } else if (destination === 'TAILOR_SHOP') {
+      router.push('/(tailor)/shop')
     } else if (destination.includes('PAYOUT') || item.category === 'PAYOUT') {
       router.push('/(tailor)/profile/payout-setup')
     } else if (destination.includes('NOTIFICATION') || destination.includes('COMMUNICATION')) {

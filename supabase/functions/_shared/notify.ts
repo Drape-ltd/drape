@@ -179,6 +179,7 @@ function optionalUuid(value: unknown) {
 const DESTINATION_KEYS = new Set([
   'NOTIFICATIONS', 'ORDER_DETAIL', 'ORDER_CHAT', 'PAYOUT_SETUP',
   'ACCOUNT_SETTINGS', 'VERIFICATION', 'SERVICE_STATUS', 'SUPPORT_CASE', 'PROMOTION',
+  'TAILOR_PROFILE', 'TAILOR_SHOP',
 ])
 
 function inboxDestination(notification: PushPayload) {

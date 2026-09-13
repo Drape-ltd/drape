@@ -301,6 +301,9 @@ verify_jwt = false
 [functions.send-tailor-readiness-reminders]
 verify_jwt = false
 
+[functions.send-tailor-activity-nudges]
+verify_jwt = false
+
 [functions.return-resolution-action]
 verify_jwt = false
 

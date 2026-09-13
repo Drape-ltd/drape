@@ -606,6 +606,16 @@ async function processJob(supabase: SupabaseClient, job: JobRow) {
         appUrl: asString(payload.appUrl),
         details,
         idempotencyKey: job.dedupe_key,
+        optionalCommunication: (() => {
+          const optional = asRecord(payload.optionalCommunication)
+          const category = asString(optional.category)
+          const purpose = asString(optional.purpose)
+          if (
+            (category === 'PRODUCT_UPDATE' || category === 'PROMOTION') &&
+            (purpose === 'OPERATIONAL' || purpose === 'MARKETING')
+          ) return { category, purpose }
+          return undefined
+        })(),
       });
       return {
         channel: "EMAIL",

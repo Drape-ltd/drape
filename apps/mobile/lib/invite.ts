@@ -1,13 +1,13 @@
 /**
  * Drapeon invite / referral utilities
  *
- * Customer referral: https://drape.app/join?ref={userId}
- * Tailor profile share: https://drape.app/tailor/{tailorProfileId}
+ * Customer referral: https://drapeon.co/join?ref={userId}
+ * Tailor profile share: https://drapeon.co/tailors/{tailorProfileId}
  */
 import { Share, Alert } from 'react-native'
 import { invokeFunction } from './supabase'
 
-const BASE_URL = 'https://drape.app'
+const BASE_URL = 'https://drapeon.co'
 
 async function openShareSheet(message: string, title: string) {
   try {
@@ -52,7 +52,7 @@ export async function shareCustomerReferral(userId: string, displayName: string)
  */
 export async function shareTailorProfile(tailorProfileId: string, tailorName: string) {
   if (!ensureValue(tailorProfileId, 'This profile is not ready to share yet. Refresh your storefront and try again.')) return
-  const link = `${BASE_URL}/tailor/${tailorProfileId}`
+  const link = `${BASE_URL}/tailors/${tailorProfileId}`
   const message = `Check out ${tailorName} on Drapeon, a marketplace for bespoke tailoring. Book a custom garment here:\n\n${link}`
   await openShareSheet(message, `${tailorName || 'Tailor'} on Drapeon`)
 }
@@ -63,7 +63,7 @@ export async function shareTailorProfile(tailorProfileId: string, tailorName: st
 export async function referToTailor(tailorProfileId: string, tailorName: string, referrerId: string) {
   if (!ensureValue(tailorProfileId, 'This tailor link is not ready yet. Retry from the tailor profile in a moment.')) return
   if (!ensureValue(referrerId, 'Your referral link is not ready yet. Retry from Profile in a moment.')) return
-  const link = `${BASE_URL}/tailor/${tailorProfileId}?ref=${referrerId}`
+  const link = `${BASE_URL}/tailors/${tailorProfileId}?ref=${referrerId}`
   const message = `I've had great work done by ${tailorName} on Drapeon. If you're looking for a tailor, check them out here:\n\n${link}`
   await openShareSheet(message, `Refer ${tailorName || 'tailor'}`)
 }
@@ -122,7 +122,7 @@ export async function sharePassportInvite(passportId: string, clientName: string
  */
 export async function inviteCustomerFromTailor(tailorProfileId: string, tailorName: string) {
   if (!ensureValue(tailorProfileId, 'Your profile is not ready to share yet. Refresh your storefront and try again.')) return
-  const link = `${BASE_URL}/tailor/${tailorProfileId}`
+  const link = `${BASE_URL}/tailors/${tailorProfileId}`
   const message = `I make bespoke garments through Drapeon. If you're looking for a tailor, you can book me here:\n\n${link}`
   await openShareSheet(message, `Book ${tailorName || 'this tailor'} on Drapeon`)
 }
