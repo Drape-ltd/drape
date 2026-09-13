@@ -2499,11 +2499,11 @@ function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): We
           ? 'Your verification needs attention before Drapeon can show you publicly or let you take paid work.'
           : 'Customers should not discover or pay an unverified tailor profile as if it were fully ready.',
       actionLabel: pending
-        ? null
+        ? 'Set up payout while you wait'
         : idStatus === 'REJECTED'
           ? 'Resubmit verification in app'
           : 'Finish verification in app',
-      actionHref: null,
+      actionHref: pending ? ('/account/payout' as Route) : null,
       tone: 'warning',
     }
   }
@@ -3931,7 +3931,7 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
     tailorActiveOrderCount,
     unreadCount,
     checkoutPendingCount,
-    payoutNeedsSetup: Boolean(tailorProfile?.payout_reverification_required),
+    payoutNeedsSetup: Boolean(tailorProfile && !isPayoutReady(tailorProfile)),
     warning,
   }
 }
@@ -5106,7 +5106,7 @@ function LegacyAccountRouteShell({
   const groups = accountNavigation(role, {
     activeOrders: hasTailorWorkspace ? tailorActiveOrderCount : customerActiveOrderCount,
     unreadMessages: unreadCount,
-    payoutNeedsSetup: false,
+    payoutNeedsSetup,
   })
 
   async function signOut() {
@@ -5433,7 +5433,7 @@ function AccountRouteShell({
       }
       unreadMessages={shellData.unreadCount}
       checkoutPendingCount={shellData.checkoutPendingCount}
-      payoutNeedsSetup={false}
+      payoutNeedsSetup={shellData.payoutNeedsSetup}
       warning={data.warning}
     >
       {children}
@@ -25784,6 +25784,14 @@ function IdentityHandoffCard({
         >
           Continue to dashboard
         </Link>
+        {!payoutReady ? (
+          <Link
+            href="/account/payout"
+            className="ml-3 mt-4 inline-flex text-sm font-semibold text-needle"
+          >
+            Set up payouts →
+          </Link>
+        ) : null}
       </section>
     )
   }
@@ -25842,19 +25850,10 @@ function IdentityHandoffCard({
             </div>
           ) : null}
           {!payoutReady ? (
-            <div className="mt-4 rounded-[8px] border border-amber-300/35 bg-amber-400/8 p-4">
-              <p className="text-sm font-semibold text-ink">Payout setup comes next</p>
-              <p className="mt-1.5 text-sm leading-6 text-ink/62">
-                Trust review can be submitted now. Paid quotes, live shop publishing, and earnings
-                release stay paused until your payout provider verifies payout readiness.
-              </p>
-              <Link
-                href="/account/payout"
-                className="mt-3 inline-flex text-sm font-semibold text-needle"
-              >
-                Review payout setup →
-              </Link>
-            </div>
+            <p className="mt-4 text-sm leading-6 text-ink/58">
+              Payout setup is not required for this review. We will prompt you after submission,
+              before you can accept paid work.
+            </p>
           ) : null}
           {rejected ? (
             <div className="mt-4 rounded-[8px] border border-rust/20 bg-rust/8 p-4">

@@ -153,7 +153,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
             : 'Customers should not discover or pay an unverified tailor profile as if it were fully ready.',
       actionLabel:
         idVerificationStatus === 'PENDING'
-          ? null
+          ? 'Set up payout while you wait'
           : idVerificationStatus === 'REJECTED'
             ? 'Resubmit verification'
             : 'Finish verification',

@@ -325,7 +325,10 @@ export default function TailorDashboard() {
       router.push('/(tailor)/shop')
       return
     }
-    if (!readiness.payoutReady && readiness.identityVerified) {
+    if (
+      !readiness.payoutReady &&
+      (readiness.identityVerified || readiness.actionLabel === 'Set up payout while you wait')
+    ) {
       router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)', historyChain: appendToHistory(undefined, '/(tailor)') } } as never)
       return
     }

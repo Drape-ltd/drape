@@ -239,6 +239,7 @@ export function WorkContent({ data }: { data: WorkData }) {
     ['VERIFIED', 'APPROVED'].includes(tailor.id_verification_status ?? '') ||
     tailor.is_live
   )
+  const verificationPending = tailor.id_verification_status === 'PENDING'
   const availability = tailor.availability ?? 'OPEN'
   const availabilityCopy =
     availability === 'OPEN'
@@ -306,10 +307,18 @@ export function WorkContent({ data }: { data: WorkData }) {
               action: 'Complete profile',
             }
           : !verified
-            ? {
+            ? verificationPending && !ready
+              ? {
+                  eyebrow: 'While Drapeon reviews you',
+                  title: 'Set up payouts now',
+                  body: 'Your trust review is already in progress. Connect your payout account now so paid work can open as soon as approval lands.',
+                  href: '/account/payout',
+                  action: 'Set up payout',
+                }
+              : {
                 eyebrow: 'Readiness',
                 title: 'Trust review required',
-                body: 'Complete the private challenge review in the app before paid work opens.',
+                body: 'Complete the private challenge review before paid work opens.',
                 href: '/account/profile',
                 action: 'Review requirements',
               }
