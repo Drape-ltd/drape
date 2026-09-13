@@ -38,6 +38,7 @@ type OpsIssueRow = {
   issue_number: number
   case_number: string
   status: OpsIssueStatus
+  canonical_status: string
   severity: OpsIssueSeverity
   metadata: Record<string, unknown> | null
   actor_id: string | null
@@ -114,7 +115,7 @@ export async function createOrRefreshOpsIssue(
 
   const existingResponse = await supabase
     .from('ops_issues')
-    .select('id, issue_number, case_number, status, severity, metadata, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action')
+    .select('id, issue_number, case_number, status, canonical_status, severity, metadata, actor_id, actor_role, order_id, user_id, tailor_profile_id, related_entity_type, related_entity_id, provider, stage, title, description, recommended_action')
     .eq('dedupe_key', input.dedupeKey)
     .maybeSingle()
 
@@ -132,6 +133,7 @@ export async function createOrRefreshOpsIssue(
     issue_type: input.issueType,
     severity: input.severity,
     status: 'OPEN' as OpsIssueStatus,
+    canonical_status: 'NEW',
     source: input.source,
     actor_id: normalizeText(input.actorId),
     actor_role: normalizeText(input.actorRole),
@@ -159,8 +161,13 @@ export async function createOrRefreshOpsIssue(
   const existing = (existingResponse.data as OpsIssueRow | null) ?? null
 
   if (existing?.id) {
+    const wasTerminal =
+      existing.status === 'RESOLVED' ||
+      existing.canonical_status === 'RESOLVED' ||
+      existing.canonical_status === 'CLOSED'
     const beforeState = {
       status: existing.status,
+      canonical_status: existing.canonical_status,
       severity: existing.severity,
       title: existing.title,
       description: existing.description,
@@ -186,13 +193,14 @@ export async function createOrRefreshOpsIssue(
 
     await supabase.from('ops_audit_logs').insert({
       issue_id: existing.id,
-      action_taken: existing.status === 'RESOLVED' ? 'ISSUE_REOPENED' : 'ISSUE_REFRESHED',
+      action_taken: wasTerminal ? 'ISSUE_REOPENED' : 'ISSUE_REFRESHED',
       performed_by: normalizeText(input.actorId),
       performed_role: normalizeText(input.actorRole) ?? 'SYSTEM',
       reason: null,
       before_state: beforeState,
       after_state: {
         status: 'OPEN',
+        canonical_status: 'NEW',
         severity: input.severity,
         title: input.title,
         description: input.description,
@@ -201,7 +209,7 @@ export async function createOrRefreshOpsIssue(
       },
     })
 
-    if (existing.status === 'RESOLVED') {
+    if (wasTerminal) {
       const notifyByEmail = input.severity === 'CRITICAL' || input.notifyOps === true
       if (notifyByEmail) await sendCriticalOpsIssueNotification({
         issueNumber: updateResponse.data.issue_number,
@@ -288,7 +296,7 @@ export async function resolveOpsIssueByDedupeKey(
 ) {
   const lookup = await supabase
     .from('ops_issues')
-    .select('id, status, metadata')
+    .select('id, status, canonical_status, metadata')
     .eq('dedupe_key', dedupeKey)
     .maybeSingle()
 
@@ -304,10 +312,14 @@ export async function resolveOpsIssueByDedupeKey(
   const existing = lookup.data as {
     id: string
     status: OpsIssueStatus
+    canonical_status: string
     metadata: Record<string, unknown> | null
   } | null
 
-  if (!existing?.id || existing.status === 'RESOLVED') return
+  if (
+    !existing?.id ||
+    (existing.status === 'RESOLVED' && existing.canonical_status === 'RESOLVED')
+  ) return
 
   const resolvedAt = new Date().toISOString()
   const nextMetadata = {
@@ -319,6 +331,7 @@ export async function resolveOpsIssueByDedupeKey(
     .from('ops_issues')
     .update({
       status: 'RESOLVED',
+      canonical_status: 'RESOLVED',
       resolved_at: resolvedAt,
       last_seen_at: resolvedAt,
       metadata: nextMetadata,
@@ -342,10 +355,12 @@ export async function resolveOpsIssueByDedupeKey(
     reason: 'Provider recovered during a successful health-checked request.',
     before_state: {
       status: existing.status,
+      canonical_status: existing.canonical_status,
       metadata: existing.metadata ?? {},
     },
     after_state: {
       status: 'RESOLVED',
+      canonical_status: 'RESOLVED',
       metadata: nextMetadata,
     },
   })
