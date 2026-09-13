@@ -25398,6 +25398,12 @@ type IdentityHandoffSession = {
   challengeText?: string
 }
 
+type IdentityProfileStatus = {
+  status?: string
+  rejectionReason?: string | null
+  rejectionCode?: string | null
+}
+
 type SignupTrustResume = {
   token: string
   storagePath: string
@@ -25474,6 +25480,8 @@ function IdentityHandoffCard({
     userId ? readSignupTrustResume(userId) : null
   )
   const [authoritativeStatus, setAuthoritativeStatus] = useState<string | null>(null)
+  const [authoritativeRejectionReason, setAuthoritativeRejectionReason] = useState<string | null>(null)
+  const [authoritativeRejectionCode, setAuthoritativeRejectionCode] = useState<string | null>(null)
   const signupResumeAttemptedRef = useRef(false)
   const status = authoritativeStatus ?? profile.id_verification_status ?? 'NOT_SUBMITTED'
   const handoffUrl = session?.url ?? ''
@@ -25481,8 +25489,17 @@ function IdentityHandoffCard({
   const verified =
     isVerifiedIdentityStatus(status) || profile.is_verified === true || profile.is_live === true
   const rejected = status === 'REJECTED'
-  const profileImageRejected = isInvalidProfileImageRejected(profile)
-  const rejectionMessage = rejected ? identityRejectionMessage(profile) : null
+  const profileImageRejected = rejected && (
+    authoritativeRejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE ||
+    isInvalidProfileImageRejected(profile)
+  )
+  const rejectionMessage = rejected
+    ? profileImageRejected
+      ? PROFILE_IMAGE_REJECTION_MESSAGE
+      : authoritativeRejectionReason
+        ? safeUserText(authoritativeRejectionReason, 'Identity review needs a clearer retake.')
+        : identityRejectionMessage(profile)
+    : null
   const handoffStatusText =
     handoffState === 'opened'
       ? 'Recording device connected. Complete the private challenge there...'
@@ -25530,14 +25547,14 @@ function IdentityHandoffCard({
 
   const checkLatestStatus = useCallback(async () => {
     if (!userId) return
-    const supabase = createClient()
-    const { data } = await supabase
-      .from('tailor_profiles')
-      .select('id_verification_status')
-      .eq('user_id', userId)
-      .maybeSingle()
-    const nextStatus = data?.id_verification_status ?? null
+    const result = await invokeAccountFunction<IdentityProfileStatus>(
+      'identity-handoff-action',
+      { action: 'profile-status' }
+    )
+    const nextStatus = result.status ?? null
     if (nextStatus) setAuthoritativeStatus(nextStatus)
+    setAuthoritativeRejectionReason(result.rejectionReason?.trim() || null)
+    setAuthoritativeRejectionCode(result.rejectionCode?.trim().toUpperCase() || null)
     if (nextStatus === 'PENDING') {
       setHandoffState('submitted')
       setSuccess('Trust video submitted. Review is now pending.')

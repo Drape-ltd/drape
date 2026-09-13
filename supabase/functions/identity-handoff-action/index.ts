@@ -21,6 +21,9 @@ const IDENTITY_RETENTION_ENFORCEMENT = Deno.env.get('IDENTITY_RETENTION_ENFORCEM
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
+    action: z.literal('profile-status'),
+  }),
+  z.object({
     action: z.literal('create'),
     challengeId: z.string().trim().min(1).max(120).optional(),
   }),
@@ -427,6 +430,42 @@ Deno.serve(async (req) => {
       { ip, userId: caller?.id ?? null, userAgent: req.headers.get('user-agent') }
     )
     if (!allowed.allowed) return rateLimitExceededResponse(cors, allowed.retryAfter)
+
+    if (body.action === 'profile-status') {
+      if (!caller?.id)
+        return jsonResponse({ error: 'Sign in to view trust verification status.' }, 401, cors)
+
+      const { data: profile, error: profileError } = await supabase
+        .from('tailor_profiles')
+        .select('id_verification_status, id_verification_rejection_reason, id_verification_metadata')
+        .eq('user_id', caller.id)
+        .maybeSingle()
+      if (profileError) throw new Error('Could not load trust verification status.')
+
+      const metadata =
+        profile?.id_verification_metadata && typeof profile.id_verification_metadata === 'object'
+          ? profile.id_verification_metadata as Record<string, unknown>
+          : null
+      const nested =
+        metadata?.identity_verification && typeof metadata.identity_verification === 'object'
+          ? metadata.identity_verification as Record<string, unknown>
+          : null
+      const rejectionCode =
+        (typeof metadata?.rejection_code === 'string' ? metadata.rejection_code : null) ??
+        (typeof metadata?.rejectionCode === 'string' ? metadata.rejectionCode : null) ??
+        (typeof nested?.rejection_code === 'string' ? nested.rejection_code : null) ??
+        (typeof nested?.rejectionCode === 'string' ? nested.rejectionCode : null)
+
+      return jsonResponse({
+        status: typeof profile?.id_verification_status === 'string'
+          ? profile.id_verification_status
+          : 'NOT_SUBMITTED',
+        rejectionReason: typeof profile?.id_verification_rejection_reason === 'string'
+          ? profile.id_verification_rejection_reason
+          : null,
+        rejectionCode: rejectionCode?.trim().toUpperCase() || null,
+      }, 200, cors)
+    }
 
     if (body.action === 'create') {
       if (!caller?.id)
