@@ -465,8 +465,11 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
   if (!token) return null
 
   const cookieStore = await cookies()
-  const session = cookieStore.get(OPS_SESSION_COOKIE)?.value ?? null
-  if (!safeCompare(session, hashOpsToken(token))) return null
+  const expectedSession = hashOpsToken(token)
+  const hasValidSession = cookieStore
+    .getAll(OPS_SESSION_COOKIE)
+    .some((cookie) => safeCompare(cookie.value, expectedSession))
+  if (!hasValidSession) return null
 
   const localIdentity = getLocalWorkforceDryRunIdentity()
   if (localIdentity) {
