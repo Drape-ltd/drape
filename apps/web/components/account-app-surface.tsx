@@ -25465,10 +25465,12 @@ function IdentityHandoffCard({
   userId,
   profile,
   onRefresh,
+  onReplaceProfilePhoto,
 }: {
   userId: string | null
   profile: TailorProfile
   onRefresh: () => void
+  onReplaceProfilePhoto?: () => void
 }) {
   const [session, setSession] = useState<IdentityHandoffSession | null>(null)
   const [delivery, setDelivery] = useState('')
@@ -25707,12 +25709,19 @@ function IdentityHandoffCard({
           Your private challenge video remains on file. Upload a clearer avatar below, then submit
           setup again so ops can re-review the public photo.
         </p>
-        <a
-          href="#profile-photo"
+        <button
+          type="button"
+          onClick={() => {
+            if (onReplaceProfilePhoto) {
+              onReplaceProfilePhoto()
+              return
+            }
+            document.getElementById('profile-photo')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
           className="mt-4 inline-flex rounded-full bg-rust px-4 py-2 text-sm font-semibold text-white"
         >
           Upload replacement photo
-        </a>
+        </button>
       </section>
     )
   }
@@ -26096,6 +26105,17 @@ function RenderProfile({
     showStep(target)
   }
 
+  function openProfilePhotoReplacement() {
+    setSetupError(null)
+    setSetupStep(0)
+    router.replace('/account/profile?setup=1&step=0#profile-photo' as Route, { scroll: false })
+    window.setTimeout(() => {
+      const photoSection = document.getElementById('profile-photo')
+      photoSection?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      photoSection?.querySelector<HTMLInputElement>('input[type="file"]')?.focus()
+    }, 100)
+  }
+
   const setupSellerType = (() => {
     if (!setupFlow || !data.userId || typeof window === 'undefined') return normalizedSellerType
     try {
@@ -26224,7 +26244,12 @@ function RenderProfile({
 
         {setupStep === 3 ? (
           setupSavedForTrust || trustReviewSubmitted ? (
-            <IdentityHandoffCard userId={data.userId} profile={profile} onRefresh={onRefresh} />
+            <IdentityHandoffCard
+              userId={data.userId}
+              profile={profile}
+              onRefresh={onRefresh}
+              onReplaceProfilePhoto={openProfilePhotoReplacement}
+            />
           ) : (
             <Surface className="border-amber-300/35 bg-amber-400/8 p-5">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
