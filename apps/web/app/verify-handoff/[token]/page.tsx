@@ -38,10 +38,13 @@ function functionError(payload: HandoffResponse | null | undefined, fallback: st
 function supportedRecorderType(): { mimeType: string; contentType: TrustVideoContentType } | null {
   if (typeof MediaRecorder === 'undefined') return null
   const candidates: Array<{ mimeType: string; contentType: TrustVideoContentType }> = [
-    { mimeType: 'video/mp4', contentType: 'video/mp4' },
     { mimeType: 'video/webm;codecs=vp9,opus', contentType: 'video/webm' },
     { mimeType: 'video/webm;codecs=vp8,opus', contentType: 'video/webm' },
     { mimeType: 'video/webm', contentType: 'video/webm' },
+    // Some desktop engines accept MP4 recording but emit a fragmented stream
+    // without a finite duration, so the preview behaves like a live broadcast.
+    // Prefer WebM whenever it is available and keep MP4 as the compatibility fallback.
+    { mimeType: 'video/mp4', contentType: 'video/mp4' },
   ]
   return candidates.find(({ mimeType }) => MediaRecorder.isTypeSupported(mimeType)) ?? null
 }
@@ -101,16 +104,24 @@ export default function VerifyHandoffPage(): React.JSX.Element {
     let cancelled = false
 
     async function boot() {
-      const { data } = await supabase.functions.invoke<HandoffResponse>('identity-handoff-action', {
+      const resolved = await supabase.functions.invoke<HandoffResponse>('identity-handoff-action', {
         body: { action: 'resolve-token', token },
       })
       if (cancelled) return
-      if (data?.error) {
-        setError(functionError(data, 'This trust-video link is not available.'))
+      if (resolved.error || resolved.data?.error) {
+        setError(functionError(
+          resolved.data,
+          resolved.error?.message ?? 'This trust-video link is not available.',
+        ))
         return
       }
+      const data = resolved.data
       setExpiresAt(typeof data?.expiresAt === 'string' ? data.expiresAt : null)
-      setChallengeText(typeof data?.challengeText === 'string' ? data.challengeText : '')
+      if (typeof data?.challengeText !== 'string' || !data.challengeText.trim()) {
+        setError('This trust-video challenge is no longer available. Return to setup and start a new session.')
+        return
+      }
+      setChallengeText(data.challengeText)
 
       if (preferNativeCapture) {
         setCameraReady(true)
@@ -148,6 +159,12 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current)
     }
   }, [preferNativeCapture, stopCamera, supabase, token])
+
+  useEffect(() => {
+    if (recordedUrl || !cameraReady || !liveVideoRef.current || !streamRef.current) return
+    liveVideoRef.current.srcObject = streamRef.current
+    void liveVideoRef.current.play().catch(() => undefined)
+  }, [cameraReady, recordedUrl])
 
   const chooseNativeCapture = useCallback(async (file: File | null) => {
     if (!file || busy) return
@@ -328,6 +345,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
               <div className="relative aspect-[3/4] overflow-hidden bg-ink">
                 {recordedUrl ? (
                   <video
+                    key="recorded-preview"
                     src={recordedUrl}
                     controls={true}
                     playsInline={true}
@@ -346,7 +364,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
                     </div>
                   </div>
                 ) : (
-                  <video ref={liveVideoRef} muted={true} playsInline={true} autoPlay={true} className="h-full w-full object-cover" />
+                  <video key="live-camera" ref={liveVideoRef} muted={true} playsInline={true} autoPlay={true} className="h-full w-full object-cover" />
                 )}
                 {recording ? (
                   <div className="absolute left-4 top-4 rounded-full bg-rust px-3 py-1.5 text-xs font-semibold text-white">

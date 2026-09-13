@@ -25484,10 +25484,10 @@ function IdentityHandoffCard({
   const rejectionMessage = rejected ? identityRejectionMessage(profile) : null
   const handoffStatusText =
     handoffState === 'opened'
-      ? 'Phone connected. Recording the private challenge on your device...'
+      ? 'Recording device connected. Complete the private challenge there...'
       : handoffState === 'submitted'
         ? 'Trust video submitted for review. Our team completes reviews within 24 hours.'
-        : 'Waiting for a secure mobile connection...'
+        : 'Waiting for a secure recording connection...'
   const payoutReady = isPayoutReady(profile)
 
   const finishSavedSignupVideo = useCallback(async () => {
@@ -25739,12 +25739,13 @@ function IdentityHandoffCard({
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-xl">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">
-            Record trust video via smartphone
+            Private trust video
           </p>
           <h3 className="mt-2 text-2xl text-ink">Record a Private Challenge Video.</h3>
           <p className="mt-2 text-sm leading-6 text-ink/64">
-            Keep your face visible and say the private challenge phrase shown on your phone. Drapeon
-            does not collect a government ID or create a biometric template.
+            Record here with this computer’s camera, or continue on your phone or in the Drapeon
+            app. Keep your face visible and say the private challenge phrase in full. Drapeon does
+            not collect a government ID or create a biometric template.
           </p>
           {session?.challengeText ? (
             <div className="mt-4 rounded-[8px] border border-needle/14 bg-needle/6 p-4">
@@ -25791,6 +25792,15 @@ function IdentityHandoffCard({
             <div
               className={`grid justify-items-center gap-4 transition-all duration-500 ${handoffState === 'submitted' ? 'max-h-0 -translate-y-2 overflow-hidden opacity-0' : 'max-h-[560px] translate-y-0 opacity-100'}`}
             >
+              <a
+                href={handoffUrl}
+                className="flex w-full items-center justify-center rounded-[8px] bg-needle px-4 py-2.5 text-sm font-semibold text-white"
+              >
+                Record on this laptop
+              </a>
+              <p className="text-center text-xs leading-5 text-ink/56">
+                Or scan the QR code to record on your phone.
+              </p>
               <div
                 className="rounded-[8px] border border-ink/8 bg-white p-3 shadow-inner"
                 aria-label="Trust-video handoff QR code"
@@ -25811,12 +25821,6 @@ function IdentityHandoffCard({
                 )}
                 <span>{handoffStatusText}</span>
               </div>
-              <a
-                href={handoffUrl}
-                className="break-all text-center text-xs font-semibold text-needle"
-              >
-                {handoffUrl}
-              </a>
               <div className="grid w-full gap-2">
                 <input
                   type="email"

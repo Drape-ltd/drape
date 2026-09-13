@@ -312,7 +312,7 @@ async function sendHandoffEmail(input: { to: string; url: string }) {
       html: `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
   <h1 style="font-size:24px;margin:0 0 12px">Record your trust video on your phone</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Open this secure link on your smartphone, keep your face visible, and record the private phrase shown on screen. Drapeon does not ask for a government ID.</p>
+  <p style="line-height:1.6;margin:0 0 16px">Open this secure link on a laptop or phone with a camera and microphone, keep your face visible, and record the private phrase shown on screen. You can also use the Drapeon app. Drapeon does not ask for a government ID.</p>
   <a href="${escapeHtml(input.url)}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">Open trust video</a>
   <p style="line-height:1.6;color:#6b7280;margin-top:20px">This link expires in 15 minutes and only works for this verification session.</p>
 </div>`,
@@ -574,7 +574,7 @@ Deno.serve(async (req) => {
           return jsonResponse({ error: 'Enter a valid phone number with country code.' }, 400, cors)
         await sendSmsDirect(
           phone,
-          `Drapeon trust video: open ${url} on your phone. The link expires in 15 minutes.`
+          `Drapeon trust video: open ${url} on a laptop or phone with a camera and microphone. The link expires in 15 minutes.`
         )
       }
 
