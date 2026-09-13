@@ -32,6 +32,11 @@ function getOpsNotificationFrom() {
   return process.env.RESEND_FROM ?? `Drapeon Ops <${CONTACTS.noreply}>`
 }
 
+function getMoneyApproverRecipients() {
+  const configured = parseEmailList(process.env.OPS_MONEY_APPROVER_EMAILS)
+  return configured.length > 0 ? configured : ['founders@drapeon.co']
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -155,4 +160,45 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
 
   await webPushPromise
   return { ok: true as const, skipped: false as const }
+}
+
+type MoneyApprovalRequiredEmailInput = {
+  requestId: string
+  reference: string
+  actionLabel: string
+  riskLevel: string
+  preparedBy: string
+  reason: string
+}
+
+export async function sendMoneyApprovalRequiredEmail(input: MoneyApprovalRequiredEmailInput) {
+  const apiKey = process.env.RESEND_API_KEY?.trim()
+  if (!apiKey) return { ok: false as const, skipped: true as const }
+  const recipients = getMoneyApproverRecipients()
+  if (recipients.length === 0) return { ok: false as const, skipped: true as const }
+
+  const opsBaseUrl = (process.env.OPS_WEB_BASE_URL ?? process.env.NEXT_PUBLIC_OPS_URL ?? 'https://ops.drapeon.co').replace(/\/+$/u, '')
+  const actionUrl = `${opsBaseUrl}/ops/money?view=approval#money-${encodeURIComponent(input.requestId)}`
+  const subject = `Founder approval needed · ${input.reference}`
+  const response = await fetch(RESEND_API, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': `money-approval:${input.requestId}`,
+    },
+    body: JSON.stringify({
+      from: getOpsNotificationFrom(),
+      to: recipients,
+      subject,
+      html: `<div style="font-family:Inter,Arial,sans-serif;max-width:640px;margin:0 auto;color:#17211c"><p style="color:#287253;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Money Desk · founder action required</p><h1 style="font-family:Georgia,serif">${escapeHtml(input.actionLabel)}</h1><p>A protected Money Desk request is waiting for your decision.</p><table style="width:100%;border-collapse:collapse"><tr><td style="padding:6px 0;color:#777">Request</td><td style="padding:6px 0;font-weight:700">${escapeHtml(input.reference)}</td></tr><tr><td style="padding:6px 0;color:#777">Risk</td><td style="padding:6px 0">${escapeHtml(input.riskLevel)}</td></tr><tr><td style="padding:6px 0;color:#777">Prepared by</td><td style="padding:6px 0">${escapeHtml(input.preparedBy)}</td></tr></table><p style="font-size:15px;line-height:1.6">${escapeHtml(input.reason)}</p><p><a href="${escapeHtml(actionUrl)}" style="display:inline-block;border-radius:999px;background:#287253;color:white;padding:12px 20px;text-decoration:none;font-weight:700">Review in Money Desk</a></p><p style="color:#777;font-size:13px">Sign in with the configured founder account. No payout credentials or bank details are included in this email.</p></div>`,
+      text: `Founder action required\n\n${input.actionLabel}\nRequest: ${input.reference}\nRisk: ${input.riskLevel}\nPrepared by: ${input.preparedBy}\n\n${input.reason}\n\nReview in Money Desk: ${actionUrl}`,
+    }),
+  })
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined)
+    return { ok: false as const, skipped: false as const }
+  }
+  const payload = await response.json().catch(() => ({})) as { id?: unknown }
+  return { ok: true as const, skipped: false as const, deliveryId: typeof payload.id === 'string' ? payload.id : null }
 }

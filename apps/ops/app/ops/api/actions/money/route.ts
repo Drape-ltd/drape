@@ -13,6 +13,7 @@ import { executeMoneyDeskRequest } from '../../../../../../web/lib/money-desk-ex
 import { getOpsSession, hasFreshOpsMfa, isNamedOpsWorkforceSession } from '../../../../../../web/lib/ops-auth'
 import { canPerformOpsAction } from '../../../../../../web/lib/ops-console'
 import { validateOpsMutationOrigin } from '../../../../../../web/lib/ops-request-security'
+import { sendMoneyApprovalRequiredEmail } from '../../../../../../web/lib/ops-notifications'
 import { createServiceRoleClient } from '../../../../../../web/lib/server-supabase'
 import { isRestrictedOpsPhoneHeaders } from '../../../../../lib/client-surface'
 
@@ -136,9 +137,13 @@ export async function POST(request: Request) {
         actionType: 'PAYOUT_DESTINATION_CHANGE',
         targetType: 'PAYOUT_CHANGE_REQUEST',
         targetId: payoutChange.id,
-        caseId: issueId,
+        // money_desk_requests.case_id belongs to the financial_cases domain.
+        // This workflow is owned by an Ops issue, so retain that link in the
+        // immutable action snapshot instead of crossing foreign-key domains.
+        caseId: null,
         reason,
         actionPayload: {
+          opsIssueId: issueId,
           payoutChangeRequestId: payoutChange.id,
           tailorUserId: payoutChange.tailor_user_id,
           tailorProfileId: payoutChange.tailor_profile_id,
@@ -148,7 +153,66 @@ export async function POST(request: Request) {
         },
         idempotencyKey: `payout-change-request:${payoutChange.id}`,
       })
-      return json({ ok: true, correlationId, result }, 200)
+      const requestId = typeof result.requestId === 'string' ? result.requestId : ''
+      const reference = typeof result.reference === 'string' ? result.reference : 'Money Desk request'
+      const riskLevel = typeof result.riskLevel === 'string' ? result.riskLevel : 'HIGH'
+      const notification = { email: 'failed', slack: 'failed' } as { email: 'sent' | 'skipped' | 'failed'; slack: 'queued' | 'already-queued' | 'failed' }
+      if (requestId) {
+        const priorEmail = await client.from('money_desk_events').select('id')
+          .eq('request_id', requestId).eq('event_type', 'FOUNDER_APPROVAL_EMAIL_SENT').limit(1).maybeSingle()
+        if (priorEmail.data?.id) {
+          notification.email = 'sent'
+        } else {
+          let email: { ok: boolean; skipped: boolean; deliveryId?: string | null } = await sendMoneyApprovalRequiredEmail({
+            requestId,
+            reference,
+            actionLabel: 'Payout destination change',
+            riskLevel,
+            preparedBy: session.email,
+            reason,
+          }).catch(() => ({ ok: false as const, skipped: false as const }))
+          if (!email.ok) {
+            const edgeDelivery = await client.functions.invoke('notify-money-approval', { body: { requestId } })
+            const edgePayload = edgeDelivery.data && typeof edgeDelivery.data === 'object' ? edgeDelivery.data as Record<string, unknown> : {}
+            if (!edgeDelivery.error && edgePayload.ok === true) email = { ok: true, skipped: false }
+          }
+          notification.email = email.ok ? 'sent' : email.skipped ? 'skipped' : 'failed'
+          await client.from('money_desk_events').insert({
+            request_id: requestId,
+            event_type: email.ok ? 'FOUNDER_APPROVAL_EMAIL_SENT' : email.skipped ? 'FOUNDER_APPROVAL_EMAIL_SKIPPED' : 'FOUNDER_APPROVAL_EMAIL_FAILED',
+            actor_email: session.email,
+            actor_role: session.role,
+            payload: { deliveryId: 'deliveryId' in email ? email.deliveryId : null },
+            correlation_id: correlationId,
+          })
+        }
+
+        const existingSlack = await client
+          .from('ops_audit_logs')
+          .select('id')
+          .eq('issue_id', issueId)
+          .eq('action_taken', 'MONEY_DESK_APPROVAL_REQUESTED')
+          .limit(1)
+          .maybeSingle()
+        if (existingSlack.data?.id) {
+          notification.slack = 'already-queued'
+        } else {
+          const slackAudit = await client.from('ops_audit_logs').insert({
+            issue_id: issueId,
+            action_taken: 'MONEY_DESK_APPROVAL_REQUESTED',
+            performed_by: session.email,
+            performed_role: session.role,
+            reason: 'Founder approval is required for a protected payout destination change.',
+            before_state: { payout_change_request_id: payoutChange.id },
+            after_state: { money_desk_request_id: requestId, money_desk_reference: reference, status: 'PENDING_APPROVAL' },
+          })
+          notification.slack = slackAudit.error ? 'failed' : 'queued'
+        }
+      }
+      const warning = notification.email !== 'sent' || notification.slack === 'failed'
+        ? 'The Money Desk request is safe, but one or more founder alerts need attention.'
+        : null
+      return json({ ok: true, correlationId, result, notification, warning }, 200)
     }
 
     const requestId = typeof body?.requestId === 'string' ? body.requestId.trim() : ''
@@ -186,7 +250,7 @@ export async function POST(request: Request) {
       reason,
     })
     return json({ ok: true, correlationId, result }, 200)
-  } catch (error) {
-    return json({ ok: false, error: error instanceof Error ? error.message : 'money-desk-action-failed', correlationId }, 409)
+  } catch {
+    return json({ ok: false, error: 'The Money Desk action could not be completed. Reload and retry.', correlationId }, 409)
   }
 }

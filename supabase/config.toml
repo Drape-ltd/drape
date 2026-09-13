@@ -118,6 +118,9 @@ verify_jwt = false
 [functions.notify-ops-verification]
 verify_jwt = false
 
+[functions.notify-money-approval]
+verify_jwt = false
+
 [functions.on-message-created]
 verify_jwt = false
 

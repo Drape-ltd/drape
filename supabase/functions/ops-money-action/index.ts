@@ -12,6 +12,7 @@ import {
 } from '../_shared/ops-money-execution.ts'
 import { isOpsMoneyCommand, selectOpsMoneyActorRole } from '../_shared/ops-money-policy.ts'
 import { isActiveOpsReadPrincipal } from '../_shared/ops-read-policy.ts'
+import { sendMoneyApprovalRequiredNotification } from '../_shared/ops-notifications.ts'
 
 const FN = 'ops-money-action'
 
@@ -202,13 +203,16 @@ Deno.serve(async (request) => {
         p_target_type: 'PAYOUT_CHANGE_REQUEST',
         p_target_id: payoutResult.data.id,
         p_order_id: null,
-        p_case_id: issueId,
+        // money_desk_requests.case_id references financial_cases. The review
+        // currently in hand is an Ops issue, retained in action_payload below.
+        p_case_id: null,
         p_amount: null,
         p_currency: null,
         p_amount_usd_equivalent: null,
         p_usd_equivalent_source: null,
         p_reason: reason,
         p_action_payload: {
+          opsIssueId: issueId,
           payoutChangeRequestId: payoutResult.data.id,
           tailorUserId: payoutResult.data.tailor_user_id,
           tailorProfileId: payoutResult.data.tailor_profile_id,
@@ -219,7 +223,63 @@ Deno.serve(async (request) => {
         p_correlation_id: correlationId,
       })
       if (submitResult.error) throw submitResult.error
-      return json({ ok: true, result: submitResult.data, correlationId }, 200, cors)
+      const submitted = asRecord(submitResult.data)
+      const submittedRequestId = typeof submitted.requestId === 'string' ? submitted.requestId : ''
+      const reference = typeof submitted.reference === 'string' ? submitted.reference : 'Money Desk request'
+      const riskLevel = typeof submitted.riskLevel === 'string' ? submitted.riskLevel : 'HIGH'
+      const notification = { email: 'failed', slack: 'failed' } as {
+        email: 'sent' | 'skipped' | 'failed'
+        slack: 'queued' | 'already-queued' | 'failed'
+      }
+      if (validUuid(submittedRequestId)) {
+        const priorEmail = await client.from('money_desk_events').select('id')
+          .eq('request_id', submittedRequestId).eq('event_type', 'FOUNDER_APPROVAL_EMAIL_SENT').limit(1).maybeSingle()
+        if (priorEmail.data?.id) {
+          notification.email = 'sent'
+        } else {
+          const email = await sendMoneyApprovalRequiredNotification({
+            requestId: submittedRequestId,
+            reference,
+            actionLabel: 'Payout destination change',
+            riskLevel,
+            preparedBy: actor.email,
+            reason,
+          }).catch(() => ({ ok: false as const, skipped: false as const }))
+          notification.email = email.ok ? 'sent' : email.skipped ? 'skipped' : 'failed'
+          await client.from('money_desk_events').insert({
+            request_id: submittedRequestId,
+            event_type: email.ok ? 'FOUNDER_APPROVAL_EMAIL_SENT' : email.skipped ? 'FOUNDER_APPROVAL_EMAIL_SKIPPED' : 'FOUNDER_APPROVAL_EMAIL_FAILED',
+            actor_email: actor.email,
+            actor_role: actor.role,
+            payload: { deliveryId: 'deliveryId' in email ? email.deliveryId : null },
+            correlation_id: correlationId,
+          })
+        }
+
+        const existingSlack = await client.from('ops_audit_logs').select('id')
+          .eq('issue_id', issueId)
+          .eq('action_taken', 'MONEY_DESK_APPROVAL_REQUESTED')
+          .limit(1)
+          .maybeSingle()
+        if (existingSlack.data?.id) {
+          notification.slack = 'already-queued'
+        } else {
+          const slackAudit = await client.from('ops_audit_logs').insert({
+            issue_id: issueId,
+            action_taken: 'MONEY_DESK_APPROVAL_REQUESTED',
+            performed_by: actor.email,
+            performed_role: actor.role,
+            reason: 'Founder approval is required for a protected payout destination change.',
+            before_state: { payout_change_request_id: payoutResult.data.id },
+            after_state: { money_desk_request_id: submittedRequestId, money_desk_reference: reference, status: 'PENDING_APPROVAL' },
+          })
+          notification.slack = slackAudit.error ? 'failed' : 'queued'
+        }
+      }
+      const warning = notification.email !== 'sent' || notification.slack === 'failed'
+        ? 'The Money Desk request is safe, but one or more founder alerts need attention.'
+        : null
+      return json({ ok: true, result: submitResult.data, notification, warning, correlationId }, 200, cors)
     }
 
     if (!validUuid(requestId)) return json({ error: 'A valid Money Desk request is required.', correlationId }, 400, cors)
