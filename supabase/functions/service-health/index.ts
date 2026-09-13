@@ -31,6 +31,7 @@ const REQUIRED_CRON_JOBS = [
   "release-order-payouts",
   "escalate-production-stalls",
   "send-consultation-reminders",
+  "send-tailor-readiness-reminders",
   "finalize-account-deletions",
   "process-notification-jobs",
   "process-ops-jobs",

@@ -510,6 +510,23 @@ async function reconcileQueuedDeliveryWebhook(
 async function processJob(supabase: SupabaseClient, job: JobRow) {
   const payload = asRecord(job.payload);
 
+  if (payload.onlyIfPayoutIncomplete === true) {
+    const userId = requireString(payload, "userId");
+    const { data: profile, error } = await supabase
+      .from("tailor_profiles")
+      .select("id,payout_account_verified,payout_reverification_required")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) throw new Error(`Payout readiness check failed: ${error.message}`);
+    if (!profile || (profile.payout_account_verified === true && profile.payout_reverification_required !== true)) {
+      return {
+        channel: job.job_type === "SEND_ACCOUNT_EVENT_EMAIL" ? "EMAIL" : "PUSH",
+        status: "SKIPPED",
+        reason: profile ? "PAYOUT_READY" : "TAILOR_PROFILE_MISSING",
+      } satisfies NotificationDeliveryResult;
+    }
+  }
+
   switch (job.job_type) {
     case "SEND_PUSH": {
       const userId = requireString(payload, "userId");

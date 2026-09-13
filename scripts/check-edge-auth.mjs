@@ -103,6 +103,7 @@ const manifest = {
   'seller-access-review-request': ['user'],
   'seller-item-action': ['user'],
   'send-consultation-reminders': ['cron'],
+  'send-tailor-readiness-reminders': ['cron'],
   'service-health': ['serviceHealth'],
   'sentry-ops-webhook': ['sentryWebhook'],
   'stripe-webhook': ['stripeWebhook'],
