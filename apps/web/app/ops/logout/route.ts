@@ -32,13 +32,15 @@ export async function POST(request: Request) {
   const url =
     mode === 'cloudflare-access'
       ? buildCanonicalOpsUrl(request, '/cdn-cgi/access/logout')
-      : buildCanonicalOpsUrl(request, '/ops')
+      : buildCanonicalOpsUrl(request, '/ops/my-work')
 
   if (mode !== 'cloudflare-access') {
     url.searchParams.set('notice', 'ops-signed-out')
   }
 
-  const response = NextResponse.redirect(url)
+  // Sign-out is a POST, but both the local landing page and Cloudflare's logout
+  // endpoint must be loaded with GET after the session cookie is cleared.
+  const response = NextResponse.redirect(url, 303)
   response.cookies.set(OPS_SESSION_COOKIE, '', {
     httpOnly: true,
     sameSite: 'strict',
