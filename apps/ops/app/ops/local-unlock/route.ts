@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import {
   createLocalWorkforceSessionValue,
   getOpsAccessMode,
-  getLocalWorkforceDryRunIdentities,
+  getLocalWorkforceDryRunIdentity,
   OPS_SESSION_COOKIE,
 } from '../../../../web/lib/ops-auth'
 import { validateOpsMutationOrigin } from '../../../../web/lib/ops-request-security'
@@ -44,12 +44,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'invalid-origin' }, { status: 403 })
   }
 
-  const formData = await request.formData()
-  const identityKey = String(formData.get('identity') ?? '')
-  const identity = getLocalWorkforceDryRunIdentities().find((candidate) => candidate.key === identityKey)
+  const identity = getLocalWorkforceDryRunIdentity()
   const sessionValue = identity ? createLocalWorkforceSessionValue(identity) : null
   if (!identity || !sessionValue) {
-    return NextResponse.json({ ok: false, error: 'invalid-local-identity' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: 'local-workforce-unconfigured' }, { status: 503 })
   }
 
   const response = NextResponse.redirect(new URL('/ops/my-work?notice=ops-unlocked', request.url), 303)

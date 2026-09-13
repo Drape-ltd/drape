@@ -205,47 +205,24 @@ export type LocalWorkforceDryRunIdentity = {
   role: OpsRole
 }
 
-export function getLocalWorkforceDryRunIdentities(): LocalWorkforceDryRunIdentity[] {
-  if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return []
+export function getLocalWorkforceDryRunIdentity(): LocalWorkforceDryRunIdentity | null {
+  if (process.env.NODE_ENV === 'production' || process.env.OPS_LOCAL_WORKFORCE_DRY_RUN !== '1') return null
   const email = process.env.OPS_LOCAL_WORKFORCE_EMAIL?.trim().toLowerCase() ?? ''
   const role = normalizeOpsRole(process.env.OPS_LOCAL_WORKFORCE_ROLE)
-  const identities: LocalWorkforceDryRunIdentity[] = []
-
-  if (email.endsWith('@drapeon.co') && role) {
-    identities.push({
-      key: 'reviewer',
-      label: 'Ops reviewer',
-      email,
-      role,
-    })
-  }
+  if (!email.endsWith('@drapeon.co') || !role) return null
 
   const founderEmail = (process.env.OPS_MONEY_APPROVER_EMAILS ?? 'founders@drapeon.co')
     .split(',')
     .map((entry) => entry.trim().toLowerCase())
     .find((entry) => entry.endsWith('@drapeon.co'))
+  const founder = founderEmail === email && role === 'admin'
 
-  if (founderEmail && founderEmail !== email) {
-    identities.push({
-      key: 'founder',
-      label: 'Founder approver',
-      email: founderEmail,
-      role: 'admin',
-    })
-  } else if (founderEmail && founderEmail === email && role === 'admin') {
-    identities[0] = {
-      key: 'founder',
-      label: 'Founder approver',
-      email: founderEmail,
-      role: 'admin',
-    }
+  return {
+    key: founder ? 'founder' : 'reviewer',
+    label: founder ? 'Founder approver' : 'Ops reviewer',
+    email,
+    role,
   }
-
-  return identities
-}
-
-function getLocalWorkforceDryRunIdentity() {
-  return getLocalWorkforceDryRunIdentities()[0] ?? null
 }
 
 export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
@@ -270,7 +247,7 @@ export function createLocalWorkforceSessionValue(identity: LocalWorkforceDryRunI
   const token = getOpsDashboardToken()
   if (!token) return null
   return createHmac('sha256', token)
-    .update(`local-workforce:${identity.key}:${identity.email}:${identity.role}`)
+    .update(`local-workforce-v2:${identity.key}:${identity.email}:${identity.role}`)
     .digest('hex')
 }
 
@@ -514,16 +491,13 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
   const cookieStore = await cookies()
   const expectedSession = hashOpsToken(token)
   const sessionCookies = cookieStore.getAll(OPS_SESSION_COOKIE)
-  const localIdentities = getLocalWorkforceDryRunIdentities()
-  const selectedLocalIdentity = localIdentities.find((identity) => {
-    const expected = createLocalWorkforceSessionValue(identity)
-    return expected && sessionCookies.some((cookie) => safeCompare(cookie.value, expected))
-  })
-  const hasLegacySession = sessionCookies.some((cookie) => safeCompare(cookie.value, expectedSession))
-  const localIdentity = selectedLocalIdentity ?? (hasLegacySession ? getLocalWorkforceDryRunIdentity() : null)
-  if (!localIdentity && !hasLegacySession) return null
+  const localIdentity = getLocalWorkforceDryRunIdentity()
 
   if (localIdentity) {
+    const expectedLocalSession = createLocalWorkforceSessionValue(localIdentity)
+    if (!expectedLocalSession || !sessionCookies.some((cookie) => safeCompare(cookie.value, expectedLocalSession))) {
+      return null
+    }
     const authenticatedAt = Math.floor(Date.now() / 1000)
     return {
       allowed: true,
@@ -541,6 +515,8 @@ async function getBootstrapSession(): Promise<OpsSession | null> {
       accessKeyAgeMs: null,
     }
   }
+
+  if (!sessionCookies.some((cookie) => safeCompare(cookie.value, expectedSession))) return null
 
   const role = getOpsBootstrapRole()
   if (!role) return null

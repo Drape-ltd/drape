@@ -5,15 +5,11 @@ import { getOpsAccessMode, getOpsSession } from '../../../web/lib/ops-auth'
 
 function LocalIdentityButtons() {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 18 }}>
+    <div style={{ marginTop: 18 }}>
       <form action="/ops/local-unlock" method="post">
-        <input name="identity" type="hidden" value="reviewer" />
-        <button className="ops-button" type="submit">Continue as Ops reviewer</button>
+        <button className="ops-button ops-button-primary" type="submit">Continue as configured workforce identity</button>
       </form>
-      <form action="/ops/local-unlock" method="post">
-        <input name="identity" type="hidden" value="founder" />
-        <button className="ops-button ops-button-primary" type="submit">Continue as founder approver</button>
-      </form>
+      <p style={{ marginTop: 12 }}>Founder approval requires a separate authenticated founder session opened from the approval alert.</p>
     </div>
   )
 }
