@@ -287,12 +287,12 @@ export default function CustomerProfileScreen() {
           onPress: () => {
             setSwitchingRole(true)
             void switchRole('TAILOR')
-              .then(({ error }) => {
+              .then(({ error, setupRequired }) => {
                 if (error) {
                   Alert.alert('Could not switch modes', error)
                   return
                 }
-                resetTo(router, '/(tailor)')
+                resetTo(router, setupRequired ? '/(tailor)/profile/setup' : '/(tailor)')
               })
               .finally(() => setSwitchingRole(false))
           },

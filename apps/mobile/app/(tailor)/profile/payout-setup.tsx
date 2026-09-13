@@ -1082,7 +1082,7 @@ export default function TailorPayoutSetupScreen() {
                   <BenefitRow
                     icon="credit-card"
                     title="Funds go directly to your bank account"
-                    body="Payout currency decides the provider for this account."
+                    body="Choose a currency only when you have an eligible bank account and can complete that provider’s verification."
                   />
                   <BenefitRow
                     icon="shield"
@@ -1101,7 +1101,7 @@ export default function TailorPayoutSetupScreen() {
                   </View>
                   <Text style={styles.heroTitle}>How would you like to be paid?</Text>
                   <Text style={styles.heroCopy}>
-                    Your earnings will be sent in this currency to your bank account. You can change it later, but you’ll need to verify the account again.
+                    Paystack is for local bank accounts in Nigeria, Ghana, and Kenya. USD, GBP, EUR, and CAD use Stripe Connect, which must support your country and bank account.
                   </Text>
                 </View>
 
@@ -1127,6 +1127,15 @@ export default function TailorPayoutSetupScreen() {
                       </TouchableOpacity>
                     )
                   })}
+                </View>
+                <View style={styles.inlineInfoCard}>
+                  <Feather name="info" size={16} color={Colors.needleGreen} />
+                  <Text style={styles.inlineInfoText}>
+                    {provider === 'STRIPE'
+                      ? `Choosing ${selectedCurrency} does not create a foreign bank account or change your country. Stripe will require identity and eligible bank verification.`
+                      : `${selectedCurrency} requires a bank account in ${selectedOption.countryLabel} that Paystack can verify.`}
+                    {' '}You can change this later, but you must verify the new payout route again. Existing orders keep their original currency.
+                  </Text>
                 </View>
               </>
             ) : null}

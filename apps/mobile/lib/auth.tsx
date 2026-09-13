@@ -40,7 +40,7 @@ interface AuthContextValue {
   signInWithGoogle: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   signInWithApple: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
   reauthenticateWithProvider: (provider: 'apple' | 'google') => Promise<{ error: string | null; authorizationCode?: string | null }>
-  switchRole: (role: DrapeRole) => Promise<{ error: string | null }>
+  switchRole: (role: DrapeRole) => Promise<{ error: string | null; setupRequired?: boolean }>
   signOut: () => Promise<void>
 }
 
@@ -837,7 +837,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function switchRole(role: DrapeRole): Promise<{ error: string | null }> {
+  async function switchRole(role: DrapeRole): Promise<{ error: string | null; setupRequired?: boolean }> {
     if (!session?.user?.id) {
       return { error: 'Sign in again before switching Drapeon modes.' }
     }
@@ -870,7 +870,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryClient.clear()
     await clearPersistedQueryCache()
     setSession(data.session)
-    return { error: null }
+    return { error: null, setupRequired: switchData?.setupRequired === true }
   }
 
   async function signOut() {

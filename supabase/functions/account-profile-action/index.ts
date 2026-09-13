@@ -397,18 +397,37 @@ Deno.serve(async (req) => {
     if (body.action === 'switch-role') {
       const targetRole = body.role
       const [{ data: userRow, error: userError }, { data: customerProfile }, { data: tailorProfile }] = await Promise.all([
-        supabase.from('users').select('display_name, phone, role').eq('id', caller.id).maybeSingle(),
-        supabase.from('customer_profiles').select('id').eq('user_id', caller.id).maybeSingle(),
+        supabase.from('users').select('display_name, phone, role, default_currency').eq('id', caller.id).maybeSingle(),
+        supabase.from('customer_profiles').select('id, display_name, avatar_url').eq('user_id', caller.id).maybeSingle(),
         supabase.from('tailor_profiles').select('id, display_name').eq('user_id', caller.id).maybeSingle(),
       ])
       if (userError || !userRow) {
         return jsonResponse({ error: 'Your account role could not be checked right now.' }, 500, cors)
       }
+      let tailorSetupCreated = false
       if (targetRole === 'TAILOR' && !tailorProfile) {
-        return jsonResponse({
-          error: 'Complete your tailor application before switching to tailor mode.',
-          message: 'Complete your tailor application before switching to tailor mode.',
-        }, 409, cors)
+        const displayName = String(customerProfile?.display_name || userRow.display_name || caller.email?.split('@')[0] || 'Drapeon')
+        const { error: tailorError } = await supabase.from('tailor_profiles').insert({
+          user_id: caller.id,
+          display_name: displayName,
+          location: '',
+          currency: normalizeAccountCurrency(userRow.default_currency) ?? 'USD',
+          avatar_url: customerProfile?.avatar_url ?? null,
+          seller_type: 'TAILOR',
+          supports_custom_orders: true,
+          supports_ready_made: false,
+          pickup_available: false,
+          delivery_available: false,
+          shipping_available: false,
+          is_live: false,
+          is_verified: false,
+          updated_at: new Date().toISOString(),
+        })
+        if (tailorError) {
+          log('error', FN, 'role_switch.tailor_profile_create_failed', { actor_id: caller.id, error: tailorError.message })
+          return jsonResponse({ error: 'Your tailor setup could not be prepared right now.' }, 500, cors)
+        }
+        tailorSetupCreated = true
       }
       if (targetRole === 'CUSTOMER' && !customerProfile) {
         const displayName = String(userRow.display_name || tailorProfile?.display_name || caller.email?.split('@')[0] || 'Drapeon')
@@ -451,7 +470,11 @@ Deno.serve(async (req) => {
         actor_role: targetRole,
         payload: { function: FN, previous_role: previousRole, next_role: targetRole },
       })
-      return jsonResponse({ ok: true, role: targetRole }, 200, cors)
+      return jsonResponse({
+        ok: true,
+        role: targetRole,
+        setupRequired: targetRole === 'TAILOR' && tailorSetupCreated,
+      }, 200, cors)
     }
 
     if (body.action === 'bootstrap-web-onboarding') {

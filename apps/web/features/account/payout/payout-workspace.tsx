@@ -647,7 +647,7 @@ function PayoutContent({ userId, identity }: { userId: string; identity: Account
       <Section
         eyebrow="Provider setup"
         title="Use an automated payout route"
-        body="Stripe Connect handles USD, GBP, EUR, and CAD. Paystack handles NGN, GHS, and KES."
+        body="Choose the route you can actually verify: Paystack uses a local bank account in Nigeria, Ghana, or Kenya. USD, GBP, EUR, and CAD use Stripe Connect and require Stripe support in your country plus identity and bank verification."
       >
         <div className="grid gap-5 p-5">
           <div className="grid gap-4 md:grid-cols-3">
@@ -666,7 +666,13 @@ function PayoutContent({ userId, identity }: { userId: string; identity: Account
                         ? 'GH'
                         : value === 'KES'
                           ? 'KE'
-                          : country
+                          : value === 'GBP'
+                            ? 'GB'
+                            : value === 'EUR'
+                              ? 'IE'
+                              : value === 'CAD'
+                                ? 'CA'
+                                : 'US'
                   )
                   setBanks([])
                   setBankCode('')
@@ -679,7 +685,7 @@ function PayoutContent({ userId, identity }: { userId: string; identity: Account
               </select>
             </label>
             <label className="grid gap-2 text-sm font-semibold">
-              Country code
+              Business country code
               <input
                 className={input}
                 value={paystack ? paystackCountry : country}
@@ -714,6 +720,19 @@ function PayoutContent({ userId, identity }: { userId: string; identity: Account
                 </button>
               )}
             </div>
+          </div>
+          <div className="rounded-[8px] border border-needle/20 bg-needle/8 p-4 text-sm leading-6 text-ink/70">
+            <p className="font-semibold text-ink">
+              {stripe ? 'Before choosing Stripe' : 'Before choosing Paystack'}
+            </p>
+            <p className="mt-1">
+              {stripe
+                ? `Choosing ${payoutCurrency} does not create a foreign bank account or change your business country. Continue only if Stripe supports your country and you can verify an eligible bank account.`
+                : `${payoutCurrency} is for a bank account in ${paystackCountry === 'NG' ? 'Nigeria' : paystackCountry === 'GH' ? 'Ghana' : 'Kenya'} that Paystack can verify.`}
+            </p>
+            <p className="mt-1">
+              You can change this later, but the new provider and payout account must be verified again. Existing orders and earnings keep their original currency.
+            </p>
           </div>
           {profile.stripe_connect_account_id ? (
             <button

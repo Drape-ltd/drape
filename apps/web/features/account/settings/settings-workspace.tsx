@@ -881,10 +881,9 @@ function RoleSwitcher({
   const [notice, setNotice] = useState<Notice>(null)
   const hasTailor = Boolean(loaded.tailor)
   const target = identity.role === 'TAILOR' ? 'CUSTOMER' : 'TAILOR'
-  const canSwitch = target === 'CUSTOMER' ? true : hasTailor
 
   async function switchRole() {
-    if (!canSwitch || busy) return
+    if (busy) return
     setBusy(true)
     setNotice(null)
     try {
@@ -893,26 +892,30 @@ function RoleSwitcher({
       const refreshResult = await supabase.auth.refreshSession()
       if (refreshResult.error) throw refreshResult.error
       invalidateAccountData()
-      window.location.assign(target === 'TAILOR' ? '/account/work' : '/account/orders')
+      window.location.assign(
+        target === 'TAILOR'
+          ? hasTailor
+            ? '/account/work'
+            : '/account/profile?setup=1'
+          : '/account/orders'
+      )
     } catch {
       setNotice({ tone: 'error', text: 'Drapeon mode could not switch. Try again.' })
       setBusy(false)
     }
   }
 
-  if (!canSwitch) {
-    return identity.role === 'CUSTOMER' ? (
-      <Link href="/account/profile?setup=1" className="inline-flex items-center gap-1 text-sm font-semibold text-needle">
-        Set up a tailor profile <ChevronRight className="size-4" />
-      </Link>
-    ) : null
-  }
-
   return (
     <div className="grid gap-2 md:justify-items-end">
       <Alert notice={notice} />
       <button className={secondary} disabled={busy} onClick={() => void switchRole()}>
-        {busy ? 'Switching…' : target === 'TAILOR' ? 'Switch to tailor mode' : 'Switch to customer mode'}
+        {busy
+          ? 'Switching…'
+          : target === 'TAILOR'
+            ? hasTailor
+              ? 'Switch to tailor mode'
+              : 'Start tailor setup'
+            : 'Switch to customer mode'}
       </button>
     </div>
   )
