@@ -8,7 +8,7 @@ import { SiteFooter } from '../components/site-footer'
 import { buildMetadata } from '../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
-  title: 'Made for you, wherever you are',
+  title: 'Drapeon',
   description: 'Discover independent tailors, order custom or ready-made fashion, and follow every detail from brief to delivery.',
   path: '/',
 })
@@ -31,7 +31,7 @@ export default function Home(): React.JSX.Element {
 
           <div className="relative z-10 flex min-h-[570px] items-end px-6 pb-9 pt-24 sm:px-10 sm:pb-12 lg:min-h-[670px] lg:px-16 lg:pb-14">
             <div className="max-w-3xl text-white">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/68 sm:text-xs">Craft, fit, and every decision in one place</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/68 sm:text-xs">Drapeon · custom clothing without borders</p>
               <h1 className="mt-5 text-[clamp(3.4rem,8vw,7.6rem)] leading-[0.84] tracking-[-0.045em] text-white">From idea<br />to garment.</h1>
               <p className="mt-7 max-w-xl text-base leading-7 text-white/76 sm:text-lg sm:leading-8">A clearer way to commission, shape, and follow clothing made for you.</p>
               <div className="mt-8 flex max-w-2xl flex-col gap-3">
