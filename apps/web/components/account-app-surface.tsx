@@ -24969,7 +24969,11 @@ function TailorSellingSetupEditor({
         },
       })
       if (data.userId) window.localStorage.removeItem(tailorWebSetupDraftKey(data.userId))
-      setSuccess(initialSetupSubmission ? 'Setup saved and submitted for review.' : 'Selling setup saved.')
+      setSuccess(
+        initialSetupSubmission
+          ? 'Setup saved. Record the private trust video below to submit for review.'
+          : 'Selling setup saved.'
+      )
       onRefresh()
     } catch (setupError) {
       setError(friendlyActionError(setupError, 'Selling setup could not save.'))
@@ -25286,11 +25290,13 @@ function TailorSellingSetupEditor({
           <Button onClick={saveSellingSetup} disabled={busy}>
             {busy ? 'Saving...' : 'Save selling setup'}
           </Button>
-          <Button asChild variant="ghost">
-            <Link href="/account/shop">
-              Manage ready-made shop <ChevronRight />
-            </Link>
-          </Button>
+          {supportsReadyMade ? (
+            <Button asChild variant="ghost">
+              <Link href="/account/shop">
+                Manage ready-made shop <ChevronRight />
+              </Link>
+            </Button>
+          ) : null}
           <Button asChild variant="ghost">
             <Link href="/account/payout">
               Review payout <ChevronRight />
@@ -25718,9 +25724,11 @@ function IdentityHandoffCard({
           <Button type="button" onClick={() => void finishSavedSignupVideo()} disabled={!!busy}>
             {busy === 'signup-resume' ? 'Checking…' : 'Finish trust submission'}
           </Button>
-          <Button asChild variant="secondary">
-            <Link href="/account/shop">Add ready-made listing</Link>
-          </Button>
+          {profile.supports_ready_made ? (
+            <Button asChild variant="secondary">
+              <Link href="/account/shop">Add ready-made listing</Link>
+            </Button>
+          ) : null}
         </div>
       </section>
     )
@@ -28775,7 +28783,12 @@ export function AccountAppSurface({
   ])
 
   if (loading || (session?.user.id && data.userId !== session.user.id)) {
-    return embedded ? <div className="app-surface min-h-52 animate-pulse p-6"><p className="text-sm font-semibold text-ink/55">Loading conversations…</p></div> : <LoadingCard />
+    const loadingLabel = surface === 'profile'
+      ? 'Loading tailor setup…'
+      : surface === 'messages'
+        ? 'Loading conversations…'
+        : 'Loading your account…'
+    return embedded ? <div className="app-surface min-h-52 animate-pulse p-6"><p className="text-sm font-semibold text-ink/55">{loadingLabel}</p></div> : <LoadingCard />
   }
   if (!session) return <AuthRequiredCard />
   if (!accountContextValue) return <LoadingCard />

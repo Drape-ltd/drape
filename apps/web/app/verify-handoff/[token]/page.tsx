@@ -24,12 +24,6 @@ type HandoffResponse = {
   challengeText?: string
 }
 
-function isLikelyMobile() {
-  if (typeof navigator === 'undefined') return false
-  const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
-  return coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-}
-
 function isAppleMobile() {
   if (typeof navigator === 'undefined') return false
   return /iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -78,7 +72,6 @@ export default function VerifyHandoffPage(): React.JSX.Element {
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [challengeText, setChallengeText] = useState('')
   const [consentGranted, setConsentGranted] = useState(false)
-  const mobileReady = isLikelyMobile()
   const preferNativeCapture = isAppleMobile()
 
   const clearRecordingTimers = useCallback(() => {
@@ -119,16 +112,12 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       setExpiresAt(typeof data?.expiresAt === 'string' ? data.expiresAt : null)
       setChallengeText(typeof data?.challengeText === 'string' ? data.challengeText : '')
 
-      if (!mobileReady) {
-        setError('Open this secure link on your smartphone, or use the Drapeon mobile app to complete trust verification.')
-        return
-      }
       if (preferNativeCapture) {
         setCameraReady(true)
         return
       }
       if (!navigator.mediaDevices?.getUserMedia || !supportedRecorderType()) {
-        setError('Video recording is not available in this browser. Open the link inside the Drapeon mobile app instead.')
+        setError('Video recording is not available in this browser. Use a current browser on a device with a camera and microphone, or open the link inside the Drapeon mobile app.')
         return
       }
 
@@ -158,7 +147,7 @@ export default function VerifyHandoffPage(): React.JSX.Element {
       stopCamera()
       if (recordedUrlRef.current) URL.revokeObjectURL(recordedUrlRef.current)
     }
-  }, [mobileReady, preferNativeCapture, stopCamera, supabase, token])
+  }, [preferNativeCapture, stopCamera, supabase, token])
 
   const chooseNativeCapture = useCallback(async (file: File | null) => {
     if (!file || busy) return
