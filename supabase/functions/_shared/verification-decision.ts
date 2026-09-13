@@ -165,7 +165,7 @@ export function buildVerificationDecisionEmail(input: {
       subject: 'Your Drapeon profile has been verified',
       html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drapeon" width="80" style="margin:32px 0 16px"/>
+  <img src="${escapeHtml(appUrl)}/icon-192.png" alt="Drapeon" width="80" height="80" style="margin:32px 0 16px;border-radius:16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust review approved</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">Your challenge video and tailor profile have been approved. Your storefront is now active on Drapeon.</p>
@@ -184,7 +184,7 @@ export function buildVerificationDecisionEmail(input: {
       : 'Drapeon trust review - action needed',
     html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="${escapeHtml(appUrl)}/logo.png" alt="Drapeon" width="80" style="margin:32px 0 16px"/>
+  <img src="${escapeHtml(appUrl)}/icon-192.png" alt="Drapeon" width="80" height="80" style="margin:32px 0 16px;border-radius:16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${profileImageRejected ? 'Profile photo needs replacement' : 'Trust video needs another look'}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">${profileImageRejected ? 'We could not approve your Drapeon profile photo yet.' : 'We could not approve your Drapeon trust review yet.'}</p>
