@@ -25473,8 +25473,9 @@ function IdentityHandoffCard({
   const [signupResume, setSignupResume] = useState<SignupTrustResume | null>(() =>
     userId ? readSignupTrustResume(userId) : null
   )
+  const [authoritativeStatus, setAuthoritativeStatus] = useState<string | null>(null)
   const signupResumeAttemptedRef = useRef(false)
-  const status = profile.id_verification_status ?? 'NOT_SUBMITTED'
+  const status = authoritativeStatus ?? profile.id_verification_status ?? 'NOT_SUBMITTED'
   const handoffUrl = session?.url ?? ''
   const pending = status === 'PENDING'
   const verified =
@@ -25535,12 +25536,24 @@ function IdentityHandoffCard({
       .select('id_verification_status')
       .eq('user_id', userId)
       .maybeSingle()
-    if (data?.id_verification_status === 'PENDING') {
+    const nextStatus = data?.id_verification_status ?? null
+    if (nextStatus) setAuthoritativeStatus(nextStatus)
+    if (nextStatus === 'PENDING') {
       setHandoffState('submitted')
       setSuccess('Trust video submitted. Review is now pending.')
       onRefresh()
     }
   }, [onRefresh, userId])
+
+  useEffect(() => {
+    if (!userId || pending || verified) return undefined
+    void checkLatestStatus()
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void checkLatestStatus()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => document.removeEventListener('visibilitychange', refreshWhenVisible)
+  }, [checkLatestStatus, pending, userId, verified])
 
   useEffect(() => {
     if (!userId || !session || pending || verified) return undefined
