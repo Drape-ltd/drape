@@ -9,7 +9,15 @@ function expiredOpsCookie(path: string) {
 }
 
 export async function POST(request: Request) {
-  if (!validateOpsMutationOrigin(request).ok) {
+  const originCheck = validateOpsMutationOrigin(request)
+  const isSameOriginUserNavigation =
+    originCheck.receivedOrigin === null &&
+    originCheck.fetchSite === 'same-origin' &&
+    request.headers.get('sec-fetch-mode')?.trim().toLowerCase() === 'navigate' &&
+    request.headers.get('sec-fetch-dest')?.trim().toLowerCase() === 'document' &&
+    request.headers.get('sec-fetch-user')?.trim() === '?1'
+
+  if (!originCheck.ok && !isSameOriginUserNavigation) {
     return NextResponse.json(
       { ok: false, error: 'invalid-origin' },
       { status: 403, headers: { 'Cache-Control': 'no-store, max-age=0' } },
