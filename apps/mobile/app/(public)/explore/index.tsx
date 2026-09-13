@@ -27,6 +27,8 @@ type PublicTailor = {
   availability?: string | null
   supports_custom_orders?: boolean | null
   supports_ready_made?: boolean | null
+  portfolio_photo_urls?: unknown
+  portfolio_video_urls?: unknown
   explore_image_url?: string | null
   explore_image_bucket?: StorageImageBucket | null
 }
@@ -43,26 +45,45 @@ export default function PublicExploreScreen() {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState('')
 
-  const load = useCallback(async (forceRefresh = false) => {
-    setError('')
-    try {
-      const data = await fetchReadGateway<PublicTailor[]>(
-        { action: 'explore-tailors', limit: 30, query: query.trim() },
-        { forceRefresh },
-      )
-      setTailors(data)
-    } catch {
-      setError('We could not load public profiles right now. Check your connection and try again.')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }, [query])
+  const load = useCallback(
+    async (forceRefresh = false, offset = 0) => {
+      setError('')
+      if (offset > 0) setLoadingMore(true)
+      try {
+        const data = await fetchReadGateway<PublicTailor[]>(
+          { action: 'explore-tailors', limit: 30, offset, query: query.trim() },
+          { forceRefresh }
+        )
+        setTailors((current) => {
+          if (offset === 0) return data
+          const seen = new Set(current.map((tailor) => tailor.id))
+          return [...current, ...data.filter((tailor) => !seen.has(tailor.id))]
+        })
+        setHasMore(data.length === 30)
+      } catch {
+        setError(
+          'We could not load public profiles right now. Check your connection and try again.'
+        )
+      } finally {
+        setLoading(false)
+        setRefreshing(false)
+        setLoadingMore(false)
+      }
+    },
+    [query]
+  )
 
   useEffect(() => {
-    const timer = setTimeout(() => { void load() }, query.trim() ? 350 : 0)
+    const timer = setTimeout(
+      () => {
+        void load()
+      },
+      query.trim() ? 350 : 0
+    )
     return () => clearTimeout(timer)
   }, [load, query])
 
@@ -83,7 +104,15 @@ export default function PublicExploreScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(true) }} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true)
+              void load(true)
+            }}
+          />
+        }
       >
         <View style={styles.hero}>
           <Text style={styles.title}>Made for you, wherever you are.</Text>
@@ -107,7 +136,13 @@ export default function PublicExploreScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateTitle}>Explore is taking a moment.</Text>
             <Text style={styles.stateBody}>{error}</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={() => { setLoading(true); void load(true) }}>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => {
+                setLoading(true)
+                void load(true)
+              }}
+            >
               <Text style={styles.retryText}>Try again</Text>
             </TouchableOpacity>
           </View>
@@ -117,32 +152,72 @@ export default function PublicExploreScreen() {
           <View style={styles.grid}>
             {tailors.map((tailor) => {
               const specialties = stringList(tailor.specialty_tags).slice(0, 3)
+              const portfolioCount = new Set([
+                ...stringList(tailor.portfolio_photo_urls),
+                ...stringList(tailor.portfolio_video_urls),
+              ]).size
               return (
                 <TouchableOpacity
                   key={tailor.id}
                   style={styles.card}
-                  onPress={() => router.push({ pathname: '/(public)/explore/tailor/[id]', params: { id: tailor.id } })}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(public)/explore/tailor/[id]',
+                      params: { id: tailor.id },
+                    })
+                  }
                   activeOpacity={0.84}
                   accessibilityRole="button"
-                  accessibilityLabel={`View ${tailor.display_name ?? 'tailor'} public profile`}
+                  accessibilityLabel={`View ${tailor.display_name ?? 'tailor'} public profile${portfolioCount > 0 ? ' and complete portfolio' : ''}`}
                 >
-                  <RemoteImage
-                    uri={tailor.explore_image_url}
-                    bucket={tailor.explore_image_bucket ?? undefined}
-                    style={styles.cardImage}
-                    surface="public_explore"
-                  />
+                  <View style={styles.cardImageWrap}>
+                    <RemoteImage
+                      uri={tailor.explore_image_url}
+                      bucket={tailor.explore_image_bucket ?? undefined}
+                      style={styles.cardImage}
+                      surface="public_explore"
+                    />
+                    {portfolioCount > 0 ? (
+                      <View style={styles.portfolioBadge}>
+                        <Feather name="image" size={13} color={Colors.textInverse} />
+                        <Text style={styles.portfolioBadgeText}>View full portfolio</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <View style={styles.cardContent}>
                     <View style={styles.cardTitleRow}>
-                      <Text style={styles.cardTitle} numberOfLines={1}>{tailor.display_name ?? 'Drapeon tailor'}</Text>
+                      <Text style={styles.cardTitle} numberOfLines={1}>
+                        {tailor.display_name ?? 'Drapeon tailor'}
+                      </Text>
                       <Text style={styles.rating}>★ {(tailor.avg_rating ?? 0).toFixed(1)}</Text>
                     </View>
-                    <Text style={styles.location} numberOfLines={1}>{tailor.location ?? 'Location not listed'}</Text>
-                    <Text style={styles.specialties} numberOfLines={2}>{specialties.join(' · ') || 'Custom and ready-made fashion'}</Text>
+                    <Text style={styles.location} numberOfLines={1}>
+                      {tailor.location ?? 'Location not listed'}
+                    </Text>
+                    <Text style={styles.specialties} numberOfLines={2}>
+                      {specialties.join(' · ') || 'Custom and ready-made fashion'}
+                    </Text>
                   </View>
                 </TouchableOpacity>
               )
             })}
+            {hasMore ? (
+              <TouchableOpacity
+                style={styles.loadMoreButton}
+                onPress={() => {
+                  void load(false, tailors.length)
+                }}
+                disabled={loadingMore}
+                accessibilityRole="button"
+                accessibilityLabel="Load more approved tailors"
+              >
+                {loadingMore ? (
+                  <ActivityIndicator color={Colors.textInverse} />
+                ) : (
+                  <Text style={styles.loadMoreText}>Load more tailors</Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
@@ -152,29 +227,139 @@ export default function PublicExploreScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  header: { minHeight: 60, paddingHorizontal: Spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: Colors.bone },
-  wordmark: { fontFamily: Fonts.display, fontSize: 22, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  accountButton: { minHeight: 40, justifyContent: 'center', paddingHorizontal: Spacing.lg, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.ink, backgroundColor: Colors.bone },
-  accountButtonText: { color: Colors.ink, fontFamily: Fonts.bodySemiBold, fontWeight: FontWeight.semibold },
+  header: {
+    minHeight: 60,
+    paddingHorizontal: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.bone,
+  },
+  wordmark: {
+    fontFamily: Fonts.display,
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    color: Colors.needleGreen,
+  },
+  accountButton: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.ink,
+    backgroundColor: Colors.bone,
+  },
+  accountButtonText: {
+    color: Colors.ink,
+    fontFamily: Fonts.bodySemiBold,
+    fontWeight: FontWeight.semibold,
+  },
   content: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxxl },
   hero: { gap: Spacing.sm, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
-  title: { maxWidth: 340, fontFamily: Fonts.display, fontSize: 32, lineHeight: 37, fontWeight: FontWeight.bold, color: Colors.ink },
-  body: { maxWidth: 350, fontFamily: Fonts.body, fontSize: 15, lineHeight: 22, color: Colors.inkLight },
-  searchWrap: { minHeight: 50, marginTop: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: Radius.lg, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.lightGrey, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  title: {
+    maxWidth: 340,
+    fontFamily: Fonts.display,
+    fontSize: 32,
+    lineHeight: 37,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  body: {
+    maxWidth: 350,
+    fontFamily: Fonts.body,
+    fontSize: 15,
+    lineHeight: 22,
+    color: Colors.inkLight,
+  },
+  searchWrap: {
+    minHeight: 50,
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
   searchInput: { flex: 1, fontFamily: Fonts.body, fontSize: 16, color: Colors.ink },
   loader: { paddingVertical: Spacing.xxl },
-  stateCard: { padding: Spacing.xl, borderRadius: Radius.xl, backgroundColor: Colors.white, gap: Spacing.sm },
+  stateCard: {
+    padding: Spacing.xl,
+    borderRadius: Radius.xl,
+    backgroundColor: Colors.white,
+    gap: Spacing.sm,
+  },
   stateTitle: { fontFamily: Fonts.display, fontSize: 24, color: Colors.ink },
   stateBody: { fontFamily: Fonts.body, lineHeight: 22, color: Colors.inkLight },
-  retryButton: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingHorizontal: Spacing.lg, borderRadius: Radius.full, backgroundColor: Colors.needleGreen },
+  retryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+  },
   retryText: { color: Colors.textInverse, fontWeight: FontWeight.semibold },
   grid: { gap: Spacing.lg },
-  card: { overflow: 'hidden', borderRadius: Radius.xl, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.lightGrey, ...Shadow.sm },
+  card: {
+    overflow: 'hidden',
+    borderRadius: Radius.xl,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  cardImageWrap: { position: 'relative' },
   cardImage: { width: '100%', aspectRatio: 1.7 },
+  portfolioBadge: {
+    position: 'absolute',
+    left: Spacing.sm,
+    bottom: Spacing.sm,
+    minHeight: 30,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(26,26,24,0.76)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  portfolioBadgeText: {
+    color: Colors.textInverse,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
   cardContent: { padding: Spacing.md, gap: Spacing.xs },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.md },
-  cardTitle: { flex: 1, fontFamily: Fonts.display, fontSize: 21, fontWeight: FontWeight.semibold, color: Colors.ink },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  cardTitle: {
+    flex: 1,
+    fontFamily: Fonts.display,
+    fontSize: 21,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   rating: { fontFamily: Fonts.bodySemiBold, color: Colors.ink },
   location: { fontFamily: Fonts.body, color: Colors.inkLight },
   specialties: { marginTop: Spacing.xs, fontFamily: Fonts.body, color: Colors.ink, lineHeight: 20 },
+  loadMoreButton: {
+    minHeight: 48,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  loadMoreText: {
+    color: Colors.textInverse,
+    fontFamily: Fonts.bodySemiBold,
+    fontWeight: FontWeight.semibold,
+  },
 })

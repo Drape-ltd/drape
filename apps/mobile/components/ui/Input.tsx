@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import {
   View,
   TextInput,
@@ -17,7 +17,7 @@ interface InputProps extends TextInputProps {
   error?: string
   hint?: string
   containerStyle?: ViewStyle
-  filterContact?: boolean  // enable real-time contact leakage detection
+  filterContact?: boolean // enable real-time contact leakage detection
   rightElement?: React.ReactNode
   required?: boolean
   showCharacterCount?: boolean
@@ -39,12 +39,15 @@ export function Input({
   onClearError,
   onFocus,
   onBlur,
+  onKeyPress,
   secureTextEntry,
   ...props
 }: InputProps) {
   const [contactWarning, setContactWarning] = useState('')
   const [focused, setFocused] = useState(false)
   const [passwordVisible, setPasswordVisible] = useState(false)
+  const [capsLockSuspected, setCapsLockSuspected] = useState(false)
+  const uppercaseRunRef = useRef(0)
 
   function handleChangeText(text: string) {
     if (displayError) onClearError?.()
@@ -65,6 +68,22 @@ export function Input({
   const resolvedCharacterMax = characterCountMax ?? props.maxLength
   const shouldShowCharacterCount = !!showCharacterCount && typeof resolvedCharacterMax === 'number'
 
+  function handlePasswordKeyPress(event: Parameters<NonNullable<TextInputProps['onKeyPress']>>[0]) {
+    if (isPasswordField) {
+      const key = event.nativeEvent.key
+      if (key === 'CapsLock') {
+        setCapsLockSuspected((current) => !current)
+      } else if (/^[A-Z]$/.test(key)) {
+        uppercaseRunRef.current += 1
+        if (uppercaseRunRef.current >= 2) setCapsLockSuspected(true)
+      } else if (/^[a-z]$/.test(key)) {
+        uppercaseRunRef.current = 0
+        setCapsLockSuspected(false)
+      }
+    }
+    onKeyPress?.(event)
+  }
+
   return (
     <View style={[styles.container, containerStyle]}>
       {label && (
@@ -73,7 +92,9 @@ export function Input({
           {required && <Text style={styles.required}> *</Text>}
         </Text>
       )}
-      <View style={[styles.inputWrapper, focused && styles.focused, hasError && styles.errorBorder]}>
+      <View
+        style={[styles.inputWrapper, focused && styles.focused, hasError && styles.errorBorder]}
+      >
         <TextInput
           style={styles.input}
           placeholderTextColor={Colors.midGrey}
@@ -85,8 +106,11 @@ export function Input({
           }}
           onBlur={(event) => {
             setFocused(false)
+            uppercaseRunRef.current = 0
+            setCapsLockSuspected(false)
             onBlur?.(event)
           }}
+          onKeyPress={handlePasswordKeyPress}
           onChangeText={handleChangeText}
           returnKeyType={props.returnKeyType ?? (props.multiline ? 'default' : 'next')}
           blurOnSubmit={props.blurOnSubmit ?? false}
@@ -115,12 +139,19 @@ export function Input({
           </TouchableOpacity>
         ) : null}
       </View>
-      {displayError || hint || shouldShowCharacterCount ? (
+      {displayError || capsLockSuspected || hint || shouldShowCharacterCount ? (
         <View style={styles.supportRow}>
           {displayError ? (
             <Text style={styles.errorText} accessibilityRole="alert">
               {displayError}
             </Text>
+          ) : capsLockSuspected ? (
+            <View style={styles.capsLockNotice} accessibilityRole="alert">
+              <Feather name="arrow-up-circle" size={15} color={Colors.warning} />
+              <Text style={styles.capsLockText}>
+                Caps Lock may be on — passwords are case-sensitive.
+              </Text>
+            </View>
           ) : hint ? (
             <Text style={styles.hint}>{hint}</Text>
           ) : (
@@ -187,6 +218,19 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.body,
     fontSize: 13,
     color: Colors.midGrey,
+    lineHeight: 18,
+  },
+  capsLockNotice: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  capsLockText: {
+    flex: 1,
+    fontFamily: Fonts.body,
+    fontSize: 13,
+    color: Colors.warning,
     lineHeight: 18,
   },
   supportRow: {

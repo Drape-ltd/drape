@@ -6,6 +6,7 @@ import { AuthLandingRedirect } from '../components/auth-landing-redirect'
 import { BrandEntrance } from '../components/brand-entrance'
 import { WebAnalytics } from '../components/web-analytics'
 import { WebSessionScopeGuard } from '../components/web-session-scope-guard'
+import { WebCapsLockSignal } from '../components/web-caps-lock-signal'
 import { UiProvider } from '../components/ui/ui-provider'
 import {
   defaultDescription,
@@ -70,14 +71,20 @@ export const metadata: Metadata = {
   },
 }
 
-export default async function RootLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
+export default async function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}): Promise<React.JSX.Element> {
   const nonce = (await headers()).get('x-nonce') ?? undefined
   const publicSupabaseEnv = {
     supabaseUrl: getSupabaseUrl(),
     supabasePublishableKey: getSupabasePublishableKey(),
     turnstileSiteKey: getTurnstileSiteKey(),
   }
-  const hasPublicSupabaseEnv = Boolean(publicSupabaseEnv.supabaseUrl && publicSupabaseEnv.supabasePublishableKey)
+  const hasPublicSupabaseEnv = Boolean(
+    publicSupabaseEnv.supabaseUrl && publicSupabaseEnv.supabasePublishableKey
+  )
   const logoUrl = `${siteUrl}/icon-512.png`
 
   const organizationJsonLd = {
@@ -141,13 +148,17 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           nonce={nonce}
           suppressHydrationWarning
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd).replace(/</g, '\\u003c') }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(organizationJsonLd).replace(/</g, '\\u003c'),
+          }}
         />
         <script
           nonce={nonce}
           suppressHydrationWarning
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd).replace(/</g, '\\u003c') }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(websiteJsonLd).replace(/</g, '\\u003c'),
+          }}
         />
         {hasPublicSupabaseEnv ? (
           <script
@@ -161,6 +172,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         ) : null}
         <WebAnalytics />
         <WebSessionScopeGuard />
+        <WebCapsLockSignal />
         <AuthLandingRedirect />
         <BrandEntrance />
         <UiProvider>

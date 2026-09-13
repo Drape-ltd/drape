@@ -9,8 +9,26 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/explore',
 })
 
-export default async function AccountExplorePage({ searchParams }: { searchParams: Promise<TailorDirectoryParams> }) {
+export default async function AccountExplorePage({
+  searchParams,
+}: {
+  searchParams: Promise<TailorDirectoryParams>
+}) {
   const params = await searchParams
-  const tailors = await getApprovedPublicTailors(40, 0, '')
-  return <TailorDirectory tailors={tailors} params={params} basePath="/account/explore" profileBasePath="/account/tailors" />
+  const page = Math.max(1, Math.min(250, Number.parseInt(params.page ?? '1', 10) || 1))
+  const offset = (page - 1) * 40
+  const query = params.q?.trim() ?? ''
+  const [tailors, nextPage] = await Promise.all([
+    getApprovedPublicTailors(40, offset, query),
+    getApprovedPublicTailors(1, offset + 40, query),
+  ])
+  return (
+    <TailorDirectory
+      tailors={tailors}
+      params={params}
+      basePath="/account/explore"
+      profileBasePath="/account/tailors"
+      pagination={{ page, hasNextPage: nextPage.length > 0 }}
+    />
+  )
 }

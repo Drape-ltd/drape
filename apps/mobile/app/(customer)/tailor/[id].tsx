@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  FlatList, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  FlatList,
+  Alert,
+  Dimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  Modal,
   Image as RNImage,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
@@ -126,14 +135,19 @@ function toTierBadge(tier: string | null | undefined): TierBadge | null {
 }
 
 function dedupeLocation(location: string): string {
-  const parts = location.split(',').map((p) => p.trim()).filter(Boolean)
+  const parts = location
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
   const seen = new Set<string>()
-  return parts.filter((p) => {
-    const key = p.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  }).join(', ')
+  return parts
+    .filter((p) => {
+      const key = p.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .join(', ')
 }
 
 function createDraftSessionId() {
@@ -170,19 +184,20 @@ export default function TailorProfileScreen() {
   const [wishlistPickerOpen, setWishlistPickerOpen] = useState(false)
   const [newWishlistName, setNewWishlistName] = useState('')
   const { currency, rates } = useCurrency()
-  const {
-    data,
-    isLoading,
-    isError,
-    isFetching,
-    refetch,
-  } = useTailorPublic(role === 'CUSTOMER' ? id : undefined, role === 'CUSTOMER' ? user?.id : undefined)
-  const { data: wishlistCollections = [], refetch: refetchWishlists } = useWishlistCollections(role === 'CUSTOMER' ? user?.id : undefined)
+  const { data, isLoading, isError, isFetching, refetch } = useTailorPublic(
+    role === 'CUSTOMER' ? id : undefined,
+    role === 'CUSTOMER' ? user?.id : undefined
+  )
+  const { data: wishlistCollections = [], refetch: refetchWishlists } = useWishlistCollections(
+    role === 'CUSTOMER' ? user?.id : undefined
+  )
   const profile = (data?.profile ?? null) as TailorProfile | null
   const reviews = (data?.reviews ?? []) as Review[]
   const isSaved = savedOverride ?? data?.isSaved ?? false
 
-  useRefreshOnFocus(() => { void refetch() }, 0)
+  useRefreshOnFocus(() => {
+    void refetch()
+  }, 0)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -219,7 +234,10 @@ export default function TailorProfileScreen() {
     } catch (error) {
       const message = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not update your wishlists yet. Retry when the signal improves.'
-        : await readFunctionErrorMessage(error, 'Could not update your wishlists right now. Please try again in a moment.')
+        : await readFunctionErrorMessage(
+            error,
+            'Could not update your wishlists right now. Please try again in a moment.'
+          )
       Alert.alert('Wishlist not updated', message)
     } finally {
       setSavingHeart(false)
@@ -241,7 +259,10 @@ export default function TailorProfileScreen() {
       } catch (error) {
         const message = isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not update your saved tailors yet. Retry when the signal improves.'
-          : await readFunctionErrorMessage(error, 'Could not update your saved tailors right now. Please try again in a moment.')
+          : await readFunctionErrorMessage(
+              error,
+              'Could not update your saved tailors right now. Please try again in a moment.'
+            )
         Alert.alert('Could not update wishlist', message)
       } finally {
         setSavingHeart(false)
@@ -310,22 +331,34 @@ export default function TailorProfileScreen() {
       ['SCAM_OR_IMPERSONATION', 'Scam or impersonation'],
       ['OTHER', 'Something else'],
     ] as const
-    Alert.alert('Report portfolio media', 'Choose the closest reason. One report opens a Trust review; urgent or repeated reports temporarily hide the media.', [
-      ...choices.map(([reason, text]) => ({
-        text,
-        onPress: async () => {
-          setReportingMedia(true)
-          const { data: result, error } = await invokeFunction('media-report-action', { body: { mediaAssetId: item.assetId, reason } })
-          setReportingMedia(false)
-          if (error || !(result as { ok?: boolean } | null)?.ok) {
-            Alert.alert('Report not sent', await readFunctionErrorMessage(error, 'Could not send this report right now.'))
-            return
-          }
-          Alert.alert('Report received', 'Drapeon Trust will review this media. You can continue browsing.')
-        },
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    Alert.alert(
+      'Report portfolio media',
+      'Choose the closest reason. One report opens a Trust review; urgent or repeated reports temporarily hide the media.',
+      [
+        ...choices.map(([reason, text]) => ({
+          text,
+          onPress: async () => {
+            setReportingMedia(true)
+            const { data: result, error } = await invokeFunction('media-report-action', {
+              body: { mediaAssetId: item.assetId, reason },
+            })
+            setReportingMedia(false)
+            if (error || !(result as { ok?: boolean } | null)?.ok) {
+              Alert.alert(
+                'Report not sent',
+                await readFunctionErrorMessage(error, 'Could not send this report right now.')
+              )
+              return
+            }
+            Alert.alert(
+              'Report received',
+              'Drapeon Trust will review this media. You can continue browsing.'
+            )
+          },
+        })),
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    )
   }
 
   if (isLoading && !data) {
@@ -369,16 +402,28 @@ export default function TailorProfileScreen() {
             <Text style={styles.stateEyebrow}>Tailor profile</Text>
             <Text style={styles.stateTitle}>Couldn't load this profile.</Text>
             <Text style={styles.stateHint}>
-              This page should help you judge whether this tailor feels right before you place an order.
+              This page should help you judge whether this tailor feels right before you place an
+              order.
             </Text>
             <View style={styles.stateGuideCard}>
               <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, go back to discovery and compare a few other live profiles.
+                Refresh here first. If it still fails, go back to discovery and compare a few other
+                live profiles.
               </Text>
             </View>
-            <Button label="Try again" onPress={() => { void refetch() }} variant="secondary" />
-            <Button label="Explore tailors" onPress={() => router.replace('/(customer)')} variant="secondary" />
+            <Button
+              label="Try again"
+              onPress={() => {
+                void refetch()
+              }}
+              variant="secondary"
+            />
+            <Button
+              label="Explore tailors"
+              onPress={() => router.replace('/(customer)')}
+              variant="secondary"
+            />
             <Button label="Go back" onPress={goBack} variant="ghost" />
           </View>
         </View>
@@ -399,10 +444,15 @@ export default function TailorProfileScreen() {
             <View style={styles.stateGuideCard}>
               <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
-                Head back to discovery and reopen a live tailor from there. If this was an older saved link, your wishlist or search results should point you to the current profile.
+                Head back to discovery and reopen a live tailor from there. If this was an older
+                saved link, your wishlist or search results should point you to the current profile.
               </Text>
             </View>
-            <Button label="Explore tailors" onPress={() => router.replace('/(customer)')} variant="secondary" />
+            <Button
+              label="Explore tailors"
+              onPress={() => router.replace('/(customer)')}
+              variant="secondary"
+            />
             <Button label="Go back" onPress={goBack} variant="secondary" />
           </View>
         </View>
@@ -410,11 +460,14 @@ export default function TailorProfileScreen() {
     )
   }
 
-  const portfolioImages = Array.from(new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0)))
-  const portfolioVideos = Array.from(new Set(profile.portfolioVideos.filter((url) => typeof url === 'string' && url.length > 0)))
-  const heroSourceImages = portfolioImages.length > 0
-    ? portfolioImages
-    : (profile.avatarUrl ? [profile.avatarUrl] : [])
+  const portfolioImages = Array.from(
+    new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0))
+  )
+  const portfolioVideos = Array.from(
+    new Set(profile.portfolioVideos.filter((url) => typeof url === 'string' && url.length > 0))
+  )
+  const heroSourceImages =
+    portfolioImages.length > 0 ? portfolioImages : profile.avatarUrl ? [profile.avatarUrl] : []
   const heroImages = heroSourceImages.filter((url) => !failedHeroImages.includes(url))
   const mediaIdByUrl = new Map((profile.media ?? []).map((item) => [item.url, item.id]))
   const portfolioImageItems: MediaPreviewItem[] = portfolioImages.map((uri) => ({
@@ -447,7 +500,10 @@ export default function TailorProfileScreen() {
   const portfolioCount = portfolioImages.length + portfolioVideos.length
   const heroHeight = heroSlides.length > 0 ? HERO_HEIGHT : 160
   const reviewSummary: ReviewSummary = {
-    average: reviews.length > 0 ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : profile.avgRating,
+    average:
+      reviews.length > 0
+        ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length
+        : profile.avgRating,
     count: reviews.length > 0 ? reviews.length : profile.totalReviews,
   }
   const reviewBreakdown = [5, 4, 3, 2, 1].map((rating) => {
@@ -457,7 +513,7 @@ export default function TailorProfileScreen() {
   })
 
   return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
@@ -495,13 +551,15 @@ export default function TailorProfileScreen() {
                       transition={150}
                       surface="customer_tailor_profile_hero"
                       onLoadError={() => {
-                        setFailedHeroImages((prev) => (prev.includes(item.uri) ? prev : [...prev, item.uri]))
+                        setFailedHeroImages((prev) =>
+                          prev.includes(item.uri) ? prev : [...prev, item.uri]
+                        )
                       }}
-                      fallback={(
+                      fallback={
                         <View style={[styles.heroImage, styles.heroPlaceholder]}>
                           <Feather name="image" size={42} color={Colors.needleGreen} />
                         </View>
-                      )}
+                      }
                     />
                   </TouchableOpacity>
                 )}
@@ -550,7 +608,9 @@ export default function TailorProfileScreen() {
           {heroSlides.length > 1 && (
             <View style={styles.photoCount}>
               <Feather name="image" size={12} color={Colors.textInverse} />
-              <Text style={styles.photoCountText}>{carouselIndex + 1} of {heroSlides.length}</Text>
+              <Text style={styles.photoCountText}>
+                {carouselIndex + 1} of {heroSlides.length}
+              </Text>
             </View>
           )}
         </View>
@@ -564,8 +624,17 @@ export default function TailorProfileScreen() {
               <Text style={styles.location}>{dedupeLocation(profile.location)}</Text>
               <View style={styles.identityMetaRow}>
                 <View style={styles.availabilityPill}>
-                  <View style={[styles.availDot, { backgroundColor: AVAILABILITY_COLOR[profile.availability] ?? Colors.midGrey }]} />
-                  <Text style={styles.availabilityPillText}>{AVAILABILITY_LABEL[profile.availability] ?? profile.availability}</Text>
+                  <View
+                    style={[
+                      styles.availDot,
+                      {
+                        backgroundColor: AVAILABILITY_COLOR[profile.availability] ?? Colors.midGrey,
+                      },
+                    ]}
+                  />
+                  <Text style={styles.availabilityPillText}>
+                    {AVAILABILITY_LABEL[profile.availability] ?? profile.availability}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -584,17 +653,27 @@ export default function TailorProfileScreen() {
             <StatPill
               label="Reviews"
               value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : 'New'}
-              subvalue={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
+              subvalue={
+                reviewSummary.count > 0
+                  ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}`
+                  : 'No reviews yet'
+              }
               actionLabel={reviewSummary.count > 0 ? 'Read reviews' : undefined}
               onPress={() => setShowReviewsModal(true)}
             />
             <StatPill
               label="Orders"
               value={profile.totalOrders > 0 ? `${profile.totalOrders}+` : '0'}
-              subvalue={profile.totalOrders > 0 ? 'Completed' : customOrdersPaused ? 'Unavailable' : 'No orders yet'}
+              subvalue={
+                profile.totalOrders > 0
+                  ? 'Completed'
+                  : customOrdersPaused
+                    ? 'Unavailable'
+                    : 'No orders yet'
+              }
             />
             <StatPill
-              label="Photos"
+              label="Portfolio"
               value={String(portfolioCount)}
               subvalue={portfolioCount > 0 ? 'Portfolio' : 'No uploads yet'}
               actionLabel={portfolioCount > 0 ? 'Open gallery' : undefined}
@@ -605,7 +684,9 @@ export default function TailorProfileScreen() {
               value={String(profile.specialtyTags.length)}
               subvalue={profile.specialtyTags.length > 0 ? 'Specialties' : 'No styles listed'}
               actionLabel={profile.specialtyTags.length > 0 ? 'View styles' : undefined}
-              onPress={profile.specialtyTags.length > 0 ? () => setShowStylesModal(true) : undefined}
+              onPress={
+                profile.specialtyTags.length > 0 ? () => setShowStylesModal(true) : undefined
+              }
             />
           </View>
 
@@ -644,7 +725,13 @@ export default function TailorProfileScreen() {
             <Text style={styles.detailLabel}>Ways to order</Text>
             <View style={styles.languageWrap}>
               <View style={styles.languageChip}>
-                <Text style={styles.languageChipText}>{profile.sellerType === 'BOUTIQUE' ? 'Boutique' : profile.sellerType === 'TAILOR_SHOP' ? 'Tailor shop' : 'Tailor'}</Text>
+                <Text style={styles.languageChipText}>
+                  {profile.sellerType === 'BOUTIQUE'
+                    ? 'Boutique'
+                    : profile.sellerType === 'TAILOR_SHOP'
+                      ? 'Tailor shop'
+                      : 'Tailor'}
+                </Text>
               </View>
               {profile.supportsCustomOrders ? (
                 <View style={styles.languageChip}>
@@ -684,16 +771,24 @@ export default function TailorProfileScreen() {
               </Text>
               {profile.consultationMode !== 'UNAVAILABLE' ? (
                 <Text style={styles.detailSubvalue}>
-                  {profile.consultationCallType === 'AUDIO' ? 'Audio call' : profile.consultationCallType === 'VIDEO' ? 'Video call' : 'Audio or video'}
-                  {profile.consultationFeeCreditable ? ' · Fee credited toward an accepted order' : ''}
+                  {profile.consultationCallType === 'AUDIO'
+                    ? 'Audio call'
+                    : profile.consultationCallType === 'VIDEO'
+                      ? 'Video call'
+                      : 'Audio or video'}
+                  {profile.consultationFeeCreditable
+                    ? ' · Fee credited toward an accepted order'
+                    : ''}
                 </Text>
               ) : null}
               {profile.consultationMode === 'PAID' ? (
-                <Text style={styles.detailSubvalue}>Payment is collected before the call. Cancellation and attendance terms are shown again before payment.</Text>
+                <Text style={styles.detailSubvalue}>
+                  Payment is collected before the call. Cancellation and attendance terms are shown
+                  again before payment.
+                </Text>
               ) : null}
             </View>
           ) : null}
-
         </View>
       </ScrollView>
 
@@ -702,129 +797,167 @@ export default function TailorProfileScreen() {
         compactOnScroll={!(profile.userId && user?.id && profile.userId === user.id)}
         testID="tailor-profile-actions"
       >
-        {(compact) => profile.userId && user?.id && profile.userId === user.id ? (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 }}>
-            <Text style={{ fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', fontFamily: Fonts.body }}>
-              This is your tailor profile
-            </Text>
-          </View>
-        ) : compact ? (
-          <>
-            {profile.supportsReadyMade ? (
-              <DrapeIconButton
-                icon="shopping-bag"
-                accessibilityLabel="Shop now"
-                tone="secondary"
-                onPress={() =>
-                  router.push({
-                    pathname: '/(customer)/tailor/shop/[id]',
-                    params: {
-                      id: profile.id,
-                      returnTo: `/(customer)/tailor/${profile.id}`,
-                      historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
-                    },
-                  })
-                }
-              />
-            ) : null}
-            {profile.supportsCustomOrders ? (
-              <DrapeIconButton
-                icon="scissors"
-                accessibilityLabel={customOrdersPaused ? 'Custom orders paused' : 'Start custom order'}
-                tone="primary"
-                onPress={() => router.push({
-                  pathname: '/(customer)/brief/[tailorId]',
-                  params: {
-                    tailorId: profile.id,
-                    returnTo: `/(customer)/tailor/${profile.id}`,
-                    historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
-                    draftSession: createDraftSessionId(),
-                    freshStart: '1',
-                  },
-                })}
-                disabled={customOrdersPaused}
-                testID="book-tailor-btn-compact"
-              />
-            ) : null}
-          </>
-        ) : (
-          <>
-            {profile.supportsReadyMade ? (
-              <DrapeCapsuleButton
-                label="Shop now"
-                tone="secondary"
-                onPress={() =>
-                  router.push({
-                    pathname: '/(customer)/tailor/shop/[id]',
-                    params: {
-                      id: profile.id,
-                      returnTo: `/(customer)/tailor/${profile.id}`,
-                      historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
-                    },
-                  })
-                }
-                style={{ flex: 1 }}
-              />
-            ) : (
-              <DrapeCapsuleButton
-                label={customOrdersPaused ? 'Custom unavailable' : 'Message'}
-                tone="secondary"
-                onPress={() => {
-                  if (customOrdersPaused) {
-                    Alert.alert(
-                      customOrdersFullyBooked ? 'Fully booked' : 'Custom orders paused',
-                      customOrdersFullyBooked
-                        ? `${profile.displayName} is fully booked for new custom briefs right now. You can still browse or check back later.`
-                        : `${profile.displayName} is not taking new custom briefs right now. You can still browse or check back later.`
-                    )
-                    return
-                  }
-
-                  Alert.alert(
-                    'Place an order first',
-                    `Messages with ${profile.displayName} start once you place a custom order. Your order creates the conversation automatically.`,
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      {
-                        text: 'Custom order',
-                        onPress: () => router.push({
-                          pathname: '/(customer)/brief/[tailorId]',
-                          params: {
-                            tailorId: profile.id,
-                            returnTo: `/(customer)/tailor/${profile.id}`,
-                            historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
-                            draftSession: createDraftSessionId(),
-                            freshStart: '1',
-                          },
-                        }),
-                      },
-                    ]
-                  )
+        {(compact) =>
+          profile.userId && user?.id && profile.userId === user.id ? (
+            <View
+              style={{
+                flex: 1,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingVertical: 4,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: FontSize.sm,
+                  color: Colors.inkLight,
+                  textAlign: 'center',
+                  fontFamily: Fonts.body,
                 }}
-                style={{ flex: 1 }}
-                disabled={customOrdersPaused}
-              />
-            )}
-            {profile.supportsCustomOrders ? (
-              <DrapeCapsuleButton
-                label={customOrdersPaused ? 'Custom paused' : 'Custom order'}
-                onPress={() => router.push({
-                  pathname: '/(customer)/brief/[tailorId]',
-                  params: {
-                    tailorId: profile.id,
-                    returnTo: `/(customer)/tailor/${profile.id}`,
-                    historyChain: appendToHistory(historyChain, `/(customer)/tailor/${profile.id}`),
-                    draftSession: createDraftSessionId(),
-                    freshStart: '1',
-                  },
-                })}
-                style={{ flex: profile.supportsReadyMade ? 1.35 : 1.6 }}
-                disabled={customOrdersPaused}
-                testID="book-tailor-btn"
-              />
-            ) : null}
-          </>
-        )}
+              >
+                This is your tailor profile
+              </Text>
+            </View>
+          ) : compact ? (
+            <>
+              {profile.supportsReadyMade ? (
+                <DrapeIconButton
+                  icon="shopping-bag"
+                  accessibilityLabel="Shop now"
+                  tone="secondary"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(customer)/tailor/shop/[id]',
+                      params: {
+                        id: profile.id,
+                        returnTo: `/(customer)/tailor/${profile.id}`,
+                        historyChain: appendToHistory(
+                          historyChain,
+                          `/(customer)/tailor/${profile.id}`
+                        ),
+                      },
+                    })
+                  }
+                />
+              ) : null}
+              {profile.supportsCustomOrders ? (
+                <DrapeIconButton
+                  icon="scissors"
+                  accessibilityLabel={
+                    customOrdersPaused ? 'Custom orders paused' : 'Start custom order'
+                  }
+                  tone="primary"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(customer)/brief/[tailorId]',
+                      params: {
+                        tailorId: profile.id,
+                        returnTo: `/(customer)/tailor/${profile.id}`,
+                        historyChain: appendToHistory(
+                          historyChain,
+                          `/(customer)/tailor/${profile.id}`
+                        ),
+                        draftSession: createDraftSessionId(),
+                        freshStart: '1',
+                      },
+                    })
+                  }
+                  disabled={customOrdersPaused}
+                  testID="book-tailor-btn-compact"
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              {profile.supportsReadyMade ? (
+                <DrapeCapsuleButton
+                  label="Shop now"
+                  tone="secondary"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(customer)/tailor/shop/[id]',
+                      params: {
+                        id: profile.id,
+                        returnTo: `/(customer)/tailor/${profile.id}`,
+                        historyChain: appendToHistory(
+                          historyChain,
+                          `/(customer)/tailor/${profile.id}`
+                        ),
+                      },
+                    })
+                  }
+                  style={{ flex: 1 }}
+                />
+              ) : (
+                <DrapeCapsuleButton
+                  label={customOrdersPaused ? 'Custom unavailable' : 'Message'}
+                  tone="secondary"
+                  onPress={() => {
+                    if (customOrdersPaused) {
+                      Alert.alert(
+                        customOrdersFullyBooked ? 'Fully booked' : 'Custom orders paused',
+                        customOrdersFullyBooked
+                          ? `${profile.displayName} is fully booked for new custom briefs right now. You can still browse or check back later.`
+                          : `${profile.displayName} is not taking new custom briefs right now. You can still browse or check back later.`
+                      )
+                      return
+                    }
+
+                    Alert.alert(
+                      'Place an order first',
+                      `Messages with ${profile.displayName} start once you place a custom order. Your order creates the conversation automatically.`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Custom order',
+                          onPress: () =>
+                            router.push({
+                              pathname: '/(customer)/brief/[tailorId]',
+                              params: {
+                                tailorId: profile.id,
+                                returnTo: `/(customer)/tailor/${profile.id}`,
+                                historyChain: appendToHistory(
+                                  historyChain,
+                                  `/(customer)/tailor/${profile.id}`
+                                ),
+                                draftSession: createDraftSessionId(),
+                                freshStart: '1',
+                              },
+                            }),
+                        },
+                      ]
+                    )
+                  }}
+                  style={{ flex: 1 }}
+                  disabled={customOrdersPaused}
+                />
+              )}
+              {profile.supportsCustomOrders ? (
+                <DrapeCapsuleButton
+                  label={customOrdersPaused ? 'Custom paused' : 'Custom order'}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(customer)/brief/[tailorId]',
+                      params: {
+                        tailorId: profile.id,
+                        returnTo: `/(customer)/tailor/${profile.id}`,
+                        historyChain: appendToHistory(
+                          historyChain,
+                          `/(customer)/tailor/${profile.id}`
+                        ),
+                        draftSession: createDraftSessionId(),
+                        freshStart: '1',
+                      },
+                    })
+                  }
+                  style={{ flex: profile.supportsReadyMade ? 1.35 : 1.6 }}
+                  disabled={customOrdersPaused}
+                  testID="book-tailor-btn"
+                />
+              ) : null}
+            </>
+          )
+        }
       </DrapeFloatingActionDock>
 
       <WishlistPickerModal
@@ -865,8 +998,15 @@ export default function TailorProfileScreen() {
                 data={imagePreviewItems}
                 horizontal
                 pagingEnabled
-                initialScrollIndex={Math.min(imagePreviewIndex, Math.max(imagePreviewItems.length - 1, 0))}
-                getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+                initialScrollIndex={Math.min(
+                  imagePreviewIndex,
+                  Math.max(imagePreviewItems.length - 1, 0)
+                )}
+                getItemLayout={(_, index) => ({
+                  length: SCREEN_WIDTH,
+                  offset: SCREEN_WIDTH * index,
+                  index,
+                })}
                 showsHorizontalScrollIndicator={false}
                 onMomentumScrollEnd={(event) => {
                   const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH)
@@ -919,9 +1059,17 @@ export default function TailorProfileScreen() {
                 </View>
               ) : null}
               {imagePreviewItems[imageViewerIndex]?.assetId ? (
-                <TouchableOpacity style={styles.previewReport} onPress={() => reportMedia(imagePreviewItems[imageViewerIndex])} disabled={reportingMedia} accessibilityRole="button" accessibilityLabel="Report this portfolio image">
+                <TouchableOpacity
+                  style={styles.previewReport}
+                  onPress={() => reportMedia(imagePreviewItems[imageViewerIndex])}
+                  disabled={reportingMedia}
+                  accessibilityRole="button"
+                  accessibilityLabel="Report this portfolio image"
+                >
                   <Feather name="flag" size={15} color={Colors.textInverse} />
-                  <Text style={styles.previewCloseText}>{reportingMedia ? 'Sending…' : 'Report'}</Text>
+                  <Text style={styles.previewCloseText}>
+                    {reportingMedia ? 'Sending…' : 'Report'}
+                  </Text>
                 </TouchableOpacity>
               ) : null}
             </>
@@ -948,9 +1096,23 @@ export default function TailorProfileScreen() {
                 nativeControls
               />
               {mediaIdByUrl.get(previewVideoUrl) ? (
-                <TouchableOpacity style={styles.previewReport} onPress={() => reportMedia({ uri: previewVideoUrl, bucket: 'portfolio-photos', assetId: mediaIdByUrl.get(previewVideoUrl) })} disabled={reportingMedia} accessibilityRole="button" accessibilityLabel="Report this portfolio video">
+                <TouchableOpacity
+                  style={styles.previewReport}
+                  onPress={() =>
+                    reportMedia({
+                      uri: previewVideoUrl,
+                      bucket: 'portfolio-photos',
+                      assetId: mediaIdByUrl.get(previewVideoUrl),
+                    })
+                  }
+                  disabled={reportingMedia}
+                  accessibilityRole="button"
+                  accessibilityLabel="Report this portfolio video"
+                >
                   <Feather name="flag" size={15} color={Colors.textInverse} />
-                  <Text style={styles.previewCloseText}>{reportingMedia ? 'Sending…' : 'Report'}</Text>
+                  <Text style={styles.previewCloseText}>
+                    {reportingMedia ? 'Sending…' : 'Report'}
+                  </Text>
                 </TouchableOpacity>
               ) : null}
             </>
@@ -958,7 +1120,12 @@ export default function TailorProfileScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showPortfolioModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowPortfolioModal(false)}>
+      <Modal
+        visible={showPortfolioModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowPortfolioModal(false)}
+      >
         <SafeAreaView style={styles.modalSafe}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setShowPortfolioModal(false)}>
@@ -984,11 +1151,11 @@ export default function TailorProfileScreen() {
                       contentFit="cover"
                       transition={120}
                       surface="customer_tailor_portfolio_grid"
-                      fallback={(
+                      fallback={
                         <View style={[styles.portfolioTileImage, styles.heroPlaceholder]}>
                           <Feather name="image" size={22} color={Colors.midGrey} />
                         </View>
-                      )}
+                      }
                     />
                   </TouchableOpacity>
                 ))}
@@ -1001,7 +1168,11 @@ export default function TailorProfileScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Play portfolio video"
                   >
-                    <PortfolioVideoPreview uri={url} style={styles.portfolioTileImage} autoplay={false} />
+                    <PortfolioVideoPreview
+                      uri={url}
+                      style={styles.portfolioTileImage}
+                      autoplay={false}
+                    />
                     <View style={styles.portfolioVideoOverlay}>
                       <View style={styles.portfolioVideoIcon}>
                         <Feather name="play" size={20} color={Colors.textInverse} />
@@ -1013,10 +1184,16 @@ export default function TailorProfileScreen() {
               </View>
             ) : (
               <View style={styles.emptyReviewCard}>
-                <Feather name="image" size={34} color={Colors.lightGrey} style={styles.emptyPortfolioIcon} />
+                <Feather
+                  name="image"
+                  size={34}
+                  color={Colors.lightGrey}
+                  style={styles.emptyPortfolioIcon}
+                />
                 <Text style={styles.emptyReviewTitle}>No portfolio yet</Text>
                 <Text style={styles.emptyReviewHint}>
-                  This seller has not uploaded work samples yet. Check styles, reviews, and ways to order before deciding.
+                  This seller has not uploaded work samples yet. Check styles, reviews, and ways to
+                  order before deciding.
                 </Text>
               </View>
             )}
@@ -1024,7 +1201,12 @@ export default function TailorProfileScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={showStylesModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowStylesModal(false)}>
+      <Modal
+        visible={showStylesModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowStylesModal(false)}
+      >
         <SafeAreaView style={styles.modalSafe}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setShowStylesModal(false)}>
@@ -1035,13 +1217,20 @@ export default function TailorProfileScreen() {
           </View>
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             <View style={styles.styleGrid}>
-              {profile.specialtyTags.map((tag) => <Tag key={tag} label={tag} />)}
+              {profile.specialtyTags.map((tag) => (
+                <Tag key={tag} label={tag} />
+              ))}
             </View>
           </ScrollView>
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={showReviewsModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReviewsModal(false)}>
+      <Modal
+        visible={showReviewsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowReviewsModal(false)}
+      >
         <SafeAreaView style={styles.modalSafe}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setShowReviewsModal(false)}>
@@ -1055,7 +1244,9 @@ export default function TailorProfileScreen() {
               <>
                 <View style={styles.ratingBreakdownCard}>
                   <View>
-                    <Text style={styles.ratingBreakdownValue}>{reviewSummary.average.toFixed(1)}</Text>
+                    <Text style={styles.ratingBreakdownValue}>
+                      {reviewSummary.average.toFixed(1)}
+                    </Text>
                     <StarRating rating={reviewSummary.average} count={reviewSummary.count} />
                   </View>
                   <View style={styles.ratingBreakdownRows}>
@@ -1063,9 +1254,16 @@ export default function TailorProfileScreen() {
                       <View key={row.rating} style={styles.ratingBreakdownRow}>
                         <Text style={styles.ratingBreakdownLabel}>{row.rating}</Text>
                         <View style={styles.ratingBreakdownTrack}>
-                          <View style={[styles.ratingBreakdownFill, { width: `${Math.round(row.percent * 100)}%` }]} />
+                          <View
+                            style={[
+                              styles.ratingBreakdownFill,
+                              { width: `${Math.round(row.percent * 100)}%` },
+                            ]}
+                          />
                         </View>
-                        <Text style={styles.ratingBreakdownPercent}>{Math.round(row.percent * 100)}%</Text>
+                        <Text style={styles.ratingBreakdownPercent}>
+                          {Math.round(row.percent * 100)}%
+                        </Text>
                       </View>
                     ))}
                   </View>
@@ -1150,8 +1348,15 @@ function ReviewCard({
   onOpenVideo: (url: string) => void
 }) {
   const name = review.reviewerName
-  const initial = name.split(' ').map((p) => p[0]).slice(0, 2).join('')
-  const date = new Date(review.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+  const initial = name
+    .split(' ')
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join('')
+  const date = new Date(review.createdAt).toLocaleDateString('en-GB', {
+    month: 'short',
+    year: 'numeric',
+  })
   const imageItems = review.mediaUrls
     .filter((url) => !isVideoMediaUrl(url))
     .map((url) => ({ uri: url, bucket: 'review-media' as const }))
@@ -1179,7 +1384,11 @@ function ReviewCard({
       </View>
       {review.body && <Text style={styles.reviewBody}>{review.body}</Text>}
       {review.mediaUrls.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.reviewMediaRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.reviewMediaRow}
+        >
           {review.mediaUrls.map((url) => {
             const isVideo = isVideoMediaUrl(url)
             const resolvedUri = resolveStorageImageUrl(url, 'review-media') ?? url
@@ -1196,13 +1405,21 @@ function ReviewCard({
               >
                 {isVideo ? (
                   <>
-                    <PortfolioVideoPreview uri={resolvedUri} style={styles.reviewMediaThumb} autoplay={false} />
+                    <PortfolioVideoPreview
+                      uri={resolvedUri}
+                      style={styles.reviewMediaThumb}
+                      autoplay={false}
+                    />
                     <View style={styles.reviewVideoBadge}>
                       <Feather name="play" size={12} color={Colors.textInverse} />
                     </View>
                   </>
                 ) : (
-                  <RNImage source={{ uri: resolvedUri }} style={styles.reviewMediaThumb} resizeMode="cover" />
+                  <RNImage
+                    source={{ uri: resolvedUri }}
+                    style={styles.reviewMediaThumb}
+                    resizeMode="cover"
+                  />
                 )}
               </TouchableOpacity>
             )
@@ -1211,7 +1428,9 @@ function ReviewCard({
       ) : null}
       {review.tags.length > 0 && (
         <View style={styles.reviewTags}>
-          {review.tags.map((t) => <Tag key={t} label={t} />)}
+          {review.tags.map((t) => (
+            <Tag key={t} label={t} />
+          ))}
         </View>
       )}
       {review.response ? (
@@ -1278,7 +1497,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   skLoadHero: {
     width: SCREEN_WIDTH,
@@ -1383,7 +1607,12 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   modalClose: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  modalTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  modalTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
   modalScroll: { flex: 1 },
   modalContent: { padding: Spacing.lg, gap: Spacing.xs, paddingBottom: Spacing.xl },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
@@ -1426,40 +1655,69 @@ const styles = StyleSheet.create({
   // Hero carousel
   heroContainer: { width: SCREEN_WIDTH, height: HERO_HEIGHT, position: 'relative' },
   heroImage: { width: SCREEN_WIDTH, height: HERO_HEIGHT },
-  heroPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
+  heroPlaceholder: {
+    backgroundColor: Colors.boneDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   heroOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
-    paddingTop: Spacing.md, paddingHorizontal: Spacing.lg,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingTop: Spacing.md,
+    paddingHorizontal: Spacing.lg,
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Colors.needleGreen,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heartBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Colors.surfaceElevated,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heartBtnSaved: {
     backgroundColor: Colors.needleGreen,
   },
   dotRow: {
-    position: 'absolute', bottom: 12, left: 0, right: 0,
-    flexDirection: 'row', justifyContent: 'center', gap: 6,
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
   },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
   dotActive: { backgroundColor: Colors.white, width: 18 },
   photoCount: {
-    position: 'absolute', bottom: 12, right: Spacing.lg,
-    backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: Radius.full,
-    paddingHorizontal: 10, paddingVertical: 4,
+    position: 'absolute',
+    bottom: 12,
+    right: Spacing.lg,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: Radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
   },
-  photoCountText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  photoCountText: {
+    fontSize: FontSize.xs,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
 
   body: { padding: Spacing.lg, gap: Spacing.md, marginTop: -Spacing.md },
   identityRow: {
@@ -1471,9 +1729,20 @@ const styles = StyleSheet.create({
     padding: 14,
     ...Shadow.md,
   },
-  name: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display, lineHeight: 28 },
+  name: {
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+    lineHeight: 28,
+  },
   location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
-  identityMetaRow: { marginTop: Spacing.sm, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  identityMetaRow: {
+    marginTop: Spacing.sm,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.xs,
+  },
   availDot: { width: 8, height: 8, borderRadius: 4 },
   availabilityPill: {
     flexDirection: 'row',
@@ -1484,7 +1753,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: 6,
   },
-  availabilityPillText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  availabilityPillText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
 
   statsRow: {
     flexDirection: 'row',
@@ -1516,8 +1789,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   statValue: { fontSize: 16, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'left' },
-  statSubvalue: { fontSize: 11, color: Colors.midGrey, fontWeight: FontWeight.medium, textAlign: 'left' },
-  statLabel: { fontSize: 11, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'left' },
+  statSubvalue: {
+    fontSize: 11,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.medium,
+    textAlign: 'left',
+  },
+  statLabel: {
+    fontSize: 11,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'left',
+  },
   statActionBadge: {
     marginTop: 1,
     borderRadius: Radius.full,
@@ -1564,7 +1847,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingVertical: 6,
   },
-  languageChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  languageChipText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
 
   bio: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 19 },
   aboutCard: {
@@ -1583,24 +1870,52 @@ const styles = StyleSheet.create({
   },
 
   reviewCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 12, gap: Spacing.xs, ...Shadow.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 12,
+    gap: Spacing.xs,
+    ...Shadow.sm,
   },
   reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   reviewAvatar: {
-    width: 40, height: 40, borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  reviewAvatarImage: { width: 40, height: 40, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
+  reviewAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+  },
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   reviewMediaRow: { gap: Spacing.sm, paddingTop: Spacing.sm, paddingRight: Spacing.md },
-  reviewMediaThumbWrap: { width: 84, height: 84, borderRadius: Radius.md, overflow: 'hidden', backgroundColor: Colors.boneDeep },
+  reviewMediaThumbWrap: {
+    width: 84,
+    height: 84,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: Colors.boneDeep,
+  },
   reviewMediaThumb: { width: '100%', height: '100%' },
-  reviewVideoBadge: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.58)' },
+  reviewVideoBadge: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.58)',
+  },
   ratingBreakdownCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -1608,13 +1923,34 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  ratingBreakdownValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  ratingBreakdownValue: {
+    fontSize: 34,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
   ratingBreakdownRows: { gap: 6 },
   ratingBreakdownRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  ratingBreakdownLabel: { width: 14, fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },
-  ratingBreakdownTrack: { flex: 1, height: 8, borderRadius: 4, backgroundColor: Colors.boneDeep, overflow: 'hidden' },
+  ratingBreakdownLabel: {
+    width: 14,
+    fontSize: FontSize.xs,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  ratingBreakdownTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.boneDeep,
+    overflow: 'hidden',
+  },
   ratingBreakdownFill: { height: '100%', borderRadius: 4, backgroundColor: Colors.needleGreen },
-  ratingBreakdownPercent: { width: 36, textAlign: 'right', fontSize: FontSize.xs, color: Colors.midGrey },
+  ratingBreakdownPercent: {
+    width: 36,
+    textAlign: 'right',
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+  },
   responseWrap: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
@@ -1623,7 +1959,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.needleGreen + '35',
     gap: 4,
   },
-  responseLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  responseLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
   responseText: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20 },
   emptyReviewCard: {
     backgroundColor: Colors.white,
@@ -1637,10 +1977,17 @@ const styles = StyleSheet.create({
   emptyReviewHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
 
   cta: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    flexDirection: 'row', gap: 8,
-    backgroundColor: Colors.white, paddingHorizontal: Spacing.lg, paddingTop: 10,
-    borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
     paddingBottom: 8,
   },
   previewBackdrop: {
@@ -1681,7 +2028,12 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH - Spacing.lg * 2,
     height: PREVIEW_MEDIA_HEIGHT,
   },
-  refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
+  refreshingText: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    paddingHorizontal: Spacing.xl,
+    marginBottom: Spacing.sm,
+  },
   previewClose: {
     position: 'absolute',
     top: 56,
@@ -1692,8 +2044,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
   },
-  previewCloseText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  previewReport: { position: 'absolute', right: Spacing.lg, bottom: Spacing.xl, zIndex: 5, minHeight: 44, paddingHorizontal: Spacing.md, borderRadius: Radius.full, backgroundColor: 'rgba(0,0,0,0.62)', flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  previewCloseText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
+  previewReport: {
+    position: 'absolute',
+    right: Spacing.lg,
+    bottom: Spacing.xl,
+    zIndex: 5,
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
   previewCount: {
     position: 'absolute',
     bottom: 48,
@@ -1703,5 +2071,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  previewCountText: { color: Colors.textInverse, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  previewCountText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
 })

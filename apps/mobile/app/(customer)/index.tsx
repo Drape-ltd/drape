@@ -33,10 +33,7 @@ import {
   type RecentlyViewedTailor,
 } from '@/lib/recently-viewed-tailors'
 import { DrapeStatusChip, RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
-import {
-  useDrapeCapsuleNavMotion,
-  useDrapeCapsuleNavScroll,
-} from '@/components/ui/DrapeCapsuleNav'
+import { useDrapeCapsuleNavMotion, useDrapeCapsuleNavScroll } from '@/components/ui/DrapeCapsuleNav'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { TierBadge } from '@/components/ui'
@@ -109,6 +106,7 @@ type TailorCard = {
   priceRangeMax: number | null
   avatarUrl: string | null
   portfolioPhoto: string | null
+  portfolioCount: number
   exploreImageBucket: StorageImageBucket | null
   availability: string
   supportsCustomOrders: boolean
@@ -139,6 +137,7 @@ type TailorDiscoveryRow = {
   price_range_max?: number | null
   avatar_url?: string | null
   portfolio_photo_urls?: unknown
+  portfolio_video_urls?: unknown
   availability?: string | null
   supports_custom_orders?: boolean | null
   supports_ready_made?: boolean | null
@@ -183,7 +182,8 @@ function resolveFallbackExploreImage(t: TailorDiscoveryRow): {
     typeof t.explore_image_url === 'string' && t.explore_image_url.trim().length > 0
       ? t.explore_image_url
       : null
-  if (gatewayCover) return { uri: gatewayCover, bucket: t.explore_image_bucket ?? 'portfolio-photos' }
+  if (gatewayCover)
+    return { uri: gatewayCover, bucket: t.explore_image_bucket ?? 'portfolio-photos' }
 
   const avatarUrl =
     typeof t.avatar_url === 'string' && t.avatar_url.trim().length > 0 ? t.avatar_url : null
@@ -314,6 +314,10 @@ async function loadLastSearch(userId: string | undefined): Promise<LastSearch | 
 
 function mapTailor(t: TailorDiscoveryRow): TailorCard {
   const fallbackImage = resolveFallbackExploreImage(t)
+  const portfolioCount = new Set([
+    ...asStringList(t.portfolio_photo_urls),
+    ...asStringList(t.portfolio_video_urls),
+  ]).size
 
   return {
     id: t.id,
@@ -328,6 +332,7 @@ function mapTailor(t: TailorDiscoveryRow): TailorCard {
     priceRangeMax: t.price_range_max ?? null,
     avatarUrl: t.avatar_url ?? null,
     portfolioPhoto: fallbackImage.uri,
+    portfolioCount,
     exploreImageBucket: fallbackImage.bucket,
     availability: t.availability ?? 'OPEN',
     supportsCustomOrders: t.supports_custom_orders ?? true,
@@ -388,6 +393,8 @@ export default function CustomerHomeScreen() {
   const [recentlyViewed, setRecentlyViewed] = useState<TailorCard[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [fetchError, setFetchError] = useState(false)
+  const [browseHasMore, setBrowseHasMore] = useState(false)
+  const [loadingMoreBrowse, setLoadingMoreBrowse] = useState(false)
 
   // Search state
   const [query, setQuery] = useState('')
@@ -450,7 +457,7 @@ export default function CustomerHomeScreen() {
   })
   const recentlyViewedIds = useMemo(
     () => new Set(recentlyViewed.map((tailor) => tailor.id)),
-    [recentlyViewed],
+    [recentlyViewed]
   )
 
   // ── Persistence load on focus ─────────────────────────────────────────────
@@ -466,7 +473,6 @@ export default function CustomerHomeScreen() {
         setRecentSearches(rs)
         setLastSearch(ls)
       })
-
     }, [user?.id])
   )
 
@@ -495,8 +501,7 @@ export default function CustomerHomeScreen() {
       const ordersFailed =
         ordersRes.status === 'rejected' ||
         (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
-      const tailorsFailed =
-        tailorsRes.status === 'rejected'
+      const tailorsFailed = tailorsRes.status === 'rejected'
 
       if (ordersFailed && tailorsFailed) {
         setFetchError(true)
@@ -511,9 +516,7 @@ export default function CustomerHomeScreen() {
           ? ((ordersRes.value.data ?? []) as ActiveOrderRow[])
           : []
       const tailorRows: TailorDiscoveryRow[] | null =
-        tailorsRes.status === 'fulfilled'
-          ? tailorsRes.value
-          : null
+        tailorsRes.status === 'fulfilled' ? tailorsRes.value : null
 
       setActiveOrders(
         orderRows
@@ -532,6 +535,7 @@ export default function CustomerHomeScreen() {
 
       if (tailorRows) {
         setAllTailors(tailorRows.map(mapTailor))
+        setBrowseHasMore(tailorRows.length === 30)
       } else {
         setFetchError(true)
         lastBrowseFetchAtRef.current = 0
@@ -541,6 +545,27 @@ export default function CustomerHomeScreen() {
       lastBrowseFetchAtRef.current = 0
     }
   }, [userId])
+
+  async function loadMoreBrowseTailors() {
+    if (loadingMoreBrowse || !browseHasMore) return
+    setLoadingMoreBrowse(true)
+    try {
+      const rows = await fetchReadGateway<TailorDiscoveryRow[]>({
+        action: 'explore-tailors',
+        limit: 30,
+        offset: allTailors.length,
+      })
+      setAllTailors((current) => {
+        const seen = new Set(current.map((tailor) => tailor.id))
+        return [...current, ...rows.map(mapTailor).filter((tailor) => !seen.has(tailor.id))]
+      })
+      setBrowseHasMore(rows.length === 30)
+    } catch {
+      setFetchError(true)
+    } finally {
+      setLoadingMoreBrowse(false)
+    }
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -563,99 +588,102 @@ export default function CustomerHomeScreen() {
    * offset=0: show cached results immediately, fetch fresh in parallel.
    * offset>0: append results to existing list.
    */
-  const runSearch = useCallback(async (q: string, offset: number) => {
-    const { specialty, location, general } = parseQuery(q)
+  const runSearch = useCallback(
+    async (q: string, offset: number) => {
+      const { specialty, location, general } = parseQuery(q)
 
-    // For fresh searches, show cached results instantly while fetching fresh
-    if (offset === 0) {
-      const cached = resultCacheRef.current.get(q)
-      if (cached) setSearchResults(cached)
-      setSearching(true)
-      setSearchPending(false)
-      setSearchFetchError(false)
-      setResultOffset(0)
-    } else {
-      setLoadingMore(true)
-    }
-    try {
-      const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
-
-      let strictPage: TailorCard[] = []
-      if (location) {
-        const strictData = await fetchReadGateway<TailorDiscoveryRow[]>({
-          action: 'explore-tailors',
-          limit: PAGE_SIZE,
-          offset,
-          specialty,
-          location,
-          strictLocation: true,
-        })
-        strictPage = strictData.map(mapTailor)
-      }
-
-      let page = strictPage
-
-      if (page.length === 0) {
-        const data = await fetchReadGateway<TailorDiscoveryRow[]>({
-          action: 'explore-tailors',
-          limit: fetchSize,
-          offset,
-          specialty,
-          general,
-        })
-
-        page = data.map(mapTailor)
-
-        if (location) {
-          page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
-        }
-      }
-
+      // For fresh searches, show cached results instantly while fetching fresh
       if (offset === 0) {
-        setSearchResults(page)
-        if (resultCacheRef.current.size >= 30) {
-          const firstKey = resultCacheRef.current.keys().next().value
-          if (firstKey) resultCacheRef.current.delete(firstKey)
-        }
-        resultCacheRef.current.set(q, page)
-        setResultOffset(page.length)
-
-        saveRecentSearch(userId, q)
-        if (page.length > 0) {
-          const ls: LastSearch = {
-            query: q,
-            count: page.length,
-            thumbnail: page[0]?.portfolioPhoto ?? null,
-            thumbnailBucket: page[0]?.exploreImageBucket ?? null,
-          }
-          saveLastSearch(userId, ls)
-          setLastSearch(ls)
-        } else {
-          clearLastSearch(userId)
-          setLastSearch(null)
-        }
-        loadRecentSearches(userId).then(setRecentSearches)
-      } else {
-        setSearchResults((prev) => [...prev, ...page])
-        setResultOffset((prev) => prev + page.length)
-      }
-
-      setHasMore(page.length === PAGE_SIZE)
-    } catch {
-      setSearchFetchError(true)
-      if (offset === 0) {
-        setSearchResults([])
-        setHasMore(false)
-      }
-    } finally {
-      if (offset === 0) {
-        setSearching(false)
+        const cached = resultCacheRef.current.get(q)
+        if (cached) setSearchResults(cached)
+        setSearching(true)
         setSearchPending(false)
+        setSearchFetchError(false)
+        setResultOffset(0)
       } else {
-        setLoadingMore(false)
+        setLoadingMore(true)
       }
-    }
-  }, [userId])
+      try {
+        const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
+
+        let strictPage: TailorCard[] = []
+        if (location) {
+          const strictData = await fetchReadGateway<TailorDiscoveryRow[]>({
+            action: 'explore-tailors',
+            limit: PAGE_SIZE,
+            offset,
+            specialty,
+            location,
+            strictLocation: true,
+          })
+          strictPage = strictData.map(mapTailor)
+        }
+
+        let page = strictPage
+
+        if (page.length === 0) {
+          const data = await fetchReadGateway<TailorDiscoveryRow[]>({
+            action: 'explore-tailors',
+            limit: fetchSize,
+            offset,
+            specialty,
+            general,
+          })
+
+          page = data.map(mapTailor)
+
+          if (location) {
+            page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
+          }
+        }
+
+        if (offset === 0) {
+          setSearchResults(page)
+          if (resultCacheRef.current.size >= 30) {
+            const firstKey = resultCacheRef.current.keys().next().value
+            if (firstKey) resultCacheRef.current.delete(firstKey)
+          }
+          resultCacheRef.current.set(q, page)
+          setResultOffset(page.length)
+
+          saveRecentSearch(userId, q)
+          if (page.length > 0) {
+            const ls: LastSearch = {
+              query: q,
+              count: page.length,
+              thumbnail: page[0]?.portfolioPhoto ?? null,
+              thumbnailBucket: page[0]?.exploreImageBucket ?? null,
+            }
+            saveLastSearch(userId, ls)
+            setLastSearch(ls)
+          } else {
+            clearLastSearch(userId)
+            setLastSearch(null)
+          }
+          loadRecentSearches(userId).then(setRecentSearches)
+        } else {
+          setSearchResults((prev) => [...prev, ...page])
+          setResultOffset((prev) => prev + page.length)
+        }
+
+        setHasMore(page.length === PAGE_SIZE)
+      } catch {
+        setSearchFetchError(true)
+        if (offset === 0) {
+          setSearchResults([])
+          setHasMore(false)
+        }
+      } finally {
+        if (offset === 0) {
+          setSearching(false)
+          setSearchPending(false)
+        } else {
+          setLoadingMore(false)
+        }
+      }
+    },
+    [userId]
+  )
 
   // ── Debounced live search — resets pagination on new query ─────────────────
 
@@ -897,7 +925,10 @@ export default function CustomerHomeScreen() {
                 {recentSearches.map((s, i) => (
                   <TouchableOpacity
                     key={i}
-                    style={[styles.recentSearchRow, i === recentSearches.length - 1 && styles.recentSearchRowLast]}
+                    style={[
+                      styles.recentSearchRow,
+                      i === recentSearches.length - 1 && styles.recentSearchRowLast,
+                    ]}
                     onPress={() => applyQuery(s)}
                   >
                     <Feather name="clock" size={16} color={Colors.midGrey} />
@@ -925,10 +956,20 @@ export default function CustomerHomeScreen() {
           <View style={styles.suggestSection}>
             <Text style={styles.suggestGroupLabel}>Try searching</Text>
             <View style={styles.suggestCard}>
-              {(
-                ['Suits in Lagos', 'Tailors in London', 'Bridal', 'Casual wear', 'Traditional', 'Bespoke suits']
-              ).map((s, i, arr) => (
-                <TouchableOpacity key={s} style={[styles.suggestRow, i === arr.length - 1 && styles.suggestRowLast]} onPress={() => applyQuery(s)} activeOpacity={0.76}>
+              {[
+                'Suits in Lagos',
+                'Tailors in London',
+                'Bridal',
+                'Casual wear',
+                'Traditional',
+                'Bespoke suits',
+              ].map((s, i, arr) => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.suggestRow, i === arr.length - 1 && styles.suggestRowLast]}
+                  onPress={() => applyQuery(s)}
+                  activeOpacity={0.76}
+                >
                   <Feather name="search" size={15} color={Colors.midGrey} />
                   <Text style={styles.suggestRowText}>{s}</Text>
                   <Feather name="chevron-right" size={17} color={Colors.midGrey} />
@@ -1144,16 +1185,35 @@ export default function CustomerHomeScreen() {
               ) : null}
             </View>
             {allTailors.length > 0 ? (
-              <View style={styles.cardsGrid}>
-                {allTailors.map((tailor) => (
-                  <GridCard
-                    key={tailor.id}
-                    tailor={tailor}
-                    recentlyViewed={recentlyViewedIds.has(tailor.id)}
-                    onPress={() => navigateToTailor(tailor)}
-                  />
-                ))}
-              </View>
+              <>
+                <View style={styles.cardsGrid}>
+                  {allTailors.map((tailor) => (
+                    <GridCard
+                      key={tailor.id}
+                      tailor={tailor}
+                      recentlyViewed={recentlyViewedIds.has(tailor.id)}
+                      onPress={() => navigateToTailor(tailor)}
+                    />
+                  ))}
+                </View>
+                {browseHasMore ? (
+                  <TouchableOpacity
+                    style={styles.browseMoreButton}
+                    onPress={() => {
+                      void loadMoreBrowseTailors()
+                    }}
+                    disabled={loadingMoreBrowse}
+                    accessibilityRole="button"
+                    accessibilityLabel="Load more recommended tailors"
+                  >
+                    {loadingMoreBrowse ? (
+                      <ActivityIndicator color={Colors.needleGreen} />
+                    ) : (
+                      <Text style={styles.browseMoreText}>Load more tailors</Text>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
+              </>
             ) : (
               <View style={styles.emptyBrowseCard}>
                 <Text style={styles.emptyBrowseTitle}>Verified tailors are being refreshed</Text>
@@ -1170,7 +1230,6 @@ export default function CustomerHomeScreen() {
               </View>
             )}
           </View>
-
         </ScrollView>
       )}
     </SafeAreaView>
@@ -1204,7 +1263,10 @@ function ActiveOrderCard({
         <View style={styles.orderCardMeta}>
           <DrapeStatusChip
             value={stagePresentation.stage ?? order.stage}
-            label={stagePresentation.label ?? customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+            label={
+              stagePresentation.label ??
+              customerOrderStageLabel(order.stage as OrderStage, order.orderKind)
+            }
             domain="order"
             style={styles.orderStatusChip}
           />
@@ -1285,6 +1347,12 @@ function GridCard({
             <Feather name="clock" size={11} color={Colors.textInverse} />
           </View>
         ) : null}
+        {tailor.portfolioCount > 0 ? (
+          <View style={styles.portfolioBadge}>
+            <Feather name="image" size={11} color={Colors.textInverse} />
+            <Text style={styles.portfolioBadgeText}>Portfolio</Text>
+          </View>
+        ) : null}
       </View>
       <View style={styles.gridInfo}>
         <Text style={styles.gridName} numberOfLines={1}>
@@ -1351,11 +1419,20 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
+        {tailor.portfolioCount > 0 ? (
+          <Text style={styles.resultPortfolioText} numberOfLines={1}>
+            View complete portfolio
+          </Text>
+        ) : null}
         {svcLabel ? (
-          <Text style={styles.resultServiceText} numberOfLines={1}>{svcLabel}</Text>
+          <Text style={styles.resultServiceText} numberOfLines={1}>
+            {svcLabel}
+          </Text>
         ) : null}
         {availHint && (
-          <Text style={styles.resultHint} numberOfLines={1}>{availHint}</Text>
+          <Text style={styles.resultHint} numberOfLines={1}>
+            {availHint}
+          </Text>
         )}
         {tailor.availability === 'LIMITED' && (
           <View style={styles.limitedBadge}>
@@ -1531,10 +1608,7 @@ function SearchFilterSheet({
                     activeOpacity={0.82}
                   >
                     <View
-                      style={[
-                        styles.filterOptionRadio,
-                        selected && styles.filterOptionRadioActive,
-                      ]}
+                      style={[styles.filterOptionRadio, selected && styles.filterOptionRadioActive]}
                     >
                       {selected ? <View style={styles.filterOptionRadioDot} /> : null}
                     </View>
@@ -1563,10 +1637,7 @@ function SearchFilterSheet({
                     activeOpacity={0.82}
                   >
                     <View
-                      style={[
-                        styles.filterOptionRadio,
-                        selected && styles.filterOptionRadioActive,
-                      ]}
+                      style={[styles.filterOptionRadio, selected && styles.filterOptionRadioActive]}
                     >
                       {selected ? <View style={styles.filterOptionRadioDot} /> : null}
                     </View>
@@ -1802,6 +1873,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   resultInfo: { flex: 1, gap: 3, justifyContent: 'center' },
+  resultPortfolioText: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   resultNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   resultName: {
     fontFamily: Fonts.bodySemiBold,
@@ -2091,6 +2163,23 @@ const styles = StyleSheet.create({
     rowGap: Spacing.lg,
     paddingHorizontal: Spacing.lg,
   },
+  browseMoreButton: {
+    alignSelf: 'center',
+    minHeight: 44,
+    marginTop: Spacing.lg,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  browseMoreText: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
   gridCard: {
     minHeight: 220,
     backgroundColor: Colors.white,
@@ -2114,6 +2203,25 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.24)',
+  },
+  portfolioBadge: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    minHeight: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(26,26,24,0.76)',
+    paddingHorizontal: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  portfolioBadgeText: {
+    fontSize: 11,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
   },
   gridInfo: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 14, gap: 4 },
   gridName: {
