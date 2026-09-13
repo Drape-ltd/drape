@@ -1,16 +1,29 @@
 import type { Metadata } from 'next'
+import { JsonLd } from '../../components/json-ld'
 import { PublicSiteHeader } from '../../components/public-site-header'
 import { SiteFooter } from '../../components/site-footer'
 import { TailorDirectory, type TailorDirectoryParams } from '../../components/tailor-directory'
-import { buildMetadata } from '../../lib/metadata'
+import { buildMetadata, siteUrl } from '../../lib/metadata'
 import { getApprovedPublicTailors } from '../../lib/public-marketplace'
 
-export const metadata: Metadata = buildMetadata({
-  title: 'Explore independent tailors',
-  description:
-    'Browse approved Drapeon tailor profiles and find the right fit for your next project.',
-  path: '/explore',
-})
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<TailorDirectoryParams>
+}): Promise<Metadata> {
+  const params = await searchParams
+  const hasSearchState = Boolean(params.q?.trim()) || (Number.parseInt(params.page ?? '1', 10) || 1) > 1
+  const metadata = buildMetadata({
+    title: 'Explore independent tailors',
+    description:
+      'Browse approved Drapeon tailor profiles, compare complete portfolios, and find the right fit for your next custom or ready-made project.',
+    path: '/explore',
+    noindex: hasSearchState,
+  })
+  return hasSearchState
+    ? { ...metadata, robots: { index: false, follow: true } }
+    : metadata
+}
 
 export default async function ExplorePage({
   searchParams,
@@ -25,8 +38,21 @@ export default async function ExplorePage({
     getApprovedPublicTailors(40, offset, query),
     getApprovedPublicTailors(1, offset + 40, query),
   ])
+  const itemListJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: query ? `Drapeon tailors matching ${query}` : 'Approved tailors on Drapeon',
+    numberOfItems: tailors.length,
+    itemListElement: tailors.map((tailor, index) => ({
+      '@type': 'ListItem',
+      position: offset + index + 1,
+      name: tailor.displayName,
+      url: `${siteUrl}/tailors/${tailor.id}`,
+    })),
+  }
   return (
     <main className="min-h-screen bg-[#f4f0e8] text-ink">
+      <JsonLd data={itemListJsonLd} />
       <div className="mx-auto max-w-[92rem] px-4 pt-4 sm:px-6">
         <PublicSiteHeader />
       </div>

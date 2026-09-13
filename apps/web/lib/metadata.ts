@@ -41,15 +41,35 @@ export function buildMetadata({
   description,
   path,
   noindex = false,
+  image,
 }: {
   title: string
   description: string
   path: string
   noindex?: boolean
+  image?: {
+    url: string
+    width?: number
+    height?: number
+    alt?: string
+  } | null
 }): Metadata {
   const url = `${siteUrl}${path}`
   const shouldNoindex = noindex || path === '/account' || path.startsWith('/account/')
   const shareImageUrl = buildShareImageUrl({ title, description, path })
+  const socialImage = image
+    ? {
+        url: image.url,
+        alt: image.alt ?? `${title} on Drapeon`,
+        ...(image.width ? { width: image.width } : {}),
+        ...(image.height ? { height: image.height } : {}),
+      }
+    : {
+        url: shareImageUrl,
+        width: 1200,
+        height: 630,
+        alt: `${title} on Drapeon`,
+      }
 
   return {
     title,
@@ -70,14 +90,7 @@ export function buildMetadata({
       siteName: 'Drapeon',
       type: 'website',
       locale: 'en_US',
-      images: [
-        {
-          url: shareImageUrl,
-          width: 1200,
-          height: 630,
-          alt: `${title} on Drapeon`,
-        },
-      ],
+      images: [socialImage],
     },
     twitter: {
       card: 'summary_large_image',
@@ -85,7 +98,7 @@ export function buildMetadata({
       creator: '@Drapeonn',
       title: title === 'Drapeon' ? defaultTitle : `${title} | Drapeon`,
       description,
-      images: [shareImageUrl],
+      images: [socialImage.url],
     },
   }
 }

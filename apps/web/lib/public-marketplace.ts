@@ -315,6 +315,23 @@ async function readApprovedPublicTailors(limit = 40, offset = 0, query = ''): Pr
 
 export const getApprovedPublicTailors = cache(readApprovedPublicTailors)
 
+export async function getApprovedPublicTailorsForSitemap(maximum = 1_000): Promise<PublicTailor[]> {
+  const pageSize = 40
+  const safeMaximum = Math.max(1, Math.min(1_000, Math.trunc(maximum)))
+  const tailors: PublicTailor[] = []
+
+  for (let offset = 0; offset < safeMaximum; offset += pageSize) {
+    const page = await readApprovedPublicTailors(
+      Math.min(pageSize, safeMaximum - offset),
+      offset,
+    )
+    tailors.push(...page)
+    if (page.length < pageSize) break
+  }
+
+  return tailors.slice(0, safeMaximum)
+}
+
 async function readApprovedPublicTailor(profileId: string, fresh = false) {
   if (!/^[0-9a-f-]{36}$/i.test(profileId)) return null
   const load = async () => {
