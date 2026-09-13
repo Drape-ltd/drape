@@ -25547,12 +25547,17 @@ function IdentityHandoffCard({
 
   useEffect(() => {
     if (!userId || pending || verified) return undefined
-    void checkLatestStatus()
+    const initialRefresh = window.setTimeout(() => {
+      void checkLatestStatus()
+    }, 0)
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') void checkLatestStatus()
     }
     document.addEventListener('visibilitychange', refreshWhenVisible)
-    return () => document.removeEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.clearTimeout(initialRefresh)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [checkLatestStatus, pending, userId, verified])
 
   useEffect(() => {

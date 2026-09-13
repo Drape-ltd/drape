@@ -154,8 +154,9 @@ export function buildVerificationDecisionEmail(input: {
   const appUrl = trim(input.appUrl) || DEFAULT_APP_URL
   const displayName = escapeHtml(input.displayName || 'there')
   const reason = trim(input.reason) || DEFAULT_VERIFICATION_REJECTION_REASON
+  const profileImageRejected = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
   const recoveryCopy =
-    input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
+    profileImageRejected
       ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
       : 'Please record the challenge again in good light and submit your profile when you are ready.'
 
@@ -178,13 +179,15 @@ export function buildVerificationDecisionEmail(input: {
   }
 
   return {
-    subject: 'Drapeon trust review - action needed',
+    subject: profileImageRejected
+      ? 'Drapeon profile photo - action needed'
+      : 'Drapeon trust review - action needed',
     html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
   <img src="${escapeHtml(appUrl)}/logo.png" alt="Drapeon" width="80" style="margin:32px 0 16px"/>
-  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Trust video needs another look</h1>
+  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${profileImageRejected ? 'Profile photo needs replacement' : 'Trust video needs another look'}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
-  <p style="color:#555;line-height:1.6">We could not approve your Drapeon trust review yet.</p>
+  <p style="color:#555;line-height:1.6">${profileImageRejected ? 'We could not approve your Drapeon profile photo yet.' : 'We could not approve your Drapeon trust review yet.'}</p>
   <p style="color:#555;line-height:1.6"><strong>Reason:</strong> ${escapeHtml(reason)}</p>
   <p style="color:#555;line-height:1.6">${escapeHtml(recoveryCopy)}</p>
   <a href="${escapeHtml(

@@ -337,6 +337,9 @@ Deno.test('performVerificationDecision rejects with a reason, resolves ops issue
   )
   expectEquals(messages.length, 1, 'rejection should send one tailor email')
   expect(messages[0]!.html.includes(reason), 'rejection email should include the ops reason')
+  expect(messages[0]!.subject.includes('trust review'), 'general rejection should name the trust review')
+  expect(messages[0]!.html.includes('Trust video needs another look'), 'general rejection should request a trust-video retake')
+  expect(!messages[0]!.html.includes('replacement profile photo'), 'general rejection should not request a profile photo')
 })
 
 Deno.test('performVerificationDecision stores structured invalid profile image rejection code with standard copy', async () => {
@@ -387,6 +390,8 @@ Deno.test('performVerificationDecision stores structured invalid profile image r
   )
   expectEquals(messages.length, 1, 'profile-image rejection should send one tailor email')
   expect(messages[0]!.html.includes(PROFILE_IMAGE_REJECTION_REASON), 'email should include profile-image recovery copy')
+  expect(messages[0]!.subject.includes('profile photo'), 'profile-image rejection should identify the affected proof')
+  expect(messages[0]!.html.includes('Profile photo needs replacement'), 'profile-image rejection should use a matching heading')
 })
 
 Deno.test('performVerificationDecision refuses rejection without a reason before mutating anything', async () => {
