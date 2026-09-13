@@ -231,6 +231,7 @@ const STEP_SUBS = [
   'Confirm handoff options, order status, and record a private trust video for review.',
 ]
 const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+const INVALID_PORTFOLIO_MEDIA_REJECTION_CODE = 'INVALID_PORTFOLIO_MEDIA'
 const PROFILE_IMAGE_REJECTION_MESSAGE =
   'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
 const SETUP_STEP_IDS: TailorSetupStep[] = [0, 1, 2, 3]
@@ -336,6 +337,10 @@ function readIdentityRejectionCode(row: {
 
 function isProfileImageRejectionCode(code: string | null | undefined) {
   return (code ?? '').trim().toUpperCase() === INVALID_PROFILE_IMAGE_REJECTION_CODE
+}
+
+function isPortfolioMediaRejectionCode(code: string | null | undefined) {
+  return (code ?? '').trim().toUpperCase() === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE
 }
 
 function readIdentityRejectionMessage(row: {
@@ -1254,10 +1259,15 @@ export default function TailorSetupScreen() {
     idVerificationStatus === 'REJECTED' &&
     isProfileImageRejectionCode(idRejectionCode) &&
     !avatarRejectionCleared
+  const portfolioRejectionActive =
+    idVerificationStatus === 'REJECTED' && isPortfolioMediaRejectionCode(idRejectionCode)
 
   const hasTrustVideoForSetup = useCallback(() => {
     if (trustVideoUri) return true
-    if (isProfileImageRejectionCode(idRejectionCode) && savedTrustVideoPath) return true
+    if (
+      (isProfileImageRejectionCode(idRejectionCode) || isPortfolioMediaRejectionCode(idRejectionCode))
+      && savedTrustVideoPath
+    ) return true
     return idVerificationStatus !== 'NOT_SUBMITTED' && idVerificationStatus !== 'REJECTED'
   }, [idRejectionCode, idVerificationStatus, savedTrustVideoPath, trustVideoUri])
 
@@ -2544,9 +2554,18 @@ export default function TailorSetupScreen() {
                 {idVerificationStatus === 'REJECTED' ? (
                   <View style={styles.identityRejectedCard}>
                     <Text style={styles.identityRejectedTitle}>
-                      {profileImageRejectionActive ? 'Profile photo needs replacement' : 'Identity retake needed'}
+                      {profileImageRejectionActive
+                        ? 'Profile photo needs replacement'
+                        : portfolioRejectionActive
+                          ? 'Portfolio needs an update'
+                          : 'Private video retake needed'}
                     </Text>
                     <Text style={styles.identityRejectedText}>{idRejectionReason || readIdentityRejectionMessage({})}</Text>
+                    {portfolioRejectionActive ? (
+                      <TouchableOpacity style={styles.identityRejectedAction} onPress={() => openSetupSection(2)}>
+                        <Text style={styles.identityRejectedActionText}>Update portfolio</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 ) : null}
 
@@ -3208,7 +3227,11 @@ export default function TailorSetupScreen() {
                     {idVerificationStatus === 'REJECTED' ? (
                       <View style={styles.identityRejectedCardCompact}>
                         <Text style={styles.identityRejectedTitle}>
-                          {profileImageRejectionActive ? 'Profile photo needs replacement' : 'Retake guidance'}
+                          {profileImageRejectionActive
+                            ? 'Profile photo needs replacement'
+                            : portfolioRejectionActive
+                              ? 'Portfolio update needed'
+                              : 'Retake guidance'}
                         </Text>
                         <Text style={styles.identityRejectedText}>{idRejectionReason || readIdentityRejectionMessage({})}</Text>
                       </View>
@@ -4436,6 +4459,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.kanteRust,
     lineHeight: 18,
+  },
+  identityRejectedAction: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.kanteRust,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  identityRejectedActionText: {
+    color: Colors.white,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
   },
   formCard: {
     backgroundColor: Colors.white,

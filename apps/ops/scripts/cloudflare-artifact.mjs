@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +14,15 @@ const artifactEnvPath = resolve(appDir, '.open-next', 'cloudflare', 'next-env.mj
 const wranglerPath = resolve(appDir, 'wrangler.jsonc')
 const productionProjectRef = 'wkfsrunetmgjdtcurmoj'
 const mode = process.argv[2]
+
+function pathEntryExists(path) {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
 
 if (mode !== 'build' && mode !== 'deploy') {
   console.error('Usage: node ./scripts/cloudflare-artifact.mjs <build|deploy>')
@@ -109,10 +118,20 @@ function runOpenNext(command) {
 const hiddenEnvironmentFiles = []
 try {
   for (const environmentFile of environmentFiles) {
-    if (!existsSync(environmentFile)) continue
+    if (!pathEntryExists(environmentFile)) continue
+    if (lstatSync(environmentFile).isSymbolicLink()) {
+      const linkTarget = readlinkSync(environmentFile)
+      unlinkSync(environmentFile)
+      writeFileSync(environmentFile, '')
+      hiddenEnvironmentFiles.push({ environmentFile, linkTarget })
+      continue
+    }
     const hiddenPath = `${environmentFile}.ops-production-${process.pid}`
     if (existsSync(hiddenPath)) throw new Error('Temporary production-build environment path already exists.')
     renameSync(environmentFile, hiddenPath)
+    // Next inspects known dotenv paths during compilation. Leave an empty,
+    // non-secret placeholder so a moved symlink does not produce ENOENT.
+    writeFileSync(environmentFile, '')
     hiddenEnvironmentFiles.push({ environmentFile, hiddenPath })
   }
 
@@ -123,7 +142,9 @@ try {
   console.error(`[ops cloudflare] ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
 } finally {
-  for (const { environmentFile, hiddenPath } of hiddenEnvironmentFiles.reverse()) {
-    renameSync(hiddenPath, environmentFile)
+  for (const { environmentFile, hiddenPath, linkTarget } of hiddenEnvironmentFiles.reverse()) {
+    if (existsSync(environmentFile)) unlinkSync(environmentFile)
+    if (linkTarget) symlinkSync(linkTarget, environmentFile)
+    else renameSync(hiddenPath, environmentFile)
   }
 }

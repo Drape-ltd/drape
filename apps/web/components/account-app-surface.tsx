@@ -344,6 +344,7 @@ const ORDER_REALTIME_CHILD_TABLES = [
 ] as const
 
 const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+const INVALID_PORTFOLIO_MEDIA_REJECTION_CODE = 'INVALID_PORTFOLIO_MEDIA'
 const PROFILE_IMAGE_REJECTION_MESSAGE =
   'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
 
@@ -8055,7 +8056,7 @@ function CustomerOrderActions({
   }
 
   return (
-    <Surface className="overflow-hidden">
+    <Surface id="portfolio" className="overflow-hidden scroll-mt-24">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
@@ -25466,11 +25467,13 @@ function IdentityHandoffCard({
   profile,
   onRefresh,
   onReplaceProfilePhoto,
+  onUpdatePortfolio,
 }: {
   userId: string | null
   profile: TailorProfile
   onRefresh: () => void
   onReplaceProfilePhoto?: () => void
+  onUpdatePortfolio?: () => void
 }) {
   const [session, setSession] = useState<IdentityHandoffSession | null>(null)
   const [delivery, setDelivery] = useState('')
@@ -25494,6 +25497,10 @@ function IdentityHandoffCard({
   const profileImageRejected = rejected && (
     authoritativeRejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE ||
     isInvalidProfileImageRejected(profile)
+  )
+  const portfolioRejected = rejected && (
+    authoritativeRejectionCode === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE ||
+    readIdentityRejectionCode(profile) === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE
   )
   const rejectionMessage = rejected
     ? profileImageRejected
@@ -25721,6 +25728,35 @@ function IdentityHandoffCard({
           className="mt-4 inline-flex rounded-full bg-rust px-4 py-2 text-sm font-semibold text-white"
         >
           Upload replacement photo
+        </button>
+      </section>
+    )
+  }
+
+  if (portfolioRejected) {
+    return (
+      <section className="rounded-[8px] border border-rust/20 bg-rust/8 p-5 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust">
+          Marketplace trust review
+        </p>
+        <h3 className="mt-2 text-xl font-semibold text-ink">Portfolio needs an update</h3>
+        <p className="mt-2 text-sm leading-6 text-rust/90">{rejectionMessage}</p>
+        <p className="mt-2 text-sm leading-6 text-ink/64">
+          Your private challenge video remains on file. Replace or remove the portfolio media named
+          in the reason, then save it to send the profile back to Ops.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            if (onUpdatePortfolio) {
+              onUpdatePortfolio()
+              return
+            }
+            document.getElementById('portfolio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+          className="mt-4 inline-flex rounded-full bg-rust px-4 py-2 text-sm font-semibold text-white"
+        >
+          Update portfolio
         </button>
       </section>
     )
@@ -26116,6 +26152,15 @@ function RenderProfile({
     }, 100)
   }
 
+  function openPortfolioReplacement() {
+    setSetupError(null)
+    setSetupStep(2)
+    router.replace('/account/profile?setup=1&step=2#portfolio' as Route, { scroll: false })
+    window.setTimeout(() => {
+      document.getElementById('portfolio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }
+
   const setupSellerType = (() => {
     if (!setupFlow || !data.userId || typeof window === 'undefined') return normalizedSellerType
     try {
@@ -26249,6 +26294,7 @@ function RenderProfile({
               profile={profile}
               onRefresh={onRefresh}
               onReplaceProfilePhoto={openProfilePhotoReplacement}
+              onUpdatePortfolio={openPortfolioReplacement}
             />
           ) : (
             <Surface className="border-amber-300/35 bg-amber-400/8 p-5">

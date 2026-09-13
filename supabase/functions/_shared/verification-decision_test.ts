@@ -1,10 +1,49 @@
 import {
+  buildVerificationDecisionEmail,
+  buildVerificationDecisionPush,
+  INVALID_PORTFOLIO_MEDIA_REJECTION_CODE,
   INVALID_PROFILE_IMAGE_REJECTION_CODE,
+  NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE,
   PROFILE_IMAGE_REJECTION_REASON,
   performVerificationDecision,
   VERIFICATION_REJECTION_REASON_REQUIRED,
   type VerificationEmailMessage,
 } from './verification-decision.ts'
+
+Deno.test('portfolio rejection keeps the private video and routes the tailor to portfolio repair', () => {
+  const email = buildVerificationDecisionEmail({
+    displayName: 'Amara Atelier',
+    approved: false,
+    reason: 'Replace the first image.',
+    rejectionCode: INVALID_PORTFOLIO_MEDIA_REJECTION_CODE,
+  })
+  const push = buildVerificationDecisionPush({
+    displayName: 'Amara Atelier',
+    approved: false,
+    status: 'REJECTED',
+    profileId: 'profile-1',
+    rejectionCode: INVALID_PORTFOLIO_MEDIA_REJECTION_CODE,
+  })
+
+  expect(email.subject.includes('portfolio'), 'portfolio rejection email should name the portfolio')
+  expect(email.html.includes('Portfolio needs an update'), 'portfolio rejection email should use portfolio guidance')
+  expect(email.html.includes('private challenge video remains on file'), 'portfolio rejection should retain private video evidence')
+  expect(push.title.includes('Portfolio'), 'portfolio rejection push should name the portfolio')
+  expect(!push.body.includes('new recording'), 'portfolio rejection push should not request a video retake')
+})
+
+Deno.test('private-video rejection explicitly requests a new recording', () => {
+  const push = buildVerificationDecisionPush({
+    displayName: 'Amara Atelier',
+    approved: false,
+    status: 'REJECTED',
+    profileId: 'profile-1',
+    rejectionCode: NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE,
+  })
+
+  expect(push.title.includes('video'), 'private-video rejection push should name the video')
+  expect(push.body.includes('new recording'), 'private-video rejection push should request a retake')
+})
 
 type Call = {
   type: string
@@ -338,8 +377,9 @@ Deno.test('performVerificationDecision rejects with a reason, resolves ops issue
   expectEquals(messages.length, 1, 'rejection should send one tailor email')
   expect(messages[0]!.html.includes(reason), 'rejection email should include the ops reason')
   expect(messages[0]!.subject.includes('trust review'), 'general rejection should name the trust review')
-  expect(messages[0]!.html.includes('Trust video needs another look'), 'general rejection should request a trust-video retake')
+  expect(messages[0]!.html.includes('Trust review needs an update'), 'general rejection should request the specific correction in the reason')
   expect(!messages[0]!.html.includes('replacement profile photo'), 'general rejection should not request a profile photo')
+  expect(!messages[0]!.html.includes('record the challenge again'), 'general rejection should not assume the private video failed')
 })
 
 Deno.test('performVerificationDecision stores structured invalid profile image rejection code with standard copy', async () => {

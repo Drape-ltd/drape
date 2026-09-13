@@ -6,6 +6,7 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
+import { resubmitPortfolioVerificationIfNeeded } from '../_shared/verification-resubmission.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'portfolio-item-action'
@@ -158,6 +159,7 @@ Deno.serve(async (req) => {
         relatedEntityId: profile.id,
         metadata: { action: body.action },
       })
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -210,6 +212,7 @@ Deno.serve(async (req) => {
         relatedEntityId: created.id,
         metadata: { action: body.action },
       })
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
       return jsonResponse({ ok: true, itemId: created.id }, 200, cors)
     }
 
@@ -260,6 +263,7 @@ Deno.serve(async (req) => {
         relatedEntityId: body.itemId,
         metadata: { action: body.action },
       })
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -298,6 +302,7 @@ Deno.serve(async (req) => {
         actor_role: 'TAILOR',
         payload: { function: FN, item_ids: nextItemIds },
       })
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -331,6 +336,7 @@ Deno.serve(async (req) => {
         actor_role: 'TAILOR',
         payload: { function: FN, item_id: body.itemId },
       })
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -348,6 +354,7 @@ Deno.serve(async (req) => {
       actor_role: 'TAILOR',
       payload: { function: FN, item_id: body.itemId },
     })
+    await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
     return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })

@@ -117,6 +117,12 @@ export function TrustDecisionPanel({
         <select value={rejectionCode} onChange={(event) => setRejectionCode(event.target.value)}>
           <option value="">General evidence or policy issue</option>
           <option value="INVALID_PROFILE_IMAGE">Profile image does not meet requirements</option>
+          <option value="INVALID_PORTFOLIO_MEDIA">Portfolio media needs replacement</option>
+          <option value="NEEDS_LIVE_SELFIE_RETAKE">Private challenge video needs a retake</option>
+          <option value="BUSINESS_IDENTITY_MISMATCH">Business identity does not match</option>
+          <option value="LOCATION_MISMATCH">Business location does not match</option>
+          <option value="OFF_PLATFORM_CONTACT">Off-platform contact details found</option>
+          <option value="GENERAL_TRUST_REVIEW">Other trust-review correction</option>
         </select>
       </label>
       {!protectedAccess ? <a className="ops-button" href={protectedCheckpoint}><ShieldCheck size={15} />Verify protected access first</a> : (

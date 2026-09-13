@@ -7,6 +7,7 @@ import { log, audit } from '../_shared/logger.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { resubmitPortfolioVerificationIfNeeded } from '../_shared/verification-resubmission.ts'
 import { isApprovedTailorProfile, stageProfileChangeRequest } from '../_shared/verification-review.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
@@ -145,7 +146,7 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     title: 'Tailor profile photo resubmitted',
     description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. The existing private challenge video is retained.`,
     recommendedAction: 'Review the new public avatar against the retained private challenge video and public profile standards, then approve or reject with a structured reason.',
-    dedupeKey: `tailor-verification:${callerId}`,
+    dedupeKey: `tailor-verification:${profile.id}`,
     notifyOps: true,
     notifyOpsPush: true,
     metadata: {
@@ -484,6 +485,8 @@ Deno.serve(async (req) => {
         payload: { function: FN, tailor_profile_id: existingProfile.id, media_asset_id: body.mediaAssetId },
       })
 
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
+
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -735,6 +738,8 @@ Deno.serve(async (req) => {
         })
       }
 
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
+
       return jsonResponse({ ok: true }, 200, cors)
     }
     if (body.action === 'update-portfolio-videos') {
@@ -780,6 +785,9 @@ Deno.serve(async (req) => {
           metadata: { action: body.action, mediaCount: addedVideoUrls.length },
         })
       }
+
+
+      await resubmitPortfolioVerificationIfNeeded(supabase, caller.id, FN)
 
       return jsonResponse({ ok: true }, 200, cors)
     }

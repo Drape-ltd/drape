@@ -101,7 +101,7 @@ async function resubmitAvatarOnlyVerificationIfNeeded(
     title: 'Tailor profile photo resubmitted',
     description: `${profile.display_name ?? 'Tailor'} replaced a rejected public profile photo and is waiting on trust review. Their private challenge video is retained.`,
     recommendedAction: 'Review the new public avatar with the retained private challenge video, then approve or reject with a structured reason.',
-    dedupeKey: `tailor-verification:${callerId}`,
+    dedupeKey: `tailor-verification:${profile.id}`,
     notifyOps: true,
     notifyOpsPush: true,
     metadata: {

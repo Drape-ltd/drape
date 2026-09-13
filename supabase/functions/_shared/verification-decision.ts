@@ -13,9 +13,23 @@ export const VERIFICATION_REJECTION_REASON_REQUIRED = 'REJECTION_REASON_REQUIRED
 export const DEFAULT_VERIFICATION_REJECTION_REASON =
   'We could not verify the submitted challenge video. Please record a clear retake with your face, voice, and full private phrase clearly captured.'
 export const INVALID_PROFILE_IMAGE_REJECTION_CODE = 'INVALID_PROFILE_IMAGE'
+export const INVALID_PORTFOLIO_MEDIA_REJECTION_CODE = 'INVALID_PORTFOLIO_MEDIA'
+export const NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE = 'NEEDS_LIVE_SELFIE_RETAKE'
+export const OFF_PLATFORM_CONTACT_REJECTION_CODE = 'OFF_PLATFORM_CONTACT'
+export const BUSINESS_IDENTITY_MISMATCH_REJECTION_CODE = 'BUSINESS_IDENTITY_MISMATCH'
+export const LOCATION_MISMATCH_REJECTION_CODE = 'LOCATION_MISMATCH'
+export const GENERAL_TRUST_REVIEW_REJECTION_CODE = 'GENERAL_TRUST_REVIEW'
 export const PROFILE_IMAGE_REJECTION_REASON =
   'Profile Photo Rejected: Please upload a clear headshot or business logo. Landscapes, solid colors, or anonymous placeholders are not permitted.'
-export const VERIFICATION_REJECTION_CODES = [INVALID_PROFILE_IMAGE_REJECTION_CODE] as const
+export const VERIFICATION_REJECTION_CODES = [
+  INVALID_PROFILE_IMAGE_REJECTION_CODE,
+  INVALID_PORTFOLIO_MEDIA_REJECTION_CODE,
+  NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE,
+  OFF_PLATFORM_CONTACT_REJECTION_CODE,
+  BUSINESS_IDENTITY_MISMATCH_REJECTION_CODE,
+  LOCATION_MISMATCH_REJECTION_CODE,
+  GENERAL_TRUST_REVIEW_REJECTION_CODE,
+] as const
 export type VerificationRejectionCode = (typeof VERIFICATION_REJECTION_CODES)[number]
 export const VERIFICATION_ISSUE_TYPE = 'TAILOR_VERIFICATION'
 export const VERIFICATION_SOURCE_OPS_DASHBOARD = 'ops_dashboard'
@@ -155,10 +169,34 @@ export function buildVerificationDecisionEmail(input: {
   const displayName = escapeHtml(input.displayName || 'there')
   const reason = trim(input.reason) || DEFAULT_VERIFICATION_REJECTION_REASON
   const profileImageRejected = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
-  const recoveryCopy =
-    profileImageRejected
-      ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
-      : 'Please record the challenge again in good light and submit your profile when you are ready.'
+  const portfolioRejected = input.rejectionCode === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE
+  const videoRejected = input.rejectionCode === NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE
+  const subject = profileImageRejected
+    ? 'Drapeon profile photo - action needed'
+    : portfolioRejected
+      ? 'Drapeon portfolio - action needed'
+      : videoRejected
+        ? 'Drapeon trust video - action needed'
+        : 'Drapeon trust review - action needed'
+  const heading = profileImageRejected
+    ? 'Profile photo needs replacement'
+    : portfolioRejected
+      ? 'Portfolio needs an update'
+      : videoRejected
+        ? 'Trust video needs another look'
+        : 'Trust review needs an update'
+  const intro = profileImageRejected
+    ? 'We could not approve your Drapeon profile photo yet.'
+    : portfolioRejected
+      ? 'We could not approve your Drapeon portfolio yet.'
+      : 'We could not approve your Drapeon trust review yet.'
+  const recoveryCopy = profileImageRejected
+    ? 'Please upload a replacement profile photo. You do not need to retake your trust video unless the review team asks for it.'
+    : portfolioRejected
+      ? 'Please replace or remove the portfolio media described above, then save your portfolio. Your private challenge video remains on file unless the review team asks for a retake.'
+      : videoRejected
+        ? 'Please record the challenge again in good light and submit your profile when you are ready.'
+        : 'Review the reason above, correct the requested profile or setup detail, then resubmit. Retake your private video only if the reason asks for it.'
 
   if (input.approved) {
     return {
@@ -179,15 +217,13 @@ export function buildVerificationDecisionEmail(input: {
   }
 
   return {
-    subject: profileImageRejected
-      ? 'Drapeon profile photo - action needed'
-      : 'Drapeon trust review - action needed',
+    subject,
     html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
   <img src="${escapeHtml(appUrl)}/icon-192.png" alt="Drapeon" width="80" height="80" style="margin:32px 0 16px;border-radius:16px"/>
-  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${profileImageRejected ? 'Profile photo needs replacement' : 'Trust video needs another look'}</h1>
+  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${heading}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
-  <p style="color:#555;line-height:1.6">${profileImageRejected ? 'We could not approve your Drapeon profile photo yet.' : 'We could not approve your Drapeon trust review yet.'}</p>
+  <p style="color:#555;line-height:1.6">${intro}</p>
   <p style="color:#555;line-height:1.6"><strong>Reason:</strong> ${escapeHtml(reason)}</p>
   <p style="color:#555;line-height:1.6">${escapeHtml(recoveryCopy)}</p>
   <a href="${escapeHtml(
@@ -203,6 +239,7 @@ export function buildVerificationDecisionPush(input: {
   approved: boolean
   status: string
   profileId: string
+  rejectionCode?: VerificationRejectionCode | null
 }) {
   const displayName = trim(input.displayName) || 'Your tailor profile'
 
@@ -232,9 +269,24 @@ export function buildVerificationDecisionPush(input: {
     }
   }
 
+  const title = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
+    ? 'Profile photo update needed'
+    : input.rejectionCode === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE
+      ? 'Portfolio update needed'
+      : input.rejectionCode === NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE
+        ? 'Trust video update needed'
+        : 'Trust review update'
+  const body = input.rejectionCode === INVALID_PROFILE_IMAGE_REJECTION_CODE
+    ? 'Replace your profile photo, then save it to send your profile back for review.'
+    : input.rejectionCode === INVALID_PORTFOLIO_MEDIA_REJECTION_CODE
+      ? 'Replace or remove the portfolio media named in the review reason, then save your portfolio.'
+      : input.rejectionCode === NEEDS_LIVE_SELFIE_RETAKE_REJECTION_CODE
+        ? 'Your private challenge video needs a new recording before your profile can go live.'
+        : 'Open Drapeon to see exactly what needs an update before your profile can go live.'
+
   return {
-    title: 'Trust review update',
-    body: 'Your challenge video needs one more update before your tailor profile can go live.',
+    title,
+    body,
     data: {
       type: 'tailor_verification_decision',
       decision: 'REJECT',
@@ -632,6 +684,7 @@ export async function performVerificationDecision(
           approved: decision === 'APPROVE',
           status,
           profileId,
+          rejectionCode,
         })
       )
       pushStatus = pushResult?.status ?? 'SENT'
