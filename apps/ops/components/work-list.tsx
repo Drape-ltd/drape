@@ -46,7 +46,7 @@ export function WorkList({ items, query = '' }: { items: OpsWorkItem[]; query?: 
   const visible = useMemo(() => {
     const nowMs = Date.now()
     return items.filter((entry) => {
-    if (normalizedQuery && ![entry.caseNumber, entry.title, entry.summary, entry.context, entry.caseType]
+    if (normalizedQuery && ![entry.caseNumber, entry.title, entry.summary, entry.context, entry.caseType, entry.relatedEntityId ?? '']
       .some((value) => value.toLowerCase().includes(normalizedQuery))) return false
     if (!matchesOpsWorkScope(entry, scope, nowMs)) return false
     if (!matchesOpsPriority(entry, priority)) return false

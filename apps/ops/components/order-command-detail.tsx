@@ -14,11 +14,14 @@ function date(value: string | null) {
 
 export function OrderCommandDetail({ data }: { data: OrderDetail }) {
   const { order } = data
+  const disputeWithoutOpenCase = order.stage === 'IN_DISPUTE' && order.openCaseCount === 0
+  const latestClosedCase = data.cases.find((entry) => ['RESOLVED', 'CLOSED', 'CANCELLED'].includes(entry.status.toUpperCase()))
   return (
     <>
       <Link className="ops-back-link" href="/ops/orders"><ArrowLeft size={14} />Orders & production</Link>
       <header className="ops-order-detail-head"><div><p className="ops-case-number">{order.reference}</p><h1>{order.item}</h1><p>{formatEnum(order.kind)} · created {formatRelativeTime(order.createdAt)}</p></div><div className="ops-order-detail-status"><span className="ops-chip">{formatEnum(order.stage)}</span><small>Updated {formatRelativeTime(order.stageUpdatedAt)}</small></div></header>
       <section className="ops-order-command-band"><div><p className="ops-action-label">Who acts next</p><strong>{order.nextOwner}</strong></div><div><p className="ops-action-label">Required outcome</p><strong>{order.nextAction}</strong></div><div><p className="ops-action-label">Open controls</p><strong>{order.openCaseCount} case{order.openCaseCount === 1 ? '' : 's'} · {order.moneyStatus ? formatEnum(order.moneyStatus) : 'No money request'}</strong></div></section>
+      {disputeWithoutOpenCase ? <div className="ops-status-banner" data-tone="critical" role="alert"><ShieldAlert size={16} /><span>This order is still marked In dispute, but no open case owns the next action. {latestClosedCase ? <><Link href={`/ops/cases/${latestClosedCase.caseNumber}`}>Open the last controlling case</Link> and use its domain recovery path.</> : <><Link href={`/ops/queues/operations?q=${encodeURIComponent(order.reference)}`}>Check Operations</Link> and create the controlling case.</>} Do not change the order manually.</span></div> : null}
       <div className="ops-order-detail-grid">
         <main className="ops-order-detail-main">
           <section className="ops-panel"><div className="ops-panel-head"><h2>Order timeline</h2><span className="ops-muted">{data.timeline.length} events</span></div><div className="ops-panel-body">{data.timeline.length ? <ol className="ops-timeline">{data.timeline.map((entry) => <li key={`${entry.source}:${entry.id}`}><strong>{formatEnum(entry.title)}</strong><span>{entry.actor} · {date(entry.occurredAt)}{entry.summary ? ` · ${entry.summary}` : ''}</span></li>)}</ol> : <div className="ops-empty"><Clock3 size={18} /><h2>No timeline evidence</h2><p>No append-only lifecycle event has been recorded for this order.</p></div>}</div></section>

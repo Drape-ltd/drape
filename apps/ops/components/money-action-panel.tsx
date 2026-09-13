@@ -83,7 +83,7 @@ export function MoneyDecisionPanel({ requestId, canDecide }: { requestId: string
   return (
     <div className="ops-money-decision">
       {result ? <div className="ops-status-banner" data-tone={result.ok ? 'healthy' : 'critical'} role={result.ok ? 'status' : 'alert'}><CheckCircle2 size={14} /><span>{result.message}<small>Correlation {result.correlationId}</small></span></div> : null}
-      <label className="ops-field">Independent decision reason<textarea maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reference the evidence reviewed and why this decision is safe." /></label>
+      <label className="ops-field">Founder decision reason<textarea maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reference the evidence reviewed and why this decision is safe." /></label>
       <div className="ops-inline-actions"><button className="ops-button ops-button-primary" type="button" disabled={pending !== null || reason.trim().length < 12} onClick={() => decide('APPROVE')}>{pending === 'APPROVE' ? <LoaderCircle className="ops-spin" size={14} /> : <CheckCircle2 size={14} />}Approve</button><button className="ops-button" type="button" disabled={pending !== null || reason.trim().length < 12} onClick={() => decide('REJECT')}>{pending === 'REJECT' ? <LoaderCircle className="ops-spin" size={14} /> : <XCircle size={14} />}Reject</button></div>
     </div>
   )

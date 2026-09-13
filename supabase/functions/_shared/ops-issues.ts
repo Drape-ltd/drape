@@ -31,6 +31,7 @@ type CreateOpsIssueInput = {
   queueKey?: 'support' | 'privacy-deletion' | 'trust-safety' | 'money-desk' | 'delivery-supply' | 'reliability' | 'operations'
   notifyOps?: boolean
   notifyOpsPush?: boolean
+  persistWhenRoutineDisabled?: boolean
 }
 
 type OpsIssueRow = {
@@ -90,7 +91,10 @@ export async function createOrRefreshOpsIssue(
   supabase: SupabaseClient,
   input: CreateOpsIssueInput,
 ) {
-  if (!shouldPersistRoutineOpsIssue(input.source, Deno.env.get('DRAPE_ROUTINE_OPS_CASES_ENABLED'))) {
+  if (
+    input.persistWhenRoutineDisabled !== true &&
+    !shouldPersistRoutineOpsIssue(input.source, Deno.env.get('DRAPE_ROUTINE_OPS_CASES_ENABLED'))
+  ) {
     log('info', 'ops-issues', 'issue.prelaunch_routine_suppressed', {
       issue_type: input.issueType,
       source: input.source,
@@ -155,6 +159,7 @@ export async function createOrRefreshOpsIssue(
     provenance:
       environment === 'PRODUCTION' ? 'REAL' : environment === 'DEVELOPMENT' ? 'QA' : 'UNKNOWN',
     resolved_at: null,
+    closed_at: null,
     last_seen_at: now,
   }
 

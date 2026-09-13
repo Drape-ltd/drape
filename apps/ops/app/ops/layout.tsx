@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import Link from 'next/link'
 import { OpsShell } from '../../components/ops-shell'
 import { getOpsAccessMode, getOpsSession } from '../../../web/lib/ops-auth'
 
@@ -12,13 +13,13 @@ function LockScreen({ mode }: { mode: string }) {
         <p>
           {production
             ? 'Cloudflare Access must present a valid named workforce identity before this application loads any operational data.'
-            : 'Use the legacy local unlock once to establish the named development dry-run identity, then return here. Production never accepts that bridge.'}
+            : 'Establish the named development dry-run identity on this machine, then continue. Production never accepts this bridge.'}
         </p>
         <div className="ops-lock-note">
           <strong>Fail-closed state</strong><br />
           Access mode: {mode}. No customer, tailor, payment, evidence, or incident data was requested.
         </div>
-        {!production ? <a className="ops-button ops-button-primary" style={{ marginTop: 18 }} href="http://localhost:3004/ops">Open local workforce unlock</a> : null}
+        {!production ? <Link className="ops-button ops-button-primary" style={{ marginTop: 18 }} href="/ops/local-unlock">Open local workforce unlock</Link> : null}
       </section>
     </main>
   )

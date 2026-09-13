@@ -18,6 +18,18 @@ import type { createServiceRoleClient } from './server-supabase'
 
 type ServiceRoleClient = NonNullable<ReturnType<typeof createServiceRoleClient>>
 
+const DEFAULT_FOUNDER_MONEY_APPROVER = 'founders@drapeon.co'
+
+export function isFounderMoneyDeskApprover(email: string | null | undefined) {
+  const normalized = email?.trim().toLowerCase()
+  if (!normalized) return false
+  const configured = (process.env.OPS_MONEY_APPROVER_EMAILS ?? DEFAULT_FOUNDER_MONEY_APPROVER)
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+  return configured.includes(normalized)
+}
+
 export type MoneyDeskGrant = {
   id: string
   expiresAt: string

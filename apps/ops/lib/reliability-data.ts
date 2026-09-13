@@ -71,6 +71,8 @@ export type JobQueueItem = {
   runAt: string
   createdAt: string
   updatedAt: string
+  linkedCaseNumber: string | null
+  linkedCaseStatus: string | null
 }
 
 export type ReliabilityData = {
@@ -101,7 +103,7 @@ export async function loadReliabilityData(): Promise<ReliabilityData> {
   const client = createServiceRoleClient()
   if (!client) throw new Error('Reliability data is unavailable because the server database client is not configured.')
 
-  const [incidentResult, providerResult, jobResult, monitorResult, jobItemsResult] = await Promise.all([
+  const [incidentResult, providerResult, jobResult, monitorResult, jobItemsResult, jobCasesResult] = await Promise.all([
     client
       .from('service_incidents')
       .select('id,incident_key,title,summary,severity,status,affected_services,public_visible,acknowledgement_required,source,source_reference,started_at,resolved_at,updated_at,last_observed_at,runbook_url,correlation_id,acknowledged_at,snoozed_until,snooze_reason')
@@ -122,6 +124,13 @@ export async function loadReliabilityData(): Promise<ReliabilityData> {
       .in('status', ['PENDING', 'RETRYABLE', 'PROCESSING', 'DEAD'])
       .order('updated_at', { ascending: false })
       .limit(200),
+    client
+      .from('ops_issues')
+      .select('case_number,issue_number,canonical_status,status,related_entity_id,updated_at')
+      .eq('related_entity_type', 'job_queue')
+      .eq('environment', environment())
+      .order('updated_at', { ascending: false })
+      .limit(1000),
   ])
 
   if (incidentResult.error) throw new Error(`Incident ledger is unavailable: ${incidentResult.error.message}`)
@@ -129,10 +138,16 @@ export async function loadReliabilityData(): Promise<ReliabilityData> {
   if (jobResult.error) throw new Error(`Job queue health is unavailable: ${jobResult.error.message}`)
   if (monitorResult.error) throw new Error(`Synthetic monitor state is unavailable: ${monitorResult.error.message}`)
   if (jobItemsResult.error) throw new Error(`Job queue source records are unavailable: ${jobItemsResult.error.message}`)
+  if (jobCasesResult.error) throw new Error(`Job recovery cases are unavailable: ${jobCasesResult.error.message}`)
 
   const providerRows = Array.isArray(providerResult.data) ? providerResult.data as Array<Record<string, unknown>> : []
   const job = jobResult.data && typeof jobResult.data === 'object' ? jobResult.data as Record<string, unknown> : {}
   const statusCounts = job.statusCounts && typeof job.statusCounts === 'object' ? job.statusCounts as Record<string, unknown> : {}
+  const casesByJobId = new Map<string, Record<string, unknown>>()
+  for (const issue of jobCasesResult.data ?? []) {
+    const jobId = String(issue.related_entity_id ?? '')
+    if (jobId && !casesByJobId.has(jobId)) casesByJobId.set(jobId, issue)
+  }
 
   return {
     incidents: (incidentResult.data ?? []).map((row) => ({
@@ -193,16 +208,21 @@ export async function loadReliabilityData(): Promise<ReliabilityData> {
       oldestPendingAt: stringValue(job.oldestPendingAt),
       oldestProcessingAt: stringValue(job.oldestProcessingAt),
     },
-    jobItems: (jobItemsResult.data ?? []).map((row) => ({
-      id: String(row.id),
-      type: String(row.job_type),
-      status: String(row.status),
-      attempts: numberValue(row.attempt_count),
-      maxAttempts: numberValue(row.max_attempts),
-      runAt: String(row.run_at),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    })),
+    jobItems: (jobItemsResult.data ?? []).map((row) => {
+      const issue = casesByJobId.get(String(row.id))
+      return {
+        id: String(row.id),
+        type: String(row.job_type),
+        status: String(row.status),
+        attempts: numberValue(row.attempt_count),
+        maxAttempts: numberValue(row.max_attempts),
+        runAt: String(row.run_at),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+        linkedCaseNumber: issue ? (stringValue(issue.case_number) ?? `OPS-${String(numberValue(issue.issue_number)).padStart(6, '0')}`) : null,
+        linkedCaseStatus: issue ? (stringValue(issue.canonical_status) ?? stringValue(issue.status)) : null,
+      }
+    }),
     observedAt: new Date().toISOString(),
   }
 }

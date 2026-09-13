@@ -1,9 +1,10 @@
-export type OpsMoneyCommand = 'ELEVATE' | 'DECIDE' | 'EXECUTE'
+export type OpsMoneyCommand = 'ELEVATE' | 'PREPARE' | 'DECIDE' | 'EXECUTE'
 
 const COMMAND_ROLES: Record<OpsMoneyCommand, readonly string[]> = {
   ELEVATE: ['admin', 'finance', 'customer_success', 'ops'],
-  DECIDE: ['admin', 'finance'],
-  EXECUTE: ['admin', 'finance'],
+  PREPARE: ['admin', 'finance', 'customer_success', 'ops'],
+  DECIDE: ['admin'],
+  EXECUTE: ['admin'],
 }
 
 export function isOpsMoneyCommand(value: unknown): value is OpsMoneyCommand {

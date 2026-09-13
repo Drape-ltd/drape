@@ -30,6 +30,7 @@ import {
   decideMoneyDeskRequest,
   getActiveMoneyDeskGrant,
   issueMoneyDeskElevation,
+  isFounderMoneyDeskApprover,
   submitMoneyDeskRequest,
 } from '../../../lib/money-desk'
 import { isMoneyDeskActionType, type MoneyDeskActionType } from '@drape/shared/money-desk'
@@ -2281,6 +2282,7 @@ export async function POST(request: Request) {
     }
 
     if (kind === 'money-desk-decision') {
+      if (!isFounderMoneyDeskApprover(session.email)) return redirectWithMessage(request, redirectTo, 'error', 'permission-denied')
       const requestId = readString(formData, 'requestId')
       const decision = readString(formData, 'decision').toUpperCase()
       if (!requestId || (decision !== 'APPROVE' && decision !== 'REJECT')) {
@@ -2315,6 +2317,7 @@ export async function POST(request: Request) {
     }
 
     if (kind === 'money-desk-execution') {
+      if (!isFounderMoneyDeskApprover(session.email)) return redirectWithMessage(request, redirectTo, 'error', 'permission-denied')
       const requestId = readString(formData, 'requestId')
       const { data: moneyRequest, error: moneyRequestError } = await client
         .from('money_desk_requests')

@@ -8,9 +8,15 @@ import { CaseCollaborationPanel } from '../../../../components/case-collaboratio
 import { CaseLineageHistory, CaseLineagePanel } from '../../../../components/case-lineage-panel'
 import { SupportCasePanel } from '../../../../components/support-case-panel'
 import { TrustCasePanel } from '../../../../components/trust-case-panel'
-import { loadSupportCaseContext, loadTrustCaseContext } from '../../../../lib/domain-data'
+import { MediaSafetyCasePanel } from '../../../../components/media-safety-case-panel'
+import { PayoutChangeCasePanel } from '../../../../components/payout-change-case-panel'
+import { loadMediaSafetyCaseContext, loadPayoutChangeCaseContext, loadSupportCaseContext, loadTrustCaseContext } from '../../../../lib/domain-data'
 import { isRestrictedOpsPhoneRequest } from '../../../../lib/client-surface'
 import { getOpsSession, hasFreshOpsMfa } from '../../../../../web/lib/ops-auth'
+import { canPerformOpsAction } from '../../../../../web/lib/ops-console'
+import { getActiveMoneyDeskGrant, type MoneyDeskGrant } from '../../../../../web/lib/money-desk'
+import { invokeOpsReadBroker, requiresOpsEdgeBroker } from '../../../../../web/lib/ops-edge-broker'
+import { createServiceRoleClient } from '../../../../../web/lib/server-supabase'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,11 +39,14 @@ export default async function CasePage({
   const authorizedForQueue = Boolean(session?.role && record.permittedRoles.includes(session.role))
   const protectedAccess = protectedState === 'verified' && Boolean(session && hasFreshOpsMfa(session))
   const visibleHistory = record.history.slice(0, 100)
-  const sla = formatSla(record.slaDueAt, record.slaPaused)
+  const terminal = ['RESOLVED', 'CLOSED', 'CANCELLED'].includes(record.status.toUpperCase())
+  const sla = terminal ? { overdue: false, label: 'Clock stopped' } : formatSla(record.slaDueAt, record.slaPaused)
   const sensitiveAction = record.caseType === 'ACCOUNT_DELETION_REQUEST'
     ? 'account-deletion'
     : record.caseType === 'TAILOR_VERIFICATION'
       ? 'trust-decision'
+      : record.relatedEntityType === 'payout_change_request'
+        ? 'money'
       : 'case'
   const protectedCheckpoint = `/ops/sensitive/${sensitiveAction}?returnTo=${encodeURIComponent(`/ops/cases/${record.caseNumber}`)}`
   const availableLineageContext = [
@@ -47,14 +56,29 @@ export default async function CasePage({
     record.relatedEntityId ? { key: 'related_entity', label: 'Related domain record' } : null,
     record.provider ? { key: 'provider', label: 'Provider lane' } : null,
   ].filter((entry): entry is { key: string; label: string } => entry !== null)
-  const [trustContext, supportContext] = await Promise.all([
+  const [trustContext, supportContext, mediaSafetyContext, payoutChangeContext] = await Promise.all([
     !phoneRestricted && record.caseType === 'TAILOR_VERIFICATION'
       ? loadTrustCaseContext({ tailorProfileId: record.tailorProfileId, userId: record.userId })
       : Promise.resolve(null),
     !phoneRestricted && record.queueKey === 'support'
       ? loadSupportCaseContext({ userId: record.userId, orderId: record.orderId })
       : Promise.resolve(null),
+    !phoneRestricted && record.caseType === 'CONTENT_FLAG' && record.metadata
+      ? loadMediaSafetyCaseContext({ issueId: record.id, relatedEntityType: record.relatedEntityType, relatedEntityId: record.relatedEntityId, metadata: record.metadata })
+      : Promise.resolve(null),
+    !phoneRestricted && record.relatedEntityType === 'payout_change_request' && record.relatedEntityId
+      ? loadPayoutChangeCaseContext(record.relatedEntityId)
+      : Promise.resolve(null),
   ])
+  let moneyGrant: MoneyDeskGrant | null = null
+  if (payoutChangeContext && protectedAccess && session) {
+    if (requiresOpsEdgeBroker()) {
+      moneyGrant = await invokeOpsReadBroker<MoneyDeskGrant | null>('money-grant', { actorRole: session.role })
+    } else {
+      const client = createServiceRoleClient()
+      moneyGrant = client ? await getActiveMoneyDeskGrant(client, session, 'PAYOUT_DESTINATION_CHANGE') : null
+    }
+  }
 
   return (
     <>
@@ -86,7 +110,7 @@ export default async function CasePage({
                 <div className="ops-fact"><dt>Queue</dt><dd>{formatEnum(record.queueKey)}</dd></div>
                 <div className="ops-fact"><dt>Owning team</dt><dd>{record.ownerTeam ? formatEnum(record.ownerTeam) : 'Policy unavailable'}</dd></div>
                 <div className="ops-fact"><dt>Assigned to</dt><dd>{record.assignee ?? 'Unassigned'}</dd></div>
-                <div className="ops-fact"><dt>SLA clock</dt><dd>{record.slaPaused ? 'Paused while waiting' : `${formatEnum(record.slaPhase)} · ${sla.label}`}</dd></div>
+                <div className="ops-fact"><dt>SLA clock</dt><dd>{terminal ? `Terminal · ${sla.label}` : record.slaPaused ? 'Paused while waiting' : `${formatEnum(record.slaPhase)} · ${sla.label}`}</dd></div>
                 <div className="ops-fact"><dt>SLA policy</dt><dd>{record.slaPolicyVersion ?? 'Policy unavailable'}</dd></div>
                 {!phoneRestricted ? <>
                   <div className="ops-fact"><dt>Related context</dt><dd>{record.context}</dd></div>
@@ -104,6 +128,8 @@ export default async function CasePage({
           </section>
           {trustContext ? <TrustCasePanel context={trustContext} caseNumber={record.caseNumber} issueId={record.id} recordVersion={record.recordVersion} protectedAccess={protectedAccess} protectedCheckpoint={protectedCheckpoint} /> : null}
           {supportContext ? <SupportCasePanel context={supportContext} /> : null}
+          {mediaSafetyContext ? <MediaSafetyCasePanel context={mediaSafetyContext} issueId={record.id} protectedAccess={protectedAccess} protectedCheckpoint={protectedCheckpoint} canModerate={Boolean(session && canPerformOpsAction(session.role, 'media-moderation'))} /> : null}
+          {payoutChangeContext ? <PayoutChangeCasePanel context={payoutChangeContext} issueId={record.id} protectedAccess={protectedAccess} protectedCheckpoint={protectedCheckpoint} grantExpiresAt={moneyGrant?.expiresAt ?? null} canPrepare={Boolean(session && canPerformOpsAction(session.role, 'money-desk-request'))} /> : null}
           {!phoneRestricted ? <section className="ops-panel">
             <div className="ops-panel-head"><h2>Durable receipts</h2><span className="ops-muted" style={{ fontSize: 11 }}>{record.receipts.length} persisted</span></div>
             <div className="ops-panel-body">

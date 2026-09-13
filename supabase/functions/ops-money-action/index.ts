@@ -21,6 +21,11 @@ function list(value: string | undefined) {
   return (value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)
 }
 
+function isFounderMoneyApprover(email: string) {
+  const configured = list(Deno.env.get('OPS_MONEY_APPROVER_EMAILS') ?? 'founders@drapeon.co')
+  return configured.some((entry) => entry.toLowerCase() === email.trim().toLowerCase())
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -132,9 +137,14 @@ Deno.serve(async (request) => {
     }
 
     const actor: OpsMoneyActor = { email: identity.email, subject: identity.subject, role: actorRole }
+    if ((commandValue === 'DECIDE' || commandValue === 'EXECUTE') && !isFounderMoneyApprover(actor.email)) {
+      return json({ error: 'Founder Money Desk approval is required.', correlationId }, 403, cors)
+    }
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : ''
+    const payoutChangeRequestId = typeof body.payoutChangeRequestId === 'string' ? body.payoutChangeRequestId.trim() : ''
+    const limiterTarget = requestId || payoutChangeRequestId
     const limiterResult = await client.rpc('check_rate_limit', {
-      p_key: `ops-money:${await hash(`${identity.email}:${commandValue}:${requestId}`)}`,
+      p_key: `ops-money:${await hash(`${identity.email}:${commandValue}:${limiterTarget}`)}`,
       p_window_seconds: 300,
       p_max_requests: commandValue === 'ELEVATE' ? 6 : commandValue === 'EXECUTE' ? 8 : 16,
     })
@@ -159,6 +169,59 @@ Deno.serve(async (request) => {
       return json({ ok: true, result: result.data, correlationId }, 200, cors)
     }
 
+    if (commandValue === 'PREPARE') {
+      const issueId = typeof body.issueId === 'string' ? body.issueId.trim() : ''
+      const reason = validateReason(body.reason, 1_000)
+      if (!validUuid(payoutChangeRequestId) || !validUuid(issueId)) {
+        return json({ error: 'A valid payout-change request and case are required.', correlationId }, 400, cors)
+      }
+      const payoutResult = await client
+        .from('payout_change_requests')
+        .select('id,status,tailor_user_id,tailor_profile_id,requested_destination,metadata')
+        .eq('id', payoutChangeRequestId)
+        .maybeSingle()
+      if (payoutResult.error || !payoutResult.data?.id || payoutResult.data.status !== 'PENDING') {
+        return json({ error: 'The payout destination request is no longer pending review.', correlationId }, 409, cors)
+      }
+      const metadata = asRecord(payoutResult.data.metadata)
+      const destination = asRecord(payoutResult.data.requested_destination)
+      if (metadata.lifecycle_state !== 'OPS_REVIEW' || metadata.confirmation_status !== 'CONFIRMED' || destination.payout_account_verified !== true) {
+        return json({ error: 'The payout destination must be confirmed and provider-verified before review.', correlationId }, 409, cors)
+      }
+      const grantId = await activeGrant(client, actor, 'PAYOUT_DESTINATION_CHANGE')
+      if (!grantId) return json({ error: 'Money Desk elevation is required.', correlationId }, 401, cors)
+      const provider = typeof destination.payout_provider === 'string' ? destination.payout_provider.trim().toUpperCase() : null
+      const requestedCurrency = typeof destination.payout_currency === 'string' ? destination.payout_currency.trim().toUpperCase() : null
+      const submitResult = await client.rpc('submit_money_desk_request', {
+        p_idempotency_key: `payout-change-request:${payoutResult.data.id}`,
+        p_jit_grant_id: grantId,
+        p_actor_email: actor.email,
+        p_actor_subject: actor.subject,
+        p_actor_role: actor.role.toUpperCase(),
+        p_action_type: 'PAYOUT_DESTINATION_CHANGE',
+        p_target_type: 'PAYOUT_CHANGE_REQUEST',
+        p_target_id: payoutResult.data.id,
+        p_order_id: null,
+        p_case_id: issueId,
+        p_amount: null,
+        p_currency: null,
+        p_amount_usd_equivalent: null,
+        p_usd_equivalent_source: null,
+        p_reason: reason,
+        p_action_payload: {
+          payoutChangeRequestId: payoutResult.data.id,
+          tailorUserId: payoutResult.data.tailor_user_id,
+          tailorProfileId: payoutResult.data.tailor_profile_id,
+          provider,
+          requestedCurrency,
+          note: reason,
+        },
+        p_correlation_id: correlationId,
+      })
+      if (submitResult.error) throw submitResult.error
+      return json({ ok: true, result: submitResult.data, correlationId }, 200, cors)
+    }
+
     if (!validUuid(requestId)) return json({ error: 'A valid Money Desk request is required.', correlationId }, 400, cors)
 
     if (commandValue === 'DECIDE') {
@@ -170,7 +233,6 @@ Deno.serve(async (request) => {
         return json({ error: 'Money Desk request was not found.', correlationId }, 404, cors)
       }
       if (requestResult.data.status !== 'PENDING_APPROVAL') return json({ error: 'Money Desk request is not awaiting approval.', correlationId }, 409, cors)
-      if (String(requestResult.data.requester_email).toLowerCase() === actor.email.toLowerCase()) return json({ error: 'The preparer cannot approve their own request.', correlationId }, 403, cors)
       const grantId = await activeGrant(client, actor, requestResult.data.action_type)
       if (!grantId) return json({ error: 'Money Desk elevation is required.', correlationId }, 401, cors)
       const decisionResult = await client.rpc('decide_money_desk_request', {

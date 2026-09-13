@@ -4,7 +4,7 @@ import { loadMoneyData } from '../../../lib/money-data'
 import { formatRelativeTime } from '../../../lib/work-items'
 import { getOpsSession, hasFreshOpsMfa } from '../../../../web/lib/ops-auth'
 import { canPerformOpsAction } from '../../../../web/lib/ops-console'
-import { getActiveMoneyDeskGrant, type MoneyDeskGrant } from '../../../../web/lib/money-desk'
+import { getActiveMoneyDeskGrant, isFounderMoneyDeskApprover, type MoneyDeskGrant } from '../../../../web/lib/money-desk'
 import { invokeOpsReadBroker, requiresOpsEdgeBroker } from '../../../../web/lib/ops-edge-broker'
 import { createServiceRoleClient } from '../../../../web/lib/server-supabase'
 import { OpsPhoneRestriction } from '../../../components/ops-phone-restriction'
@@ -33,5 +33,6 @@ export default async function MoneyPage({ searchParams }: { searchParams: Promis
       grant = client ? await getActiveMoneyDeskGrant(client, session) : null
     }
   }
-  return <><PageHead eyebrow="Marketplace / Money Desk" title="Money Desk" description="A controlled queue for every manual release, refund, payout change, FX exception, and financial recovery." meta={`Observed ${formatRelativeTime(data.observedAt)}`} /><MoneyDeskWorkspace data={data} selectedView={selectedView} sensitiveAccessReady={sensitiveAccessReady} grantExpiresAt={grant?.expiresAt ?? null} actorEmail={session?.email ?? null} canApprove={Boolean(session && canPerformOpsAction(session.role, 'money-desk-decision'))} canExecute={Boolean(session && canPerformOpsAction(session.role, 'money-desk-execution'))} /></>
+  const founderMoneyAuthority = Boolean(session?.email && isFounderMoneyDeskApprover(session.email))
+  return <><PageHead eyebrow="Marketplace / Money Desk" title="Money Desk" description="A controlled queue for every manual release, refund, payout change, FX exception, and financial recovery." meta={`Observed ${formatRelativeTime(data.observedAt)}`} /><MoneyDeskWorkspace data={data} selectedView={selectedView} sensitiveAccessReady={sensitiveAccessReady} grantExpiresAt={grant?.expiresAt ?? null} actorEmail={session?.email ?? null} canApprove={Boolean(founderMoneyAuthority && session && canPerformOpsAction(session.role, 'money-desk-decision'))} canExecute={Boolean(founderMoneyAuthority && session && canPerformOpsAction(session.role, 'money-desk-execution'))} /></>
 }

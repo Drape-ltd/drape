@@ -199,6 +199,7 @@ export async function queueMediaSafetyReview(
     tailorProfileId: input.tailorProfileId ?? null,
     relatedEntityType: input.relatedEntityType ?? 'media_asset',
     relatedEntityId: input.relatedEntityId ?? queuedAssetIds[0] ?? null,
+    queueKey: 'trust-safety',
     title: 'Public media needs safety review',
     description: `New public media was uploaded on ${input.surface}. Review it for explicit, unsafe, or off-platform content.`,
     recommendedAction: 'Open the media asset in ops, approve it if safe, or set moderation_status to BLOCKED to remove it from public Drapeon surfaces.',

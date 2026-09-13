@@ -45,9 +45,181 @@ export type SupportCaseContext = {
   }
 }
 
+export type MediaSafetyCaseContext = {
+  assets: Array<{
+    id: string
+    kind: string
+    publicUrl: string
+    posterUrl: string | null
+    purpose: string
+    status: string
+    moderationStatus: string
+    riskLevel: string
+    reasons: string[]
+    createdAt: string
+  }>
+}
+
+export type PayoutChangeCaseContext = {
+  requestId: string
+  status: string
+  submittedAt: string | null
+  lifecycleState: string | null
+  confirmationStatus: string | null
+  confirmedAt: string | null
+  currentDestination: PayoutDestinationContext | null
+  requestedDestination: PayoutDestinationContext | null
+  accountHolderMatch: boolean | null
+  riskSignals: string[]
+  moneyRequest: null | {
+    id: string
+    reference: string
+    status: string
+    requesterEmail: string
+  }
+}
+
+type PayoutDestinationContext = {
+  provider: string | null
+  currency: string | null
+  bankName: string | null
+  accountName: string | null
+  accountMasked: string | null
+  countryCode: string | null
+  accountVerified: boolean
+}
+
 function cleanUrls(value: unknown) {
   if (!Array.isArray(value)) return []
   return [...new Set(value.filter((entry): entry is string => typeof entry === 'string' && /^https?:\/\//iu.test(entry.trim())).map((entry) => entry.trim()))].slice(0, 24)
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function payoutDestination(value: unknown): PayoutDestinationContext | null {
+  const destination = record(value)
+  if (Object.keys(destination).length === 0) return null
+  return {
+    provider: stringValue(destination.payout_provider),
+    currency: stringValue(destination.payout_currency),
+    bankName: stringValue(destination.payout_bank_name),
+    accountName: stringValue(destination.payout_account_name),
+    accountMasked: stringValue(destination.payout_account_masked),
+    countryCode: stringValue(destination.payout_country_code),
+    accountVerified: destination.payout_account_verified === true,
+  }
+}
+
+function normalizedName(value: string | null) {
+  return value?.trim().replace(/\s+/gu, ' ').toUpperCase() ?? ''
+}
+
+export async function loadMediaSafetyCaseContext(input: {
+  issueId: string
+  relatedEntityType: string | null
+  relatedEntityId: string | null
+  metadata: Record<string, unknown> | null
+}): Promise<MediaSafetyCaseContext | null> {
+  const client = createServiceRoleClient()
+  if (!client) return null
+  const metadataIds = Array.isArray(input.metadata?.media_asset_ids)
+    ? input.metadata.media_asset_ids.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    : []
+  const assetIds = [...new Set([
+    ...metadataIds,
+    input.relatedEntityType === 'media_asset' ? input.relatedEntityId : null,
+  ].filter((value): value is string => Boolean(value)))]
+  if (assetIds.length === 0) return { assets: [] }
+
+  const { data, error } = await client
+    .from('media_assets')
+    .select('id,media_kind,public_url,poster_url,purpose,status,moderation_status,moderation_risk_level,moderation_reasons,created_at')
+    .in('id', assetIds)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(`Media safety context is unavailable: ${error.message}`)
+
+  return {
+    assets: (data ?? []).flatMap((asset) => {
+      const publicUrl = stringValue(asset.public_url)
+      if (!publicUrl) return []
+      return [{
+        id: String(asset.id),
+        kind: String(asset.media_kind ?? 'UNKNOWN'),
+        publicUrl,
+        posterUrl: stringValue(asset.poster_url),
+        purpose: String(asset.purpose ?? 'PUBLIC_MEDIA'),
+        status: String(asset.status ?? 'UNKNOWN'),
+        moderationStatus: String(asset.moderation_status ?? 'PENDING_REVIEW'),
+        riskLevel: String(asset.moderation_risk_level ?? 'UNKNOWN'),
+        reasons: Array.isArray(asset.moderation_reasons) ? asset.moderation_reasons.map(String) : [],
+        createdAt: String(asset.created_at),
+      }]
+    }),
+  }
+}
+
+export async function loadPayoutChangeCaseContext(requestId: string): Promise<PayoutChangeCaseContext | null> {
+  const client = createServiceRoleClient()
+  if (!client || !requestId) return null
+  const [changeResult, moneyResult] = await Promise.all([
+    client
+      .from('payout_change_requests')
+      .select('id,status,current_destination,requested_destination,metadata,submitted_at,updated_at')
+      .eq('id', requestId)
+      .maybeSingle(),
+    client
+      .from('money_desk_requests')
+      .select('id,reference,status,requester_email')
+      .eq('action_type', 'PAYOUT_DESTINATION_CHANGE')
+      .eq('target_type', 'PAYOUT_CHANGE_REQUEST')
+      .eq('target_id', requestId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+  if (changeResult.error) throw new Error(`Payout change context is unavailable: ${changeResult.error.message}`)
+  if (moneyResult.error) throw new Error(`Money Desk context is unavailable: ${moneyResult.error.message}`)
+  const change = changeResult.data
+  if (!change?.id) return null
+  const current = payoutDestination(change.current_destination)
+  const requested = payoutDestination(change.requested_destination)
+  const currentName = normalizedName(current?.accountName ?? null)
+  const requestedName = normalizedName(requested?.accountName ?? null)
+  const accountHolderMatch = currentName && requestedName ? currentName === requestedName : null
+  const riskSignals: string[] = []
+  if (current?.provider !== requested?.provider) riskSignals.push('Provider changed')
+  if (current?.currency !== requested?.currency) riskSignals.push('Currency changed')
+  if (current?.bankName !== requested?.bankName) riskSignals.push('Bank changed')
+  if (current?.accountMasked !== requested?.accountMasked) riskSignals.push('Account changed')
+  if (accountHolderMatch === false) riskSignals.push('Account holder name changed')
+  if (requested?.accountVerified !== true) riskSignals.push('Provider verification incomplete')
+  const metadata = record(change.metadata)
+  const moneyRequest = moneyResult.data
+
+  return {
+    requestId: String(change.id),
+    status: String(change.status),
+    submittedAt: stringValue(change.submitted_at) ?? stringValue(change.updated_at),
+    lifecycleState: stringValue(metadata.lifecycle_state),
+    confirmationStatus: stringValue(metadata.confirmation_status),
+    confirmedAt: stringValue(metadata.confirmed_at),
+    currentDestination: current,
+    requestedDestination: requested,
+    accountHolderMatch,
+    riskSignals,
+    moneyRequest: moneyRequest?.id ? {
+      id: String(moneyRequest.id),
+      reference: String(moneyRequest.reference),
+      status: String(moneyRequest.status),
+      requesterEmail: String(moneyRequest.requester_email),
+    } : null,
+  }
 }
 
 export async function loadTrustCaseContext(input: { tailorProfileId: string | null; userId: string | null }): Promise<TrustCaseContext | null> {

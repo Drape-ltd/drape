@@ -6,6 +6,8 @@ import {
   decideMoneyDeskRequest,
   getActiveMoneyDeskGrant,
   issueMoneyDeskElevation,
+  isFounderMoneyDeskApprover,
+  submitMoneyDeskRequest,
 } from '../../../../../../web/lib/money-desk'
 import { executeMoneyDeskRequest } from '../../../../../../web/lib/money-desk-execution'
 import { getOpsSession, hasFreshOpsMfa, isNamedOpsWorkforceSession } from '../../../../../../web/lib/ops-auth'
@@ -68,6 +70,8 @@ export async function POST(request: Request) {
   const action = typeof body?.action === 'string' ? body.action.trim().toUpperCase() : ''
   const requiredPermission = action === 'ELEVATE'
     ? 'money-desk-elevation'
+    : action === 'PREPARE'
+      ? 'money-desk-request'
     : action === 'DECIDE'
       ? 'money-desk-decision'
       : action === 'EXECUTE'
@@ -75,6 +79,9 @@ export async function POST(request: Request) {
         : null
   if (!requiredPermission || !canPerformOpsAction(session.role, requiredPermission)) {
     return json({ ok: false, error: 'action-not-authorized', correlationId }, 403)
+  }
+  if ((action === 'DECIDE' || action === 'EXECUTE') && !isFounderMoneyDeskApprover(session.email)) {
+    return json({ ok: false, error: 'founder-money-approval-required', correlationId }, 403)
   }
 
   if (session.mode === 'cloudflare-access') {
@@ -93,6 +100,53 @@ export async function POST(request: Request) {
       const result = await issueMoneyDeskElevation(client, session, {
         actionScopes: requestedScopes.length > 0 ? requestedScopes : allMoneyDeskActionScopes(),
         reason,
+      })
+      return json({ ok: true, correlationId, result }, 200)
+    }
+
+    if (action === 'PREPARE') {
+      const payoutChangeRequestId = typeof body?.payoutChangeRequestId === 'string' ? body.payoutChangeRequestId.trim() : ''
+      const issueId = typeof body?.issueId === 'string' ? body.issueId.trim() : ''
+      const reason = typeof body?.reason === 'string' ? body.reason.trim() : ''
+      if (!payoutChangeRequestId || !issueId || reason.length < 12 || reason.length > 1_000) {
+        return json({ ok: false, error: 'payout-change-request-issue-and-reason-required', correlationId }, 400)
+      }
+      const { data: payoutChange, error: payoutChangeError } = await client
+        .from('payout_change_requests')
+        .select('id,status,tailor_user_id,tailor_profile_id,requested_destination,metadata')
+        .eq('id', payoutChangeRequestId)
+        .maybeSingle()
+      if (payoutChangeError || !payoutChange?.id || payoutChange.status !== 'PENDING') {
+        return json({ ok: false, error: payoutChangeError?.message ?? 'payout-change-review-unavailable', correlationId }, 409)
+      }
+      const metadata = payoutChange.metadata && typeof payoutChange.metadata === 'object' && !Array.isArray(payoutChange.metadata)
+        ? payoutChange.metadata as Record<string, unknown>
+        : {}
+      const destination = payoutChange.requested_destination && typeof payoutChange.requested_destination === 'object' && !Array.isArray(payoutChange.requested_destination)
+        ? payoutChange.requested_destination as Record<string, unknown>
+        : {}
+      if (metadata.lifecycle_state !== 'OPS_REVIEW' || metadata.confirmation_status !== 'CONFIRMED' || destination.payout_account_verified !== true) {
+        return json({ ok: false, error: 'payout-change-must-be-confirmed-and-provider-verified', correlationId }, 409)
+      }
+      const grant = await getActiveMoneyDeskGrant(client, session, 'PAYOUT_DESTINATION_CHANGE')
+      if (!grant) return json({ ok: false, error: 'money-desk-elevation-required', correlationId }, 401)
+      const provider = typeof destination.payout_provider === 'string' ? destination.payout_provider.trim().toUpperCase() : null
+      const requestedCurrency = typeof destination.payout_currency === 'string' ? destination.payout_currency.trim().toUpperCase() : null
+      const result = await submitMoneyDeskRequest(client, session, grant, {
+        actionType: 'PAYOUT_DESTINATION_CHANGE',
+        targetType: 'PAYOUT_CHANGE_REQUEST',
+        targetId: payoutChange.id,
+        caseId: issueId,
+        reason,
+        actionPayload: {
+          payoutChangeRequestId: payoutChange.id,
+          tailorUserId: payoutChange.tailor_user_id,
+          tailorProfileId: payoutChange.tailor_profile_id,
+          provider,
+          requestedCurrency,
+          note: reason,
+        },
+        idempotencyKey: `payout-change-request:${payoutChange.id}`,
       })
       return json({ ok: true, correlationId, result }, 200)
     }
@@ -124,10 +178,6 @@ export async function POST(request: Request) {
     if (String(moneyRequest.status) !== 'PENDING_APPROVAL') {
       return json({ ok: false, error: 'money-request-is-not-awaiting-approval', correlationId }, 409)
     }
-    if (String(moneyRequest.requester_email).toLowerCase() === session.email.toLowerCase()) {
-      return json({ ok: false, error: 'maker-cannot-approve-own-request', correlationId }, 403)
-    }
-
     const grant = await getActiveMoneyDeskGrant(client, session, moneyRequest.action_type)
     if (!grant) return json({ ok: false, error: 'money-desk-elevation-required', correlationId }, 401)
     const result = await decideMoneyDeskRequest(client, session, grant, {

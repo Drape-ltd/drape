@@ -55,6 +55,7 @@ export type OpsWorkItem = {
   environment: 'development' | 'production'
   sensitivity: 'INTERNAL' | 'SENSITIVE' | 'HIGHLY_RESTRICTED'
   recordVersion: number | null
+  relatedEntityType: string | null
   relatedEntityId: string | null
   userId: string | null
   tailorProfileId: string | null
@@ -115,6 +116,7 @@ function queueForIssue(issueType: string, source?: string | null, title?: string
 
 function normalizedQueueKey(value: string | null | undefined, issueType: string, source?: string | null, title?: string | null) {
   if (source?.toLowerCase() === 'account-support-action' || issueType.toUpperCase() === 'AFTERCARE_REQUEST' || title?.toLowerCase().includes('support requested')) return 'support'
+  if (issueType.toUpperCase() === 'CONTENT_FLAG') return 'trust'
   switch (value?.trim().toLowerCase()) {
     case 'privacy-deletion': return 'privacy'
     case 'trust-safety': return 'trust'
@@ -200,7 +202,9 @@ export function buildOpsWorkItems(data: CanonicalOpsData): OpsWorkItem[] {
   }
 
   const userById = new Map(data.users.map((user) => [user.id, user]))
-  const policyByQueue = new Map(data.policies.map((policy) => [policy.queue_key, policy]))
+  const policyByQueue = new Map(
+    data.policies.map((policy) => [normalizedQueueKey(policy.queue_key, ''), policy])
+  )
   const deletionById = new Map(data.deletions.map((request) => [request.id, request]))
   const representedDeletionIds = new Set<string>()
   const items: OpsWorkItem[] = data.issues.map((issue) => {
@@ -210,7 +214,7 @@ export function buildOpsWorkItems(data: CanonicalOpsData): OpsWorkItem[] {
     const user = deletion ? userById.get(deletion.user_id) : undefined
     if (deletion) representedDeletionIds.add(deletion.id)
     const queueKey = normalizedQueueKey(issue.queue_key, issue.issue_type, issue.source, issue.title)
-    const policy = policyByQueue.get(issue.queue_key ?? '') ?? policyByQueue.get(queueKey)
+    const policy = policyByQueue.get(queueKey) ?? policyByQueue.get(issue.queue_key ?? '')
     const caseNumber = issue.case_number ?? displayCaseNumber(issue.issue_number)
     const history = auditsByIssue.get(issue.id) ?? []
     const slaPhase = issue.first_responded_at ? 'ACTIVE_RESOLUTION' : 'FIRST_RESPONSE'
@@ -256,6 +260,7 @@ export function buildOpsWorkItems(data: CanonicalOpsData): OpsWorkItem[] {
         environment: issueEnvironment(issue.environment),
         sensitivity: 'HIGHLY_RESTRICTED',
         recordVersion: issue.record_version ?? null,
+        relatedEntityType: issue.related_entity_type,
         relatedEntityId: deletion.id,
         userId: deletion.user_id,
         tailorProfileId: issue.tailor_profile_id,
@@ -302,6 +307,7 @@ export function buildOpsWorkItems(data: CanonicalOpsData): OpsWorkItem[] {
       environment: issueEnvironment(issue.environment),
       sensitivity: normalizedSensitivity(issue.sensitivity),
       recordVersion: issue.record_version ?? null,
+      relatedEntityType: issue.related_entity_type,
       relatedEntityId: issue.related_entity_id,
       userId: issue.user_id,
       tailorProfileId: issue.tailor_profile_id,
@@ -350,6 +356,7 @@ export function buildOpsWorkItems(data: CanonicalOpsData): OpsWorkItem[] {
       environment: runtimeEnvironment(),
       sensitivity: 'HIGHLY_RESTRICTED',
       recordVersion: null,
+      relatedEntityType: 'account_deletion_request',
       relatedEntityId: request.id,
       userId: request.user_id,
       tailorProfileId: null,

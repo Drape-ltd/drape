@@ -88,7 +88,7 @@ async function loadTailorDetailDataDirect(tailorProfileId: string) {
   ])
   assertResults([user, items, ordersResult, issues], 'Tailor operational state')
   return {
-    tailor: { id: String(profile.data.id), userId, name: text(profile.data.business_name) ?? text(profile.data.display_name) ?? 'Tailor', email: text(user.data?.email), bio: text(profile.data.bio), location: text(profile.data.location), region: text(user.data?.region_code), languages: Array.isArray(profile.data.languages) ? profile.data.languages.map(String) : [], specialties: Array.isArray(profile.data.specialty_tags) ? profile.data.specialty_tags.map(String) : [], priceMin: typeof profile.data.price_range_min === 'number' ? profile.data.price_range_min : null, priceMax: typeof profile.data.price_range_max === 'number' ? profile.data.price_range_max : null, currency: text(profile.data.currency), trustStatus: String(profile.data.id_verification_status ?? 'NOT_SUBMITTED'), payoutReady: Boolean(profile.data.payout_account_verified) && !Boolean(profile.data.payout_reverification_required), payoutProvider: text(profile.data.payout_provider), payoutCurrency: text(profile.data.payout_currency), live: Boolean(profile.data.is_live), profileComplete: Boolean(profile.data.profile_completed), availability: text(profile.data.availability), shopPaused: Boolean(profile.data.shop_paused), totalOrders: Number(profile.data.total_orders ?? 0), rating: typeof profile.data.avg_rating === 'number' ? profile.data.avg_rating : null, createdAt: String(profile.data.created_at), updatedAt: String(profile.data.updated_at) },
+    tailor: { id: String(profile.data.id), userId, name: text(profile.data.business_name) ?? text(profile.data.display_name) ?? 'Tailor', email: text(user.data?.email), accountMode: text(user.data?.role) ?? 'CUSTOMER', bio: text(profile.data.bio), location: text(profile.data.location), region: text(user.data?.region_code), languages: Array.isArray(profile.data.languages) ? profile.data.languages.map(String) : [], specialties: Array.isArray(profile.data.specialty_tags) ? profile.data.specialty_tags.map(String) : [], priceMin: typeof profile.data.price_range_min === 'number' ? profile.data.price_range_min : null, priceMax: typeof profile.data.price_range_max === 'number' ? profile.data.price_range_max : null, currency: text(profile.data.currency), trustStatus: String(profile.data.id_verification_status ?? 'NOT_SUBMITTED'), payoutReady: Boolean(profile.data.payout_account_verified) && !Boolean(profile.data.payout_reverification_required), payoutProvider: text(profile.data.payout_provider), payoutCurrency: text(profile.data.payout_currency), live: Boolean(profile.data.is_live), profileComplete: Boolean(profile.data.profile_completed), availability: text(profile.data.availability), shopPaused: Boolean(profile.data.shop_paused), totalOrders: Number(profile.data.total_orders ?? 0), rating: typeof profile.data.avg_rating === 'number' ? profile.data.avg_rating : null, createdAt: String(profile.data.created_at), updatedAt: String(profile.data.updated_at) },
     items: (items.data ?? []).map((row) => ({ id: String(row.id), title: String(row.title), category: text(row.category), live: Boolean(row.is_live), stockStatus: text(row.stock_status), updatedAt: String(row.updated_at) })),
     orders: (ordersResult.data ?? []).map((row) => ({ id: String(row.id), reference: String(row.reference), kind: text(row.order_kind), item: text(row.item_title) ?? text(row.garment_type) ?? 'Order', stage: String(row.stage), stageUpdatedAt: String(row.stage_updated_at), amount: typeof row.total_amount === 'number' ? row.total_amount : typeof row.quoted_amount === 'number' ? row.quoted_amount : null, currency: text(row.quoted_currency) ?? text(row.currency), deliveryMethod: text(row.delivery_method), createdAt: String(row.created_at) })),
     cases: (issues.data ?? []).map((row) => ({ id: String(row.id), caseNumber: displayCaseNumber(row), type: String(row.issue_type), severity: String(row.severity), status: String(row.canonical_status ?? row.status), title: String(row.title), recommendedAction: String(row.recommended_action), updatedAt: String(row.updated_at) })),
@@ -149,21 +149,30 @@ async function loadDeliveryOperationsDataDirect() {
 
 async function loadCommunicationsOperationsDataDirect() {
   const client = clientOrThrow()
-  const [campaigns, recipients, providerEvents, jobs] = await Promise.all([
+  const [campaigns, recipients, providerEvents, jobs, jobCases] = await Promise.all([
     client.from('communication_campaigns').select('id,name,kind,category,purpose,severity,status,risk_level,scheduled_at,expires_at,correlation_id,created_at,updated_at').order('created_at', { ascending: false }).limit(100),
     client.from('communication_campaign_recipients').select('campaign_id,status,updated_at').order('updated_at', { ascending: false }).limit(2000),
     client.from('communication_provider_events').select('id,provider,channel,signature_verified,status,attempts,next_attempt_at,processed_at,correlation_id,received_at').order('received_at', { ascending: false }).limit(300),
     client.from('job_queue').select('id,job_type,status,attempt_count,max_attempts,run_at,created_at,updated_at').or('job_type.ilike.%EMAIL%,job_type.ilike.%PUSH%,job_type.ilike.%SMS%,job_type.ilike.%COMMUNICATION%').order('created_at', { ascending: false }).limit(300),
+    client.from('ops_issues').select('case_number,issue_number,canonical_status,status,related_entity_id,updated_at').eq('related_entity_type', 'job_queue').order('updated_at', { ascending: false }).limit(1000),
   ])
-  assertResults([campaigns, recipients, providerEvents, jobs], 'Communications')
+  assertResults([campaigns, recipients, providerEvents, jobs, jobCases], 'Communications')
   const recipientRows = recipients.data ?? []
+  const casesByJobId = new Map<string, Record<string, unknown>>()
+  for (const issue of jobCases.data ?? []) {
+    const jobId = String(issue.related_entity_id ?? '')
+    if (jobId && !casesByJobId.has(jobId)) casesByJobId.set(jobId, issue)
+  }
   return {
     campaigns: (campaigns.data ?? []).map((row) => {
       const audience = recipientRows.filter((recipient) => String(recipient.campaign_id) === String(row.id))
       return { id: String(row.id), name: String(row.name), kind: String(row.kind), category: String(row.category), purpose: String(row.purpose), severity: String(row.severity), status: String(row.status), riskLevel: String(row.risk_level), scheduledAt: text(row.scheduled_at), expiresAt: text(row.expires_at), correlationId: String(row.correlation_id), createdAt: String(row.created_at), updatedAt: String(row.updated_at), recipients: audience.length, delivered: audience.filter((entry) => String(entry.status) === 'DELIVERED').length, failed: audience.filter((entry) => ['FAILED', 'DEAD'].includes(String(entry.status))).length }
     }),
     providerEvents: (providerEvents.data ?? []).map((row) => ({ id: String(row.id), provider: String(row.provider), channel: String(row.channel), signatureVerified: Boolean(row.signature_verified), status: String(row.status), attempts: Number(row.attempts), nextAttemptAt: text(row.next_attempt_at), processedAt: text(row.processed_at), correlationId: String(row.correlation_id), receivedAt: String(row.received_at) })),
-    jobs: (jobs.data ?? []).map((row) => ({ id: String(row.id), type: String(row.job_type), status: String(row.status), attempts: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), runAt: String(row.run_at), createdAt: String(row.created_at), updatedAt: String(row.updated_at) })),
+    jobs: (jobs.data ?? []).map((row) => {
+      const issue = casesByJobId.get(String(row.id))
+      return { id: String(row.id), type: String(row.job_type), status: String(row.status), attempts: Number(row.attempt_count), maxAttempts: Number(row.max_attempts), runAt: String(row.run_at), createdAt: String(row.created_at), updatedAt: String(row.updated_at), linkedCaseNumber: issue ? displayCaseNumber(issue) : null, linkedCaseStatus: issue ? String(issue.canonical_status ?? issue.status) : null }
+    }),
     observedAt: new Date().toISOString(),
   }
 }

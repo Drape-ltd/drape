@@ -927,6 +927,7 @@ async function reportDeadJob(
         source: FN,
         relatedEntityType: "job_queue",
         relatedEntityId: job.id,
+        queueKey: "reliability",
         provider: null,
         stage: job.job_type,
         title: "A background job could not be completed",
@@ -935,6 +936,7 @@ async function reportDeadJob(
         recommendedAction:
           "Review the job payload, provider status, and retry manually after correcting the root cause.",
         dedupeKey: `job-dead:${job.id}`,
+        persistWhenRoutineDisabled: true,
         metadata: {
           job_id: job.id,
           event_id: job.event_id,

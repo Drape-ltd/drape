@@ -18,7 +18,7 @@ function money(amount: number | null, currency: string | null) {
 
 export function OrderCommandList({ orders, selectedView }: { orders: OrderSummary[]; selectedView: string | null }) {
   const active = orders.filter((order) => !['COMPLETE', 'CANCELLED', 'DECLINED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'EXPIRED'].includes(order.stage))
-  const attention = active.filter((order) => order.openCaseCount > 0 || tone(order.paymentStatus) === 'critical' || tone(order.settlementStatus) === 'critical')
+  const attention = active.filter((order) => order.stage === 'IN_DISPUTE' || order.openCaseCount > 0 || tone(order.paymentStatus) === 'critical' || tone(order.settlementStatus) === 'critical')
   const handoff = active.filter((order) => ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION'].includes(order.stage))
   const closed = orders.filter((order) => !active.includes(order))
   const visibleOrders = selectedView === 'active' ? active : selectedView === 'attention' ? attention : selectedView === 'handoff' ? handoff : selectedView === 'closed' ? closed : orders

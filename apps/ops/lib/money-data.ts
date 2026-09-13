@@ -10,7 +10,7 @@ export type MoneyRequest = {
   id: string; reference: string; actionType: string; actionLabel: string; status: string; targetType: string; targetId: string
   orderId: string | null; orderReference: string | null; amount: number | null; currency: string | null; reason: string
   requesterEmail: string; requesterRole: string; riskLevel: string; riskReasons: string[]; requiredApprovalCount: number
-  approvalCount: number; correlationId: string; executionOutcome: string | null; providerReference: string | null
+  approvalCount: number; policyVersion: string | null; correlationId: string; executionOutcome: string | null; providerReference: string | null
   createdAt: string; updatedAt: string; decisions: MoneyDecision[]; attempts: MoneyAttempt[]
 }
 export type MoneyData = {
@@ -43,7 +43,7 @@ export async function loadMoneyData(): Promise<MoneyData> {
   if (!client) throw new Error('Money Desk is unavailable because the server database client is not configured.')
 
   const [requestResult, decisionResult, attemptResult, payoutResult, trancheResult] = await Promise.all([
-    client.from('money_desk_requests').select('id,reference,action_type,status,target_type,target_id,order_id,amount,currency,reason,requester_email,requester_role,risk_level,risk_reasons,required_approval_count,approval_count,correlation_id,execution_outcome,provider_reference,created_at,updated_at').order('created_at', { ascending: false }).limit(150),
+    client.from('money_desk_requests').select('id,reference,action_type,status,target_type,target_id,order_id,amount,currency,reason,requester_email,requester_role,risk_level,risk_reasons,required_approval_count,approval_count,policy_version,correlation_id,execution_outcome,provider_reference,created_at,updated_at').order('created_at', { ascending: false }).limit(150),
     client.from('money_desk_decisions').select('id,request_id,decision,approver_email,approver_role,reason,created_at').order('created_at', { ascending: false }).limit(500),
     client.from('money_desk_execution_attempts').select('id,request_id,status,executor_email,executor_role,provider_reference,failure_code,failure_summary,correlation_id,started_at,completed_at').order('started_at', { ascending: false }).limit(500),
     client.from('payouts').select('id,order_id,status,amount,currency,provider,processed_at').in('status', ['PENDING', 'PROCESSING', 'BLOCKED', 'FAILED']).limit(500),
@@ -71,7 +71,7 @@ export async function loadMoneyData(): Promise<MoneyData> {
         id: String(row.id), reference: String(row.reference), actionType, actionLabel: isMoneyDeskActionType(actionType) ? MONEY_DESK_ACTION_LABELS[actionType] : actionType,
         status: String(row.status), targetType: String(row.target_type), targetId: String(row.target_id), orderId, orderReference: orderId ? orders.get(orderId) ?? null : null,
         amount: typeof row.amount === 'number' ? row.amount : null, currency: text(row.currency), reason: String(row.reason), requesterEmail: String(row.requester_email), requesterRole: String(row.requester_role),
-        riskLevel: String(row.risk_level), riskReasons: Array.isArray(row.risk_reasons) ? row.risk_reasons.map(String) : [], requiredApprovalCount: Number(row.required_approval_count), approvalCount: Number(row.approval_count),
+        riskLevel: String(row.risk_level), riskReasons: Array.isArray(row.risk_reasons) ? row.risk_reasons.map(String) : [], requiredApprovalCount: Number(row.required_approval_count), approvalCount: Number(row.approval_count), policyVersion: text(row.policy_version),
         correlationId: String(row.correlation_id), executionOutcome: text(row.execution_outcome), providerReference: text(row.provider_reference), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
         decisions: decisions.filter((decision) => decision.requestId === String(row.id)), attempts: attempts.filter((attempt) => attempt.requestId === String(row.id)),
       }

@@ -141,7 +141,7 @@ export async function loadOrderDetail(orderId: string): Promise<OrderDetail | nu
   if (requiresOpsEdgeBroker()) return invokeOpsReadBroker<OrderDetail | null>('order-detail', { orderId })
   const client = createServiceRoleClient()
   if (!client) throw new Error('Order detail is unavailable because the server database client is not configured.')
-  const { data: row, error } = await client.from('orders').select('id,reference,order_kind,garment_type,item_title,description,stage,stage_updated_at,created_at,quoted_amount,total_amount,currency,quoted_currency,delivery_method,customer_id,tailor_id,deadline,occasion,fabric_source,escrow_released,escrow_released_at,handoff_completed_at,customer_handoff_confirmed_at,tracking_number,carrier').eq('id', orderId).maybeSingle()
+  const { data: row, error } = await client.from('orders').select('id,reference,order_kind,garment_type,item_title,garment_description,stage,stage_updated_at,created_at,quoted_amount,total_amount,currency,quoted_currency,delivery_method,customer_id,tailor_id,deadline,occasion,fabric_source,escrow_released,escrow_released_at,handoff_completed_at,customer_handoff_confirmed_at,tracking_number,carrier').eq('id', orderId).maybeSingle()
   if (error) throw new Error(`Order detail is unavailable: ${error.message}`)
   if (!row) return null
   const id = String(row.id)
@@ -199,7 +199,7 @@ export async function loadOrderDetail(orderId: string): Promise<OrderDetail | nu
       fulfillmentStatus: (fulfillmentEventsResult.data ?? [])[0] ? String((fulfillmentEventsResult.data ?? [])[0].event_type) : null,
       settlementStatus: (trancheResult.data ?? []).some((entry) => String(entry.status) === 'BLOCKED') ? 'BLOCKED' : (trancheResult.data ?? []).some((entry) => String(entry.status) === 'ELIGIBLE') ? 'ELIGIBLE' : null,
       ...nextStep(stage),
-      description: text(row.description),
+      description: text(row.garment_description),
       deadline: text(row.deadline),
       occasion: text(row.occasion),
       fabricSource: text(row.fabric_source),
