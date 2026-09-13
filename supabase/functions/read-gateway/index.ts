@@ -7,6 +7,7 @@ import {
   cacheControlForReadAction,
   PUBLIC_READ_CACHE_CONTROL,
 } from '../_shared/read-cache-policy.ts'
+import { specialtyTagSearchClauses } from '../_shared/tailor-search.ts'
 
 const FN = 'read-gateway'
 
@@ -59,12 +60,6 @@ function safeSearchTerm(value: unknown) {
   const term = asString(value)
   if (!term) return null
   return term.replace(/[%_,{}()"']/gu, ' ').replace(/\s+/gu, ' ').trim()
-}
-
-function safeArrayLiteralItem(value: string | null) {
-  if (!value) return null
-  const sanitized = value.replace(/[{}"\\,]/gu, ' ').replace(/\s+/gu, ' ').trim()
-  return sanitized.length > 0 ? sanitized : null
 }
 
 function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
@@ -362,18 +357,12 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
   }
 
   const searchTerm = specialty ?? general ?? query
-  const arrayTerm = safeArrayLiteralItem(searchTerm)
-  if (searchTerm && arrayTerm) {
+  if (searchTerm) {
     const searchClauses = [
       `display_name.ilike.%${searchTerm}%`,
       `location.ilike.%${searchTerm}%`,
+      ...specialtyTagSearchClauses(searchTerm),
     ]
-
-    // PostgREST array literals are picky about spaces; multi-word text still searches
-    // name/location, while exact specialty chips continue to use the indexed array.
-    if (!arrayTerm.includes(' ')) {
-      searchClauses.push(`specialty_tags.cs.{${arrayTerm}}`)
-    }
 
     builder = builder.or(searchClauses.join(','))
   }
