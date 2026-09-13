@@ -113,6 +113,11 @@ export function middleware(request: NextRequest) {
   const nonce = createNonce()
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-nonce', nonce)
+  if (request.nextUrl.searchParams.get('notice') === 'ops-signed-out') {
+    requestHeaders.set('x-ops-notice', 'ops-signed-out')
+  } else {
+    requestHeaders.delete('x-ops-notice')
+  }
   const response = NextResponse.next({ request: { headers: requestHeaders } })
   response.headers.set('Content-Security-Policy', contentSecurityPolicy(nonce))
   response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive')
