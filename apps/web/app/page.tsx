@@ -5,13 +5,16 @@ import { ArrowRight } from 'lucide-react'
 import { PublicSiteHeader } from '../components/public-site-header'
 import { ProductStoryShowcase } from '../components/product-story-showcase'
 import { SiteFooter } from '../components/site-footer'
-import { buildMetadata } from '../lib/metadata'
+import { buildMetadata, defaultTitle } from '../lib/metadata'
 
-export const metadata: Metadata = buildMetadata({
-  title: 'Drapeon',
-  description: 'Discover independent tailors, order custom or ready-made fashion, and follow every detail from brief to delivery.',
-  path: '/',
-})
+export const metadata: Metadata = {
+  ...buildMetadata({
+    title: 'Drapeon',
+    description: 'Discover independent tailors, order custom or ready-made fashion, and follow every detail from brief to delivery.',
+    path: '/',
+  }),
+  title: { absolute: defaultTitle },
+}
 
 const journey = [
   { number: '01', title: 'Start with the idea', body: 'Bring the garment, references, fit, timing, and delivery details into one clear brief.' },
