@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     return json({ error: 'invalid-json' }, 400)
   }
   const action = typeof body?.action === 'string' ? body.action.trim().toUpperCase() : ''
-  if (!['ACKNOWLEDGE', 'ASSIGN_SELF', 'ADD_NOTE', 'ESCALATE', 'MERGE_CASE', 'SPLIT_CASE'].includes(action)) return json({ error: 'invalid-action' }, 400)
+  if (!['ACKNOWLEDGE', 'ASSIGN_SELF', 'ADD_NOTE', 'ESCALATE', 'RESOLVE_DEAD_JOB', 'MERGE_CASE', 'SPLIT_CASE'].includes(action)) return json({ error: 'invalid-action' }, 400)
   if (action === 'MERGE_CASE' || action === 'SPLIT_CASE') {
     if (session.role !== 'admin') return json({ error: 'admin-required' }, 403)
     if (!hasFreshOpsMfa(session)) return json({ error: 'protected-access-required' }, 401)
@@ -46,6 +46,7 @@ export async function POST(request: Request) {
     const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : ''
     const requestCorrelationId = typeof body.correlationId === 'string' ? body.correlationId.trim() : correlationId
     const lineageAction = action === 'MERGE_CASE' || action === 'SPLIT_CASE'
+    const deadJobReviewAction = action === 'RESOLVE_DEAD_JOB'
     const selectedContext = Array.isArray(body.selectedContext)
       ? body.selectedContext.filter((entry): entry is string => typeof entry === 'string').slice(0, 5)
       : []
@@ -66,7 +67,18 @@ export async function POST(request: Request) {
         p_environment: 'DEVELOPMENT',
         p_correlation_id: requestCorrelationId,
       })
-      : await client.rpc('perform_ops_case_collaboration_action', {
+      : deadJobReviewAction
+        ? await client.rpc('perform_ops_dead_job_review_action', {
+          p_issue_id: body.issueId,
+          p_reason: reason,
+          p_expected_record_version: expectedRecordVersion,
+          p_idempotency_key: idempotencyKey,
+          p_actor_principal_id: principal.id,
+          p_actor_label: session.email,
+          p_environment: 'DEVELOPMENT',
+          p_correlation_id: requestCorrelationId,
+        })
+        : await client.rpc('perform_ops_case_collaboration_action', {
         p_issue_id: body.issueId,
         p_action: action,
         p_reason: reason,
@@ -76,7 +88,7 @@ export async function POST(request: Request) {
         p_actor_label: session.email,
         p_environment: 'DEVELOPMENT',
         p_correlation_id: requestCorrelationId,
-      })
+        })
     if (error) {
       const conflict = error.code === '40001' || error.code === '55000'
       const forbidden = error.code === '42501'

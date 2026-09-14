@@ -1,20 +1,24 @@
-# Drape
+# Drapeon
 
-Drape is a tailoring marketplace for custom orders and ready-made pieces.
+Drapeon is a cross-platform marketplace for custom clothing and ready-made pieces. Customers discover verified tailors, share a brief and fit information, manage orders, and shop published pieces. Tailors onboard through a private trust review, manage their storefront and portfolio, quote work, fulfil orders, and connect a payout provider.
 
 The repo currently contains:
 
 - an Expo / React Native customer + tailor app
-- a Next.js web app deployed through Cloudflare
+- a Next.js customer/tailor web app deployed through Cloudflare
+- a separate Next.js Ops control plane protected by named Cloudflare Access identities
+- a Cloudflare Worker that monitors production health every five minutes
 - Supabase database migrations and Edge Functions
-- shared order, auth, and validation logic for both surfaces
+- shared order, money, auth, trust, notification, and validation contracts
 
 ## Stack
 
 - `apps/mobile`: Expo Router, React Native, Supabase, React Query
 - `apps/web`: Next.js, Supabase, Cloudflare / OpenNext
+- `apps/ops`: standalone Ops portal, Cloudflare Access, sensitive step-up routes
+- `apps/health-monitor`: scheduled Cloudflare Worker for production synthetic checks
 - `supabase/`: SQL migrations and Edge Functions
-- `packages/shared`: shared order state, contact filtering, and auth helpers
+- `packages/shared`: cross-platform domain contracts and validation
 - `packages/db`: Prisma schema and DB tooling
 
 ## Repo Layout
@@ -22,7 +26,9 @@ The repo currently contains:
 ```text
 apps/
   mobile/      Expo app for customers and tailors
-  web/         Marketing + auth bridge + web APIs
+  web/         Marketing, marketplace, customer/tailor workspace, auth bridge
+  ops/         Named-workforce operations control plane
+  health-monitor/ Scheduled production health monitor
 packages/
   db/          Prisma schema and DB scripts
   shared/      Shared TS utilities used across apps
@@ -34,12 +40,15 @@ docs/          Product, QA, and rollout notes
 
 ## What Works Today
 
-- customer sign up, onboarding, measurement profile, and order brief flow
-- tailor setup, quoting, consultation, messaging, and production-stage updates
-- local collection and shipping handoff workflows
-- hosted password recovery bridge for mobile auth recovery
-- waitlist and tailor-application submissions saved to DB and mirrored into inbox notifications
-- guided fit intake with `measurement_scans` and pre-cutting tailor review support
+- customer and tailor signup with cross-browser confirmation and durable setup drafts
+- tailor storefront, portfolio, private challenge-video trust review, approval/rejection, and resubmission
+- verified-tailor Explore discovery, custom-order briefs, ready-made listings, quotes, messaging, and fulfilment
+- guided fit intake with `measurement_scans` and pre-cutting tailor review
+- Stripe Connect payout onboarding and currency-aware marketplace pricing
+- local collection and shipping handoffs with persisted workflow outcomes
+- transactional email, push, SMS fallback policy, Ops/Slack routing, and dead-letter ownership
+- standalone Ops queues for Trust, Safety, Reliability, Money Desk, Communications, and delivery operations
+- Cloudflare production monitoring with durable state, deduplicated Slack transitions, and exact Ops case links
 
 ## Local Setup
 
@@ -87,7 +96,7 @@ This is the shortest safe path to get the project running on a fresh machine wit
 ```bash
 git clone <your-remote-url>
 cd drape
-git checkout develop
+git checkout main
 pnpm install
 ```
 
@@ -174,11 +183,19 @@ Mobile:
 pnpm --filter @drape/mobile dev -- --clear
 ```
 
-Ops dashboard locally:
+Ops dashboard locally (ordinary named local workforce session):
 
-```text
-http://localhost:3000/ops?token=drape-ops-local-2026
+```bash
+pnpm --filter @drape/ops dev
 ```
+
+Open `http://localhost:3005/ops/my-work`. Founder-authority testing is intentionally separate:
+
+```bash
+pnpm --filter @drape/ops dev:founder
+```
+
+Open `http://localhost:3006/ops/my-work`. Never add a shared Ops token or auth bypass to a URL.
 
 ### 8. Resume manual testing from the latest trackers
 
@@ -280,6 +297,10 @@ Recent workflow additions include:
 - guided fit session storage via `measurement_scans`
 - cutting preflight rules that can block progression until fit review, fabric receipt, or measurement confirmation is complete
 - payment currency locking, tax and payout hardening, append-only payment ledgers, and ops issue routing
+- private trust-video evidence, resumable tailor setup, and cross-browser confirmation recovery
+- Stripe payout destination review, Money Desk receipts, and provider webhook reconciliation
+- dead-letter Reliability ownership with explicit no-replay resolution for stale notifications
+- scheduled production health checks with durable Ops incidents and deduplicated Slack alerts
 
 ## Current Guided Fit Flow
 
@@ -333,14 +354,14 @@ git diff --check
 pnpm supabase:link:prod
 pnpm supabase:status
 supabase migration list
-supabase db push --dry-run
+pnpm supabase:db:push:prod -- --dry-run
 ```
 
 4. Apply migrations and deploy Edge Functions:
 
 ```bash
-supabase db push --yes
-supabase functions deploy --debug tailor-order-action customer-order-action custom-order-action payment-action --project-ref <prod-ref>
+pnpm supabase:db:push:prod
+pnpm supabase:functions:deploy:prod -- tailor-order-action customer-order-action custom-order-action payment-action
 ```
 
 If shared files under `supabase/functions/_shared` changed, deploy every function that imports those shared files. A full function sweep is safer before launch.
@@ -450,29 +471,52 @@ pnpm --filter @drape/mobile build:android:prod
 
 Deploy Supabase functions after workflow changes that touch `supabase/functions/**`.
 
-Typical examples:
+Use the target guard for every deployment:
 
 ```bash
-supabase functions deploy tailor-order-action
-supabase functions deploy customer-order-action
-supabase functions deploy custom-order-action
+pnpm supabase:functions:deploy:dev -- tailor-order-action customer-order-action custom-order-action
+pnpm supabase:functions:deploy:prod -- tailor-order-action customer-order-action custom-order-action
 ```
 
 Apply any matching SQL migration before testing those changes in a live environment.
+
+### Ops and production health
+
+`apps/ops` is an independently deployed control plane at `https://ops.drapeon.co`. Production authentication requires Cloudflare Access plus an active named `ops_workforce_principals` record. Sensitive Trust, Money Desk, deletion, evidence, and administrative actions require the dedicated short-lived sensitive audience; a normal Ops session is not sufficient.
+
+`apps/health-monitor` runs every five minutes and calls the authenticated production readiness endpoint. The durable database monitor state and Ops issue ledger are authoritative; Slack is only an alert surface. A transition to degraded or recovered is posted once, while unchanged failures are suppressed.
+
+Dead jobs are never rewritten as successful. Each true dead-letter outcome owns a Reliability case. A reviewed stale notification can be resolved without replay, which stores a named reason, immutable case event, action receipt, and audit entry while retaining the original `DEAD` job. Until that explicit review exists, the production health check stays degraded.
+
+Useful checks:
+
+```bash
+pnpm --filter @drape/ops typecheck
+pnpm --filter @drape/ops ui:verify
+pnpm --filter @drape/ops runtime:verify
+pnpm --filter @drape/health-monitor check
+curl -i https://drapeon-health-monitor.dimowoope.workers.dev/health
+```
 
 ## Testing Focus
 
 Highest-signal manual passes right now:
 
 - customer signup to custom order placement
+- tailor signup, confirmation, restored draft, trust submission, rejection/resubmission, and approval
+- role switching from customer to tailor, including required profile photo and trust/payout gates
+- Stripe Connect start, hosted provider setup, return, cancel, retry, webhook, and readiness state
+- currency changes across Explore, quotes, payment records, earnings, and payout presentation
 - tailor quote to production-stage movement
 - shipping and local collection handoff
 - waitlist and tailor-application submission notifications
 - password reset email to hosted recovery bridge to in-app reset
 - guided fit intake to pre-cutting tailor review
+- dead job to exact Reliability case, named resolution receipt, recovered health transition, and Slack deep link
 
 ## Notes
 
-- This repo is actively evolving, so some docs may describe in-flight work before it is fully deployed.
-- The DB remains the source of truth for leads and orders; inbox notifications are secondary visibility, not the primary record.
-- If you are testing a workflow that touches Supabase Edge Functions, always make sure the matching migration and function deploy happened together.
+- The database and durable domain/case ledgers are authoritative. UI banners, email, push, SMS, and Slack are delivery surfaces—not proof of a business transition.
+- Migrations, Edge Functions, customer web, Ops, mobile binaries, provider configuration, and Cloudflare Workers are separate release units. Verify each target explicitly.
+- Development proof never substitutes for production verification. Preserve production correlation IDs and terminal provider outcomes.
+- Never commit credentials or place them in URLs. Use secret stores and verify secret names without printing values.

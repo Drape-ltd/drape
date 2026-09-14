@@ -54,6 +54,7 @@ Deno.serve(async (request) => {
     }
 
     const lineageAction = action === 'MERGE_CASE' || action === 'SPLIT_CASE'
+    const deadJobReviewAction = action === 'RESOLVE_DEAD_JOB'
     if (lineageAction) {
       if (isPhoneClient(`${request.headers.get('user-agent') ?? ''} ${request.headers.get('x-drape-client-user-agent') ?? ''}`)) {
         return json({ error: 'Case lineage actions are desktop-only.', correlationId }, 403, cors)
@@ -108,7 +109,18 @@ Deno.serve(async (request) => {
         p_environment: environment,
         p_correlation_id: requestCorrelationId,
       })
-      : await supabase.rpc('perform_ops_case_collaboration_action', {
+      : deadJobReviewAction
+        ? await supabase.rpc('perform_ops_dead_job_review_action', {
+          p_issue_id: issueId,
+          p_reason: reason,
+          p_expected_record_version: expectedRecordVersion,
+          p_idempotency_key: idempotencyKey,
+          p_actor_principal_id: principal.id,
+          p_actor_label: identity.email,
+          p_environment: environment,
+          p_correlation_id: requestCorrelationId,
+        })
+        : await supabase.rpc('perform_ops_case_collaboration_action', {
         p_issue_id: issueId,
         p_action: action,
         p_reason: reason,
@@ -118,7 +130,7 @@ Deno.serve(async (request) => {
         p_actor_label: identity.email,
         p_environment: environment,
         p_correlation_id: requestCorrelationId,
-      })
+        })
     if (error) {
       const conflict = error.code === '40001'
       const forbidden = error.code === '42501'

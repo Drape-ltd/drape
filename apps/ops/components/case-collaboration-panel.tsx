@@ -1,11 +1,11 @@
 'use client'
 
-import { CheckCircle2, LoaderCircle, NotebookPen, Siren, UserRoundCheck } from 'lucide-react'
+import { CheckCircle2, LoaderCircle, NotebookPen, ShieldCheck, Siren, UserRoundCheck } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { idempotencyFingerprint, useIdempotentCommand } from '../lib/use-idempotent-command'
 
-export function CaseCollaborationPanel({ issueId, status, assignee, recordVersion, authorizedForQueue, allowAcknowledge, allowAssign, allowEscalate }: {
+export function CaseCollaborationPanel({ issueId, status, assignee, recordVersion, authorizedForQueue, allowAcknowledge, allowAssign, allowEscalate, allowResolveDeadJob }: {
   issueId: string
   status: string
   assignee: string | null
@@ -14,18 +14,26 @@ export function CaseCollaborationPanel({ issueId, status, assignee, recordVersio
   allowAcknowledge: boolean
   allowAssign: boolean
   allowEscalate: boolean
+  allowResolveDeadJob: boolean
 }) {
   const router = useRouter()
   const [note, setNote] = useState('')
   const [escalationReason, setEscalationReason] = useState('')
+  const [resolutionReason, setResolutionReason] = useState('')
   const [pending, setPending] = useState<string | null>(null)
   const [result, setResult] = useState<{ ok: boolean; message: string; correlationId?: string } | null>(null)
   const command = useIdempotentCommand('ops-case-collaboration')
   const terminal = ['RESOLVED', 'CLOSED'].includes(status.toUpperCase())
 
-  async function act(action: 'ACKNOWLEDGE' | 'ASSIGN_SELF' | 'ADD_NOTE' | 'ESCALATE') {
+  async function act(action: 'ACKNOWLEDGE' | 'ASSIGN_SELF' | 'ADD_NOTE' | 'ESCALATE' | 'RESOLVE_DEAD_JOB') {
     if (pending || !recordVersion) return
-    const reason = action === 'ADD_NOTE' ? note.trim() : action === 'ESCALATE' ? escalationReason.trim() : ''
+    const reason = action === 'ADD_NOTE'
+      ? note.trim()
+      : action === 'ESCALATE'
+        ? escalationReason.trim()
+        : action === 'RESOLVE_DEAD_JOB'
+          ? resolutionReason.trim()
+          : ''
     const fingerprint = idempotencyFingerprint([issueId, action, reason, recordVersion])
     const attempt = command.begin(fingerprint)
     setPending(action)
@@ -53,6 +61,7 @@ export function CaseCollaborationPanel({ issueId, status, assignee, recordVersio
       setResult({ ok: true, message: 'The action and durable receipt were persisted.', correlationId })
       if (action === 'ADD_NOTE') setNote('')
       if (action === 'ESCALATE') setEscalationReason('')
+      if (action === 'RESOLVE_DEAD_JOB') setResolutionReason('')
       router.refresh()
     } catch {
       setResult({ ok: false, message: 'The server response was interrupted. Your input is preserved; retry unchanged to recover the same idempotency receipt.' })
@@ -82,6 +91,13 @@ export function CaseCollaborationPanel({ issueId, status, assignee, recordVersio
         <p>Use this only when the owning team cannot safely resolve the case within policy. The reason, queue policy, backup team, and receipt are recorded together.</p>
         <label className="ops-field">Escalation reason<textarea value={escalationReason} maxLength={1000} onChange={(event) => setEscalationReason(event.target.value)} /></label>
         <button className="ops-button" type="button" disabled={pending !== null || !recordVersion || escalationReason.trim().length < 12} onClick={() => act('ESCALATE')}>{pending === 'ESCALATE' ? <LoaderCircle className="ops-spin" size={15} /> : <Siren size={15} />}Escalate case</button>
+      </div> : null}
+      {allowResolveDeadJob ? <div className="ops-action-block">
+        <p className="ops-action-label">Terminal review</p>
+        <h3>Resolve without replay</h3>
+        <p>Use this only after reviewing the recorded attempts and confirming the stale message must not be sent. The dead job remains immutable; the reason and receipt close only the Reliability case.</p>
+        <label className="ops-field">Review outcome<textarea value={resolutionReason} maxLength={1000} onChange={(event) => setResolutionReason(event.target.value)} /></label>
+        <button className="ops-button ops-button-primary" type="button" disabled={pending !== null || !recordVersion || resolutionReason.trim().length < 12} onClick={() => act('RESOLVE_DEAD_JOB')}>{pending === 'RESOLVE_DEAD_JOB' ? <LoaderCircle className="ops-spin" size={15} /> : <ShieldCheck size={15} />}Record no-replay resolution</button>
       </div> : null}
     </div>
   )

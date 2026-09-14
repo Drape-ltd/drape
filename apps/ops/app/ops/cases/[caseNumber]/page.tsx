@@ -190,6 +190,7 @@ export default async function CasePage({
                 allowAcknowledge={record.permittedActions.includes('acknowledge') || record.permittedActions.includes('triage')}
                 allowAssign={record.permittedActions.includes('assign')}
                 allowEscalate={record.permittedActions.includes('escalate')}
+                allowResolveDeadJob={record.queueKey === 'reliability' && record.relatedEntityType === 'job_queue' && record.permittedActions.includes('resolve')}
               />}
               {!phoneRestricted && record.sourceHref ? <a className="ops-button" style={{ marginTop: 14, width: '100%' }} href={record.sourceHref}>Open related record <ExternalLink size={14} /></a> : null}
             </div>

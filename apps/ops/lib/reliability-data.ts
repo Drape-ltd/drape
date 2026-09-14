@@ -58,6 +58,8 @@ export type JobQueueHealth = {
   retryable: number
   processing: number
   dead: number
+  totalDead: number
+  reviewedDead: number
   oldestPendingAt: string | null
   oldestProcessingAt: string | null
 }
@@ -205,6 +207,8 @@ export async function loadReliabilityData(): Promise<ReliabilityData> {
       retryable: numberValue(job.retryableCount),
       processing: numberValue(statusCounts.PROCESSING),
       dead: numberValue(job.deadCount),
+      totalDead: numberValue(job.totalDeadCount),
+      reviewedDead: numberValue(job.reviewedDeadCount),
       oldestPendingAt: stringValue(job.oldestPendingAt),
       oldestProcessingAt: stringValue(job.oldestProcessingAt),
     },
