@@ -18,14 +18,16 @@ export function TurnstileChallenge({
   onTokenChange: (token: string | null) => void
 }) {
   const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
+  const siteKey = process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
   const [loaded, setLoaded] = useState(false)
   const [interactive, setInteractive] = useState(false)
   const [verified, setVerified] = useState(false)
   const [error, setError] = useState('')
-  const challengeUrl = useMemo(
-    () => `${siteUrl}/auth/mobile-challenge?action=${encodeURIComponent(action)}`,
-    [action, siteUrl],
-  )
+  const challengeUrl = useMemo(() => {
+    const params = new URLSearchParams({ action })
+    if (siteKey) params.set('siteKey', siteKey)
+    return `${siteUrl}/auth/mobile-challenge?${params.toString()}`
+  }, [action, siteKey, siteUrl])
 
   function handleMessage(event: WebViewMessageEvent) {
     let message: ChallengeMessage

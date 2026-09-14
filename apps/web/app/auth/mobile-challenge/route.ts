@@ -1,6 +1,7 @@
 import { getTurnstileSiteKey } from '../../../lib/supabase-config'
 
 const ALLOWED_ACTIONS = new Set(['signin', 'signup', 'recovery'])
+const CLOUDFLARE_ALWAYS_PASS_SITE_KEY = '1x00000000000000000000AA'
 
 function safeJson(value: string) {
   return JSON.stringify(value).replace(/</g, '\\u003c')
@@ -10,7 +11,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const requestedAction = url.searchParams.get('action') ?? ''
   const action = ALLOWED_ACTIONS.has(requestedAction) ? requestedAction : 'signin'
-  const siteKey = getTurnstileSiteKey() ?? ''
+  const configuredSiteKey = getTurnstileSiteKey() ?? ''
+  const requestedSiteKey = url.searchParams.get('siteKey')?.trim() ?? ''
+  const siteKey =
+    requestedSiteKey === configuredSiteKey || requestedSiteKey === CLOUDFLARE_ALWAYS_PASS_SITE_KEY
+      ? requestedSiteKey
+      : configuredSiteKey
   const nonce = request.headers.get('x-nonce') ?? ''
 
   const html = `<!doctype html>
