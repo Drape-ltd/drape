@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "check": "node --check src/index.mjs",
+    "test": "node --test src/index.test.mjs",
     "dev": "wrangler dev --test-scheduled",
     "deploy": "wrangler deploy"
   },

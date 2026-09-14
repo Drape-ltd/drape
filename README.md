@@ -484,7 +484,7 @@ Apply any matching SQL migration before testing those changes in a live environm
 
 `apps/ops` is an independently deployed control plane at `https://ops.drapeon.co`. Production authentication requires Cloudflare Access plus an active named `ops_workforce_principals` record. Sensitive Trust, Money Desk, deletion, evidence, and administrative actions require the dedicated short-lived sensitive audience; a normal Ops session is not sufficient.
 
-`apps/health-monitor` runs every five minutes and calls the authenticated production readiness endpoint. The durable database monitor state and Ops issue ledger are authoritative; Slack is only an alert surface. A transition to degraded or recovered is posted once, while unchanged failures are suppressed.
+`apps/health-monitor` runs every five minutes and calls the authenticated production readiness endpoint. The durable database monitor state and Ops issue ledger are authoritative; Slack is only an alert surface. Critical failures alert immediately. Latency warnings require three consecutive slow probes, recovery requires two consecutive healthy probes, and latency jitter does not create new incident fingerprints.
 
 Dead jobs are never rewritten as successful. Each true dead-letter outcome owns a Reliability case. A reviewed stale notification can be resolved without replay, which stores a named reason, immutable case event, action receipt, and audit entry while retaining the original `DEAD` job. Until that explicit review exists, the production health check stays degraded.
 

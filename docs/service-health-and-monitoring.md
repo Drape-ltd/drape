@@ -163,10 +163,14 @@ Then trigger one scheduled check from the Cloudflare dashboard and verify
 `/health` returns a fresh state. Do not deploy the Worker with missing secrets;
 an incomplete monitor creates false incidents and cannot prove Slack delivery.
 
-Slack transition alerts go to `#ops-critical` and include links to the exact
-GitHub monitor run and Drapeon Ops. Add the bot to that channel. Never use an
-expiring Slack app-configuration token as `SLACK_BOT_TOKEN`; use the installed
-bot OAuth token.
+Slack transition alerts go to `#ops-critical` and include links to Drapeon Ops.
+Critical readiness failures alert immediately. Slow-but-ready probes require
+three consecutive observations before one warning is posted, and an open
+incident requires two consecutive healthy probes before one recovery is posted.
+Changing latency values share one warning fingerprint, so normal response-time
+jitter cannot generate repeated incident-change messages. Add the bot to that
+channel. Never use an expiring Slack app-configuration token as
+`SLACK_BOT_TOKEN`; use the installed bot OAuth token.
 
 See
 `docs/beta-observability-runbook.md` for beta log queries and push receipt
