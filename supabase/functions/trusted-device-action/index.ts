@@ -16,6 +16,7 @@ import {
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
+import { reviewerAccessFromEnv } from '../_shared/reviewer-access.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'trusted-device-action'
@@ -270,6 +271,20 @@ Deno.serve(async (req) => {
           })
           return json({ ok: true, trusted: true, deviceId: trusted.id }, 200, cors)
         }
+      }
+
+      const reviewerAccess = reviewerAccessFromEnv(caller.email)
+      if (reviewerAccess) {
+        await audit(supabase, {
+          event: 'auth.reviewer_device_challenge_bypassed',
+          actor_id: caller.id,
+          severity: 'info',
+          payload: {
+            platform: body.platform,
+            expires_at: reviewerAccess.expiresAt,
+          },
+        })
+        return json({ ok: true, trusted: true }, 200, cors)
       }
 
       if (!caller.email) return json({ error: 'This account has no verified email for device confirmation.' }, 409, cors)
