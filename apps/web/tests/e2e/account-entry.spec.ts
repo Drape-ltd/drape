@@ -173,6 +173,22 @@ test.describe('authenticated web entry contract', () => {
     await expect(page).toHaveURL(/\/auth\/recover\?code=recovery-code&flow=recovery/)
   })
 
+  test('a legacy bare callback honors a fresh recovery request before exchanging the code', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'drapeon.web.auth.recoveryIntent.v1',
+        JSON.stringify({ requestedAt: Date.now() })
+      )
+    })
+    await page.goto('/auth/callback?code=legacy-recovery-code&next=%2Faccount%2Forders')
+
+    await expect(page).toHaveURL(
+      /\/auth\/recover\?code=legacy-recovery-code&next=%2Faccount%2Forders&flow=recovery/
+    )
+  })
+
   test('Back after a completed reset cannot reopen the password form', async ({ page }) => {
     await page.goto('/auth/recover?status=complete')
     await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()

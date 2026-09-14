@@ -11,6 +11,7 @@ import {
 } from '@drape/shared/auth-role'
 import { IDENTITY_CONSENT_POLICY_VERSION } from '@drape/shared'
 import { createClient } from '../lib/supabase'
+import { RECOVERY_INTENT_KEY } from '../lib/auth-recovery-intent'
 import {
   bootstrapWebOnboarding,
   persistedWebOnboardingPayload,
@@ -38,6 +39,7 @@ type OAuthIntent = {
 
 const OAUTH_INTENT_KEY = 'drapeon.web.auth.oauthIntent.v1'
 const OAUTH_INTENT_MAX_AGE_MS = 15 * 60_000
+const RECOVERY_INTENT_MAX_AGE_MS = 15 * 60_000
 
 const emailOtpTypes = new Set<EmailOtpType>([
   'signup',
@@ -97,6 +99,46 @@ function oauthRecoveryHref(intent: OAuthIntent | null, next: string) {
     return `/sign-up?role=${role}&notice=oauth-cancelled`
   }
   return `/sign-in?next=${encodeURIComponent(next)}&notice=oauth-cancelled`
+}
+
+function hasRecoveryMarker(searchParams: URLSearchParams) {
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  return (
+    searchParams.get('type') === 'recovery' ||
+    searchParams.get('flow') === 'recovery' ||
+    hashParams.get('type') === 'recovery' ||
+    hashParams.get('flow') === 'recovery'
+  )
+}
+
+function hasFreshRecoveryIntent() {
+  const raw = window.localStorage.getItem(RECOVERY_INTENT_KEY)
+  if (!raw) return false
+  try {
+    const parsed = JSON.parse(raw) as { requestedAt?: number }
+    if (
+      !Number.isFinite(parsed.requestedAt) ||
+      Date.now() - parsed.requestedAt! > RECOVERY_INTENT_MAX_AGE_MS
+    ) {
+      window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+      return false
+    }
+    return true
+  } catch {
+    window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+    return false
+  }
+}
+
+function redirectRecoveryCallback(searchParams: {
+  forEach(callback: (value: string, key: string) => void): void
+}): void {
+  const recoveryUrl = new URL('/auth/recover', window.location.origin)
+  searchParams.forEach((value, key) => recoveryUrl.searchParams.set(key, value))
+  recoveryUrl.searchParams.set('flow', 'recovery')
+  const hash = window.location.hash
+  window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+  window.location.replace(`${recoveryUrl.pathname}${recoveryUrl.search}${hash}`)
 }
 
 async function applySessionFromUrl(
@@ -468,6 +510,14 @@ export function AuthCallbackClient(): React.JSX.Element {
       const next = sanitizeNext(searchParams.get('next'))
       const oauthIntent = readOAuthIntent()
       setRecoveryHref(oauthRecoveryHref(oauthIntent, next))
+
+      // Recovery must win over any existing authenticated session. Do this
+      // before exchangeCodeForSession so the reset token can only be handled
+      // by the recovery bridge, never by normal account-entry routing.
+      if (hasRecoveryMarker(searchParams) || hasFreshRecoveryIntent()) {
+        redirectRecoveryCallback(searchParams)
+        return
+      }
 
       const providerError = searchParams.get('error_description') ?? searchParams.get('error')
       if (providerError) {

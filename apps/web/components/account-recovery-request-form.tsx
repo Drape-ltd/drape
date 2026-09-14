@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '../lib/supabase'
+import { RECOVERY_INTENT_KEY } from '../lib/auth-recovery-intent'
 import { TurnstileChallenge } from './turnstile-challenge'
 
 function mapRecoveryError(message: string | undefined) {
@@ -79,6 +80,11 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
     }
 
     setLoading(true)
+    // Keep a short-lived browser hint for older Supabase links that redirect
+    // to a bare `/` and lose their recovery type before reaching Drapeon. The
+    // callback consumes it before exchanging the code, so an existing account
+    // session cannot swallow a password-reset link as ordinary sign-in.
+    window.localStorage.setItem(RECOVERY_INTENT_KEY, JSON.stringify({ requestedAt: Date.now() }))
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
       redirectTo: getHostedRecoveryUrl(),
       captchaToken,
