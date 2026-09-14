@@ -1,12 +1,5 @@
 import { useState } from 'react'
-import {
-  KeyboardAvoidingView,
-  Platform,
-  View,
-  Text,
-  StyleSheet,
-  Alert,
-} from 'react-native'
+import { KeyboardAvoidingView, Platform, View, Text, StyleSheet, Alert } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -64,14 +57,14 @@ export default function ForgotPasswordScreen() {
       const isCaptchaError = error.message.toLowerCase().includes('captcha')
       if (isCaptchaError) {
         setSecurityError(
-          'We refreshed the security check. Wait for it to complete, then retry. Your email is still here.',
+          'We refreshed the security check. Wait for it to complete, then retry. Your email is still here.'
         )
       } else {
         Alert.alert(
           'Could not start reset',
           isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
-          : 'We could not start password reset right now. Please try again in a moment.',
+            ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
+            : 'We could not start password reset right now. Please try again in a moment.'
         )
       }
     } else {
@@ -113,10 +106,10 @@ export default function ForgotPasswordScreen() {
               </View>
               <View style={styles.nextCard}>
                 <Text style={styles.nextEyebrow}>What happens next</Text>
-                <Text style={styles.nextTitle}>Open the link from this device if you can.</Text>
+                <Text style={styles.nextTitle}>Open the link on any trusted device.</Text>
                 <Text style={styles.nextCopy}>
-                  We’ll bring you into a secure password-reset screen, then send you back to sign in
-                  with the same Drapeon account.
+                  The link opens Drapeon’s secure web reset screen. After you choose a new password,
+                  return here and sign in to the same account.
                 </Text>
               </View>
               <Button
@@ -129,24 +122,10 @@ export default function ForgotPasswordScreen() {
             <>
               <AuthEntryHeader
                 eyebrow="Account recovery"
-                title="Reset your password without losing your place."
-                body="Enter the email address on your Drapeon account and we’ll send you a secure link to set a new password."
+                title="Reset your password."
+                body="Enter the email on your Drapeon account and we’ll send you a secure reset link."
                 showWordmark={false}
               />
-              <View style={styles.reassuranceCard}>
-                <Text style={styles.reassuranceTitle}>What happens next</Text>
-                <Text style={styles.reassuranceText}>
-                  We’ll send a secure recovery link to your inbox.
-                </Text>
-                <Text style={styles.reassuranceText}>
-                  Your orders, messages, and profile stay exactly where you left them.
-                </Text>
-                <Text style={styles.reassuranceText}>
-                  If you no longer control this inbox, support may need stronger proof before
-                  helping with account recovery.
-                </Text>
-              </View>
-
               <View style={styles.formCard}>
                 <Input
                   label="Email"
@@ -181,8 +160,26 @@ export default function ForgotPasswordScreen() {
                   label="Send reset link"
                   onPress={handleReset}
                   loading={loading}
-                  disabled={!email.trim() || !isValidEmail(email.trim().toLowerCase()) || !captchaToken}
+                  disabled={
+                    !email.trim() || !isValidEmail(email.trim().toLowerCase()) || !captchaToken
+                  }
                 />
+              </View>
+
+              <View style={styles.reassuranceCard}>
+                <View style={styles.reassuranceIcon}>
+                  <Ionicons name="lock-closed" size={18} color={Colors.needleGreen} />
+                </View>
+                <View style={styles.reassuranceCopy}>
+                  <Text style={styles.reassuranceTitle}>Secure from request to reset</Text>
+                  <Text style={styles.reassuranceText}>
+                    The link opens drapeon.co to finish. Your orders, messages, and profile stay
+                    where you left them.
+                  </Text>
+                  <Text style={styles.reassuranceHelp}>
+                    No longer control this inbox? Contact support for account recovery.
+                  </Text>
+                </View>
               </View>
             </>
           )}
@@ -196,7 +193,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
-  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxl },
+  content: { padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxl },
   stateCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -221,11 +218,22 @@ const styles = StyleSheet.create({
   },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
   reassuranceCard: {
-    backgroundColor: Colors.bone,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.xl,
     padding: Spacing.lg,
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
+  reassuranceIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  reassuranceCopy: { flex: 1, gap: 4 },
   reassuranceTitle: {
     fontSize: FontSize.sm,
     color: Colors.ink,
@@ -235,6 +243,12 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 21,
+  },
+  reassuranceHelp: {
+    marginTop: Spacing.xs,
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 18,
   },
   formCard: {
     backgroundColor: Colors.bone,

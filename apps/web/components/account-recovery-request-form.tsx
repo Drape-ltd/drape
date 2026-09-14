@@ -72,7 +72,9 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
     try {
       supabase = createClient()
     } catch {
-      setError('Account recovery is temporarily unavailable. Please try again later or contact support.')
+      setError(
+        'Account recovery is temporarily unavailable. Please try again later or contact support.'
+      )
       return
     }
 
@@ -95,7 +97,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
 
   return (
     <form
-      className="mt-8 grid gap-4 rounded-[8px] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_55px_rgba(22,28,24,0.06)] sm:p-6"
+      className="grid gap-5 rounded-[8px] border border-ink/8 bg-white/90 p-5 shadow-[0_18px_55px_rgba(22,28,24,0.06)] sm:p-7"
       noValidate
       onSubmit={(event) => {
         event.preventDefault()
@@ -103,10 +105,13 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
       }}
     >
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Reset password</p>
-        <h2 className="mt-3 text-3xl leading-tight text-ink">Send a secure reset link.</h2>
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+          Reset password
+        </p>
+        <h2 className="mt-3 text-3xl leading-tight text-ink">Where should we send the link?</h2>
         <p className="mt-3 text-sm leading-7 text-ink/64">
-          Use the email on your Drapeon account. The reset link opens the protected recovery flow.
+          Enter the email on your Drapeon account. For privacy, the confirmation looks the same
+          whether or not the address is registered.
         </p>
       </div>
       <label className="grid gap-2 text-sm font-semibold text-ink">
@@ -120,13 +125,13 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
           className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
         />
       </label>
-      <TurnstileChallenge
-        key={captchaResetKey}
-        action="recovery"
-        onTokenChange={setCaptchaToken}
-      />
+      <TurnstileChallenge key={captchaResetKey} action="recovery" onTokenChange={setCaptchaToken} />
       {error ? (
-        <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+        <div
+          role="alert"
+          aria-live="polite"
+          className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+        >
           {error}
         </div>
       ) : null}

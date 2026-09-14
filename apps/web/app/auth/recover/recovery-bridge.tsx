@@ -24,21 +24,36 @@ export function RecoveryBridge(): any {
     // the web; it must never require an installed mobile app to finish.
     async function applyRecoverySession() {
       if (typeof window === 'undefined') return
-      const supabase = createClient()
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
+      const accessToken = hashParams.get('access_token')
+      const refreshToken = hashParams.get('refresh_token')
+      const code = searchParams.get('code')
+
+      if (!tokenHash && !(accessToken && refreshToken) && !code) {
+        setSessionError('No valid recovery token found. Request a new password reset link.')
+        return
+      }
+
+      let supabase
+      try {
+        supabase = createClient()
+      } catch {
+        setSessionError(
+          'Account recovery is temporarily unavailable. Request a new link or contact support.'
+        )
+        return
+      }
 
       // token_hash flow (email link)
-      const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
       if (tokenHash) {
         const { error: otpError } = await supabase.auth.verifyOtp({
           token_hash: tokenHash,
           type: 'recovery',
         })
         if (otpError) {
-          setSessionError(
-            'This reset link has expired or was already used. Request a new one.',
-          )
+          setSessionError('This reset link has expired or was already used. Request a new one.')
           return
         }
         setSessionReady(true)
@@ -46,17 +61,13 @@ export function RecoveryBridge(): any {
       }
 
       // hash access_token flow (older Supabase email links)
-      const accessToken = hashParams.get('access_token')
-      const refreshToken = hashParams.get('refresh_token')
       if (accessToken && refreshToken) {
         const { error: sessionErr } = await supabase.auth.setSession({
           access_token: accessToken,
           refresh_token: refreshToken,
         })
         if (sessionErr) {
-          setSessionError(
-            'This reset link has expired or was already used. Request a new one.',
-          )
+          setSessionError('This reset link has expired or was already used. Request a new one.')
           return
         }
         setSessionReady(true)
@@ -64,23 +75,20 @@ export function RecoveryBridge(): any {
       }
 
       // code flow
-      const code = searchParams.get('code')
       if (code) {
         const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
         if (codeError) {
-          setSessionError(
-            'This reset link has expired or was already used. Request a new one.',
-          )
+          setSessionError('This reset link has expired or was already used. Request a new one.')
           return
         }
         setSessionReady(true)
         return
       }
-
-      setSessionError('No valid recovery token found. Request a new password reset link.')
     }
 
-    void applyRecoverySession()
+    void applyRecoverySession().catch(() => {
+      setSessionError('Drapeon could not verify this reset link. Request a new one and try again.')
+    })
   }, [])
 
   async function resetPassword() {
@@ -97,7 +105,7 @@ export function RecoveryBridge(): any {
     setLoading(false)
     if (updateError) {
       setError(
-        'Could not update your password. The reset link may have expired — request a new one.',
+        'Could not update your password. The reset link may have expired — request a new one.'
       )
       return
     }
@@ -112,7 +120,7 @@ export function RecoveryBridge(): any {
     ])
     if (revokeError || noticeError) {
       setError(
-        'Your password changed, but Drapeon could not finish every security cleanup step. Sign in with your new password and review Login & security.',
+        'Your password changed, but Drapeon could not finish every security cleanup step. Sign in with your new password and review Login & security.'
       )
       return
     }
@@ -126,13 +134,16 @@ export function RecoveryBridge(): any {
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)] px-5 py-8">
       <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-md place-items-center">
         <div className="w-full rounded-[8px] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Drapeon
+          </p>
 
           {done ? (
             <>
               <h1 className="mt-3 text-3xl text-ink">Password updated.</h1>
               <p className="mt-3 text-sm leading-7 text-ink/66">
-                Your other sessions and remembered devices have been signed out. Use your new password to sign in again.
+                Your other sessions and remembered devices have been signed out. Use your new
+                password to sign in again.
               </p>
               <a
                 href="/sign-in?password_reset=1"
@@ -207,7 +218,10 @@ export function RecoveryBridge(): any {
                   </span>
                 </div>
                 {error ? (
-                  <p role="alert" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
+                  <p
+                    role="alert"
+                    className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+                  >
                     {error}
                   </p>
                 ) : null}

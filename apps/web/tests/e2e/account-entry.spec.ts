@@ -137,6 +137,34 @@ test.describe('authenticated web entry contract', () => {
       .toMatchObject({ loading: 0 })
   })
 
+  test('password recovery explains the app-to-web handoff and never exposes account existence', async ({
+    page,
+  }) => {
+    await page.goto('/account/recovery')
+
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Reset your password.' })
+    ).toBeVisible()
+    await expect(page.getByText(/completed on drapeon\.co/i)).toBeVisible()
+    await expect(page.getByText(/confirmation looks the same/i)).toBeVisible()
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    )
+    expect(overflow, '/account/recovery horizontal overflow').toBeLessThanOrEqual(1)
+  })
+
+  test('a recovery URL without a token fails closed instead of hanging', async ({ page }) => {
+    await page.goto('/auth/recover')
+
+    await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Request a new reset link' })).toHaveAttribute(
+      'href',
+      '/account/recovery'
+    )
+    await expect(page.getByText('Verifying your link…')).toHaveCount(0)
+  })
+
   test('account Explore stays inside the authenticated workspace', async ({ page }) => {
     await page.goto('/account/explore')
     await expect(page).toHaveURL(/\/account\/explore|\/sign-in/)
