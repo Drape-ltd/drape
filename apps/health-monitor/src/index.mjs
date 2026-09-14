@@ -156,10 +156,22 @@ async function runChecks(env) {
   const transitions = ledgerStates.map((state) => state?.transition ?? 'NONE')
   let slackDelivery = null
 
-  if (transitions.some((transition) => transition === 'DEGRADED' || transition === 'CHANGED')) {
-    slackDelivery = await postSlack(env, ':rotating_light: *Drapeon service incident changed*', summaryFor(results))
-  } else if (transitions.some((transition) => transition === 'RECOVERED')) {
-    slackDelivery = await postSlack(env, ':white_check_mark: *Drapeon services recovered*', summaryFor(results))
+  try {
+    if (transitions.some((transition) => transition === 'DEGRADED' || transition === 'CHANGED')) {
+      slackDelivery = await postSlack(env, ':rotating_light: *Drapeon service incident changed*', summaryFor(results))
+    } else if (transitions.some((transition) => transition === 'RECOVERED')) {
+      slackDelivery = await postSlack(env, ':white_check_mark: *Drapeon services recovered*', summaryFor(results))
+    }
+  } catch (error) {
+    // Alert delivery must never prevent the synthetic result from reaching KV
+    // and the durable Ops ledger. GitHub Actions remains the independent Slack
+    // fallback while this failure is visible in Worker logs.
+    console.error(JSON.stringify({
+      event: 'health_alert_delivery_failed',
+      checkedAt,
+      correlationId,
+      error: compact(error?.message || error),
+    }))
   }
   if (slackDelivery) {
     await Promise.all(results.map((result) => persistMonitorResult(env, result, checkedAt, currentFingerprint, correlationId, slackDelivery)))

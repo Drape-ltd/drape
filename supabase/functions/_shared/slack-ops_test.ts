@@ -11,12 +11,8 @@ import {
 } from "./slack-ops.ts";
 
 Deno.test("Slack Ops links open the exact authenticated case", () => {
-  const issueId = "case id/with unsafe chars";
-  const url = exactOpsIssueUrl(issueId, "https://ops.drapeon.co/");
-  assertStringIncludes(url, "https://ops.drapeon.co/ops?");
-  assertStringIncludes(url, "view=workflow-issues");
-  assertStringIncludes(url, `focusIssue=${encodeURIComponent(issueId)}`);
-  assertStringIncludes(url, `#workflow-issue-${encodeURIComponent(issueId)}`);
+  const url = exactOpsIssueUrl("ops-a7107c46", "https://ops.drapeon.co/");
+  assertEquals(url, "https://ops.drapeon.co/ops/cases/OPS-A7107C46");
 });
 
 Deno.test("Slack summaries redact contact data, URLs, and common secrets", () => {

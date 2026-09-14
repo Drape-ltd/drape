@@ -13,6 +13,7 @@ type SlackChannelKey =
 type OpsIssue = {
   id: string;
   issue_number: number;
+  case_number: string;
   issue_type: string;
   severity: string;
   status: string;
@@ -81,11 +82,12 @@ function webBaseUrl() {
     .replace(/\/+$/u, "");
 }
 
-export function exactOpsIssueUrl(issueId: string, baseUrl = webBaseUrl()) {
-  const encoded = encodeURIComponent(issueId);
-  return `${
-    baseUrl.replace(/\/+$/u, "")
-  }/ops?view=workflow-issues&focusIssue=${encoded}#workflow-issue-${encoded}`;
+export function exactOpsIssueUrl(caseNumber: string, baseUrl = webBaseUrl()) {
+  const normalized = caseNumber.trim().toUpperCase();
+  if (!/^OPS-[A-Z0-9-]{1,60}$/u.test(normalized)) {
+    throw new Error("The Ops case number is invalid");
+  }
+  return `${baseUrl.replace(/\/+$/u, "")}/ops/cases/${encodeURIComponent(normalized)}`;
 }
 
 export function redactSlackText(value: unknown, maxLength = 600) {
@@ -206,7 +208,7 @@ function issueBlocks(
     elements: [{
       type: "button",
       text: { type: "plain_text", text: "Open exact Ops case", emoji: true },
-      url: exactOpsIssueUrl(issue.id),
+      url: exactOpsIssueUrl(issue.case_number),
       action_id: `open_ops_${channelKey.toLowerCase()}`,
     }],
   });
@@ -255,7 +257,7 @@ async function loadIssueAndAudit(
 ) {
   const [issueResponse, auditResponse] = await Promise.all([
     supabase.from("ops_issues").select(
-      "id,issue_number,issue_type,severity,status,source,order_id,provider,stage,title,description,recommended_action,created_at,updated_at",
+      "id,issue_number,case_number,issue_type,severity,status,source,order_id,provider,stage,title,description,recommended_action,created_at,updated_at",
     ).eq("id", issueId).single(),
     supabase.from("ops_audit_logs").select(
       "id,issue_id,action_taken,performed_role,reason,created_at,after_state",
