@@ -205,6 +205,8 @@ function buildAuthCallbackUrl(nextPath = '/account/orders') {
   return url.toString()
 }
 
+const OAUTH_INTENT_KEY = 'drapeon.web.auth.oauthIntent.v1'
+
 function createMediaClaimToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
@@ -736,7 +738,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     TAILOR_TRUST_VIDEO_CHALLENGES[0].text
   )
   const [trustConsentGranted, setTrustConsentGranted] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(() =>
+    searchParams.get('notice') === 'oauth-cancelled'
+      ? isSignUp
+        ? 'Google or Apple account creation was cancelled. Choose a provider or continue with email.'
+        : 'Google or Apple sign-in was cancelled. Choose a provider or sign in with email.'
+      : null
+  )
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [resendLoading, setResendLoading] = useState(false)
@@ -753,6 +761,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const [signupDraftHydrated, setSignupDraftHydrated] = useState(false)
+
   const signupDraftSnapshot = useMemo<Record<string, unknown>>(
     () => ({
       step,
@@ -1355,6 +1364,23 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     setProviderLoading(provider)
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
+    const oauthNext =
+      contextualReturn ??
+      (isSignUp
+        ? role === 'TAILOR'
+          ? '/account/profile?setup=1'
+          : '/account/customer/setup'
+        : '/account/orders')
+    window.localStorage.setItem(
+      OAUTH_INTENT_KEY,
+      JSON.stringify({
+        provider,
+        mode: isSignUp ? 'sign-up' : 'sign-in',
+        role: isSignUp ? role : null,
+        next: oauthNext,
+        startedAt: Date.now(),
+      })
+    )
     if (isSignUp) {
       window.localStorage.setItem('drapeon.web.auth.roleIntent', role)
     } else {
@@ -1367,14 +1393,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         supabase.auth.signInWithOAuth({
           provider,
           options: {
-            redirectTo: buildAuthCallbackUrl(
-              contextualReturn ??
-                (isSignUp
-                  ? role === 'TAILOR'
-                    ? '/account/profile?setup=1'
-                    : '/account/customer/setup'
-                  : '/account/orders')
-            ),
+            redirectTo: buildAuthCallbackUrl(oauthNext),
             skipBrowserRedirect: true,
           },
         }),

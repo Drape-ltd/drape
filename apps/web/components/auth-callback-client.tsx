@@ -24,6 +24,17 @@ import {
 
 type EmailOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
 
+type OAuthIntent = {
+  provider: 'apple' | 'google'
+  mode: 'sign-in' | 'sign-up'
+  role: 'CUSTOMER' | 'TAILOR' | null
+  next: string
+  startedAt: number
+}
+
+const OAUTH_INTENT_KEY = 'drapeon.web.auth.oauthIntent.v1'
+const OAUTH_INTENT_MAX_AGE_MS = 15 * 60_000
+
 const emailOtpTypes = new Set<EmailOtpType>([
   'signup',
   'invite',
@@ -43,6 +54,9 @@ function normalizeEmailOtpType(value: string | null): EmailOtpType | null {
 
 function mapCallbackError(message: string | undefined) {
   const normalized = (message ?? '').toLowerCase()
+  if (normalized.includes('access_denied') || normalized.includes('cancel')) {
+    return 'Account access was cancelled. Nothing was changed.'
+  }
   if (normalized.includes('expired') || normalized.includes('invalid')) {
     return 'This account link has expired or was already used. Request a fresh link and try again.'
   }
@@ -50,6 +64,35 @@ function mapCallbackError(message: string | undefined) {
     return 'Connection looks weak. Try again when the signal improves.'
   }
   return 'We could not finish this account link. Return to sign in and try again.'
+}
+
+function readOAuthIntent(): OAuthIntent | null {
+  const raw = window.localStorage.getItem(OAUTH_INTENT_KEY)
+  if (!raw) return null
+  try {
+    const intent = JSON.parse(raw) as OAuthIntent
+    if (
+      (intent.provider !== 'apple' && intent.provider !== 'google') ||
+      (intent.mode !== 'sign-in' && intent.mode !== 'sign-up') ||
+      !Number.isFinite(intent.startedAt) ||
+      Date.now() - intent.startedAt > OAUTH_INTENT_MAX_AGE_MS
+    ) {
+      window.localStorage.removeItem(OAUTH_INTENT_KEY)
+      return null
+    }
+    return intent
+  } catch {
+    window.localStorage.removeItem(OAUTH_INTENT_KEY)
+    return null
+  }
+}
+
+function oauthRecoveryHref(intent: OAuthIntent | null, next: string) {
+  if (intent?.mode === 'sign-up') {
+    const role = intent.role === 'TAILOR' ? 'TAILOR' : 'CUSTOMER'
+    return `/sign-up?role=${role}&notice=oauth-cancelled`
+  }
+  return `/sign-in?next=${encodeURIComponent(next)}&notice=oauth-cancelled`
 }
 
 async function applySessionFromUrl(
@@ -64,7 +107,12 @@ async function applySessionFromUrl(
   const code = searchParams.get('code')
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (error) throw error
+    if (error) {
+      // Browser back/forward can replay an already-consumed OAuth callback.
+      // Keep a valid session instead of turning that into a dead-end error.
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (!sessionData.session) throw error
+    }
     return
   }
 
@@ -407,15 +455,25 @@ export function AuthCallbackClient(): React.JSX.Element {
   const searchParams = useSearchParams()
   const [message, setMessage] = useState('Finishing sign in...')
   const [failed, setFailed] = useState(false)
+  const [recoveryHref, setRecoveryHref] = useState('/sign-in')
 
   useEffect(() => {
     let active = true
 
     async function complete() {
-      const supabase = createClient()
       const next = sanitizeNext(searchParams.get('next'))
+      const oauthIntent = readOAuthIntent()
+      setRecoveryHref(oauthRecoveryHref(oauthIntent, next))
+
+      const providerError = searchParams.get('error_description') ?? searchParams.get('error')
+      if (providerError) {
+        setFailed(true)
+        setMessage(mapCallbackError(providerError))
+        return
+      }
 
       try {
+        const supabase = createClient()
         await applySessionFromUrl(supabase, searchParams)
 
         const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
@@ -580,6 +638,7 @@ export function AuthCallbackClient(): React.JSX.Element {
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
         window.localStorage.removeItem('drapeon.web.auth.onboarding')
         window.localStorage.removeItem('drapeon.web.auth.signup-draft.v1')
+        window.localStorage.removeItem(OAUTH_INTENT_KEY)
         markWebSessionScope(true)
 
         if (active) {
@@ -614,15 +673,14 @@ export function AuthCallbackClient(): React.JSX.Element {
           <p className="mt-4 text-sm leading-7 text-ink/66">{message}</p>
           {failed ? (
             <div className="mt-5 flex flex-col items-center gap-3">
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
+              <Link
+                href={recoveryHref as Route}
                 className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
               >
                 Try again
-              </button>
-              <Link href="/sign-in" className="text-sm font-semibold text-needle">
-                Return to sign in
+              </Link>
+              <Link href={recoveryHref as Route} className="text-sm font-semibold text-needle">
+                {recoveryHref.startsWith('/sign-up') ? 'Return to create account' : 'Return to sign in'}
               </Link>
             </div>
           ) : null}

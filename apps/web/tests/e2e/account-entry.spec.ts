@@ -77,6 +77,66 @@ test.describe('authenticated web entry contract', () => {
     ).toHaveAttribute('aria-pressed', 'false')
   })
 
+  test('cancelled social sign-in returns to a usable sign-in page', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'drapeon.web.auth.oauthIntent.v1',
+        JSON.stringify({
+          provider: 'google',
+          mode: 'sign-in',
+          role: null,
+          next: '/account/orders',
+          startedAt: Date.now(),
+        })
+      )
+    })
+    await page.goto('/auth/callback?error=access_denied&next=%2Faccount%2Forders')
+
+    await expect(page.getByText('Account access was cancelled. Nothing was changed.')).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Return to sign in' })).toHaveAttribute(
+      'href',
+      '/sign-in?next=%2Faccount%2Forders&notice=oauth-cancelled'
+    )
+  })
+
+  test('cancelled social signup returns to the selected role without replaying the callback', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'drapeon.web.auth.oauthIntent.v1',
+        JSON.stringify({
+          provider: 'google',
+          mode: 'sign-up',
+          role: 'TAILOR',
+          next: '/account/profile?setup=1',
+          startedAt: Date.now(),
+        })
+      )
+    })
+    await page.goto('/auth/callback?error=access_denied&next=%2Faccount%2Fprofile%3Fsetup%3D1')
+
+    await expect(page.getByRole('link', { name: 'Return to create account' })).toHaveAttribute(
+      'href',
+      '/sign-up?role=TAILOR&notice=oauth-cancelled'
+    )
+  })
+
+  test('customer setup never remains on an unbounded loading screen', async ({ page }) => {
+    await page.goto('/account/customer/setup')
+
+    await expect
+      .poll(
+        async () => ({
+          loading: await page.getByText('Loading your setup…').count(),
+          url: page.url(),
+          unavailable: await page.getByRole('heading', { name: 'Setup unavailable' }).count(),
+        }),
+        { timeout: 12_000 }
+      )
+      .toMatchObject({ loading: 0 })
+  })
+
   test('account Explore stays inside the authenticated workspace', async ({ page }) => {
     await page.goto('/account/explore')
     await expect(page).toHaveURL(/\/account\/explore|\/sign-in/)

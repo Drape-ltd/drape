@@ -19,6 +19,8 @@ import { PhoneNumberField } from './ui/phone-number-field'
 type UnitPreference = 'in' | 'cm'
 type SetupState = 'loading' | 'ready' | 'error'
 
+const SETUP_REQUEST_TIMEOUT_MS = 8_000
+
 type CustomerProfileRow = {
   display_name?: string | null
   phone?: string | null
@@ -72,6 +74,18 @@ function profileIsComplete(profile: CustomerProfileRow | null, metadataPhone: st
   )
 }
 
+function withSetupTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<T>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${label} timed out`)), SETUP_REQUEST_TIMEOUT_MS)
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout)
+  })
+}
+
 async function invokeProfileAction<T>(body: Record<string, unknown>) {
   const result = await createClient().functions.invoke('account-profile-action', { body })
   const payload = (result.data ?? {}) as T & { error?: string; message?: string }
@@ -104,13 +118,24 @@ export function CustomerAccountSetup(): React.JSX.Element {
   const [otpExpiresAt, setOtpExpiresAt] = useState<string | null>(null)
   const [busy, setBusy] = useState<'send' | 'verify' | 'save' | 'signout' | null>(null)
   const [error, setError] = useState('')
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
     let active = true
-    const supabase = createClient()
 
     async function load() {
-      const { data, error: userError } = await supabase.auth.getUser()
+      const supabase = createClient()
+      setState('loading')
+      setLoadError('')
+      const { data: sessionData } = await withSetupTimeout(
+        supabase.auth.getSession(),
+        'Account session'
+      )
+      const sessionUser = sessionData.session?.user ?? null
+      const userResult = sessionUser
+        ? { data: { user: sessionUser }, error: null }
+        : await withSetupTimeout(supabase.auth.getUser(), 'Account session')
+      const { data, error: userError } = userResult
       if (!active) return
       if (userError || !data.user) {
         router.replace('/sign-in?next=%2Faccount%2Fcustomer%2Fsetup' as Route)
@@ -118,16 +143,22 @@ export function CustomerAccountSetup(): React.JSX.Element {
       }
 
       const [profileResult, accountResult] = await Promise.all([
-        supabase
-          .from('customer_profiles')
-          .select('display_name, phone, unit_preference, garment_context, measurements')
-          .eq('user_id', data.user.id)
-          .maybeSingle(),
-        supabase
-          .from('users')
-          .select('role, default_currency, currency_source, region_code')
-          .eq('id', data.user.id)
-          .maybeSingle(),
+        withSetupTimeout(
+          supabase
+            .from('customer_profiles')
+            .select('display_name, phone, unit_preference, garment_context, measurements')
+            .eq('user_id', data.user.id)
+            .maybeSingle(),
+          'Customer profile'
+        ),
+        withSetupTimeout(
+          supabase
+            .from('users')
+            .select('role, default_currency, currency_source, region_code')
+            .eq('id', data.user.id)
+            .maybeSingle(),
+          'Account details'
+        ),
       ])
       if (!active) return
       if (profileResult.error || accountResult.error) {
@@ -203,13 +234,13 @@ export function CustomerAccountSetup(): React.JSX.Element {
 
     void load().catch(() => {
       if (!active) return
-      setLoadError('Your account setup could not load. Refresh to try again.')
+      setLoadError('Your account setup could not load. Try again or return to sign in.')
       setState('error')
     })
     return () => {
       active = false
     }
-  }, [router])
+  }, [loadAttempt, router])
 
   const normalizedPhone = normalizePhoneForStorage(phone)
   const phoneAlreadyVerified = Boolean(normalizedPhone && normalizedPhone === verifiedPhone)
@@ -333,6 +364,22 @@ export function CustomerAccountSetup(): React.JSX.Element {
         <div className="w-full max-w-lg rounded-[8px] border border-rust/20 bg-white p-6">
           <h1 className="text-3xl text-ink">Setup unavailable</h1>
           <p className="mt-3 text-sm leading-6 text-ink/64">{loadError}</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+              className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleUseAnotherAccount()}
+              className="inline-flex min-h-11 items-center justify-center rounded-full border border-ink/12 bg-white px-5 py-2.5 text-sm font-semibold text-needle"
+            >
+              Return to sign in
+            </button>
+          </div>
         </div>
       </main>
     )
