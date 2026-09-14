@@ -763,7 +763,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!assessment.trusted) {
         if (!assessment.challengeId)
           throw new Error('A device verification code could not be created.')
-        await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+        // Keep this sign-in session only in memory until the device code is
+        // verified. `signOut({ scope: 'local' })` invalidates the credential
+        // that `trusted-device-action` needs to approve the challenge, so it
+        // caused every code submission to fail as unauthenticated. Removing
+        // persisted storage still ensures an app restart cannot resume this
+        // unverified session; RouteGuard continues to see `session === null`.
+        await clearActiveAuthStorage().catch(() => undefined)
         setSession(null)
         return {
           error: null,
