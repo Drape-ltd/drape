@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '../../../lib/supabase'
 import { RECOVERY_HANDOFF_KEY, RECOVERY_INTENT_KEY } from '../../../lib/auth-recovery-intent'
 import { safeAccountReturnPath } from '../../../lib/account-return-path'
@@ -11,6 +11,11 @@ import {
 } from '@drape/shared/auth-security'
 
 export function RecoveryBridge(): any {
+  // The browser client that successfully consumed this one-use recovery
+  // token owns the resulting session. Keep it for the password update rather
+  // than constructing a fresh singleton which may not have observed that
+  // session yet.
+  const recoveryClientRef = useRef<ReturnType<typeof createClient> | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -25,6 +30,7 @@ export function RecoveryBridge(): any {
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
 
   function failClosedRecovery(message: string) {
+    recoveryClientRef.current = null
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
       window.localStorage.removeItem(RECOVERY_INTENT_KEY)
@@ -97,6 +103,8 @@ export function RecoveryBridge(): any {
           if (active) failClosedRecovery(completedMessage)
           return
         }
+
+        recoveryClientRef.current = supabase
 
         // The verified session is now in browser storage. Remove all callback
         // material from the address bar before rendering the password form.
@@ -219,6 +227,7 @@ export function RecoveryBridge(): any {
         failClosedRecovery(completedMessage)
         return
       }
+      recoveryClientRef.current = supabase
       window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
       window.localStorage.removeItem(RECOVERY_INTENT_KEY)
       window.sessionStorage.removeItem(RECOVERY_HANDOFF_KEY)
@@ -242,8 +251,12 @@ export function RecoveryBridge(): any {
       return
     }
     setError(null)
+    const supabase = recoveryClientRef.current
+    if (!supabase) {
+      setError('Your reset session is no longer active. Request a new reset link and try again.')
+      return
+    }
     setLoading(true)
-    const supabase = createClient()
     const { error: updateError } = await supabase.auth.updateUser({ password })
     setLoading(false)
     if (updateError) {
@@ -272,6 +285,7 @@ export function RecoveryBridge(): any {
 
     await supabase.auth.signOut({ scope: 'others' })
     await supabase.auth.signOut({ scope: 'local' })
+    recoveryClientRef.current = null
     // Replace the recovery history entry before showing the success state. If
     // the user later presses Back, the bridge sees status=complete and renders
     // the expired-link state instead of an active password form.
