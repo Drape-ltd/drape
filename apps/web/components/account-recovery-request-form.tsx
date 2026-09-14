@@ -109,7 +109,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
       return
     }
 
-    setMessage('If that email has a Drapeon account, a password reset link is on the way.')
+    setMessage('If that email has a Drapeon account, a password reset email is on the way.')
   }
 
   return (

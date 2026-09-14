@@ -8,7 +8,7 @@
   </head>
   <body style="background:#f4f1eb;margin:0;padding:0">
     <div style="display:none;font-size:1px;color:#f4f1eb;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden">
-      Use this secure link to choose a new Drapeon password.
+      Use this secure code to choose a new Drapeon password.
     </div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1eb;width:100%">
       <tr>
@@ -24,11 +24,19 @@
                 <p style="color:#2f7557;font-family:Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:1.4px;line-height:18px;margin:0 0 12px;text-transform:uppercase">Account recovery</p>
                 <h1 style="color:#17211c;font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:40px;margin:0 0 24px">Reset your password</h1>
                 <p style="color:#25322b;font-family:Arial,sans-serif;font-size:16px;line-height:25px;margin:0 0 16px">We received a request to reset the password for {{ .Email }}.</p>
-                <p style="color:#3d4942;font-family:Arial,sans-serif;font-size:16px;line-height:26px;margin:0">The secure link below opens Drapeon’s protected recovery page. After you choose a new password, other sessions and remembered devices will be signed out.</p>
+                <p style="color:#3d4942;font-family:Arial,sans-serif;font-size:16px;line-height:26px;margin:0">Use this one-time code on Drapeon’s protected recovery page. After you choose a new password, other sessions and remembered devices will be signed out.</p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1eb;border:1px solid #e5e1d8;border-radius:12px;margin:24px 0 0;width:100%">
+                  <tr>
+                    <td align="center" style="padding:18px 14px">
+                      <p style="color:#6b716d;font-family:Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:1.2px;line-height:16px;margin:0 0 8px;text-transform:uppercase">Your reset code</p>
+                      <p style="color:#17211c;font-family:Arial,sans-serif;font-size:28px;font-weight:700;letter-spacing:7px;line-height:34px;margin:0">{{ .Token }}</p>
+                    </td>
+                  </tr>
+                </table>
                 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 4px">
                   <tr>
                     <td bgcolor="#2f7557" style="border-radius:999px">
-                      <a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash | urlquery }}&amp;type=recovery" style="color:#ffffff;display:inline-block;font-family:Arial,sans-serif;font-size:16px;font-weight:700;line-height:20px;padding:15px 24px;text-decoration:none">Reset password securely</a>
+                      <a href="{{ .RedirectTo }}&amp;email={{ .Email | urlquery }}" style="color:#ffffff;display:inline-block;font-family:Arial,sans-serif;font-size:16px;font-weight:700;line-height:20px;padding:15px 24px;text-decoration:none">Reset password securely</a>
                     </td>
                   </tr>
                 </table>

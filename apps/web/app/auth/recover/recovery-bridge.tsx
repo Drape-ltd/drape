@@ -18,7 +18,11 @@ export function RecoveryBridge(): any {
   const recoveryClientRef = useRef<ReturnType<typeof createClient> | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
+  const [awaitingRecoveryCode, setAwaitingRecoveryCode] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  const [recoveryEmail, setRecoveryEmail] = useState('')
+  const [recoveryCode, setRecoveryCode] = useState('')
+  const [recoveryCodeError, setRecoveryCodeError] = useState<string | null>(null)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -40,8 +44,11 @@ export function RecoveryBridge(): any {
       window.history.replaceState(null, '', '/auth/recover?status=expired')
     }
     setAwaitingConfirmation(false)
+    setAwaitingRecoveryCode(false)
     setSessionReady(false)
     setPassword('')
+    setRecoveryCode('')
+    setRecoveryCodeError(null)
     setError(null)
     setCleanupWarning(false)
     setSessionError(message)
@@ -131,6 +138,8 @@ export function RecoveryBridge(): any {
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
       setReturnTo(safeAccountReturnPath(searchParams.get('next')) ?? '/account/orders')
+      const recoveryFlow =
+        searchParams.get('flow') === 'recovery' || hashParams.get('flow') === 'recovery'
       const providerError = searchParams.get('error') || hashParams.get('error')
       const providerErrorCode = searchParams.get('error_code') || hashParams.get('error_code')
       if (providerError || providerErrorCode) {
@@ -148,6 +157,16 @@ export function RecoveryBridge(): any {
       const confirmationUrl = searchParams.get('confirmation_url') || hashParams.get('confirmation_url')
 
       if (!tokenHash && !(accessToken && refreshToken) && !code && !confirmationUrl) {
+        // The email code route intentionally carries no credential in its
+        // URL. A mail scanner can visit it without spending the code, and the
+        // person can finish on a different browser or device.
+        if (recoveryFlow) {
+          if (active) {
+            setRecoveryEmail(searchParams.get('email')?.trim().toLowerCase() ?? '')
+            setAwaitingRecoveryCode(true)
+          }
+          return
+        }
         failClosedRecovery('No valid recovery token found. Request a new password reset link.')
         return
       }
@@ -243,6 +262,46 @@ export function RecoveryBridge(): any {
     }
   }
 
+  async function verifyRecoveryCode() {
+    if (loading || sessionReady || !awaitingRecoveryCode) return
+
+    const email = recoveryEmail.trim().toLowerCase()
+    const token = recoveryCode.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setRecoveryCodeError('Enter the email address that received this reset code.')
+      return
+    }
+    if (!/^\d{6,8}$/.test(token)) {
+      setRecoveryCodeError('Enter the full reset code from the email.')
+      return
+    }
+
+    setLoading(true)
+    setRecoveryCodeError(null)
+    try {
+      const supabase = createClient({ auth: { detectSessionInUrl: false }, isSingleton: false })
+      const result = await supabase.auth.verifyOtp({ email, token, type: 'recovery' })
+      if (result.error || !result.data.session) {
+        recoveryClientRef.current = null
+        setRecoveryCode('')
+        setRecoveryCodeError('That reset code is invalid or expired. Request a new link and try again.')
+        return
+      }
+
+      recoveryClientRef.current = supabase
+      // The email address and one-time code never remain in history once a
+      // recovery session has been established.
+      window.history.replaceState(null, '', '/auth/recover')
+      setAwaitingRecoveryCode(false)
+      setSessionReady(true)
+    } catch {
+      recoveryClientRef.current = null
+      setRecoveryCodeError('Drapeon could not verify that code. Check your connection and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function resetPassword() {
     if (loading || !sessionReady) return
     const strengthError = validatePasswordStrength(password, {})
@@ -260,9 +319,23 @@ export function RecoveryBridge(): any {
     const { error: updateError } = await supabase.auth.updateUser({ password })
     setLoading(false)
     if (updateError) {
-      setError(
-        'Could not update your password. The reset link may have expired — request a new one.'
-      )
+      const message = updateError.message.toLowerCase()
+      if (message.includes('different from the old password')) {
+        setError('Choose a new password that is different from your current password.')
+      } else if (
+        updateError.status === 401 ||
+        updateError.status === 403 ||
+        message.includes('session') ||
+        message.includes('jwt')
+      ) {
+        // Auth rejected the recovery session, so fail closed rather than
+        // allowing the form to appear usable after its authority has gone.
+        failClosedRecovery('This recovery session expired. Request a new reset code and try again.')
+      } else {
+        // Keep the verified, in-memory recovery session alive for temporary
+        // transport failures. The user can retry without burning a new code.
+        setError('We could not update your password. Check your connection and try again.')
+      }
       return
     }
 
@@ -352,6 +425,58 @@ export function RecoveryBridge(): any {
               >
                 {loading ? 'Verifying…' : 'Continue to reset password'}
               </button>
+            </>
+          ) : awaitingRecoveryCode ? (
+            <>
+              <h1 className="mt-3 text-3xl text-ink">Enter your reset code.</h1>
+              <p className="mt-3 text-sm leading-7 text-ink/66">
+                Enter the one-time code from the email to securely choose a new password.
+              </p>
+              <form
+                className="mt-6 grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void verifyRecoveryCode()
+                }}
+              >
+                <label className="grid gap-2 text-sm font-semibold text-ink">
+                  Email
+                  <input
+                    value={recoveryEmail}
+                    onChange={(event) => setRecoveryEmail(event.target.value)}
+                    type="email"
+                    autoComplete="email"
+                    className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition focus:border-needle"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-ink">
+                  Reset code
+                  <input
+                    value={recoveryCode}
+                    onChange={(event) => setRecoveryCode(event.target.value.replace(/\s/g, ''))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={8}
+                    placeholder="Enter the code from your email"
+                    className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal tracking-[0.18em] text-ink outline-none transition placeholder:tracking-normal placeholder:text-ink/36 focus:border-needle"
+                  />
+                </label>
+                {recoveryCodeError ? (
+                  <p
+                    role="alert"
+                    className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+                  >
+                    {recoveryCodeError}
+                  </p>
+                ) : null}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle/90 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
+                >
+                  {loading ? 'Verifying…' : 'Verify code'}
+                </button>
+              </form>
             </>
           ) : !sessionReady ? (
             <>

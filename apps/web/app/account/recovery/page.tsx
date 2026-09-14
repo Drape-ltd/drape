@@ -15,8 +15,8 @@ const RECOVERY_STEPS = [
   ['1', 'Check your inbox', 'The email can take a minute or two to arrive.'],
   [
     '2',
-    'Open the secure link',
-    'The reset is completed on drapeon.co—even when you requested it from the app.',
+    'Open the recovery page',
+    'Enter the one-time code from the email on drapeon.co—even when you requested it from the app.',
   ],
   [
     '3',
@@ -40,8 +40,8 @@ export default function AccountRecoveryPage(): React.JSX.Element {
               Reset your password.
             </h1>
             <p className="mt-3 max-w-xl text-base leading-7 text-ink/66">
-              We’ll email you a secure link. It opens Drapeon’s web reset screen, then returns you
-              to sign in.
+              We’ll email you a protected recovery page and one-time code. Enter the code to reset
+              your password, then sign in again.
             </p>
           </div>
 
