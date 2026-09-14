@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
+import { resolveAccountRuntimeRole } from '@drape/shared/auth-role'
 import { createClient } from '../../lib/supabase'
 import { useSessionTimeout } from '../../hooks/use-session-timeout'
 import {
@@ -152,14 +153,10 @@ async function loadIdentity(session: Session): Promise<AccountRouteIdentity> {
       ? userResult.data.role
       : null
   const requestedRole = sessionRole(session) ?? storedRole
-  const role: AccountRouteIdentity['role'] =
-    requestedRole === 'CUSTOMER' && customer
-      ? 'CUSTOMER'
-      : requestedRole === 'TAILOR' && tailor
-        ? 'TAILOR'
-        : tailor
-          ? 'TAILOR'
-          : 'CUSTOMER'
+  const role: AccountRouteIdentity['role'] = resolveAccountRuntimeRole({
+    requestedRole,
+    hasTailorProfile: Boolean(tailor),
+  })
   if (tailor?.id) {
     const payoutResult = await supabase
       .from('tailor_profiles')

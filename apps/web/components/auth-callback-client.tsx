@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
-import { resolveAuthenticatedRole } from '@drape/shared/auth-role'
+import { resolveAuthenticatedRole, shouldApplyFreshSignupRole } from '@drape/shared/auth-role'
 import { IDENTITY_CONSENT_POLICY_VERSION } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import {
@@ -535,15 +535,22 @@ export function AuthCallbackClient(): React.JSX.Element {
           .select('role')
           .eq('id', data.user.id)
           .maybeSingle()
-        const establishedRole =
-          metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
+        const applyFreshSignupRole = shouldApplyFreshSignupRole({
+          intentMode: oauthIntent?.mode,
+          intentRole: roleIntent,
+          createdAt: data.user.created_at,
+          lastSignInAt: data.user.last_sign_in_at,
+        })
+        const establishedRole = applyFreshSignupRole
+          ? null
+          : metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
             ? metadataRole
             : roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR'
               ? null
               : roleMirror?.role
         const role = resolveAuthenticatedRole({
           establishedRole,
-          onboardingRole: onboarding?.role,
+          onboardingRole: applyFreshSignupRole ? null : onboarding?.role,
           entryIntent: roleIntent,
         })
         const matchingOnboarding = onboarding?.role === role ? onboarding : null
@@ -630,6 +637,20 @@ export function AuthCallbackClient(): React.JSX.Element {
                 accessToken: mediaAccessToken,
               })
             }
+          } else if (applyFreshSignupRole) {
+            const { data: switchData, error: switchError } = await supabase.functions.invoke(
+              'account-profile-action',
+              { body: { action: 'switch-role', role } }
+            )
+            const switchPayload = (switchData ?? {}) as { error?: string; message?: string }
+            if (switchError || switchPayload.error) {
+              throw new Error(
+                switchPayload.message ||
+                  switchPayload.error ||
+                  switchError?.message ||
+                  'Your account setup could not be prepared.'
+              )
+            }
           } else {
             await syncRoleMirror(role)
           }
@@ -680,7 +701,9 @@ export function AuthCallbackClient(): React.JSX.Element {
                 Try again
               </Link>
               <Link href={recoveryHref as Route} className="text-sm font-semibold text-needle">
-                {recoveryHref.startsWith('/sign-up') ? 'Return to create account' : 'Return to sign in'}
+                {recoveryHref.startsWith('/sign-up')
+                  ? 'Return to create account'
+                  : 'Return to sign in'}
               </Link>
             </div>
           ) : null}

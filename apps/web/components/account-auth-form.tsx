@@ -1433,6 +1433,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
   function beginProviderAccess(provider: 'apple' | 'google') {
     if (isSignUp) {
+      if (!signupDraftHydrated) return
       setError(null)
       setPendingSignupProvider(provider)
       setStep(2)
@@ -1451,7 +1452,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           <button
             type="button"
             onClick={() => beginProviderAccess('apple')}
-            disabled={loading || providerLoading !== null}
+            disabled={loading || providerLoading !== null || (isSignUp && !signupDraftHydrated)}
             className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-current">
@@ -1464,7 +1465,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           <button
             type="button"
             onClick={() => beginProviderAccess('google')}
-            disabled={loading || providerLoading !== null}
+            disabled={loading || providerLoading !== null || (isSignUp && !signupDraftHydrated)}
             className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full border border-ink/12 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5">
