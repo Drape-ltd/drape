@@ -50,28 +50,55 @@ export function ChooseAccountRole(): React.JSX.Element {
       router.replace('/account/profile?setup=1' as Route)
       return
     }
-    router.replace(safeNext(searchParams.get('next')) as Route)
+    const next = safeNext(searchParams.get('next'))
+    router.replace((next === '/account/orders' ? '/account/customer/setup' : next) as Route)
   }
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)] px-5 py-8">
       <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-2xl place-items-center">
         <div className="w-full rounded-[8px] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-8">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">One last step</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            One last step
+          </p>
           <h1 className="mt-3 text-4xl text-ink sm:text-5xl">How will you use Drapeon?</h1>
-          <p className="mt-4 text-sm leading-7 text-ink/66">Choose once to open the right setup. You can still discover and collaborate across Drapeon.</p>
+          <p className="mt-4 text-sm leading-7 text-ink/66">
+            Choose once to open the right setup. You can still discover and collaborate across
+            Drapeon.
+          </p>
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <button type="button" onClick={() => void choose('CUSTOMER')} disabled={loading !== null} className="min-h-32 rounded-[8px] border border-ink/10 bg-white p-5 text-left transition hover:border-needle hover:bg-bone disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void choose('CUSTOMER')}
+              disabled={loading !== null}
+              className="min-h-32 rounded-[8px] border border-ink/10 bg-white p-5 text-left transition hover:border-needle hover:bg-bone disabled:opacity-50"
+            >
               <span className="block text-lg font-semibold text-ink">I’m looking for a tailor</span>
-              <span className="mt-2 block text-sm leading-6 text-ink/60">Explore profiles, save measurements, and manage orders.</span>
+              <span className="mt-2 block text-sm leading-6 text-ink/60">
+                Explore profiles, save measurements, and manage orders.
+              </span>
             </button>
-            <button type="button" onClick={() => void choose('TAILOR')} disabled={loading !== null} className="min-h-32 rounded-[8px] border border-ink/10 bg-white p-5 text-left transition hover:border-needle hover:bg-bone disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void choose('TAILOR')}
+              disabled={loading !== null}
+              className="min-h-32 rounded-[8px] border border-ink/10 bg-white p-5 text-left transition hover:border-needle hover:bg-bone disabled:opacity-50"
+            >
               <span className="block text-lg font-semibold text-ink">I’m a tailor</span>
-              <span className="mt-2 block text-sm leading-6 text-ink/60">Create your profile, show your work, and manage clients.</span>
+              <span className="mt-2 block text-sm leading-6 text-ink/60">
+                Create your profile, show your work, and manage clients.
+              </span>
             </button>
           </div>
           {loading ? <p className="mt-4 text-sm text-ink/60">Saving your choice…</p> : null}
-          {error ? <p role="alert" className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</p> : null}
+          {error ? (
+            <p
+              role="alert"
+              className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+            >
+              {error}
+            </p>
+          ) : null}
         </div>
       </section>
     </main>

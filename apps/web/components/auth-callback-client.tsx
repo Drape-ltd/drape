@@ -120,7 +120,7 @@ async function uploadOnboardingAvatar(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   role: 'CUSTOMER' | 'TAILOR',
-  avatarDataUrl: string,
+  avatarDataUrl: string
 ) {
   if (!avatarDataUrl.startsWith('data:image/jpeg;base64,')) return
   const blob = await fetch(avatarDataUrl).then((response) => response.blob())
@@ -145,10 +145,13 @@ async function uploadOnboardingAvatarDraft(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   role: 'CUSTOMER' | 'TAILOR',
-  draft: SignupMediaDraftDescriptor,
+  draft: SignupMediaDraftDescriptor
 ) {
   const blob = await readSignupMediaDraft(draft.key)
-  if (!blob) throw new Error('Your saved profile photo is missing from this browser. Return to signup and choose it again.')
+  if (!blob)
+    throw new Error(
+      'Your saved profile photo is missing from this browser. Return to signup and choose it again.'
+    )
   const path = `${userId}/avatar.jpg`
   const uploaded = await supabase.storage.from('avatars').upload(path, blob, {
     contentType: 'image/jpeg',
@@ -169,7 +172,7 @@ async function uploadOnboardingAvatarDraft(
 async function uploadOnboardingPortfolio(
   supabase: ReturnType<typeof createClient>,
   userId: string,
-  dataUrls: string[],
+  dataUrls: string[]
 ) {
   const urls: string[] = []
   for (const [index, dataUrl] of dataUrls.slice(0, 4).entries()) {
@@ -196,12 +199,15 @@ async function uploadOnboardingPortfolio(
 async function uploadOnboardingPortfolioImages(
   supabase: ReturnType<typeof createClient>,
   userId: string,
-  drafts: SignupMediaDraftDescriptor[],
+  drafts: SignupMediaDraftDescriptor[]
 ) {
   const urls: string[] = []
   for (const [index, draft] of drafts.slice(0, 12).entries()) {
     const blob = await readSignupMediaDraft(draft.key)
-    if (!blob) throw new Error('A saved portfolio photo is missing from this browser. Return to signup and choose it again.')
+    if (!blob)
+      throw new Error(
+        'A saved portfolio photo is missing from this browser. Return to signup and choose it again.'
+      )
     const path = `portfolio/${userId}/signup-${index + 1}-${Date.now()}.jpg`
     const uploaded = await supabase.storage.from('portfolio-photos').upload(path, blob, {
       contentType: 'image/jpeg',
@@ -230,12 +236,15 @@ function videoExtension(contentType: string) {
 async function uploadOnboardingPortfolioVideos(
   supabase: ReturnType<typeof createClient>,
   userId: string,
-  drafts: SignupMediaDraftDescriptor[],
+  drafts: SignupMediaDraftDescriptor[]
 ) {
   const urls: string[] = []
   for (const [index, draft] of drafts.slice(0, 4).entries()) {
     const blob = await readSignupMediaDraft(draft.key)
-    if (!blob) throw new Error('A saved portfolio video is missing from this browser. Return to signup and choose it again.')
+    if (!blob)
+      throw new Error(
+        'A saved portfolio video is missing from this browser. Return to signup and choose it again.'
+      )
     const path = `portfolio/${userId}/videos/signup-${index + 1}-${Date.now()}.${videoExtension(draft.contentType)}`
     const uploaded = await supabase.storage.from('portfolio-photos').upload(path, blob, {
       contentType: draft.contentType,
@@ -258,34 +267,51 @@ async function uploadOnboardingPortfolioVideos(
 async function submitOnboardingTrustVideo(
   supabase: ReturnType<typeof createClient>,
   onboarding: WebOnboardingPayload,
-  deferSubmission: boolean,
+  deferSubmission: boolean
 ) {
   const draft = onboarding.trustVideoDraft
   const challengeId = onboarding.trustChallengeId
   if (!draft || !challengeId || onboarding.trustConsentGranted !== true) return null
   const blob = await readSignupMediaDraft(draft.key)
-  if (!blob) throw new Error('Your saved private trust video is missing from this browser. Return to setup and record it again.')
+  if (!blob)
+    throw new Error(
+      'Your saved private trust video is missing from this browser. Return to setup and record it again.'
+    )
 
   const created = await supabase.functions.invoke('identity-handoff-action', {
     body: { action: 'create', challengeId },
   })
-  const createdData = (created.data ?? {}) as { token?: string; challengeId?: string; error?: string }
+  const createdData = (created.data ?? {}) as {
+    token?: string
+    challengeId?: string
+    error?: string
+  }
   if (created.error || !createdData.token || createdData.challengeId !== challengeId) {
-    throw created.error ?? new Error(createdData.error ?? 'The private challenge could not be prepared.')
+    throw (
+      created.error ??
+      new Error(createdData.error ?? 'The private challenge could not be prepared.')
+    )
   }
   const uploadRequest = await supabase.functions.invoke('identity-handoff-action', {
     body: { action: 'create-upload-url', token: createdData.token, contentType: draft.contentType },
   })
-  const uploadData = (uploadRequest.data ?? {}) as { path?: string; uploadToken?: string; error?: string }
-  if (uploadRequest.error || !uploadData.path || !uploadData.uploadToken) {
-    throw uploadRequest.error ?? new Error(uploadData.error ?? 'The private video upload could not start.')
+  const uploadData = (uploadRequest.data ?? {}) as {
+    path?: string
+    uploadToken?: string
+    error?: string
   }
-  const uploaded = await supabase.storage.from('trust-verification').uploadToSignedUrl(
-    uploadData.path,
-    uploadData.uploadToken,
-    blob,
-    { contentType: draft.contentType, cacheControl: '0' },
-  )
+  if (uploadRequest.error || !uploadData.path || !uploadData.uploadToken) {
+    throw (
+      uploadRequest.error ??
+      new Error(uploadData.error ?? 'The private video upload could not start.')
+    )
+  }
+  const uploaded = await supabase.storage
+    .from('trust-verification')
+    .uploadToSignedUrl(uploadData.path, uploadData.uploadToken, blob, {
+      contentType: draft.contentType,
+      cacheControl: '0',
+    })
   if (uploaded.error) throw uploaded.error
   if (deferSubmission) {
     return {
@@ -310,7 +336,10 @@ async function submitOnboardingTrustVideo(
   })
   const submittedData = (submitted.data ?? {}) as { error?: string }
   if (submitted.error || submittedData.error) {
-    throw submitted.error ?? new Error(submittedData.error ?? 'The private trust video could not be submitted.')
+    throw (
+      submitted.error ??
+      new Error(submittedData.error ?? 'The private trust video could not be submitted.')
+    )
   }
   await deleteSignupMediaDraft(draft.key).catch(() => undefined)
   return null
@@ -326,48 +355,51 @@ function preserveTailorSetupDraft(
     challengeId: string
     challengeText: string
     consentGranted: true
-  } | null,
+  } | null
 ) {
   const tailor = onboarding.tailor
   if (!tailor) return
-  window.localStorage.setItem(`drape:tailor-setup-draft:v3:${userId}`, JSON.stringify({
-    version: 3,
-    displayName: onboarding.displayName,
-    location: tailor.location,
-    bio: tailor.bio ?? '',
-    languages: tailor.languages,
-    specialties: tailor.specialties,
-    currency: onboarding.defaultCurrency,
-    priceMin: tailor.priceRangeMin ? String(tailor.priceRangeMin / 100) : '',
-    priceMax: tailor.priceRangeMax ? String(tailor.priceRangeMax / 100) : '',
-    availability: tailor.availability ?? 'OPEN',
-    sellerType: tailor.sellerType ?? 'TAILOR',
-    supportsCustomOrders: tailor.supportsCustomOrders,
-    supportsReadyMade: tailor.supportsReadyMade,
-    acceptsCustomOrdersNow: tailor.supportsCustomOrders,
-    shopPaused: false,
-    pickupAvailable: tailor.fulfillment.includes('PICKUP'),
-    deliveryAvailable: tailor.fulfillment.includes('DELIVERY'),
-    shippingAvailable: tailor.fulfillment.includes('SHIPPING'),
-    pickupAddress: tailor.pickupAddress ?? '',
-    pickupCity: tailor.pickupCity ?? '',
-    pickupRegion: tailor.pickupRegion ?? '',
-    pickupPostalCode: tailor.pickupPostalCode ?? '',
-    pickupCountryCode: tailor.pickupCountryCode ?? '',
-    pickupInstructions: '',
-    consultationMode: tailor.consultationMode ?? 'FREE',
-    consultationRequirement: tailor.consultationRequirement ?? 'OPTIONAL',
-    consultationFee: tailor.consultationFee ?? '',
-    consultationDuration: tailor.consultationDuration ?? '30',
-    consultationCallType: tailor.consultationCallType ?? 'VIDEO',
-    consultationFeeCreditable: tailor.consultationFeeCreditable === true,
-    signupTrustVideoDraft: trustResume?.draft ?? null,
-    signupTrustChallengeId: trustResume?.challengeId ?? '',
-    signupTrustChallengeText: trustResume?.challengeText ?? '',
-    signupTrustConsentGranted: trustResume?.consentGranted === true,
-    signupTrustHandoffToken: trustResume?.token ?? '',
-    signupTrustStoragePath: trustResume?.storagePath ?? '',
-  }))
+  window.localStorage.setItem(
+    `drape:tailor-setup-draft:v3:${userId}`,
+    JSON.stringify({
+      version: 3,
+      displayName: onboarding.displayName,
+      location: tailor.location,
+      bio: tailor.bio ?? '',
+      languages: tailor.languages,
+      specialties: tailor.specialties,
+      currency: onboarding.defaultCurrency,
+      priceMin: tailor.priceRangeMin ? String(tailor.priceRangeMin / 100) : '',
+      priceMax: tailor.priceRangeMax ? String(tailor.priceRangeMax / 100) : '',
+      availability: tailor.availability ?? 'OPEN',
+      sellerType: tailor.sellerType ?? 'TAILOR',
+      supportsCustomOrders: tailor.supportsCustomOrders,
+      supportsReadyMade: tailor.supportsReadyMade,
+      acceptsCustomOrdersNow: tailor.supportsCustomOrders,
+      shopPaused: false,
+      pickupAvailable: tailor.fulfillment.includes('PICKUP'),
+      deliveryAvailable: tailor.fulfillment.includes('DELIVERY'),
+      shippingAvailable: tailor.fulfillment.includes('SHIPPING'),
+      pickupAddress: tailor.pickupAddress ?? '',
+      pickupCity: tailor.pickupCity ?? '',
+      pickupRegion: tailor.pickupRegion ?? '',
+      pickupPostalCode: tailor.pickupPostalCode ?? '',
+      pickupCountryCode: tailor.pickupCountryCode ?? '',
+      pickupInstructions: '',
+      consultationMode: tailor.consultationMode ?? 'FREE',
+      consultationRequirement: tailor.consultationRequirement ?? 'OPTIONAL',
+      consultationFee: tailor.consultationFee ?? '',
+      consultationDuration: tailor.consultationDuration ?? '30',
+      consultationCallType: tailor.consultationCallType ?? 'VIDEO',
+      consultationFeeCreditable: tailor.consultationFeeCreditable === true,
+      signupTrustVideoDraft: trustResume?.draft ?? null,
+      signupTrustChallengeId: trustResume?.challengeId ?? '',
+      signupTrustChallengeText: trustResume?.challengeText ?? '',
+      signupTrustConsentGranted: trustResume?.consentGranted === true,
+      signupTrustHandoffToken: trustResume?.token ?? '',
+      signupTrustStoragePath: trustResume?.storagePath ?? '',
+    })
+  )
 }
 
 export function AuthCallbackClient(): React.JSX.Element {
@@ -393,9 +425,10 @@ export function AuthCallbackClient(): React.JSX.Element {
         }
 
         let onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
-        const mediaClaimToken = typeof data.user.user_metadata?.signup_media_claim_token === 'string'
-          ? data.user.user_metadata.signup_media_claim_token
-          : ''
+        const mediaClaimToken =
+          typeof data.user.user_metadata?.signup_media_claim_token === 'string'
+            ? data.user.user_metadata.signup_media_claim_token
+            : ''
         let mediaAccessToken = ''
         if (mediaClaimToken && onboarding) {
           const { data: sessionData } = await supabase.auth.getSession()
@@ -407,18 +440,34 @@ export function AuthCallbackClient(): React.JSX.Element {
               accessToken: mediaAccessToken,
             })
             const avatarDraft = restored.find((entry) => entry.kind === 'avatar')
-            const portfolioImageDrafts = restored.filter((entry) => entry.kind === 'portfolio-image')
-            const portfolioVideoDrafts = restored.filter((entry) => entry.kind === 'portfolio-video')
+            const portfolioImageDrafts = restored.filter(
+              (entry) => entry.kind === 'portfolio-image'
+            )
+            const portfolioVideoDrafts = restored.filter(
+              (entry) => entry.kind === 'portfolio-video'
+            )
             const trustVideoDraft = restored.find((entry) => entry.kind === 'trust-video')
             onboarding = {
               ...onboarding,
               avatarDraft: avatarDraft ?? onboarding.avatarDraft,
-              portfolioImageDrafts: portfolioImageDrafts.length ? portfolioImageDrafts : onboarding.portfolioImageDrafts,
-              portfolioVideoDrafts: portfolioVideoDrafts.length ? portfolioVideoDrafts : onboarding.portfolioVideoDrafts,
+              portfolioImageDrafts: portfolioImageDrafts.length
+                ? portfolioImageDrafts
+                : onboarding.portfolioImageDrafts,
+              portfolioVideoDrafts: portfolioVideoDrafts.length
+                ? portfolioVideoDrafts
+                : onboarding.portfolioVideoDrafts,
               trustVideoDraft: trustVideoDraft ?? onboarding.trustVideoDraft,
-              trustChallengeId: typeof data.user.user_metadata?.signup_trust_challenge_id === 'string' ? data.user.user_metadata.signup_trust_challenge_id : onboarding.trustChallengeId,
-              trustChallengeText: typeof data.user.user_metadata?.signup_trust_challenge_text === 'string' ? data.user.user_metadata.signup_trust_challenge_text : onboarding.trustChallengeText,
-              trustConsentGranted: data.user.user_metadata?.signup_trust_consent_granted === true || onboarding.trustConsentGranted,
+              trustChallengeId:
+                typeof data.user.user_metadata?.signup_trust_challenge_id === 'string'
+                  ? data.user.user_metadata.signup_trust_challenge_id
+                  : onboarding.trustChallengeId,
+              trustChallengeText:
+                typeof data.user.user_metadata?.signup_trust_challenge_text === 'string'
+                  ? data.user.user_metadata.signup_trust_challenge_text
+                  : onboarding.trustChallengeText,
+              trustConsentGranted:
+                data.user.user_metadata?.signup_trust_consent_granted === true ||
+                onboarding.trustConsentGranted,
             }
           }
         }
@@ -428,9 +477,12 @@ export function AuthCallbackClient(): React.JSX.Element {
           .select('role')
           .eq('id', data.user.id)
           .maybeSingle()
-        const establishedRole = metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
-          ? metadataRole
-          : roleMirror?.role
+        const establishedRole =
+          metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
+            ? metadataRole
+            : roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR'
+              ? null
+              : roleMirror?.role
         const role = resolveAuthenticatedRole({
           establishedRole,
           onboardingRole: onboarding?.role,
@@ -474,14 +526,14 @@ export function AuthCallbackClient(): React.JSX.Element {
                 supabase,
                 data.user.id,
                 role,
-                matchingOnboarding.avatarDraft,
+                matchingOnboarding.avatarDraft
               )
             } else if (matchingOnboarding.avatarDataUrl) {
               await uploadOnboardingAvatar(
                 supabase,
                 data.user.id,
                 role,
-                matchingOnboarding.avatarDataUrl,
+                matchingOnboarding.avatarDataUrl
               )
             }
             if (role === 'TAILOR') {
@@ -489,32 +541,36 @@ export function AuthCallbackClient(): React.JSX.Element {
                 await uploadOnboardingPortfolioImages(
                   supabase,
                   data.user.id,
-                  matchingOnboarding.portfolioImageDrafts,
+                  matchingOnboarding.portfolioImageDrafts
                 )
               } else if (matchingOnboarding.portfolioDataUrls?.length) {
                 await uploadOnboardingPortfolio(
                   supabase,
                   data.user.id,
-                  matchingOnboarding.portfolioDataUrls,
+                  matchingOnboarding.portfolioDataUrls
                 )
               }
               if (matchingOnboarding.portfolioVideoDrafts?.length) {
                 await uploadOnboardingPortfolioVideos(
                   supabase,
                   data.user.id,
-                  matchingOnboarding.portfolioVideoDrafts,
+                  matchingOnboarding.portfolioVideoDrafts
                 )
               }
               const sellerType = matchingOnboarding.tailor?.sellerType ?? 'TAILOR'
               const trustResume = await submitOnboardingTrustVideo(
                 supabase,
                 matchingOnboarding,
-                sellerType !== 'TAILOR',
+                sellerType !== 'TAILOR'
               )
               preserveTailorSetupDraft(data.user.id, matchingOnboarding, trustResume)
             }
             if (mediaClaimToken && mediaAccessToken) {
-              await cleanupQuarantinedSignupMedia({ userId: data.user.id, claimToken: mediaClaimToken, accessToken: mediaAccessToken })
+              await cleanupQuarantinedSignupMedia({
+                userId: data.user.id,
+                claimToken: mediaClaimToken,
+                accessToken: mediaAccessToken,
+              })
             }
           } else {
             await syncRoleMirror(role)
@@ -551,7 +607,9 @@ export function AuthCallbackClient(): React.JSX.Element {
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)] px-5 py-8">
       <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-lg place-items-center">
         <div className="w-full rounded-[8px] border border-ink/8 bg-white/88 p-7 text-center shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Drapeon
+          </p>
           <h1 className="mt-3 text-4xl text-ink">Opening your account</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">{message}</p>
           {failed ? (

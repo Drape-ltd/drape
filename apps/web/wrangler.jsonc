@@ -7,24 +7,26 @@
   "routes": [
     {
       "pattern": "drapeon.co/*",
-      "zone_name": "drapeon.co"
+      "zone_name": "drapeon.co",
     },
     {
       "pattern": "www.drapeon.co/*",
-      "zone_name": "drapeon.co"
-    }
+      "zone_name": "drapeon.co",
+    },
   ],
   "vars": {
     "DRAPE_WEB_ENV": "production",
     "DRAPE_EXPECTED_SUPABASE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",
     "NEXT_PUBLIC_SITE_URL": "https://drapeon.co",
     "NEXT_PUBLIC_SUPABASE_URL": "https://wkfsrunetmgjdtcurmoj.supabase.co",
+    "NEXT_PUBLIC_AUTH_GOOGLE_ENABLED": "true",
+    "NEXT_PUBLIC_AUTH_APPLE_ENABLED": "false",
     "SUPABASE_SERVICE_ROLE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",
     "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndrZnNydW5ldG1namR0Y3VybW9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyMzIzODksImV4cCI6MjA4OTgwODM4OX0.O--hKpkahwpyU4SEFh_IDNFyN5tBm3xKmYZc-EmBC18",
     "CF_ACCESS_TEAM_DOMAIN": "drapeon.cloudflareaccess.com",
     "OPS_ALLOWED_EMAILS": "dimowoope@gmail.com,koleosho530@gmail.com",
     "OPS_HOSTNAME": "ops.drapeon.co",
-    "OPS_CANONICAL_ORIGIN": "https://ops.drapeon.co"
+    "OPS_CANONICAL_ORIGIN": "https://ops.drapeon.co",
   },
   "secrets": {
     "required": [
@@ -33,14 +35,14 @@
       "CF_ACCESS_SENSITIVE_AUD",
       "SMS_PROVIDER",
       "TERMII_API_KEY",
-      "TERMII_SENDER_ID"
-    ]
+      "TERMII_SENDER_ID",
+    ],
   },
   "assets": {
     "directory": ".open-next/assets",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
   },
   "observability": {
-    "enabled": true
-  }
+    "enabled": true,
+  },
 }

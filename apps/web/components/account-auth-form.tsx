@@ -1,8 +1,28 @@
 'use client'
 
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react'
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import Image from 'next/image'
-import { Check, ChevronDown, ImagePlus, KeyRound, Search, ShieldCheck, ShoppingBag, Store, Video, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ImagePlus,
+  KeyRound,
+  Search,
+  ShieldCheck,
+  ShoppingBag,
+  Store,
+  Video,
+  X,
+} from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -85,7 +105,11 @@ const GARMENT_OPTIONS: Array<{ value: CustomerGarmentContext; label: string; hin
   { value: 'MENSWEAR', label: 'Menswear', hint: 'Agbada, kaftans, suits, shirts, trousers' },
   { value: 'WOMENSWEAR', label: 'Womenswear', hint: 'Dresses, blouses, skirts, occasionwear' },
   { value: 'BOTH', label: 'Both', hint: 'I order across menswear and womenswear' },
-  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say', hint: 'Tailors can work from measurements only' },
+  {
+    value: 'PREFER_NOT_TO_SAY',
+    label: 'Prefer not to say',
+    hint: 'Tailors can work from measurements only',
+  },
 ]
 
 const FULFILLMENT_OPTIONS: Array<{ value: TailorFulfillment; label: string }> = [
@@ -114,7 +138,10 @@ function accountHomeForRole(role: DrapeRole) {
 
 function mapAuthError(message: string | undefined) {
   const normalized = (message ?? '').toLowerCase()
-  if (normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')) {
+  if (
+    normalized.includes('invalid login credentials') ||
+    normalized.includes('invalid credentials')
+  ) {
     return 'Incorrect email or password.'
   }
   if (normalized.includes('already registered') || normalized.includes('already exists')) {
@@ -232,15 +259,19 @@ function fieldHasContactLeak(value: string, label: string): string | null {
 function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (blob) => blob ? resolve(blob) : reject(new Error('This browser could not prepare the photo.')),
+      (blob) =>
+        blob ? resolve(blob) : reject(new Error('This browser could not prepare the photo.')),
       'image/jpeg',
-      quality,
+      quality
     )
   })
 }
 
 async function prepareAvatar(file: File): Promise<Blob> {
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+  if (
+    !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) ||
+    file.size > 10 * 1024 * 1024
+  ) {
     throw new Error('Choose a JPG, PNG, or WebP image under 10 MB.')
   }
 
@@ -260,14 +291,17 @@ async function prepareAvatar(file: File): Promise<Blob> {
     0,
     0,
     512,
-    512,
+    512
   )
   source.close()
   return canvasToJpegBlob(canvas, 0.82)
 }
 
 async function preparePortfolioImage(file: File): Promise<Blob> {
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 15 * 1024 * 1024) {
+  if (
+    !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) ||
+    file.size > 15 * 1024 * 1024
+  ) {
     throw new Error('Choose a JPG, PNG, or WebP image under 15 MB.')
   }
   const source = await createImageBitmap(file)
@@ -310,7 +344,9 @@ function SetupOptionPicker({
 
   return (
     <div className="grid gap-2">
-      <label id={triggerId} className="text-sm font-semibold text-ink">{label}</label>
+      <label id={triggerId} className="text-sm font-semibold text-ink">
+        {label}
+      </label>
       <button
         type="button"
         aria-labelledby={triggerId}
@@ -323,7 +359,9 @@ function SetupOptionPicker({
           <span className="block text-sm font-semibold text-ink">
             {values.length ? values.join(', ') : `Choose ${label.toLowerCase()}`}
           </span>
-          <span className="mt-1 block text-xs text-ink/48">{values.length}/{limit} selected</span>
+          <span className="mt-1 block text-xs text-ink/48">
+            {values.length}/{limit} selected
+          </span>
         </span>
         <ChevronDown className="size-5 shrink-0 text-ink/45" aria-hidden="true" />
       </button>
@@ -337,60 +375,120 @@ function SetupOptionPicker({
               aria-label={`Remove ${value}`}
               className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-full border border-needle/16 bg-needle/7 px-3 text-xs font-semibold text-needle transition-colors hover:bg-needle/12 focus-visible:ring-2 focus-visible:ring-needle/30"
             >
-              {value}<X className="size-3" aria-hidden="true" />
+              {value}
+              <X className="size-3" aria-hidden="true" />
             </button>
           ))}
         </div>
       ) : null}
 
       {open ? (
-        <div className="fixed inset-0 z-[120] grid items-end bg-black/35 p-0 sm:place-items-center sm:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
-          <section role="dialog" aria-modal="true" aria-labelledby={`${triggerId}-title`} className="flex max-h-[86vh] w-full flex-col rounded-t-[24px] border border-ink/10 bg-white shadow-2xl sm:max-w-xl sm:rounded-[20px]">
+        <div
+          className="fixed inset-0 z-[120] grid items-end bg-black/35 p-0 sm:place-items-center sm:p-6"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${triggerId}-title`}
+            className="flex max-h-[86vh] w-full flex-col rounded-t-[24px] border border-ink/10 bg-white shadow-2xl sm:max-w-xl sm:rounded-[20px]"
+          >
             <div className="mx-auto mt-3 h-1 w-14 rounded-full bg-ink/12 sm:hidden" />
             <div className="flex items-start gap-4 border-b border-ink/8 px-5 py-5 sm:px-6">
               <div className="min-w-0 flex-1">
-                <h2 id={`${triggerId}-title`} className="text-2xl text-ink">{label}</h2>
-                <p className="mt-1 text-sm leading-6 text-ink/56">Choose up to {limit}. Your selections appear on your public profile.</p>
+                <h2 id={`${triggerId}-title`} className="text-2xl text-ink">
+                  {label}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-ink/56">
+                  Choose up to {limit}. Your selections appear on your public profile.
+                </p>
               </div>
-              <button type="button" aria-label={`Close ${label.toLowerCase()}`} onClick={() => setOpen(false)} className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full bg-bone text-ink transition-colors hover:bg-ink/10 focus-visible:ring-2 focus-visible:ring-needle/35"><X className="size-5" /></button>
+              <button
+                type="button"
+                aria-label={`Close ${label.toLowerCase()}`}
+                onClick={() => setOpen(false)}
+                className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full bg-bone text-ink transition-colors hover:bg-ink/10 focus-visible:ring-2 focus-visible:ring-needle/35"
+              >
+                <X className="size-5" />
+              </button>
             </div>
             <div className="border-b border-ink/8 px-5 py-4 sm:px-6">
               <label className="flex min-h-11 items-center gap-3 rounded-[8px] border border-ink/10 bg-bone/35 px-3 focus-within:border-needle">
                 <Search className="size-4 shrink-0 text-ink/40" aria-hidden="true" />
                 <span className="sr-only">Search {label.toLowerCase()}</span>
-                <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${label.toLowerCase()}`} className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink/36" />
-                {query ? <button type="button" onClick={() => setQuery('')} className="grid size-8 cursor-pointer place-items-center rounded-full hover:bg-ink/8" aria-label="Clear search"><X className="size-4" /></button> : null}
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={`Search ${label.toLowerCase()}`}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink/36"
+                />
+                {query ? (
+                  <button
+                    type="button"
+                    onClick={() => setQuery('')}
+                    className="grid size-8 cursor-pointer place-items-center rounded-full hover:bg-ink/8"
+                    aria-label="Clear search"
+                  >
+                    <X className="size-4" />
+                  </button>
+                ) : null}
               </label>
             </div>
             <div className="overflow-y-auto px-5 py-4 sm:px-6">
-              {visibleGroups.length ? visibleGroups.map((group) => (
-                <div key={group.label} className="mb-5 last:mb-0">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/42">{group.label}</p>
-                  <div className="overflow-hidden rounded-[10px] border border-ink/8">
-                    {group.items.map((option, index) => {
-                      const active = values.includes(option)
-                      const disabled = !active && values.length >= limit
-                      return (
-                        <button
-                          key={option}
-                          type="button"
-                          disabled={disabled}
-                          role="checkbox"
-                          aria-checked={active}
-                          onClick={() => onChange(active ? values.filter((value) => value !== option) : [...values, option])}
-                          className={`flex min-h-12 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left text-sm transition-colors ${index ? 'border-t border-ink/8' : ''} ${active ? 'bg-needle/7 text-needle' : 'bg-white text-ink hover:bg-bone/55'} disabled:cursor-not-allowed disabled:opacity-40`}
-                        >
-                          <span className="min-w-0 flex-1 font-medium">{option}</span>
-                          <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${active ? 'border-needle bg-needle text-white' : 'border-ink/20 bg-white'}`}>{active ? <Check className="size-3.5" aria-hidden="true" /> : null}</span>
-                        </button>
-                      )
-                    })}
+              {visibleGroups.length ? (
+                visibleGroups.map((group) => (
+                  <div key={group.label} className="mb-5 last:mb-0">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/42">
+                      {group.label}
+                    </p>
+                    <div className="overflow-hidden rounded-[10px] border border-ink/8">
+                      {group.items.map((option, index) => {
+                        const active = values.includes(option)
+                        const disabled = !active && values.length >= limit
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            disabled={disabled}
+                            role="checkbox"
+                            aria-checked={active}
+                            onClick={() =>
+                              onChange(
+                                active
+                                  ? values.filter((value) => value !== option)
+                                  : [...values, option]
+                              )
+                            }
+                            className={`flex min-h-12 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left text-sm transition-colors ${index ? 'border-t border-ink/8' : ''} ${active ? 'bg-needle/7 text-needle' : 'bg-white text-ink hover:bg-bone/55'} disabled:cursor-not-allowed disabled:opacity-40`}
+                          >
+                            <span className="min-w-0 flex-1 font-medium">{option}</span>
+                            <span
+                              className={`grid size-5 shrink-0 place-items-center rounded-full border ${active ? 'border-needle bg-needle text-white' : 'border-ink/20 bg-white'}`}
+                            >
+                              {active ? <Check className="size-3.5" aria-hidden="true" /> : null}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )) : <p className="py-8 text-center text-sm text-ink/48">No matches for “{query}”.</p>}
+                ))
+              ) : (
+                <p className="py-8 text-center text-sm text-ink/48">No matches for “{query}”.</p>
+              )}
             </div>
             <div className="border-t border-ink/8 bg-white p-4 sm:px-6">
-              <button type="button" onClick={() => setOpen(false)} className="min-h-12 w-full cursor-pointer rounded-full bg-needle px-5 text-sm font-semibold text-white transition-colors hover:bg-needle-600 focus-visible:ring-2 focus-visible:ring-needle/35">Done · {values.length} selected</button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="min-h-12 w-full cursor-pointer rounded-full bg-needle px-5 text-sm font-semibold text-white transition-colors hover:bg-needle-600 focus-visible:ring-2 focus-visible:ring-needle/35"
+              >
+                Done · {values.length} selected
+              </button>
             </div>
           </section>
         </div>
@@ -417,14 +515,85 @@ function SetupSingleChoicePicker<T extends string>({
   return (
     <div className="grid gap-2">
       <span className="text-sm font-semibold text-ink">{label}</span>
-      <button type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)} className="flex min-h-[68px] w-full cursor-pointer items-center gap-3 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-left transition-colors hover:border-needle/30 hover:bg-bone/30 focus-visible:ring-2 focus-visible:ring-needle/35">
-        <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{selected.label}</span><span className="mt-1 block text-xs leading-5 text-ink/52">{selected.hint}</span></span><ChevronDown className="size-5 shrink-0 text-ink/45" aria-hidden="true" />
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+        className="flex min-h-[68px] w-full cursor-pointer items-center gap-3 rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-left transition-colors hover:border-needle/30 hover:bg-bone/30 focus-visible:ring-2 focus-visible:ring-needle/35"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-ink">{selected.label}</span>
+          <span className="mt-1 block text-xs leading-5 text-ink/52">{selected.hint}</span>
+        </span>
+        <ChevronDown className="size-5 shrink-0 text-ink/45" aria-hidden="true" />
       </button>
       {open ? (
-        <div className="fixed inset-0 z-[120] grid items-end bg-black/35 sm:place-items-center sm:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
-          <section role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full rounded-t-[24px] border border-ink/10 bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-[20px] sm:p-6">
-            <div className="flex items-start gap-4"><div className="min-w-0 flex-1"><h2 id={titleId} className="text-2xl text-ink">{label}</h2><p className="mt-1 text-sm leading-6 text-ink/56">Pick the description that best matches how your business works.</p></div><button type="button" aria-label={`Close ${label.toLowerCase()}`} onClick={() => setOpen(false)} className="grid size-10 cursor-pointer place-items-center rounded-full bg-bone hover:bg-ink/10"><X className="size-5" /></button></div>
-            <div className="mt-5 grid gap-2">{options.map((option) => { const active = option.value === value; return <button key={option.value} type="button" role="radio" aria-checked={active} onClick={() => { onChange(option.value); setOpen(false) }} className={`flex min-h-[72px] w-full cursor-pointer items-center gap-3 rounded-[10px] border p-4 text-left transition-colors ${active ? 'border-needle bg-needle/7' : 'border-ink/10 bg-white hover:bg-bone/55'}`}><span className="min-w-0 flex-1"><span className={`block text-sm font-semibold ${active ? 'text-needle' : 'text-ink'}`}>{option.label}</span><span className="mt-1 block text-xs leading-5 text-ink/54">{option.hint}</span></span><span className={`grid size-5 shrink-0 place-items-center rounded-full border ${active ? 'border-needle bg-needle text-white' : 'border-ink/20'}`}>{active ? <Check className="size-3.5" /> : null}</span></button> })}</div>
+        <div
+          className="fixed inset-0 z-[120] grid items-end bg-black/35 sm:place-items-center sm:p-6"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            className="w-full rounded-t-[24px] border border-ink/10 bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-[20px] sm:p-6"
+          >
+            <div className="flex items-start gap-4">
+              <div className="min-w-0 flex-1">
+                <h2 id={titleId} className="text-2xl text-ink">
+                  {label}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-ink/56">
+                  Pick the description that best matches how your business works.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label={`Close ${label.toLowerCase()}`}
+                onClick={() => setOpen(false)}
+                className="grid size-10 cursor-pointer place-items-center rounded-full bg-bone hover:bg-ink/10"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-2">
+              {options.map((option) => {
+                const active = option.value === value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => {
+                      onChange(option.value)
+                      setOpen(false)
+                    }}
+                    className={`flex min-h-[72px] w-full cursor-pointer items-center gap-3 rounded-[10px] border p-4 text-left transition-colors ${active ? 'border-needle bg-needle/7' : 'border-ink/10 bg-white hover:bg-bone/55'}`}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block text-sm font-semibold ${active ? 'text-needle' : 'text-ink'}`}
+                      >
+                        {option.label}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-ink/54">
+                        {option.hint}
+                      </span>
+                    </span>
+                    <span
+                      className={`grid size-5 shrink-0 place-items-center rounded-full border ${active ? 'border-needle bg-needle text-white' : 'border-ink/20'}`}
+                    >
+                      {active ? <Check className="size-3.5" /> : null}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
           </section>
         </div>
       ) : null}
@@ -432,7 +601,15 @@ function SetupSingleChoicePicker<T extends string>({
   )
 }
 
-function SignupDraftVideoPreview({ draft, label, onRemove }: { draft: SignupMediaDraftDescriptor; label: string; onRemove: () => void }) {
+function SignupDraftVideoPreview({
+  draft,
+  label,
+  onRemove,
+}: {
+  draft: SignupMediaDraftDescriptor
+  label: string
+  onRemove: () => void
+}) {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => {
     let active = true
@@ -449,9 +626,31 @@ function SignupDraftVideoPreview({ draft, label, onRemove }: { draft: SignupMedi
   }, [draft.key])
   return (
     <div className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-ink/10 bg-[#121815]">
-      {url ? <video src={url} controls playsInline preload="metadata" className="size-full object-cover" aria-label={label} /> : <div className="grid size-full place-items-center text-white/70"><Video className="size-7" /></div>}
-      <button type="button" aria-label={`Remove ${label.toLowerCase()}`} onClick={onRemove} className="absolute right-2 top-2 z-10 grid size-8 cursor-pointer place-items-center rounded-full bg-black/75 text-white"><X className="size-4" /></button>
-      <span className="absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-1 text-[11px] font-semibold text-white">Video · {Math.round(draft.durationSeconds)} sec</span>
+      {url ? (
+        <video
+          src={url}
+          controls
+          playsInline
+          preload="metadata"
+          className="size-full object-cover"
+          aria-label={label}
+        />
+      ) : (
+        <div className="grid size-full place-items-center text-white/70">
+          <Video className="size-7" />
+        </div>
+      )}
+      <button
+        type="button"
+        aria-label={`Remove ${label.toLowerCase()}`}
+        onClick={onRemove}
+        className="absolute right-2 top-2 z-10 grid size-8 cursor-pointer place-items-center rounded-full bg-black/75 text-white"
+      >
+        <X className="size-4" />
+      </button>
+      <span className="absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-1 text-[11px] font-semibold text-white">
+        Video · {Math.round(draft.durationSeconds)} sec
+      </span>
     </div>
   )
 }
@@ -462,7 +661,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialRole = useMemo(() => normalizeRole(searchParams.get('role')), [searchParams])
-  const contextualReturn = useMemo(() => safeAccountReturnPath(searchParams.get('next')), [searchParams])
+  const hasExplicitRole = useMemo(() => {
+    const requested = searchParams.get('role')?.toLowerCase()
+    return requested === 'customer' || requested === 'tailor'
+  }, [searchParams])
+  const contextualReturn = useMemo(
+    () => safeAccountReturnPath(searchParams.get('next')),
+    [searchParams]
+  )
   const detectedCurrency = useMemo(() => detectCurrencyPreference({ locale: browserLocale() }), [])
   const detectedPhoneCountry = useMemo(() => browserPhoneCountry(), [])
   const isSignUp = mode === 'sign-up'
@@ -485,7 +691,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [defaultCurrency, setDefaultCurrency] = useState<AccountCurrencyCode>(detectedCurrency.currency)
+  const [defaultCurrency, setDefaultCurrency] = useState<AccountCurrencyCode>(
+    detectedCurrency.currency
+  )
   const [currencySource, setCurrencySource] = useState<CurrencySource>(detectedCurrency.source)
   const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
   const [unitPreference, setUnitPreference] = useState<MeasurementUnit>('in')
@@ -507,18 +715,26 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [pickupPostalCode, setPickupPostalCode] = useState('')
   const [pickupCountryCode, setPickupCountryCode] = useState('')
   const [consultationMode, setConsultationMode] = useState<'UNAVAILABLE' | 'FREE' | 'PAID'>('FREE')
-  const [consultationRequirement, setConsultationRequirement] = useState<'OPTIONAL' | 'REQUIRED'>('OPTIONAL')
+  const [consultationRequirement, setConsultationRequirement] = useState<'OPTIONAL' | 'REQUIRED'>(
+    'OPTIONAL'
+  )
   const [consultationFee, setConsultationFee] = useState('')
   const [consultationDuration, setConsultationDuration] = useState<'15' | '30' | '45' | '60'>('30')
-  const [consultationCallType, setConsultationCallType] = useState<'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'>('VIDEO')
+  const [consultationCallType, setConsultationCallType] = useState<
+    'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'
+  >('VIDEO')
   const [consultationFeeCreditable, setConsultationFeeCreditable] = useState(false)
   const [portfolioDataUrls, setPortfolioDataUrls] = useState<string[]>([])
   const [portfolioImageDrafts, setPortfolioImageDrafts] = useState<SignupMediaDraftDescriptor[]>([])
   const [portfolioVideoDrafts, setPortfolioVideoDrafts] = useState<SignupMediaDraftDescriptor[]>([])
   const portfolioInputRef = useRef<HTMLInputElement>(null)
   const [trustVideoDraft, setTrustVideoDraft] = useState<SignupMediaDraftDescriptor | null>(null)
-  const [trustChallengeId, setTrustChallengeId] = useState<string>(TAILOR_TRUST_VIDEO_CHALLENGES[0].id)
-  const [trustChallengeText, setTrustChallengeText] = useState<string>(TAILOR_TRUST_VIDEO_CHALLENGES[0].text)
+  const [trustChallengeId, setTrustChallengeId] = useState<string>(
+    TAILOR_TRUST_VIDEO_CHALLENGES[0].id
+  )
+  const [trustChallengeText, setTrustChallengeText] = useState<string>(
+    TAILOR_TRUST_VIDEO_CHALLENGES[0].text
+  )
   const [trustConsentGranted, setTrustConsentGranted] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -531,29 +747,86 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [showPassword, setShowPassword] = useState(false)
   const [skipProfileSetup, setSkipProfileSetup] = useState(false)
   const [providerLoading, setProviderLoading] = useState<'apple' | 'google' | null>(null)
+  const [pendingSignupProvider, setPendingSignupProvider] = useState<'apple' | 'google' | null>(
+    null
+  )
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const [signupDraftHydrated, setSignupDraftHydrated] = useState(false)
-  const signupDraftSnapshot = useMemo<Record<string, unknown>>(() => ({
-    step, pendingConfirmationEmail, role, displayName, phone, email, avatarDraft, tailorLocation, tailorBio,
-    tailorLanguagesList, tailorSpecialtiesList, tailorSellerType, tailorAvailability,
-    priceMin, priceMax, supportsCustomOrders, supportsReadyMade, fulfillment,
-    pickupAddress, pickupCity, pickupRegion, pickupPostalCode, pickupCountryCode,
-    consultationMode, consultationRequirement, consultationFee, consultationDuration,
-    consultationCallType, consultationFeeCreditable, portfolioImageDrafts, portfolioVideoDrafts,
-    trustVideoDraft, trustChallengeId, trustConsentGranted,
-  }), [
-    avatarDraft, consultationCallType, consultationDuration, consultationFee,
-    consultationFeeCreditable, consultationMode, consultationRequirement, displayName, email,
-    fulfillment, phone, pickupAddress, pickupCity, pickupCountryCode, pickupPostalCode,
-    pendingConfirmationEmail,
-    pickupRegion, portfolioImageDrafts, portfolioVideoDrafts, priceMax, priceMin, role,
-    step,
-    supportsCustomOrders, supportsReadyMade, tailorAvailability, tailorBio,
-    tailorLanguagesList, tailorLocation, tailorSellerType, tailorSpecialtiesList,
-    trustChallengeId, trustConsentGranted, trustVideoDraft,
-  ])
-
+  const signupDraftSnapshot = useMemo<Record<string, unknown>>(
+    () => ({
+      step,
+      pendingConfirmationEmail,
+      role,
+      displayName,
+      phone,
+      email,
+      avatarDraft,
+      tailorLocation,
+      tailorBio,
+      tailorLanguagesList,
+      tailorSpecialtiesList,
+      tailorSellerType,
+      tailorAvailability,
+      priceMin,
+      priceMax,
+      supportsCustomOrders,
+      supportsReadyMade,
+      fulfillment,
+      pickupAddress,
+      pickupCity,
+      pickupRegion,
+      pickupPostalCode,
+      pickupCountryCode,
+      consultationMode,
+      consultationRequirement,
+      consultationFee,
+      consultationDuration,
+      consultationCallType,
+      consultationFeeCreditable,
+      portfolioImageDrafts,
+      portfolioVideoDrafts,
+      trustVideoDraft,
+      trustChallengeId,
+      trustConsentGranted,
+    }),
+    [
+      avatarDraft,
+      consultationCallType,
+      consultationDuration,
+      consultationFee,
+      consultationFeeCreditable,
+      consultationMode,
+      consultationRequirement,
+      displayName,
+      email,
+      fulfillment,
+      phone,
+      pickupAddress,
+      pickupCity,
+      pickupCountryCode,
+      pickupPostalCode,
+      pendingConfirmationEmail,
+      pickupRegion,
+      portfolioImageDrafts,
+      portfolioVideoDrafts,
+      priceMax,
+      priceMin,
+      role,
+      step,
+      supportsCustomOrders,
+      supportsReadyMade,
+      tailorAvailability,
+      tailorBio,
+      tailorLanguagesList,
+      tailorLocation,
+      tailorSellerType,
+      tailorSpecialtiesList,
+      trustChallengeId,
+      trustConsentGranted,
+      trustVideoDraft,
+    ]
+  )
 
   const passwordInputId = useId()
 
@@ -574,10 +847,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           destination: contextualReturn ?? '/account/orders',
         })
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : 'Device verification could not resume.')
+        if (active)
+          setError(cause instanceof Error ? cause.message : 'Device verification could not resume.')
       }
     })
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [contextualReturn, deviceChallenge, isSignUp, searchParams])
 
   useEffect(() => {
@@ -588,64 +864,140 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         const raw = window.localStorage.getItem(PUBLIC_SIGNUP_DRAFT_KEY)
         if (raw) {
           const draft = JSON.parse(raw) as Record<string, unknown>
-          const hasMeaningfulDraft = [
-            draft.displayName,
-            draft.phone,
-            draft.email,
-            draft.tailorLocation,
-            draft.tailorBio,
-            draft.priceMin,
-            draft.priceMax,
-          ].some((value) => typeof value === 'string' && value.trim().length > 0) || Boolean(
-            draft.avatarDraft ||
-            draft.trustVideoDraft ||
-            (Array.isArray(draft.portfolioImageDrafts) && draft.portfolioImageDrafts.length) ||
-            (Array.isArray(draft.portfolioVideoDrafts) && draft.portfolioVideoDrafts.length),
-          )
+          const hasMeaningfulDraft =
+            [
+              draft.displayName,
+              draft.phone,
+              draft.email,
+              draft.tailorLocation,
+              draft.tailorBio,
+              draft.priceMin,
+              draft.priceMax,
+            ].some((value) => typeof value === 'string' && value.trim().length > 0) ||
+            Boolean(
+              draft.avatarDraft ||
+              draft.trustVideoDraft ||
+              (Array.isArray(draft.portfolioImageDrafts) && draft.portfolioImageDrafts.length) ||
+              (Array.isArray(draft.portfolioVideoDrafts) && draft.portfolioVideoDrafts.length)
+            )
           const restoredPendingEmail =
             typeof draft.pendingConfirmationEmail === 'string' &&
             /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.pendingConfirmationEmail)
               ? draft.pendingConfirmationEmail.trim().toLowerCase()
               : null
-          if (draft.step === 1 || draft.step === 2 || draft.step === 3 || draft.step === 4 || draft.step === 5 || draft.step === 6) setStep(draft.step)
+          if (
+            draft.step === 1 ||
+            draft.step === 2 ||
+            draft.step === 3 ||
+            draft.step === 4 ||
+            draft.step === 5 ||
+            draft.step === 6
+          )
+            setStep(draft.step)
           if (restoredPendingEmail) {
             setPendingConfirmationEmail(restoredPendingEmail)
           }
-          if (draft.role === 'CUSTOMER' || draft.role === 'TAILOR') setRole(draft.role)
+          if (hasExplicitRole) setRole(initialRole)
+          else if (draft.role === 'CUSTOMER' || draft.role === 'TAILOR') setRole(draft.role)
           if (typeof draft.displayName === 'string') setDisplayName(draft.displayName)
           if (typeof draft.phone === 'string') setPhone(draft.phone)
           if (typeof draft.email === 'string') setEmail(draft.email)
           if (typeof draft.tailorLocation === 'string') setTailorLocation(draft.tailorLocation)
           if (typeof draft.tailorBio === 'string') setTailorBio(draft.tailorBio)
-          if (Array.isArray(draft.tailorLanguagesList)) setTailorLanguagesList(draft.tailorLanguagesList.filter((value): value is string => typeof value === 'string'))
-          if (Array.isArray(draft.tailorSpecialtiesList)) setTailorSpecialtiesList(draft.tailorSpecialtiesList.filter((value): value is string => typeof value === 'string'))
-          if (draft.tailorSellerType === 'TAILOR' || draft.tailorSellerType === 'BOUTIQUE' || draft.tailorSellerType === 'TAILOR_SHOP') setTailorSellerType(draft.tailorSellerType)
-          if (draft.tailorAvailability === 'OPEN' || draft.tailorAvailability === 'LIMITED' || draft.tailorAvailability === 'FULLY_BOOKED') setTailorAvailability(draft.tailorAvailability)
+          if (Array.isArray(draft.tailorLanguagesList))
+            setTailorLanguagesList(
+              draft.tailorLanguagesList.filter(
+                (value): value is string => typeof value === 'string'
+              )
+            )
+          if (Array.isArray(draft.tailorSpecialtiesList))
+            setTailorSpecialtiesList(
+              draft.tailorSpecialtiesList.filter(
+                (value): value is string => typeof value === 'string'
+              )
+            )
+          if (
+            draft.tailorSellerType === 'TAILOR' ||
+            draft.tailorSellerType === 'BOUTIQUE' ||
+            draft.tailorSellerType === 'TAILOR_SHOP'
+          )
+            setTailorSellerType(draft.tailorSellerType)
+          if (
+            draft.tailorAvailability === 'OPEN' ||
+            draft.tailorAvailability === 'LIMITED' ||
+            draft.tailorAvailability === 'FULLY_BOOKED'
+          )
+            setTailorAvailability(draft.tailorAvailability)
           if (typeof draft.priceMin === 'string') setPriceMin(draft.priceMin)
           if (typeof draft.priceMax === 'string') setPriceMax(draft.priceMax)
-          if (typeof draft.supportsCustomOrders === 'boolean') setSupportsCustomOrders(draft.supportsCustomOrders)
-          if (typeof draft.supportsReadyMade === 'boolean') setSupportsReadyMade(draft.supportsReadyMade)
-          if (Array.isArray(draft.fulfillment)) setFulfillment(draft.fulfillment.filter((value): value is TailorFulfillment => value === 'PICKUP' || value === 'DELIVERY' || value === 'SHIPPING'))
+          if (typeof draft.supportsCustomOrders === 'boolean')
+            setSupportsCustomOrders(draft.supportsCustomOrders)
+          if (typeof draft.supportsReadyMade === 'boolean')
+            setSupportsReadyMade(draft.supportsReadyMade)
+          if (Array.isArray(draft.fulfillment))
+            setFulfillment(
+              draft.fulfillment.filter(
+                (value): value is TailorFulfillment =>
+                  value === 'PICKUP' || value === 'DELIVERY' || value === 'SHIPPING'
+              )
+            )
           if (typeof draft.pickupAddress === 'string') setPickupAddress(draft.pickupAddress)
           if (typeof draft.pickupCity === 'string') setPickupCity(draft.pickupCity)
           if (typeof draft.pickupRegion === 'string') setPickupRegion(draft.pickupRegion)
-          if (typeof draft.pickupPostalCode === 'string') setPickupPostalCode(draft.pickupPostalCode)
-          if (typeof draft.pickupCountryCode === 'string') setPickupCountryCode(draft.pickupCountryCode)
-          if (draft.consultationMode === 'UNAVAILABLE' || draft.consultationMode === 'FREE' || draft.consultationMode === 'PAID') setConsultationMode(draft.consultationMode)
-          if (draft.consultationRequirement === 'OPTIONAL' || draft.consultationRequirement === 'REQUIRED') setConsultationRequirement(draft.consultationRequirement)
+          if (typeof draft.pickupPostalCode === 'string')
+            setPickupPostalCode(draft.pickupPostalCode)
+          if (typeof draft.pickupCountryCode === 'string')
+            setPickupCountryCode(draft.pickupCountryCode)
+          if (
+            draft.consultationMode === 'UNAVAILABLE' ||
+            draft.consultationMode === 'FREE' ||
+            draft.consultationMode === 'PAID'
+          )
+            setConsultationMode(draft.consultationMode)
+          if (
+            draft.consultationRequirement === 'OPTIONAL' ||
+            draft.consultationRequirement === 'REQUIRED'
+          )
+            setConsultationRequirement(draft.consultationRequirement)
           if (typeof draft.consultationFee === 'string') setConsultationFee(draft.consultationFee)
-          if (draft.consultationDuration === '15' || draft.consultationDuration === '30' || draft.consultationDuration === '45' || draft.consultationDuration === '60') setConsultationDuration(draft.consultationDuration)
-          if (draft.consultationCallType === 'AUDIO' || draft.consultationCallType === 'VIDEO' || draft.consultationCallType === 'AUDIO_OR_VIDEO') setConsultationCallType(draft.consultationCallType)
-          if (typeof draft.consultationFeeCreditable === 'boolean') setConsultationFeeCreditable(draft.consultationFeeCreditable)
+          if (
+            draft.consultationDuration === '15' ||
+            draft.consultationDuration === '30' ||
+            draft.consultationDuration === '45' ||
+            draft.consultationDuration === '60'
+          )
+            setConsultationDuration(draft.consultationDuration)
+          if (
+            draft.consultationCallType === 'AUDIO' ||
+            draft.consultationCallType === 'VIDEO' ||
+            draft.consultationCallType === 'AUDIO_OR_VIDEO'
+          )
+            setConsultationCallType(draft.consultationCallType)
+          if (typeof draft.consultationFeeCreditable === 'boolean')
+            setConsultationFeeCreditable(draft.consultationFeeCreditable)
 
-          let savedAvatar = draft.avatarDraft && typeof draft.avatarDraft === 'object' && typeof (draft.avatarDraft as SignupMediaDraftDescriptor).key === 'string'
-            ? draft.avatarDraft as SignupMediaDraftDescriptor
-            : null
-          if (!savedAvatar && typeof draft.avatarDataUrl === 'string' && draft.avatarDataUrl.startsWith('data:image/')) {
+          let savedAvatar =
+            draft.avatarDraft &&
+            typeof draft.avatarDraft === 'object' &&
+            typeof (draft.avatarDraft as SignupMediaDraftDescriptor).key === 'string'
+              ? (draft.avatarDraft as SignupMediaDraftDescriptor)
+              : null
+          if (
+            !savedAvatar &&
+            typeof draft.avatarDataUrl === 'string' &&
+            draft.avatarDataUrl.startsWith('data:image/')
+          ) {
             const blob = await fetch(draft.avatarDataUrl).then((response) => response.blob())
             const key = createSignupMediaDraftKey('avatar')
             await saveSignupMediaDraft(key, blob)
-            savedAvatar = { key, name: 'profile-photo.jpg', contentType: blob.type, byteLength: blob.size, durationSeconds: 0, createdAt: new Date().toISOString() }
+            savedAvatar = {
+              key,
+              name: 'profile-photo.jpg',
+              contentType: blob.type,
+              byteLength: blob.size,
+              durationSeconds: 0,
+              createdAt: new Date().toISOString(),
+            }
           }
           if (savedAvatar) {
             const blob = await readSignupMediaDraft(savedAvatar.key)
@@ -656,34 +1008,81 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           }
 
           let savedPortfolioImages = Array.isArray(draft.portfolioImageDrafts)
-            ? draft.portfolioImageDrafts.filter((value): value is SignupMediaDraftDescriptor => Boolean(value && typeof value === 'object' && typeof (value as SignupMediaDraftDescriptor).key === 'string')).slice(0, 12)
+            ? draft.portfolioImageDrafts
+                .filter((value): value is SignupMediaDraftDescriptor =>
+                  Boolean(
+                    value &&
+                    typeof value === 'object' &&
+                    typeof (value as SignupMediaDraftDescriptor).key === 'string'
+                  )
+                )
+                .slice(0, 12)
             : []
           if (!savedPortfolioImages.length && Array.isArray(draft.portfolioDataUrls)) {
-            savedPortfolioImages = (await Promise.all(draft.portfolioDataUrls
-              .filter((value): value is string => typeof value === 'string' && value.startsWith('data:image/'))
-              .slice(0, 12)
-              .map(async (dataUrl, index) => {
-                const blob = await fetch(dataUrl).then((response) => response.blob())
-                const key = createSignupMediaDraftKey('portfolio')
-                await saveSignupMediaDraft(key, blob)
-                return { key, name: `portfolio-photo-${index + 1}.jpg`, contentType: blob.type, byteLength: blob.size, durationSeconds: 0, createdAt: new Date().toISOString() }
-              })))
+            savedPortfolioImages = await Promise.all(
+              draft.portfolioDataUrls
+                .filter(
+                  (value): value is string =>
+                    typeof value === 'string' && value.startsWith('data:image/')
+                )
+                .slice(0, 12)
+                .map(async (dataUrl, index) => {
+                  const blob = await fetch(dataUrl).then((response) => response.blob())
+                  const key = createSignupMediaDraftKey('portfolio')
+                  await saveSignupMediaDraft(key, blob)
+                  return {
+                    key,
+                    name: `portfolio-photo-${index + 1}.jpg`,
+                    contentType: blob.type,
+                    byteLength: blob.size,
+                    durationSeconds: 0,
+                    createdAt: new Date().toISOString(),
+                  }
+                })
+            )
           }
-          const restoredPortfolioImages = await Promise.all(savedPortfolioImages.map(async (descriptor) => {
-            const blob = await readSignupMediaDraft(descriptor.key)
-            return blob ? { descriptor, dataUrl: await blobToDataUrl(blob) } : null
-          }))
+          const restoredPortfolioImages = await Promise.all(
+            savedPortfolioImages.map(async (descriptor) => {
+              const blob = await readSignupMediaDraft(descriptor.key)
+              return blob ? { descriptor, dataUrl: await blobToDataUrl(blob) } : null
+            })
+          )
           if (active) {
-            const availableImages = restoredPortfolioImages.filter((value): value is { descriptor: SignupMediaDraftDescriptor; dataUrl: string } => Boolean(value))
+            const availableImages = restoredPortfolioImages.filter(
+              (value): value is { descriptor: SignupMediaDraftDescriptor; dataUrl: string } =>
+                Boolean(value)
+            )
             setPortfolioImageDrafts(availableImages.map((value) => value.descriptor))
             setPortfolioDataUrls(availableImages.map((value) => value.dataUrl))
           }
 
-          if (Array.isArray(draft.portfolioVideoDrafts)) setPortfolioVideoDrafts(draft.portfolioVideoDrafts.filter((value): value is SignupMediaDraftDescriptor => Boolean(value && typeof value === 'object' && typeof (value as SignupMediaDraftDescriptor).key === 'string')).slice(0, 4))
-          if (draft.trustVideoDraft && typeof draft.trustVideoDraft === 'object' && typeof (draft.trustVideoDraft as SignupMediaDraftDescriptor).key === 'string') setTrustVideoDraft(draft.trustVideoDraft as SignupMediaDraftDescriptor)
-          const storedChallenge = TAILOR_TRUST_VIDEO_CHALLENGES.find((challenge) => challenge.id === draft.trustChallengeId)
-          if (storedChallenge) { setTrustChallengeId(storedChallenge.id); setTrustChallengeText(storedChallenge.text) }
-          if (typeof draft.trustConsentGranted === 'boolean') setTrustConsentGranted(draft.trustConsentGranted)
+          if (Array.isArray(draft.portfolioVideoDrafts))
+            setPortfolioVideoDrafts(
+              draft.portfolioVideoDrafts
+                .filter((value): value is SignupMediaDraftDescriptor =>
+                  Boolean(
+                    value &&
+                    typeof value === 'object' &&
+                    typeof (value as SignupMediaDraftDescriptor).key === 'string'
+                  )
+                )
+                .slice(0, 4)
+            )
+          if (
+            draft.trustVideoDraft &&
+            typeof draft.trustVideoDraft === 'object' &&
+            typeof (draft.trustVideoDraft as SignupMediaDraftDescriptor).key === 'string'
+          )
+            setTrustVideoDraft(draft.trustVideoDraft as SignupMediaDraftDescriptor)
+          const storedChallenge = TAILOR_TRUST_VIDEO_CHALLENGES.find(
+            (challenge) => challenge.id === draft.trustChallengeId
+          )
+          if (storedChallenge) {
+            setTrustChallengeId(storedChallenge.id)
+            setTrustChallengeText(storedChallenge.text)
+          }
+          if (typeof draft.trustConsentGranted === 'boolean')
+            setTrustConsentGranted(draft.trustConsentGranted)
           if (hasMeaningfulDraft && !restoredPendingEmail) {
             setMessage('Your saved signup draft was restored. Re-enter your password to continue.')
           }
@@ -695,8 +1094,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       }
     }
     void hydrateDraft()
-    return () => { active = false }
-  }, [isSignUp, signupDraftHydrated])
+    return () => {
+      active = false
+    }
+  }, [hasExplicitRole, initialRole, isSignUp, signupDraftHydrated])
 
   useEffect(() => {
     if (!isSignUp || !signupDraftHydrated) return
@@ -706,10 +1107,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   useEffect(() => {
     if (!isSignUp || !signupDraftHydrated) return
     const persistLatestDraft = () => {
-      window.localStorage.setItem(
-        PUBLIC_SIGNUP_DRAFT_KEY,
-        JSON.stringify(signupDraftSnapshot),
-      )
+      window.localStorage.setItem(PUBLIC_SIGNUP_DRAFT_KEY, JSON.stringify(signupDraftSnapshot))
     }
     window.addEventListener('pagehide', persistLatestDraft)
     return () => window.removeEventListener('pagehide', persistLatestDraft)
@@ -729,11 +1127,20 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   }, [isSignUp, step])
 
   useEffect(() => {
-    if (!isSignUp || role !== 'TAILOR' || step !== 6 || trustChallengeInitializedRef.current || trustVideoDraft) return
+    if (
+      !isSignUp ||
+      role !== 'TAILOR' ||
+      step !== 6 ||
+      trustChallengeInitializedRef.current ||
+      trustVideoDraft
+    )
+      return
     trustChallengeInitializedRef.current = true
     const bytes = new Uint32Array(1)
     window.crypto.getRandomValues(bytes)
-    const challenge = TAILOR_TRUST_VIDEO_CHALLENGES[(bytes[0] ?? 0) % TAILOR_TRUST_VIDEO_CHALLENGES.length] ?? TAILOR_TRUST_VIDEO_CHALLENGES[0]
+    const challenge =
+      TAILOR_TRUST_VIDEO_CHALLENGES[(bytes[0] ?? 0) % TAILOR_TRUST_VIDEO_CHALLENGES.length] ??
+      TAILOR_TRUST_VIDEO_CHALLENGES[0]
     setTrustChallengeId(challenge.id)
     setTrustChallengeText(challenge.text)
   }, [isSignUp, role, step, trustVideoDraft])
@@ -747,7 +1154,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (avatarDraft?.key) await deleteSignupMediaDraft(avatarDraft.key).catch(() => undefined)
       const key = createSignupMediaDraftKey('avatar')
       await saveSignupMediaDraft(key, blob)
-      setAvatarDraft({ key, name: file.name, contentType: blob.type, byteLength: blob.size, durationSeconds: 0, createdAt: new Date().toISOString() })
+      setAvatarDraft({
+        key,
+        name: file.name,
+        contentType: blob.type,
+        byteLength: blob.size,
+        durationSeconds: 0,
+        createdAt: new Date().toISOString(),
+      })
       setAvatarDataUrl(await blobToDataUrl(blob))
       event.target.value = ''
     } catch (cause) {
@@ -768,29 +1182,51 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     try {
       const imageFiles = files.filter((file) => file.type.startsWith('image/'))
       const videoFiles = files.filter((file) => file.type.startsWith('video/'))
-      if (portfolioVideoDrafts.length + videoFiles.length > 4) throw new Error('Choose up to 4 portfolio videos.')
+      if (portfolioVideoDrafts.length + videoFiles.length > 4)
+        throw new Error('Choose up to 4 portfolio videos.')
       const preparedImages: Array<{ descriptor: SignupMediaDraftDescriptor; dataUrl: string }> = []
       for (const file of imageFiles) {
         const blob = await preparePortfolioImage(file)
         const key = createSignupMediaDraftKey('portfolio')
         await saveSignupMediaDraft(key, blob)
         preparedImages.push({
-          descriptor: { key, name: file.name, contentType: blob.type, byteLength: blob.size, durationSeconds: 0, createdAt: new Date().toISOString() },
+          descriptor: {
+            key,
+            name: file.name,
+            contentType: blob.type,
+            byteLength: blob.size,
+            durationSeconds: 0,
+            createdAt: new Date().toISOString(),
+          },
           dataUrl: await blobToDataUrl(blob),
         })
       }
       const preparedVideos: SignupMediaDraftDescriptor[] = []
       for (const file of videoFiles) {
-        if (!['video/mp4', 'video/quicktime', 'video/webm'].includes(file.type)) throw new Error('Portfolio videos must be MP4, MOV, or WebM.')
-        if (file.size > MEDIA_LIMITS_BYTES.portfolioVideo) throw new Error('Keep each portfolio video under 30 MB.')
+        if (!['video/mp4', 'video/quicktime', 'video/webm'].includes(file.type))
+          throw new Error('Portfolio videos must be MP4, MOV, or WebM.')
+        if (file.size > MEDIA_LIMITS_BYTES.portfolioVideo)
+          throw new Error('Keep each portfolio video under 30 MB.')
         const durationSeconds = await readVideoDurationSeconds(file)
-        if (durationSeconds > MEDIA_LIMITS_SECONDS.portfolioVideo + 0.75) throw new Error('Portfolio videos must be 30 seconds or less.')
+        if (durationSeconds > MEDIA_LIMITS_SECONDS.portfolioVideo + 0.75)
+          throw new Error('Portfolio videos must be 30 seconds or less.')
         const key = createSignupMediaDraftKey('portfolio')
         await saveSignupMediaDraft(key, file)
-        preparedVideos.push({ key, name: file.name, contentType: file.type, byteLength: file.size, durationSeconds, createdAt: new Date().toISOString() })
+        preparedVideos.push({
+          key,
+          name: file.name,
+          contentType: file.type,
+          byteLength: file.size,
+          durationSeconds,
+          createdAt: new Date().toISOString(),
+        })
       }
-      setPortfolioImageDrafts((current) => [...current, ...preparedImages.map((value) => value.descriptor)].slice(0, 12))
-      setPortfolioDataUrls((current) => [...current, ...preparedImages.map((value) => value.dataUrl)].slice(0, 12))
+      setPortfolioImageDrafts((current) =>
+        [...current, ...preparedImages.map((value) => value.descriptor)].slice(0, 12)
+      )
+      setPortfolioDataUrls((current) =>
+        [...current, ...preparedImages.map((value) => value.dataUrl)].slice(0, 12)
+      )
       setPortfolioVideoDrafts((current) => [...current, ...preparedVideos].slice(0, 4))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Those work samples could not be prepared.')
@@ -822,7 +1258,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (tailorLocation.trim().length < 2) return TAILOR_SETUP_VALIDATION.LOCATION_REQUIRED_MESSAGE
       if (tailorBio.trim().length < 80) return TAILOR_SETUP_VALIDATION.BIO_REQUIRED_MESSAGE
       if (!tailorLanguagesList.length) return TAILOR_SETUP_VALIDATION.LANGUAGE_REQUIRED_MESSAGE
-      const leak = fieldHasContactLeak(tailorLocation, 'Location') || fieldHasContactLeak(tailorBio, 'Bio')
+      const leak =
+        fieldHasContactLeak(tailorLocation, 'Location') || fieldHasContactLeak(tailorBio, 'Bio')
       if (leak) return leak
     }
     if (section === 4) {
@@ -832,11 +1269,18 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (!min || !max || max < min) return TAILOR_SETUP_VALIDATION.PRICE_REQUIRED_MESSAGE
       const minMajor = parseTailorPriceMajor(priceMin)
       const maxMajor = parseTailorPriceMajor(priceMax)
-      if (minMajor < getTailorPriceMinMajor(defaultCurrency)) return getTailorPriceMinimumMessage(defaultCurrency)
-      if (maxMajor > getTailorPriceMaxMajor(defaultCurrency)) return getTailorPriceLimitMessage(defaultCurrency)
-      if (!supportsCustomOrders && !supportsReadyMade) return TAILOR_SETUP_VALIDATION.ORDER_MODE_REQUIRED_MESSAGE
+      if (minMajor < getTailorPriceMinMajor(defaultCurrency))
+        return getTailorPriceMinimumMessage(defaultCurrency)
+      if (maxMajor > getTailorPriceMaxMajor(defaultCurrency))
+        return getTailorPriceLimitMessage(defaultCurrency)
+      if (!supportsCustomOrders && !supportsReadyMade)
+        return TAILOR_SETUP_VALIDATION.ORDER_MODE_REQUIRED_MESSAGE
     }
-    if (section === 5 && tailorSellerType !== 'BOUTIQUE' && portfolioDataUrls.length + portfolioVideoDrafts.length < 1) {
+    if (
+      section === 5 &&
+      tailorSellerType !== 'BOUTIQUE' &&
+      portfolioDataUrls.length + portfolioVideoDrafts.length < 1
+    ) {
       return TAILOR_SETUP_VALIDATION.PORTFOLIO_REQUIRED_MESSAGE
     }
     if (section === 6) {
@@ -844,14 +1288,18 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (fulfillment.includes('PICKUP') && pickupAddress.trim().length < 8) {
         return TAILOR_SETUP_VALIDATION.PICKUP_ADDRESS_REQUIRED_MESSAGE
       }
-      if (fulfillment.includes('PICKUP') && (!pickupCity.trim() || !/^[A-Za-z]{2}$/u.test(pickupCountryCode.trim()))) {
+      if (
+        fulfillment.includes('PICKUP') &&
+        (!pickupCity.trim() || !/^[A-Za-z]{2}$/u.test(pickupCountryCode.trim()))
+      ) {
         return 'Add the pickup city and 2-letter country code before offering pickup.'
       }
       if (consultationMode === 'PAID' && !parseMajorAmountToMinor(consultationFee)) {
         return 'Enter a valid consultation fee.'
       }
       if (!trustVideoDraft) return TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE
-      if (!trustConsentGranted) return 'Review and accept the private trust-video consent before creating your account.'
+      if (!trustConsentGranted)
+        return 'Review and accept the private trust-video consent before creating your account.'
     }
     return null
   }
@@ -892,7 +1340,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     try {
       return createClient()
     } catch {
-      setError('Account access is temporarily unavailable. Please try again later or contact support.')
+      setError(
+        'Account access is temporarily unavailable. Please try again later or contact support.'
+      )
       return null
     }
   }
@@ -904,8 +1354,12 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     if (!supabase) return
 
     setProviderLoading(provider)
-    window.localStorage.removeItem('drapeon.web.auth.roleIntent')
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
+    if (isSignUp) {
+      window.localStorage.setItem('drapeon.web.auth.roleIntent', role)
+    } else {
+      window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+    }
 
     let providerUrl: string | null = null
     try {
@@ -913,11 +1367,18 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         supabase.auth.signInWithOAuth({
           provider,
           options: {
-            redirectTo: buildAuthCallbackUrl(contextualReturn ?? '/account/orders'),
+            redirectTo: buildAuthCallbackUrl(
+              contextualReturn ??
+                (isSignUp
+                  ? role === 'TAILOR'
+                    ? '/account/profile?setup=1'
+                    : '/account/customer/setup'
+                  : '/account/orders')
+            ),
             skipBrowserRedirect: true,
           },
         }),
-        `${provider === 'apple' ? 'Apple' : 'Google'} sign-in`,
+        `${provider === 'apple' ? 'Apple' : 'Google'} sign-in`
       )
 
       if (providerError || !data.url) {
@@ -928,7 +1389,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       providerUrl = data.url
     } catch (providerFailure) {
       setProviderLoading(null)
-      setError(mapAuthError(providerFailure instanceof Error ? providerFailure.message : String(providerFailure)))
+      setError(
+        mapAuthError(
+          providerFailure instanceof Error ? providerFailure.message : String(providerFailure)
+        )
+      )
       return
     }
 
@@ -941,8 +1406,21 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     window.setTimeout(() => {
       if (window.location.href !== currentUrl) return
       setProviderLoading(null)
-      setError(`The ${provider === 'apple' ? 'Apple' : 'Google'} sign-in page could not open. Check your browser settings and try again.`)
+      setError(
+        `The ${provider === 'apple' ? 'Apple' : 'Google'} sign-in page could not open. Check your browser settings and try again.`
+      )
     }, 4_000)
+  }
+
+  function beginProviderAccess(provider: 'apple' | 'google') {
+    if (isSignUp) {
+      setError(null)
+      setPendingSignupProvider(provider)
+      setStep(2)
+      return
+    }
+
+    void continueWithProvider(provider)
   }
 
   function renderProviderEntry() {
@@ -951,26 +1429,42 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     return (
       <div className="mt-6 grid gap-3">
         {appleOAuthEnabled ? (
-        <button
-          type="button"
-          onClick={() => void continueWithProvider('apple')}
-          disabled={loading || providerLoading !== null}
-          className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-current"><path d="M17.1 12.5c0-2.7 2.2-4 2.3-4.1-1.3-1.9-3.3-2.1-4-2.1-1.7-.2-3.3 1-4.2 1-.9 0-2.3-1-3.8-.9-1.9 0-3.7 1.1-4.7 2.8-2 3.5-.5 8.7 1.4 11.5.9 1.4 2.1 2.9 3.6 2.8 1.4-.1 2-1 3.7-1s2.2 1 3.8 1c1.6 0 2.6-1.4 3.5-2.8 1.1-1.6 1.5-3.1 1.5-3.2-.1 0-3.1-1.2-3.1-5zM14.3 4.5c.8-1 1.3-2.3 1.2-3.5-1.2.1-2.6.8-3.4 1.7-.7.8-1.4 2.2-1.2 3.4 1.3.1 2.6-.6 3.4-1.6z"/></svg>
-          {providerLoading === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
-        </button>
+          <button
+            type="button"
+            onClick={() => beginProviderAccess('apple')}
+            disabled={loading || providerLoading !== null}
+            className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-current">
+              <path d="M17.1 12.5c0-2.7 2.2-4 2.3-4.1-1.3-1.9-3.3-2.1-4-2.1-1.7-.2-3.3 1-4.2 1-.9 0-2.3-1-3.8-.9-1.9 0-3.7 1.1-4.7 2.8-2 3.5-.5 8.7 1.4 11.5.9 1.4 2.1 2.9 3.6 2.8 1.4-.1 2-1 3.7-1s2.2 1 3.8 1c1.6 0 2.6-1.4 3.5-2.8 1.1-1.6 1.5-3.1 1.5-3.2-.1 0-3.1-1.2-3.1-5zM14.3 4.5c.8-1 1.3-2.3 1.2-3.5-1.2.1-2.6.8-3.4 1.7-.7.8-1.4 2.2-1.2 3.4 1.3.1 2.6-.6 3.4-1.6z" />
+            </svg>
+            {providerLoading === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
+          </button>
         ) : null}
         {googleOAuthEnabled ? (
-        <button
-          type="button"
-          onClick={() => void continueWithProvider('google')}
-          disabled={loading || providerLoading !== null}
-          className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full border border-ink/12 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z"/><path fill="#FBBC05" d="M6.4 14a6 6 0 0 1 0-3.9V7.4H3.1a10 10 0 0 0 0 9.2L6.4 14z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 3.1 7.4l3.3 2.7C7.2 7.7 9.4 5.9 12 5.9z"/></svg>
-          {providerLoading === 'google' ? 'Opening Google…' : 'Continue with Google'}
-        </button>
+          <button
+            type="button"
+            onClick={() => beginProviderAccess('google')}
+            disabled={loading || providerLoading !== null}
+            className="inline-flex min-h-[52px] items-center justify-center gap-3 rounded-full border border-ink/12 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5">
+              <path
+                fill="#4285F4"
+                d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z"
+              />
+              <path fill="#FBBC05" d="M6.4 14a6 6 0 0 1 0-3.9V7.4H3.1a10 10 0 0 0 0 9.2L6.4 14z" />
+              <path
+                fill="#EA4335"
+                d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 3.1 7.4l3.3 2.7C7.2 7.7 9.4 5.9 12 5.9z"
+              />
+            </svg>
+            {providerLoading === 'google' ? 'Opening Google…' : 'Continue with Google'}
+          </button>
         ) : null}
         <div className="flex items-center gap-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/36">
           <span className="h-px flex-1 bg-ink/10" />
@@ -985,11 +1479,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     const supabase = getSupabase()
     if (!supabase) return null
 
-    const { data } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', userId)
-      .maybeSingle()
+    const { data } = await supabase.from('users').select('role').eq('id', userId).maybeSingle()
 
     return data?.role === 'TAILOR' || data?.role === 'CUSTOMER' ? data.role : null
   }
@@ -1104,7 +1594,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       setError(TAILOR_SETUP_VALIDATION.SPECIALTY_REQUIRED_MESSAGE)
       return null
     }
-    if (!priceRangeMin || !priceRangeMax || priceRangeMax < priceRangeMin || !Number.isFinite(priceMinMajor) || !Number.isFinite(priceMaxMajor)) {
+    if (
+      !priceRangeMin ||
+      !priceRangeMax ||
+      priceRangeMax < priceRangeMin ||
+      !Number.isFinite(priceMinMajor) ||
+      !Number.isFinite(priceMaxMajor)
+    ) {
       setError(TAILOR_SETUP_VALIDATION.PRICE_REQUIRED_MESSAGE)
       return null
     }
@@ -1124,7 +1620,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       setError(TAILOR_SETUP_VALIDATION.FULFILLMENT_REQUIRED_MESSAGE)
       return null
     }
-    if (tailorSellerType !== 'BOUTIQUE' && portfolioDataUrls.length + portfolioVideoDrafts.length === 0) {
+    if (
+      tailorSellerType !== 'BOUTIQUE' &&
+      portfolioDataUrls.length + portfolioVideoDrafts.length === 0
+    ) {
       setError(TAILOR_SETUP_VALIDATION.PORTFOLIO_REQUIRED_MESSAGE)
       return null
     }
@@ -1232,9 +1731,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     setLoading(true)
     const normalizedEmail = email.trim().toLowerCase()
-    const accountHome = isSignUp && role === 'TAILOR'
-      ? '/account/profile?setup=1'
-      : accountHomeForRole(role)
+    const accountHome =
+      isSignUp && role === 'TAILOR' ? '/account/profile?setup=1' : accountHomeForRole(role)
     const redirectTo = buildAuthCallbackUrl(accountHome)
 
     if (isSignUp) {
@@ -1251,9 +1749,17 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       const mediaClaimHash = await sha256(mediaClaimToken)
       const quarantineEntries: QuarantineMediaEntry[] = [
         ...(onboarding.avatarDraft ? [{ ...onboarding.avatarDraft, kind: 'avatar' as const }] : []),
-        ...(onboarding.portfolioImageDrafts ?? []).map((entry) => ({ ...entry, kind: 'portfolio-image' as const })),
-        ...(onboarding.portfolioVideoDrafts ?? []).map((entry) => ({ ...entry, kind: 'portfolio-video' as const })),
-        ...(onboarding.trustVideoDraft ? [{ ...onboarding.trustVideoDraft, kind: 'trust-video' as const }] : []),
+        ...(onboarding.portfolioImageDrafts ?? []).map((entry) => ({
+          ...entry,
+          kind: 'portfolio-image' as const,
+        })),
+        ...(onboarding.portfolioVideoDrafts ?? []).map((entry) => ({
+          ...entry,
+          kind: 'portfolio-video' as const,
+        })),
+        ...(onboarding.trustVideoDraft
+          ? [{ ...onboarding.trustVideoDraft, kind: 'trust-video' as const }]
+          : []),
       ]
 
       const { data, error } = await supabase.auth.signUp({
@@ -1289,16 +1795,26 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (!data.session) {
         if (quarantineEntries.length && data.user?.id) {
           try {
-            await stageSignupMedia({ userId: data.user.id, claimToken: mediaClaimToken, entries: quarantineEntries })
+            await stageSignupMedia({
+              userId: data.user.id,
+              claimToken: mediaClaimToken,
+              entries: quarantineEntries,
+            })
           } catch (mediaError) {
             setLoading(false)
             setPendingConfirmationEmail(normalizedEmail)
-            setError(mediaError instanceof Error ? mediaError.message : 'Private signup media could not upload. Try again before confirming your email.')
+            setError(
+              mediaError instanceof Error
+                ? mediaError.message
+                : 'Private signup media could not upload. Try again before confirming your email.'
+            )
             return
           }
         }
         setPendingConfirmationEmail(normalizedEmail)
-        setMessage('Check your email to confirm your Drapeon account. The link returns you to your account after confirmation.')
+        setMessage(
+          'Check your email to confirm your Drapeon account. The link returns you to your account after confirmation.'
+        )
         setLoading(false)
         return
       }
@@ -1355,7 +1871,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     try {
       const assessment = await assessWebDevice(signedInSession, rememberDevice)
       if (!assessment.trusted) {
-        if (!assessment.challengeId) throw new Error('A device verification code could not be created.')
+        if (!assessment.challengeId)
+          throw new Error('A device verification code could not be created.')
         setPassword('')
         setDeviceCode('')
         setDeviceChallenge({
@@ -1429,7 +1946,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   async function cancelDeviceVerification() {
     if (!deviceChallenge || loading) return
     setLoading(true)
-    await createClient().auth.signOut({ scope: 'local' }).catch(() => undefined)
+    await createClient()
+      .auth.signOut({ scope: 'local' })
+      .catch(() => undefined)
     setDeviceChallenge(null)
     setDeviceCode('')
     setMessage(null)
@@ -1455,7 +1974,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       type: 'signup',
       email: pendingConfirmationEmail,
       options: {
-        emailRedirectTo: buildAuthCallbackUrl(role === 'TAILOR' ? '/account/profile?setup=1' : accountHomeForRole(role)),
+        emailRedirectTo: buildAuthCallbackUrl(
+          role === 'TAILOR' ? '/account/profile?setup=1' : accountHomeForRole(role)
+        ),
         captchaToken,
       },
     })
@@ -1488,7 +2009,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <path d="M4 4h16v16H4V4zm0 0 8 9 8-9" />
           </svg>
         </div>
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Almost there</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+          Almost there
+        </p>
         <h2 className="mt-3 text-3xl text-ink">Check your inbox</h2>
         <p className="mt-3 text-sm leading-7 text-ink/66">
           We sent a confirmation link to{' '}
@@ -1498,7 +2021,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         {role === 'TAILOR' ? (
           <div className="mt-4 rounded-[10px] border border-needle/18 bg-needle/7 px-4 py-3 text-left">
             <p className="text-sm font-semibold text-ink">Continue from any browser or device</p>
-            <p className="mt-1 text-xs leading-5 text-ink/58">After confirmation, Drapeon opens your required studio setup. You will add your portfolio or ready-made proof and private trust video there before submitting for review.</p>
+            <p className="mt-1 text-xs leading-5 text-ink/58">
+              After confirmation, Drapeon opens your required studio setup. You will add your
+              portfolio or ready-made proof and private trust video there before submitting for
+              review.
+            </p>
           </div>
         ) : null}
         <p className="mt-2 text-xs text-ink/44">
@@ -1506,9 +2033,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         </p>
         <p className="mt-2 text-xs leading-5 text-ink/52">
           No email after resending? This address may already be confirmed.{' '}
-          <Link href="/sign-in" className="font-semibold text-needle hover:underline">Sign in</Link>
-          {' '}or{' '}
-          <Link href="/account/recovery" className="font-semibold text-needle hover:underline">reset your password</Link>.
+          <Link href="/sign-in" className="font-semibold text-needle hover:underline">
+            Sign in
+          </Link>{' '}
+          or{' '}
+          <Link href="/account/recovery" className="font-semibold text-needle hover:underline">
+            reset your password
+          </Link>
+          .
         </p>
         <Link
           href={role === 'TAILOR' ? '/sign-in?next=%2Faccount%2Fprofile%3Fsetup%3D1' : '/sign-in'}
@@ -1517,7 +2049,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           I&apos;ve confirmed — continue
         </Link>
         <p className="mt-2 text-xs leading-5 text-ink/44">
-          Confirmed in another browser or on your phone? Sign in here to securely continue on this device.
+          Confirmed in another browser or on your phone? Sign in here to securely continue on this
+          device.
         </p>
         <div className="mt-5 text-left">
           <TurnstileChallenge
@@ -1549,7 +2082,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           </p>
         ) : null}
         {message ? (
-          <p role="status" aria-live="polite" className="mt-4 rounded-lg border border-needle/20 bg-needle/8 px-4 py-3 text-sm text-ink">
+          <p
+            role="status"
+            aria-live="polite"
+            className="mt-4 rounded-lg border border-needle/20 bg-needle/8 px-4 py-3 text-sm text-ink"
+          >
             {message}
           </p>
         ) : null}
@@ -1565,10 +2102,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <ShieldCheck className="size-6" aria-hidden="true" />
           </span>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">New device</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+              New device
+            </p>
             <h1 className="mt-2 text-3xl leading-tight text-ink sm:text-4xl">Check your email.</h1>
             <p className="mt-3 text-sm leading-6 text-ink/64">
-              Enter the six-digit code sent to <span className="font-semibold text-ink">{deviceChallenge.maskedEmail}</span>.
+              Enter the six-digit code sent to{' '}
+              <span className="font-semibold text-ink">{deviceChallenge.maskedEmail}</span>.
             </p>
           </div>
         </div>
@@ -1582,7 +2122,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           <label className="grid gap-2 text-sm font-semibold text-ink">
             Verification code
             <span className="relative block">
-              <KeyRound className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-ink/40" aria-hidden="true" />
+              <KeyRound
+                className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-ink/40"
+                aria-hidden="true"
+              />
               <input
                 value={deviceCode}
                 onChange={(event) => {
@@ -1599,10 +2142,29 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </span>
           </label>
           <p id="device-code-expiry" className="text-xs leading-5 text-ink/50">
-            Expires {new Date(deviceChallenge.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Never share this code.
+            Expires{' '}
+            {new Date(deviceChallenge.expiresAt).toLocaleTimeString([], {
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
+            . Never share this code.
           </p>
-          {message ? <p role="status" className="rounded-lg border border-needle/15 bg-needle/7 px-4 py-3 text-sm text-needle">{message}</p> : null}
-          {error ? <p role="alert" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</p> : null}
+          {message ? (
+            <p
+              role="status"
+              className="rounded-lg border border-needle/15 bg-needle/7 px-4 py-3 text-sm text-needle"
+            >
+              {message}
+            </p>
+          ) : null}
+          {error ? (
+            <p
+              role="alert"
+              className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+            >
+              {error}
+            </p>
+          ) : null}
           <button
             type="submit"
             disabled={loading || deviceCode.length !== 6}
@@ -1612,10 +2174,20 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           </button>
         </form>
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-ink/6 pt-5 text-sm">
-          <button type="button" disabled={loading} onClick={() => void cancelDeviceVerification()} className="font-semibold text-ink/56 hover:text-ink">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void cancelDeviceVerification()}
+            className="font-semibold text-ink/56 hover:text-ink"
+          >
             Use another account
           </button>
-          <button type="button" disabled={loading} onClick={() => void resendDeviceCode()} className="font-semibold text-needle hover:underline">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void resendDeviceCode()}
+            className="font-semibold text-needle hover:underline"
+          >
             Send a new code
           </button>
         </div>
@@ -1628,10 +2200,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     return (
       <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Sign in</p>
-          <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
-            Sign in to Drapeon.
-          </h1>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Sign in
+          </p>
+          <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">Sign in to Drapeon.</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">Use your Drapeon account.</p>
         </div>
 
@@ -1703,7 +2275,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           />
 
           {error ? (
-            <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+            >
               {error}
             </div>
           ) : null}
@@ -1746,7 +2322,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <span>
               <span className="block font-semibold text-ink">Trust this device for 30 days</span>
               <span className="mt-1 block text-xs leading-5 text-ink/56">
-                Uncheck this on shared or public computers. We will verify this browser again after the session ends.
+                Uncheck this on shared or public computers. We will verify this browser again after
+                the session ends.
               </span>
             </span>
           </label>
@@ -1768,7 +2345,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   return (
     <div className="rounded-[8px] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
       {/* Step indicator */}
-      <div className="mb-6 flex items-center gap-2" aria-label={`Step ${step} of ${role === 'TAILOR' ? 2 : 3}`}>
+      <div
+        className="mb-6 flex items-center gap-2"
+        aria-label={`Step ${step} of ${role === 'TAILOR' ? 2 : 3}`}
+      >
         {Array.from({ length: role === 'TAILOR' ? 2 : 3 }, (_, index) => index + 1).map((n) => (
           <div
             key={n}
@@ -1784,13 +2364,24 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
               Create account
             </p>
-            <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">
+            <h1
+              ref={signupHeadingRef}
+              tabIndex={-1}
+              className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+            >
               Start your Drapeon account.
             </h1>
             <p className="mt-4 text-sm leading-7 text-ink/66">
               One account for ordering and tailoring.
             </p>
-            {message ? <p role="status" className="mt-3 rounded-[8px] border border-needle/15 bg-needle/6 px-3 py-2 text-xs leading-5 text-ink/62">{message}</p> : null}
+            {message ? (
+              <p
+                role="status"
+                className="mt-3 rounded-[8px] border border-needle/15 bg-needle/6 px-3 py-2 text-xs leading-5 text-ink/62"
+              >
+                {message}
+              </p>
+            ) : null}
           </div>
 
           {renderProviderEntry()}
@@ -1811,14 +2402,24 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <div className="flex items-center gap-4 rounded-[8px] border border-ink/10 bg-white p-3">
               <div className="relative grid size-16 shrink-0 place-items-center overflow-hidden rounded-full bg-needle/10 text-lg font-semibold text-needle">
                 {avatarDataUrl ? (
-                  <Image src={avatarDataUrl} alt="Profile photo preview" fill unoptimized className="object-cover" />
+                  <Image
+                    src={avatarDataUrl}
+                    alt="Profile photo preview"
+                    fill
+                    unoptimized
+                    className="object-cover"
+                  />
                 ) : (
                   displayName.trim().slice(0, 1).toUpperCase() || 'D'
                 )}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-ink">Profile photo</p>
-                <p className="mt-1 text-xs leading-5 text-ink/52">Add a clear photo for your profile, orders, and messages. It is privately staged before confirmation and attaches even if you open the email on another browser or device.</p>
+                <p className="mt-1 text-xs leading-5 text-ink/52">
+                  Add a clear photo for your profile, orders, and messages. It is privately staged
+                  before confirmation and attaches even if you open the email on another browser or
+                  device.
+                </p>
               </div>
               <input
                 ref={avatarInputRef}
@@ -1826,7 +2427,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 aria-hidden="true"
                 tabIndex={-1}
                 accept="image/jpeg,image/png,image/webp"
-                onChange={(event) => { void selectAvatar(event) }}
+                onChange={(event) => {
+                  void selectAvatar(event)
+                }}
                 className="sr-only"
               />
               <div className="flex shrink-0 flex-col gap-2">
@@ -1953,7 +2556,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             </div>
 
             {error ? (
-              <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              <div
+                role="alert"
+                aria-live="polite"
+                className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+              >
                 {error}
               </div>
             ) : null}
@@ -1982,7 +2589,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
               Your role
             </p>
-            <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-2 scroll-mt-28 text-3xl leading-tight text-ink outline-none sm:text-4xl">
+            <h1
+              ref={signupHeadingRef}
+              tabIndex={-1}
+              className="mt-2 scroll-mt-28 text-3xl leading-tight text-ink outline-none sm:text-4xl"
+            >
               Choose your role.
             </h1>
             <p className="mt-2 text-sm text-ink/58">You can shop and work from one account.</p>
@@ -2003,8 +2614,17 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               <div className="grid size-10 shrink-0 place-items-center rounded-[8px] bg-needle/10">
                 <ShoppingBag aria-hidden="true" className="size-5 text-needle" strokeWidth={1.8} />
               </div>
-              <div className="min-w-0 flex-1"><p className="text-base font-semibold text-ink">Customer</p><p className="mt-1 text-sm leading-5 text-ink/62">Find tailors, share a brief, and track every order.</p></div>
-              <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${role === 'CUSTOMER' ? 'border-needle bg-needle' : 'border-ink/20'}`}>{role === 'CUSTOMER' ? <span className="size-1.5 rounded-full bg-white" /> : null}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-semibold text-ink">Customer</p>
+                <p className="mt-1 text-sm leading-5 text-ink/62">
+                  Find tailors, share a brief, and track every order.
+                </p>
+              </div>
+              <span
+                className={`grid size-5 shrink-0 place-items-center rounded-full border ${role === 'CUSTOMER' ? 'border-needle bg-needle' : 'border-ink/20'}`}
+              >
+                {role === 'CUSTOMER' ? <span className="size-1.5 rounded-full bg-white" /> : null}
+              </span>
             </button>
 
             {/* Tailor card */}
@@ -2021,13 +2641,26 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               <div className="grid size-10 shrink-0 place-items-center rounded-[8px] bg-needle/10">
                 <Store aria-hidden="true" className="size-5 text-needle" strokeWidth={1.8} />
               </div>
-              <div className="min-w-0 flex-1"><p className="text-base font-semibold text-ink">Tailor</p><p className="mt-1 text-sm leading-5 text-ink/62">Build your storefront, manage work, and receive payouts.</p></div>
-              <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${role === 'TAILOR' ? 'border-needle bg-needle' : 'border-ink/20'}`}>{role === 'TAILOR' ? <span className="size-1.5 rounded-full bg-white" /> : null}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-semibold text-ink">Tailor</p>
+                <p className="mt-1 text-sm leading-5 text-ink/62">
+                  Build your storefront, manage work, and receive payouts.
+                </p>
+              </div>
+              <span
+                className={`grid size-5 shrink-0 place-items-center rounded-full border ${role === 'TAILOR' ? 'border-needle bg-needle' : 'border-ink/20'}`}
+              >
+                {role === 'TAILOR' ? <span className="size-1.5 rounded-full bg-white" /> : null}
+              </span>
             </button>
           </div>
 
           {error ? (
-            <div role="alert" aria-live="polite" className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+            >
               {error}
             </div>
           ) : null}
@@ -2035,21 +2668,35 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           {role === 'TAILOR' ? (
             <div className="mt-5 grid gap-3">
               <div className="rounded-[8px] border border-needle/14 bg-needle/6 px-4 py-3">
-                <p className="text-sm font-semibold text-ink">Your studio setup follows confirmation</p>
-                <p className="mt-1 text-xs leading-5 text-ink/58">After confirming your email, Drapeon opens the required four-step setup. Boutique and Tailor Shop accounts must add their first hidden ready-made proof item before trust review can begin.</p>
+                <p className="text-sm font-semibold text-ink">
+                  Your studio setup follows {pendingSignupProvider ? 'sign-in' : 'confirmation'}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-ink/58">
+                  {pendingSignupProvider
+                    ? `After connecting your ${pendingSignupProvider === 'apple' ? 'Apple' : 'Google'} account, Drapeon opens the required four-step setup.`
+                    : 'After confirming your email, Drapeon opens the required four-step setup.'}{' '}
+                  Boutique and Tailor Shop accounts must add their first hidden ready-made proof
+                  item before trust review can begin.
+                </p>
               </div>
-              <TurnstileChallenge
-                key={captchaResetKey}
-                action="signup"
-                onTokenChange={setCaptchaToken}
-              />
+              {!pendingSignupProvider ? (
+                <TurnstileChallenge
+                  key={captchaResetKey}
+                  action="signup"
+                  onTokenChange={setCaptchaToken}
+                />
+              ) : null}
             </div>
           ) : null}
 
           <div className="mt-5 flex justify-between gap-3">
             <button
               type="button"
-              onClick={() => { setError(null); setStep(1) }}
+              onClick={() => {
+                setError(null)
+                setPendingSignupProvider(null)
+                setStep(1)
+              }}
               className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-5 py-2.5 text-sm font-semibold text-ink transition hover:bg-bone"
             >
               Back
@@ -2058,13 +2705,29 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               type="button"
               onClick={() => {
                 setError(null)
+                if (pendingSignupProvider) {
+                  void continueWithProvider(pendingSignupProvider)
+                  return
+                }
                 if (role === 'TAILOR') void submit(true)
                 else setStep(3)
               }}
-              disabled={loading || (role === 'TAILOR' && !captchaToken)}
+              disabled={
+                loading ||
+                providerLoading !== null ||
+                (role === 'TAILOR' && !pendingSignupProvider && !captchaToken)
+              }
               className="min-h-11 rounded-[8px] bg-needle px-6 py-2.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(45,106,79,0.16)] transition hover:bg-needle-600"
             >
-              {role === 'TAILOR' ? (loading ? 'Creating…' : 'Create account') : 'Continue'}
+              {pendingSignupProvider
+                ? providerLoading === pendingSignupProvider
+                  ? `Opening ${pendingSignupProvider === 'apple' ? 'Apple' : 'Google'}…`
+                  : `Continue with ${pendingSignupProvider === 'apple' ? 'Apple' : 'Google'}`
+                : role === 'TAILOR'
+                  ? loading
+                    ? 'Creating…'
+                    : 'Create account'
+                  : 'Continue'}
             </button>
           </div>
         </>
@@ -2072,16 +2735,43 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
       {role === 'TAILOR' && step === 3 ? (
         <section>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Studio setup · 1 of 4</p>
-          <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">Your identity.</h1>
-          <p className="mt-3 text-sm leading-6 text-ink/62">Build the public profile customers use to recognize and trust your studio.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Studio setup · 1 of 4
+          </p>
+          <h1
+            ref={signupHeadingRef}
+            tabIndex={-1}
+            className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+          >
+            Your identity.
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-ink/62">
+            Build the public profile customers use to recognize and trust your studio.
+          </p>
           <div className="mt-6 grid gap-5">
             <div className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-bone/40 p-3">
               <div className="relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full bg-needle/10 font-semibold text-needle">
-                {avatarDataUrl ? <Image src={avatarDataUrl} alt="Profile photo" fill unoptimized className="object-cover" /> : displayName.slice(0, 1).toUpperCase()}
+                {avatarDataUrl ? (
+                  <Image
+                    src={avatarDataUrl}
+                    alt="Profile photo"
+                    fill
+                    unoptimized
+                    className="object-cover"
+                  />
+                ) : (
+                  displayName.slice(0, 1).toUpperCase()
+                )}
               </div>
-              <div className="min-w-0"><p className="truncate text-sm font-semibold text-ink">{displayName}</p><p className="truncate text-xs text-ink/52">{phone}</p></div>
-              {!avatarDataUrl ? <span className="ml-auto text-xs font-semibold text-rust">Photo required</span> : <Check className="ml-auto size-5 text-needle" aria-label="Profile photo ready" />}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-ink">{displayName}</p>
+                <p className="truncate text-xs text-ink/52">{phone}</p>
+              </div>
+              {!avatarDataUrl ? (
+                <span className="ml-auto text-xs font-semibold text-rust">Photo required</span>
+              ) : (
+                <Check className="ml-auto size-5 text-needle" aria-label="Profile photo ready" />
+              )}
             </div>
             <StructuredAddressSearch
               label="City or base location"
@@ -2090,7 +2780,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
               allowManualFallback={false}
               className=""
               onSelect={(address) => {
-                setTailorLocation([address.city, address.stateRegion, address.country].filter(Boolean).join(', '))
+                setTailorLocation(
+                  [address.city, address.stateRegion, address.country].filter(Boolean).join(', ')
+                )
                 setPickupCity(address.city ?? '')
                 setPickupRegion(address.stateRegion ?? '')
                 setPickupCountryCode(address.countryCode ?? '')
@@ -2099,77 +2791,572 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             />
             <label className="grid gap-2 text-sm font-semibold text-ink">
               About your work
-              <textarea value={tailorBio} onChange={(event) => { setTailorBio(event.target.value); setError(null) }} maxLength={600} rows={5} placeholder="What do you make best? Who do you sew for? How do fittings and timelines work?" className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-base font-normal leading-7 text-ink outline-none focus:border-needle" />
-              <span className={`text-xs font-normal ${tailorBio.trim().length >= 80 ? 'text-needle' : 'text-ink/48'}`}>{tailorBio.trim().length}/80 minimum · 600 maximum</span>
+              <textarea
+                value={tailorBio}
+                onChange={(event) => {
+                  setTailorBio(event.target.value)
+                  setError(null)
+                }}
+                maxLength={600}
+                rows={5}
+                placeholder="What do you make best? Who do you sew for? How do fittings and timelines work?"
+                className="rounded-[8px] border border-ink/10 bg-white px-4 py-3 text-base font-normal leading-7 text-ink outline-none focus:border-needle"
+              />
+              <span
+                className={`text-xs font-normal ${tailorBio.trim().length >= 80 ? 'text-needle' : 'text-ink/48'}`}
+              >
+                {tailorBio.trim().length}/80 minimum · 600 maximum
+              </span>
             </label>
-            <SetupOptionPicker label="Languages" values={tailorLanguagesList} groups={TAILOR_LANGUAGE_GROUPS} limit={12} onChange={(values) => { setTailorLanguagesList(values); setError(null) }} />
-            {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
-            <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(2) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="button" onClick={() => continueTailorSection(3)} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white">Continue</button></div>
+            <SetupOptionPicker
+              label="Languages"
+              values={tailorLanguagesList}
+              groups={TAILOR_LANGUAGE_GROUPS}
+              limit={12}
+              onChange={(values) => {
+                setTailorLanguagesList(values)
+                setError(null)
+              }}
+            />
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+              >
+                {error}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null)
+                  setStep(2)
+                }}
+                className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => continueTailorSection(3)}
+                className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white"
+              >
+                Continue
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
 
       {role === 'TAILOR' && step === 4 ? (
         <section>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Studio setup · 2 of 4</p>
-          <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">What you make.</h1>
-          <p className="mt-3 text-sm leading-6 text-ink/62">Use the same catalogue and business choices as the Drapeon app.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Studio setup · 2 of 4
+          </p>
+          <h1
+            ref={signupHeadingRef}
+            tabIndex={-1}
+            className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+          >
+            What you make.
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-ink/62">
+            Use the same catalogue and business choices as the Drapeon app.
+          </p>
           <div className="mt-6 grid gap-5">
-            <SetupOptionPicker label="Specialties" values={tailorSpecialtiesList} groups={TAILOR_SPECIALTY_GROUPS} limit={20} onChange={(values) => { setTailorSpecialtiesList(values); setError(null) }} />
+            <SetupOptionPicker
+              label="Specialties"
+              values={tailorSpecialtiesList}
+              groups={TAILOR_SPECIALTY_GROUPS}
+              limit={20}
+              onChange={(values) => {
+                setTailorSpecialtiesList(values)
+                setError(null)
+              }}
+            />
             <SetupSingleChoicePicker
               label="Business type"
               value={tailorSellerType}
               options={TAILOR_SELLER_TYPE_OPTIONS}
               onChange={(value) => {
                 setTailorSellerType(value)
-                if (value === 'BOUTIQUE') { setSupportsCustomOrders(false); setSupportsReadyMade(true) }
-                else if (value === 'TAILOR_SHOP') { setSupportsCustomOrders(true); setSupportsReadyMade(true) }
-                else { setSupportsCustomOrders(true); setSupportsReadyMade(false) }
+                if (value === 'BOUTIQUE') {
+                  setSupportsCustomOrders(false)
+                  setSupportsReadyMade(true)
+                } else if (value === 'TAILOR_SHOP') {
+                  setSupportsCustomOrders(true)
+                  setSupportsReadyMade(true)
+                } else {
+                  setSupportsCustomOrders(true)
+                  setSupportsReadyMade(false)
+                }
                 setError(null)
               }}
             />
-            <label className="grid gap-2 text-sm font-semibold text-ink">Profile currency<select value={defaultCurrency} onChange={(event) => { setDefaultCurrency(event.target.value as AccountCurrencyCode); setCurrencySource('USER_SELECTED') }} className="min-h-12 rounded-[8px] border border-ink/10 bg-white px-4 text-base font-normal">{SUPPORTED_CURRENCIES.map((option) => <option key={option.code} value={option.code}>{option.symbol} {option.code} — {option.name}</option>)}</select></label>
-            <div className="grid gap-3 sm:grid-cols-2"><MoneyInput id="signup-tailor-price-min" label="Typical project minimum" value={priceMin} onValueChange={setPriceMin} currency={defaultCurrency} /><MoneyInput id="signup-tailor-price-max" label="Typical project maximum" value={priceMax} onValueChange={setPriceMax} currency={defaultCurrency} /></div>
-            <fieldset className="grid gap-2"><legend className="text-sm font-semibold text-ink">How customers can order</legend><label className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm"><input type="checkbox" checked={supportsCustomOrders} onChange={(event) => setSupportsCustomOrders(event.target.checked)} /> Custom orders</label><label className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm"><input type="checkbox" checked={supportsReadyMade} onChange={(event) => setSupportsReadyMade(event.target.checked)} /> Ready-made shop</label></fieldset>
-            {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
-            <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(3) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="button" onClick={() => continueTailorSection(4)} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white">Continue</button></div>
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Profile currency
+              <select
+                value={defaultCurrency}
+                onChange={(event) => {
+                  setDefaultCurrency(event.target.value as AccountCurrencyCode)
+                  setCurrencySource('USER_SELECTED')
+                }}
+                className="min-h-12 rounded-[8px] border border-ink/10 bg-white px-4 text-base font-normal"
+              >
+                {SUPPORTED_CURRENCIES.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.symbol} {option.code} — {option.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MoneyInput
+                id="signup-tailor-price-min"
+                label="Typical project minimum"
+                value={priceMin}
+                onValueChange={setPriceMin}
+                currency={defaultCurrency}
+              />
+              <MoneyInput
+                id="signup-tailor-price-max"
+                label="Typical project maximum"
+                value={priceMax}
+                onValueChange={setPriceMax}
+                currency={defaultCurrency}
+              />
+            </div>
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-semibold text-ink">How customers can order</legend>
+              <label className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={supportsCustomOrders}
+                  onChange={(event) => setSupportsCustomOrders(event.target.checked)}
+                />{' '}
+                Custom orders
+              </label>
+              <label className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={supportsReadyMade}
+                  onChange={(event) => setSupportsReadyMade(event.target.checked)}
+                />{' '}
+                Ready-made shop
+              </label>
+            </fieldset>
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+              >
+                {error}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null)
+                  setStep(3)
+                }}
+                className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => continueTailorSection(4)}
+                className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white"
+              >
+                Continue
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
 
       {role === 'TAILOR' && step === 5 ? (
         <section>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Studio setup · 3 of 4</p>
-          <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">{tailorSellerType === 'BOUTIQUE' ? 'Shop proof.' : tailorSellerType === 'TAILOR_SHOP' ? 'Public proof.' : 'Portfolio.'}</h1>
-          <p className="mt-3 text-sm leading-6 text-ink/62">{tailorSellerType === 'BOUTIQUE' ? 'Your first ready-made listing is the proof customers inspect. You can prepare optional brand media now; the listing editor opens after email confirmation.' : tailorSellerType === 'TAILOR_SHOP' ? 'Add at least one portfolio photo or video now. You will add one ready-made listing after confirmation before review can begin.' : 'Add at least one real work photo or short video. You will see exactly what is selected before continuing.'}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Studio setup · 3 of 4
+          </p>
+          <h1
+            ref={signupHeadingRef}
+            tabIndex={-1}
+            className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+          >
+            {tailorSellerType === 'BOUTIQUE'
+              ? 'Shop proof.'
+              : tailorSellerType === 'TAILOR_SHOP'
+                ? 'Public proof.'
+                : 'Portfolio.'}
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-ink/62">
+            {tailorSellerType === 'BOUTIQUE'
+              ? 'Your first ready-made listing is the proof customers inspect. You can prepare optional brand media now; the listing editor opens after email confirmation.'
+              : tailorSellerType === 'TAILOR_SHOP'
+                ? 'Add at least one portfolio photo or video now. You will add one ready-made listing after confirmation before review can begin.'
+                : 'Add at least one real work photo or short video. You will see exactly what is selected before continuing.'}
+          </p>
           <div className="mt-6 grid gap-5">
-            {tailorSellerType === 'BOUTIQUE' ? <div className="rounded-[10px] border border-needle/16 bg-needle/6 p-4"><p className="text-sm font-semibold text-ink">Ready-made proof continues after confirmation</p><p className="mt-1 text-xs leading-5 text-ink/58">A real listing needs inventory, price, size, and delivery details owned by your confirmed account. Your saved signup returns directly to that editor.</p></div> : null}
-            <input ref={portfolioInputRef} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple className="sr-only" onChange={(event) => { void selectPortfolioImages(event) }} />
-            <button type="button" onClick={() => portfolioInputRef.current?.click()} className="grid min-h-32 cursor-pointer place-items-center rounded-[12px] border border-dashed border-needle/35 bg-needle/5 p-5 text-center transition-colors hover:bg-needle/10 focus-visible:ring-2 focus-visible:ring-needle/35"><span><span className="mx-auto flex items-center justify-center gap-2 text-needle"><ImagePlus className="size-6" aria-hidden="true" /><Video className="size-6" aria-hidden="true" /></span><span className="mt-2 block text-sm font-semibold text-needle">Choose portfolio media</span><span className="mt-1 block text-xs text-ink/48">Photos or videos · 12 items total · up to 4 videos</span></span></button>
-            {portfolioDataUrls.length || portfolioVideoDrafts.length ? <div className="grid grid-cols-2 gap-3" aria-label="Selected work samples">{portfolioDataUrls.map((url, index) => <div key={portfolioImageDrafts[index]?.key ?? `${url.slice(-12)}-${index}`} className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-ink/10 bg-bone"><Image src={url} alt={`Work sample photo ${index + 1}`} fill unoptimized className="object-cover" /><button type="button" aria-label={`Remove work sample photo ${index + 1}`} onClick={() => void removePortfolioImage(index)} className="absolute right-2 top-2 grid size-8 cursor-pointer place-items-center rounded-full bg-black/70 text-white"><X className="size-4" /></button><span className="absolute bottom-2 left-2 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-white">Photo</span></div>)}{portfolioVideoDrafts.map((draft, index) => <SignupDraftVideoPreview key={draft.key} draft={draft} label={`Work sample video ${index + 1}`} onRemove={() => void removePortfolioVideo(index)} />)}</div> : <p className="rounded-[8px] border border-ink/8 bg-bone/40 px-4 py-3 text-sm text-ink/56">No portfolio media selected yet.</p>}
-            <div className="flex items-center justify-between text-xs text-ink/48"><span>{portfolioDataUrls.length + portfolioVideoDrafts.length}/12 media selected</span><span>{portfolioVideoDrafts.length}/4 videos</span></div>
-            <p className="text-xs leading-5 text-ink/48">Media uploads to private temporary storage before confirmation, then attaches to your account. You can open the confirmation link on another browser or device.</p>
-            {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
-            <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(4) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="button" onClick={() => continueTailorSection(5)} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white">Continue</button></div>
+            {tailorSellerType === 'BOUTIQUE' ? (
+              <div className="rounded-[10px] border border-needle/16 bg-needle/6 p-4">
+                <p className="text-sm font-semibold text-ink">
+                  Ready-made proof continues after confirmation
+                </p>
+                <p className="mt-1 text-xs leading-5 text-ink/58">
+                  A real listing needs inventory, price, size, and delivery details owned by your
+                  confirmed account. Your saved signup returns directly to that editor.
+                </p>
+              </div>
+            ) : null}
+            <input
+              ref={portfolioInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
+              multiple
+              className="sr-only"
+              onChange={(event) => {
+                void selectPortfolioImages(event)
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => portfolioInputRef.current?.click()}
+              className="grid min-h-32 cursor-pointer place-items-center rounded-[12px] border border-dashed border-needle/35 bg-needle/5 p-5 text-center transition-colors hover:bg-needle/10 focus-visible:ring-2 focus-visible:ring-needle/35"
+            >
+              <span>
+                <span className="mx-auto flex items-center justify-center gap-2 text-needle">
+                  <ImagePlus className="size-6" aria-hidden="true" />
+                  <Video className="size-6" aria-hidden="true" />
+                </span>
+                <span className="mt-2 block text-sm font-semibold text-needle">
+                  Choose portfolio media
+                </span>
+                <span className="mt-1 block text-xs text-ink/48">
+                  Photos or videos · 12 items total · up to 4 videos
+                </span>
+              </span>
+            </button>
+            {portfolioDataUrls.length || portfolioVideoDrafts.length ? (
+              <div className="grid grid-cols-2 gap-3" aria-label="Selected work samples">
+                {portfolioDataUrls.map((url, index) => (
+                  <div
+                    key={portfolioImageDrafts[index]?.key ?? `${url.slice(-12)}-${index}`}
+                    className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-ink/10 bg-bone"
+                  >
+                    <Image
+                      src={url}
+                      alt={`Work sample photo ${index + 1}`}
+                      fill
+                      unoptimized
+                      className="object-cover"
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Remove work sample photo ${index + 1}`}
+                      onClick={() => void removePortfolioImage(index)}
+                      className="absolute right-2 top-2 grid size-8 cursor-pointer place-items-center rounded-full bg-black/70 text-white"
+                    >
+                      <X className="size-4" />
+                    </button>
+                    <span className="absolute bottom-2 left-2 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-white">
+                      Photo
+                    </span>
+                  </div>
+                ))}
+                {portfolioVideoDrafts.map((draft, index) => (
+                  <SignupDraftVideoPreview
+                    key={draft.key}
+                    draft={draft}
+                    label={`Work sample video ${index + 1}`}
+                    onRemove={() => void removePortfolioVideo(index)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-[8px] border border-ink/8 bg-bone/40 px-4 py-3 text-sm text-ink/56">
+                No portfolio media selected yet.
+              </p>
+            )}
+            <div className="flex items-center justify-between text-xs text-ink/48">
+              <span>
+                {portfolioDataUrls.length + portfolioVideoDrafts.length}/12 media selected
+              </span>
+              <span>{portfolioVideoDrafts.length}/4 videos</span>
+            </div>
+            <p className="text-xs leading-5 text-ink/48">
+              Media uploads to private temporary storage before confirmation, then attaches to your
+              account. You can open the confirmation link on another browser or device.
+            </p>
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+              >
+                {error}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null)
+                  setStep(4)
+                }}
+                className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => continueTailorSection(5)}
+                className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white"
+              >
+                Continue
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
 
       {role === 'TAILOR' && step === 6 ? (
         <section>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Studio setup · 4 of 4</p>
-          <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">Setup &amp; verification.</h1>
-          <p className="mt-3 text-sm leading-6 text-ink/62">Set availability, fulfilment, and consultation rules before submitting your private trust video.</p>
-          <form className="mt-6 grid gap-5" onSubmit={(event) => { event.preventDefault(); const issue = validateTailorSection(6); if (issue) { setError(issue); return }; void submit() }}>
-            <label className="grid gap-2 text-sm font-semibold text-ink">Availability<select value={tailorAvailability} onChange={(event) => setTailorAvailability(event.target.value as TailorAvailability)} className="min-h-12 rounded-[8px] border border-ink/10 bg-white px-4 text-base font-normal"><option value="OPEN">Open for orders</option><option value="LIMITED">Limited availability</option><option value="FULLY_BOOKED">Fully booked</option></select></label>
-            <fieldset className="grid gap-2"><legend className="text-sm font-semibold text-ink">How customers receive orders <span className="font-normal text-ink/48">· choose at least one</span></legend>{FULFILLMENT_OPTIONS.map((option) => <label key={option.value} className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm"><input type="checkbox" checked={fulfillment.includes(option.value)} onChange={() => { setFulfillment((current) => current.includes(option.value) ? current.filter((value) => value !== option.value) : [...current, option.value]); setError(null) }} /> {option.label}</label>)}</fieldset>
-            {fulfillment.includes('PICKUP') ? <div className="grid gap-3 rounded-[8px] border border-ink/10 bg-bone/35 p-4"><StructuredAddressSearch label="Private pickup address · required for Pickup" value={pickupAddress} placeholder="Search full pickup address" allowManualFallback className="" onSelect={(address) => { setPickupAddress(address.displayValue); setPickupCity(address.city); setPickupRegion(address.stateRegion); setPickupPostalCode(address.postcode); setPickupCountryCode(address.countryCode ?? ''); setError(null) }} /><p className="text-xs leading-5 text-ink/48">Required only when Pickup is selected. Kept private until a confirmed customer needs collection details.</p></div> : null}
-            <fieldset className="grid gap-3"><legend className="text-sm font-semibold text-ink">Consultations</legend><div className="grid grid-cols-3 gap-2">{(['UNAVAILABLE','FREE','PAID'] as const).map((value) => <button key={value} type="button" aria-pressed={consultationMode === value} onClick={() => setConsultationMode(value)} className={`min-h-11 rounded-full border px-2 text-xs font-semibold ${consultationMode === value ? 'border-needle bg-needle text-white' : 'border-ink/10 bg-white text-ink'}`}>{value === 'UNAVAILABLE' ? 'Not offered' : value === 'FREE' ? 'Free' : 'Paid'}</button>)}</div>{consultationMode !== 'UNAVAILABLE' ? <><label className="grid gap-2 text-sm font-semibold text-ink">Requirement<select value={consultationRequirement} onChange={(event) => setConsultationRequirement(event.target.value as 'OPTIONAL' | 'REQUIRED')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"><option value="OPTIONAL">Optional</option><option value="REQUIRED">Required before ordering</option></select></label><div className="grid grid-cols-2 gap-3"><label className="grid gap-2 text-sm font-semibold text-ink">Duration<select value={consultationDuration} onChange={(event) => setConsultationDuration(event.target.value as '15' | '30' | '45' | '60')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal">{['15','30','45','60'].map((value) => <option key={value} value={value}>{value} minutes</option>)}</select></label><label className="grid gap-2 text-sm font-semibold text-ink">Call type<select value={consultationCallType} onChange={(event) => setConsultationCallType(event.target.value as 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO')} className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"><option value="VIDEO">Video</option><option value="AUDIO">Audio</option><option value="AUDIO_OR_VIDEO">Audio or video</option></select></label></div>{consultationMode === 'PAID' ? <><MoneyInput id="signup-consultation-fee" label="Consultation fee" value={consultationFee} onValueChange={setConsultationFee} currency={defaultCurrency} /><label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={consultationFeeCreditable} onChange={(event) => setConsultationFeeCreditable(event.target.checked)} /> Credit the fee toward an order</label></> : null}</> : null}</fieldset>
-            <SignupTrustVideo challengeText={trustChallengeText} draft={trustVideoDraft} consentGranted={trustConsentGranted} onDraftChange={(nextDraft) => { setTrustVideoDraft(nextDraft); setError(null) }} onConsentChange={(granted) => { setTrustConsentGranted(granted); setError(null) }} onError={setError} />
-            <div className="rounded-[10px] border border-ink/8 bg-bone/40 px-4 py-3 text-xs leading-5 text-ink/58"><p><span className="font-semibold text-ink">What happens next:</span> create the account, then open the confirmation email on any browser or device. Drapeon attaches the privately staged profile media and trust video for review before the storefront can go live.</p><p className="mt-2">Keep this page open only until account creation finishes and the check-your-inbox screen appears.</p></div>
-            <TurnstileChallenge key={captchaResetKey} action="signup" onTokenChange={setCaptchaToken} />
-            {error ? <div role="alert" className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">{error}</div> : null}
-            <div className="flex gap-3"><button type="button" onClick={() => { setError(null); setStep(5) }} className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold">Back</button><button type="submit" disabled={loading || !captchaToken} className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">{loading ? 'Creating…' : 'Create account'}</button></div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+            Studio setup · 4 of 4
+          </p>
+          <h1
+            ref={signupHeadingRef}
+            tabIndex={-1}
+            className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+          >
+            Setup &amp; verification.
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-ink/62">
+            Set availability, fulfilment, and consultation rules before submitting your private
+            trust video.
+          </p>
+          <form
+            className="mt-6 grid gap-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const issue = validateTailorSection(6)
+              if (issue) {
+                setError(issue)
+                return
+              }
+              void submit()
+            }}
+          >
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Availability
+              <select
+                value={tailorAvailability}
+                onChange={(event) =>
+                  setTailorAvailability(event.target.value as TailorAvailability)
+                }
+                className="min-h-12 rounded-[8px] border border-ink/10 bg-white px-4 text-base font-normal"
+              >
+                <option value="OPEN">Open for orders</option>
+                <option value="LIMITED">Limited availability</option>
+                <option value="FULLY_BOOKED">Fully booked</option>
+              </select>
+            </label>
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-semibold text-ink">
+                How customers receive orders{' '}
+                <span className="font-normal text-ink/48">· choose at least one</span>
+              </legend>
+              {FULFILLMENT_OPTIONS.map((option) => (
+                <label
+                  key={option.value}
+                  className="flex items-center gap-3 rounded-[8px] border border-ink/10 bg-white p-3 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={fulfillment.includes(option.value)}
+                    onChange={() => {
+                      setFulfillment((current) =>
+                        current.includes(option.value)
+                          ? current.filter((value) => value !== option.value)
+                          : [...current, option.value]
+                      )
+                      setError(null)
+                    }}
+                  />{' '}
+                  {option.label}
+                </label>
+              ))}
+            </fieldset>
+            {fulfillment.includes('PICKUP') ? (
+              <div className="grid gap-3 rounded-[8px] border border-ink/10 bg-bone/35 p-4">
+                <StructuredAddressSearch
+                  label="Private pickup address · required for Pickup"
+                  value={pickupAddress}
+                  placeholder="Search full pickup address"
+                  allowManualFallback
+                  className=""
+                  onSelect={(address) => {
+                    setPickupAddress(address.displayValue)
+                    setPickupCity(address.city)
+                    setPickupRegion(address.stateRegion)
+                    setPickupPostalCode(address.postcode)
+                    setPickupCountryCode(address.countryCode ?? '')
+                    setError(null)
+                  }}
+                />
+                <p className="text-xs leading-5 text-ink/48">
+                  Required only when Pickup is selected. Kept private until a confirmed customer
+                  needs collection details.
+                </p>
+              </div>
+            ) : null}
+            <fieldset className="grid gap-3">
+              <legend className="text-sm font-semibold text-ink">Consultations</legend>
+              <div className="grid grid-cols-3 gap-2">
+                {(['UNAVAILABLE', 'FREE', 'PAID'] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={consultationMode === value}
+                    onClick={() => setConsultationMode(value)}
+                    className={`min-h-11 rounded-full border px-2 text-xs font-semibold ${consultationMode === value ? 'border-needle bg-needle text-white' : 'border-ink/10 bg-white text-ink'}`}
+                  >
+                    {value === 'UNAVAILABLE' ? 'Not offered' : value === 'FREE' ? 'Free' : 'Paid'}
+                  </button>
+                ))}
+              </div>
+              {consultationMode !== 'UNAVAILABLE' ? (
+                <>
+                  <label className="grid gap-2 text-sm font-semibold text-ink">
+                    Requirement
+                    <select
+                      value={consultationRequirement}
+                      onChange={(event) =>
+                        setConsultationRequirement(event.target.value as 'OPTIONAL' | 'REQUIRED')
+                      }
+                      className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"
+                    >
+                      <option value="OPTIONAL">Optional</option>
+                      <option value="REQUIRED">Required before ordering</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="grid gap-2 text-sm font-semibold text-ink">
+                      Duration
+                      <select
+                        value={consultationDuration}
+                        onChange={(event) =>
+                          setConsultationDuration(event.target.value as '15' | '30' | '45' | '60')
+                        }
+                        className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"
+                      >
+                        {['15', '30', '45', '60'].map((value) => (
+                          <option key={value} value={value}>
+                            {value} minutes
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-semibold text-ink">
+                      Call type
+                      <select
+                        value={consultationCallType}
+                        onChange={(event) =>
+                          setConsultationCallType(
+                            event.target.value as 'AUDIO' | 'VIDEO' | 'AUDIO_OR_VIDEO'
+                          )
+                        }
+                        className="min-h-11 rounded-[8px] border border-ink/10 bg-white px-3 font-normal"
+                      >
+                        <option value="VIDEO">Video</option>
+                        <option value="AUDIO">Audio</option>
+                        <option value="AUDIO_OR_VIDEO">Audio or video</option>
+                      </select>
+                    </label>
+                  </div>
+                  {consultationMode === 'PAID' ? (
+                    <>
+                      <MoneyInput
+                        id="signup-consultation-fee"
+                        label="Consultation fee"
+                        value={consultationFee}
+                        onValueChange={setConsultationFee}
+                        currency={defaultCurrency}
+                      />
+                      <label className="flex items-center gap-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={consultationFeeCreditable}
+                          onChange={(event) => setConsultationFeeCreditable(event.target.checked)}
+                        />{' '}
+                        Credit the fee toward an order
+                      </label>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+            </fieldset>
+            <SignupTrustVideo
+              challengeText={trustChallengeText}
+              draft={trustVideoDraft}
+              consentGranted={trustConsentGranted}
+              onDraftChange={(nextDraft) => {
+                setTrustVideoDraft(nextDraft)
+                setError(null)
+              }}
+              onConsentChange={(granted) => {
+                setTrustConsentGranted(granted)
+                setError(null)
+              }}
+              onError={setError}
+            />
+            <div className="rounded-[10px] border border-ink/8 bg-bone/40 px-4 py-3 text-xs leading-5 text-ink/58">
+              <p>
+                <span className="font-semibold text-ink">What happens next:</span> create the
+                account, then open the confirmation email on any browser or device. Drapeon attaches
+                the privately staged profile media and trust video for review before the storefront
+                can go live.
+              </p>
+              <p className="mt-2">
+                Keep this page open only until account creation finishes and the check-your-inbox
+                screen appears.
+              </p>
+            </div>
+            <TurnstileChallenge
+              key={captchaResetKey}
+              action="signup"
+              onTokenChange={setCaptchaToken}
+            />
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-[8px] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink"
+              >
+                {error}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null)
+                  setStep(5)
+                }}
+                className="min-h-12 flex-1 rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading || !captchaToken}
+                className="min-h-12 flex-1 rounded-full bg-needle px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {loading ? 'Creating…' : 'Create account'}
+              </button>
+            </div>
           </form>
         </section>
       ) : null}
@@ -2181,7 +3368,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
               Profile setup
             </p>
-            <h1 ref={signupHeadingRef} tabIndex={-1} className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl">
+            <h1
+              ref={signupHeadingRef}
+              tabIndex={-1}
+              className="mt-3 scroll-mt-28 text-4xl leading-tight text-ink outline-none sm:text-5xl"
+            >
               Tell tailors about your style.
             </h1>
             <p className="mt-4 text-sm leading-7 text-ink/66">
@@ -2197,25 +3388,25 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             }}
           >
             <>
-            {/* Currency selector — 7 currencies, keep styled select */}
-            <label className="grid gap-2 text-sm font-semibold text-ink">
-              Account currency
-              <select
-                value={defaultCurrency}
-                onChange={(event) => {
-                  setDefaultCurrency(event.target.value as AccountCurrencyCode)
-                  setCurrencySource('USER_SELECTED')
-                  setRegionCode(regionCode || detectedCurrency.regionCode || 'ZZ')
-                }}
-                className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition focus:border-needle"
-              >
-                {SUPPORTED_CURRENCIES.map((option) => (
-                  <option key={option.code} value={option.code}>
-                    {option.symbol} {option.code} — {option.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {/* Currency selector — 7 currencies, keep styled select */}
+              <label className="grid gap-2 text-sm font-semibold text-ink">
+                Account currency
+                <select
+                  value={defaultCurrency}
+                  onChange={(event) => {
+                    setDefaultCurrency(event.target.value as AccountCurrencyCode)
+                    setCurrencySource('USER_SELECTED')
+                    setRegionCode(regionCode || detectedCurrency.regionCode || 'ZZ')
+                  }}
+                  className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition focus:border-needle"
+                >
+                  {SUPPORTED_CURRENCIES.map((option) => (
+                    <option key={option.code} value={option.code}>
+                      {option.symbol} {option.code} — {option.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <>
                 <div className="grid gap-2 text-sm font-semibold text-ink">
@@ -2255,16 +3446,22 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                         }
                       >
                         <span className="block text-sm font-semibold text-ink">{option.label}</span>
-                        <span className="mt-1 block text-xs font-normal leading-5 text-ink/56">{option.hint}</span>
+                        <span className="mt-1 block text-xs font-normal leading-5 text-ink/56">
+                          {option.hint}
+                        </span>
                       </button>
                     ))}
                   </div>
                 </div>
               </>
-              </>
+            </>
 
             {error ? (
-              <div role="alert" aria-live="polite" className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              <div
+                role="alert"
+                aria-live="polite"
+                className="rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+              >
                 {error}
               </div>
             ) : null}
@@ -2284,7 +3481,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => { setError(null); setStep(2) }}
+                onClick={() => {
+                  setError(null)
+                  setStep(2)
+                }}
                 className="flex-1 min-h-[52px] rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
               >
                 Back
