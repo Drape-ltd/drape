@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '../../../lib/supabase'
 import { RECOVERY_HANDOFF_KEY } from '../../../lib/auth-recovery-intent'
+import { safeAccountReturnPath } from '../../../lib/account-return-path'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
@@ -18,6 +19,7 @@ export function RecoveryBridge(): any {
   const [done, setDone] = useState(false)
   const [cleanupWarning, setCleanupWarning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [returnTo, setReturnTo] = useState('/account/orders')
 
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
 
@@ -57,6 +59,7 @@ export function RecoveryBridge(): any {
       if (failClosedAfterHistoryReturn()) return
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      setReturnTo(safeAccountReturnPath(searchParams.get('next')) ?? '/account/orders')
       const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
       const accessToken = hashParams.get('access_token')
       const refreshToken = hashParams.get('refresh_token')
@@ -245,7 +248,7 @@ export function RecoveryBridge(): any {
                 </p>
               ) : null}
               <a
-                href="/sign-in?password_reset=1"
+                href={`/sign-in?password_reset=1&next=${encodeURIComponent(returnTo)}`}
                 className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
               >
                 Sign in securely
