@@ -16,6 +16,7 @@ export function RecoveryBridge(): any {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
+  const [cleanupWarning, setCleanupWarning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
@@ -191,19 +192,21 @@ export function RecoveryBridge(): any {
       return
     }
 
-    const [{ error: revokeError }, { error: noticeError }] = await Promise.all([
-      supabase.functions.invoke('trusted-device-action', {
-        body: { action: 'revoke-all' },
-      }),
-      supabase.functions.invoke('account-security-notification', {
-        body: { event: 'PASSWORD_CHANGED' },
-      }),
-    ])
-    if (revokeError || noticeError) {
-      setError(
-        'Your password changed, but Drapeon could not finish every security cleanup step. Sign in with your new password and review Login & security.'
-      )
-      return
+    setPassword('')
+
+    let securityCleanupFailed = false
+    try {
+      const [{ error: revokeError }, { error: noticeError }] = await Promise.all([
+        supabase.functions.invoke('trusted-device-action', {
+          body: { action: 'revoke-all' },
+        }),
+        supabase.functions.invoke('account-security-notification', {
+          body: { event: 'PASSWORD_CHANGED' },
+        }),
+      ])
+      securityCleanupFailed = Boolean(revokeError || noticeError)
+    } catch {
+      securityCleanupFailed = true
     }
 
     await supabase.auth.signOut({ scope: 'others' })
@@ -212,6 +215,7 @@ export function RecoveryBridge(): any {
     // the user later presses Back, the bridge sees status=complete and renders
     // the expired-link state instead of an active password form.
     window.history.replaceState(null, '', '/auth/recover?status=complete')
+    setCleanupWarning(securityCleanupFailed)
     setDone(true)
   }
 
@@ -227,9 +231,19 @@ export function RecoveryBridge(): any {
             <>
               <h1 className="mt-3 text-3xl text-ink">Password updated.</h1>
               <p className="mt-3 text-sm leading-7 text-ink/66">
-                Your other sessions and remembered devices have been signed out. Use your new
-                password to sign in again.
+                {cleanupWarning
+                  ? 'This browser was signed out. Sign in with your new password and review Login & security to confirm every remembered device is cleared.'
+                  : 'Your other sessions and remembered devices have been signed out. Use your new password to sign in again.'}
               </p>
+              {cleanupWarning ? (
+                <p
+                  role="alert"
+                  className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
+                >
+                  Your password changed, but Drapeon could not finish every security cleanup step.
+                  Review Login & security after signing in.
+                </p>
+              ) : null}
               <a
                 href="/sign-in?password_reset=1"
                 className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white"
