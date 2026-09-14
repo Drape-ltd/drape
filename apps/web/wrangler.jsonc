@@ -7,12 +7,12 @@
   "routes": [
     {
       "pattern": "drapeon.co/*",
-      "zone_name": "drapeon.co",
+      "zone_name": "drapeon.co"
     },
     {
       "pattern": "www.drapeon.co/*",
-      "zone_name": "drapeon.co",
-    },
+      "zone_name": "drapeon.co"
+    }
   ],
   "vars": {
     "DRAPE_WEB_ENV": "production",
@@ -26,7 +26,7 @@
     "CF_ACCESS_TEAM_DOMAIN": "drapeon.cloudflareaccess.com",
     "OPS_ALLOWED_EMAILS": "dimowoope@gmail.com,koleosho530@gmail.com",
     "OPS_HOSTNAME": "ops.drapeon.co",
-    "OPS_CANONICAL_ORIGIN": "https://ops.drapeon.co",
+    "OPS_CANONICAL_ORIGIN": "https://ops.drapeon.co"
   },
   "secrets": {
     "required": [
@@ -35,14 +35,14 @@
       "CF_ACCESS_SENSITIVE_AUD",
       "SMS_PROVIDER",
       "TERMII_API_KEY",
-      "TERMII_SENDER_ID",
-    ],
+      "TERMII_SENDER_ID"
+    ]
   },
   "assets": {
     "directory": ".open-next/assets",
-    "binding": "ASSETS",
+    "binding": "ASSETS"
   },
   "observability": {
-    "enabled": true,
-  },
+    "enabled": true
+  }
 }
