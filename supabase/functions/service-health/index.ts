@@ -537,6 +537,54 @@ async function jobQueueCheck(supabase: any): Promise<Check> {
   };
 }
 
+async function caseConflictBurstCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now();
+  const { data, error } = await supabase.rpc("get_ops_case_conflict_health");
+  const latencyMs = Math.round(performance.now() - startedAt);
+
+  if (error) {
+    return {
+      ok: false,
+      status: "fail",
+      message: `Ops case-conflict health RPC failed: ${error.message}`,
+      latencyMs,
+    };
+  }
+
+  const payload = data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : {};
+  const conflictCount = typeof payload.conflictCount === "number"
+    ? payload.conflictCount
+    : 0;
+  const threshold = typeof payload.threshold === "number"
+    ? payload.threshold
+    : 20;
+  const windowMinutes = typeof payload.windowMinutes === "number"
+    ? payload.windowMinutes
+    : 5;
+
+  if (conflictCount >= threshold) {
+    return {
+      ok: false,
+      status: "fail",
+      message: `${conflictCount} stale Ops case actions occurred within ${windowMinutes} minutes; investigate client refresh or automation behavior.`,
+      latencyMs,
+      details: { conflictCount, threshold, windowMinutes },
+    };
+  }
+
+  return {
+    ok: true,
+    status: "ok",
+    message: conflictCount > 0
+      ? `${conflictCount} expected stale Ops case action(s) observed below the alert threshold.`
+      : "No stale Ops case actions observed in the last five minutes.",
+    latencyMs,
+    details: { conflictCount, threshold, windowMinutes },
+  };
+}
+
 async function slackDeliveryCheck(supabase: any): Promise<Check> {
   const startedAt = performance.now();
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -982,6 +1030,7 @@ Deno.serve(async (req) => {
     database: await databaseCheck(supabase),
     cron: await cronCheck(supabase),
     jobQueue: await jobQueueCheck(supabase),
+    caseConflictBurst: await caseConflictBurstCheck(supabase),
     slackDelivery: await slackDeliveryCheck(supabase),
     payoutWatchdog: await payoutWatchdogCheck(supabase),
     androidPushRegistration: await androidPushRegistrationCheck(supabase),

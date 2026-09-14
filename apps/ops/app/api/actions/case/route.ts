@@ -101,6 +101,16 @@ export async function POST(request: Request) {
         correlationId,
       }, conflict ? 409 : forbidden ? 403 : invalid ? 400 : 500)
     }
+    const result = data && typeof data === 'object' && !Array.isArray(data)
+      ? data as Record<string, unknown>
+      : null
+    if (result?.conflict === true) {
+      return json({
+        error: 'case-version-conflict',
+        recordVersion: result.recordVersion,
+        correlationId,
+      }, 409)
+    }
     return json({ ok: true, receipt: data, correlationId }, 200)
   }
 

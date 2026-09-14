@@ -488,7 +488,7 @@ Apply any matching SQL migration before testing those changes in a live environm
 
 Dead jobs are never rewritten as successful. Each true dead-letter outcome owns a Reliability case. A reviewed stale notification can be resolved without replay, which stores a named reason, immutable case event, action receipt, and audit entry while retaining the original `DEAD` job. Until that explicit review exists, the production health check stays degraded.
 
-Optimistic-concurrency conflicts are expected client outcomes: return one bounded HTTP `409` and use a non-retryable database error code. Reserve SQLSTATE `40001` for genuine serialization failures; provider or database retry layers can amplify an incorrectly classified stale-version click into a request storm. The Ops interaction contract checks this boundary.
+Optimistic-concurrency conflicts are expected client outcomes: record them in bounded minute buckets and return one structured HTTP `409` without raising a database error. A burst of 20 conflicts within five minutes fails readiness and produces one deduplicated Slack transition alert; isolated stale screens remain normal UI feedback. Reserve SQLSTATE `40001` for genuine serialization failures because provider or database retry layers can amplify an incorrectly classified stale-version click into a request storm. The Ops interaction contract checks this boundary.
 
 Useful checks:
 

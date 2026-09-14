@@ -158,6 +158,21 @@ Deno.serve(async (request) => {
         cors,
       )
     }
+    const result = data && typeof data === 'object' && !Array.isArray(data)
+      ? data as Record<string, unknown>
+      : null
+    if (result?.conflict === true) {
+      return json(
+        {
+          error: 'This case changed. Reload it before acting.',
+          code: 'CASE_VERSION_CONFLICT',
+          recordVersion: result.recordVersion,
+          correlationId,
+        },
+        409,
+        cors,
+      )
+    }
     return json({ ok: true, receipt: data, correlationId }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { correlation_id: correlationId, error: error instanceof Error ? error.message : String(error) })
