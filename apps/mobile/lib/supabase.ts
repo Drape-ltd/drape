@@ -11,14 +11,16 @@ function getSupabaseProjectRef(url: string) {
   try {
     const hostname = new URL(url).hostname
     const [ref, provider] = hostname.split('.')
-    return provider === 'supabase' ? ref ?? null : null
+    return provider === 'supabase' ? (ref ?? null) : null
   } catch {
     return null
   }
 }
 
 function assertMobileSupabaseConfig() {
-  const appVariant = (process.env.EXPO_PUBLIC_APP_VARIANT ?? (__DEV__ ? 'development' : 'production'))
+  const appVariant = (
+    process.env.EXPO_PUBLIC_APP_VARIANT ?? (__DEV__ ? 'development' : 'production')
+  )
     .trim()
     .toLowerCase()
   const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() ?? ''
@@ -42,11 +44,15 @@ function assertMobileSupabaseConfig() {
   }
 
   if (!actualProjectRef) {
-    throw new Error(`EXPO_PUBLIC_SUPABASE_URL must point to a Supabase project, received "${supabaseUrl}".`)
+    throw new Error(
+      `EXPO_PUBLIC_SUPABASE_URL must point to a Supabase project, received "${supabaseUrl}".`
+    )
   }
 
   if (!supabasePublishableKey) {
-    throw new Error('Missing EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY.')
+    throw new Error(
+      'Missing EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY.'
+    )
   }
 
   if (!supabaseEnv) {
@@ -74,9 +80,7 @@ function assertMobileSupabaseConfig() {
   }
 
   if (usesProductionData && supabaseEnv !== 'production') {
-    throw new Error(
-      `${appVariant} mobile builds must use EXPO_PUBLIC_SUPABASE_ENV=production.`
-    )
+    throw new Error(`${appVariant} mobile builds must use EXPO_PUBLIC_SUPABASE_ENV=production.`)
   }
 
   if (!usesProductionData && supabaseEnv === 'production') {
@@ -94,9 +98,7 @@ const AUTH_STORAGE_VERSION = appVariant === 'development' ? 'v3' : 'v2'
 const legacySupabaseStorageKey = `drape.auth.${supabaseHost}`
 const supabaseStorageKey = `drape.auth.${AUTH_STORAGE_VERSION}.${supabaseHost}`
 const previousSupabaseStorageKeys =
-  appVariant === 'development'
-    ? [`drape.auth.v2.${supabaseHost}`]
-    : []
+  appVariant === 'development' ? [`drape.auth.v2.${supabaseHost}`] : []
 const AUTH_NETWORK_TIMEOUT_MS = 12_000
 const DEFAULT_EDGE_FUNCTION_TIMEOUT_MS = 25_000
 const LEGACY_AUTH_STORAGE_KEYS = [
@@ -159,7 +161,7 @@ async function readSecureStoreValue(key: string) {
   const count = await readChunkCount(key)
   if (count > 0) {
     const chunks = await Promise.all(
-      Array.from({ length: count }, (_, index) => SecureStore.getItemAsync(chunkKey(key, index))),
+      Array.from({ length: count }, (_, index) => SecureStore.getItemAsync(chunkKey(key, index)))
     )
 
     if (chunks.every((chunk): chunk is string => typeof chunk === 'string')) {
@@ -183,7 +185,7 @@ async function writeSecureStoreValue(key: string, value: string) {
 
   const chunks = value.match(new RegExp(`.{1,${SECURE_STORE_CHUNK_SIZE}}`, 'gs')) ?? []
   await Promise.all(
-    chunks.map((chunk, index) => SecureStore.setItemAsync(chunkKey(key, index), chunk)),
+    chunks.map((chunk, index) => SecureStore.setItemAsync(chunkKey(key, index), chunk))
   )
   await SecureStore.setItemAsync(chunkMetaKey(key), JSON.stringify({ count: chunks.length }))
   await SecureStore.deleteItemAsync(key).catch(() => {})
@@ -213,7 +215,10 @@ const ExpoSecureStoreAdapter = {
       await AsyncStorage.removeItem(key).catch(() => {})
     } catch (error) {
       if (__DEV__) {
-        console.warn('[Drapeon auth] SecureStore auth write failed; falling back to AsyncStorage.', error)
+        console.warn(
+          '[Drapeon auth] SecureStore auth write failed; falling back to AsyncStorage.',
+          error
+        )
         await AsyncStorage.setItem(key, value).catch(() => {})
         return
       }
@@ -235,7 +240,7 @@ async function clearLegacyAuthStorage() {
       AsyncStorage.removeItem(key).catch(() => {}),
       SecureStore.deleteItemAsync(key).catch(() => {}),
       deleteSecureStoreChunks(key),
-    ]),
+    ])
   )
 }
 
@@ -270,10 +275,32 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   },
 })
 
+// Recovery links are intentionally completed in the hosted browser bridge and
+// may be opened on a different device. A mobile PKCE verifier would be trapped
+// in this app's storage, so password-reset requests use an isolated implicit-
+// flow client that returns a one-time recovery session in the link fragment.
+// It never persists or mutates the app's active session.
+const recoveryStorage = {
+  getItem: async () => null,
+  setItem: async () => {},
+  removeItem: async () => {},
+}
+
+export const recoverySupabase = createClient(supabaseUrl, supabasePublishableKey, {
+  auth: {
+    storage: recoveryStorage,
+    storageKey: `${supabaseStorageKey}.recovery-request`,
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+    flowType: 'implicit',
+  },
+})
+
 async function withNetworkTimeout<Result>(
   promise: Promise<Result>,
   message: string,
-  timeoutMs = AUTH_NETWORK_TIMEOUT_MS,
+  timeoutMs = AUTH_NETWORK_TIMEOUT_MS
 ): Promise<Result> {
   let timeout: ReturnType<typeof setTimeout> | null = null
   try {
@@ -291,7 +318,9 @@ async function withNetworkTimeout<Result>(
 }
 
 async function getFreshAccessToken(forceRefresh = false): Promise<string | null> {
-  const { data: { session } } = await supabase.auth.getSession()
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
   if (!session) {
     return null
   }
@@ -299,7 +328,7 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
   const refresh = async () => {
     const { data, error } = await withNetworkTimeout(
       supabase.auth.refreshSession(),
-      'Connection timed out before Drapeon could refresh your session. Check your signal and try again.',
+      'Connection timed out before Drapeon could refresh your session. Check your signal and try again.'
     )
     if (!error) {
       return data.session?.access_token ?? null
@@ -318,7 +347,7 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
   // token with Auth so we don't send a stale or corrupted JWT to Edge Functions.
   const { error: userError } = await withNetworkTimeout(
     supabase.auth.getUser(),
-    'Connection timed out before Drapeon could verify your session. Check your signal and try again.',
+    'Connection timed out before Drapeon could verify your session. Check your signal and try again.'
   )
   if (userError) {
     const refreshed = await refresh()
@@ -339,7 +368,12 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function invokeFunction<T = any>(
   fn: string,
-  options?: { body?: object; headers?: Record<string, string>; timeoutMs?: number; accessToken?: string },
+  options?: {
+    body?: object
+    headers?: Record<string, string>
+    timeoutMs?: number
+    accessToken?: string
+  }
 ): Promise<{ data: T | null; error: Error | null }> {
   let token: string | null = options?.accessToken ?? null
   try {
@@ -360,7 +394,7 @@ export async function invokeFunction<T = any>(
 
   try {
     const timeoutMs = options?.timeoutMs ?? DEFAULT_EDGE_FUNCTION_TIMEOUT_MS
-    const withTimeout = async <Result,>(promise: Promise<Result>): Promise<Result> => {
+    const withTimeout = async <Result>(promise: Promise<Result>): Promise<Result> => {
       let timeout: ReturnType<typeof setTimeout> | null = null
       try {
         return await Promise.race([
@@ -414,11 +448,15 @@ export async function invokeFunction<T = any>(
       if (context && typeof context === 'object' && 'json' in context) {
         try {
           const payload = await (context as { json: () => Promise<unknown> }).json()
-          const serverMessage = payload && typeof payload === 'object'
-            ? ('message' in payload && typeof (payload as { message?: unknown }).message === 'string'
+          const serverMessage =
+            payload && typeof payload === 'object'
+              ? 'message' in payload &&
+                typeof (payload as { message?: unknown }).message === 'string'
                 ? (payload as { message?: unknown }).message
-                : 'error' in payload ? (payload as { error?: unknown }).error : null)
-            : null
+                : 'error' in payload
+                  ? (payload as { error?: unknown }).error
+                  : null
+              : null
           if (typeof serverMessage === 'string' && serverMessage.trim()) {
             return { data: null, error: new Error(serverMessage.trim()) }
           }

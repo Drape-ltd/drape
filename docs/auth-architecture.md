@@ -76,7 +76,7 @@ Where it is enforced:
 ## Recovery And Account Protection
 
 - Password reset uses Supabase recovery links with an explicit `flow=recovery` marker and waits for recovery session exchange before showing the reset form.
-- Recovery is completed in the hosted web bridge (`/auth/recover`) on any trusted browser. Mobile requests point at that bridge; they do not depend on a PKCE verifier or an installed app being present on the device that opens the email.
+- Recovery is completed in the hosted web bridge (`/auth/recover`) on any trusted browser. Mobile requests use an isolated implicit-flow request client, so they do not strand a PKCE verifier in the app or depend on the installed app being present on the device that opens the email. Native sign-in/OAuth remains PKCE-bound to the app callback.
 - iOS Universal Links and Android App Links intentionally do not claim `/auth/*`, preventing a recovery URL from being intercepted by native OAuth/session handling. Older builds that do receive a recovery URL hand it back to the browser instead of exchanging it as a normal sign-in.
 - After a successful reset, the bridge replaces its history entry with `status=complete`. A browser Back or mobile Safari bfcache restore therefore renders an expired-link state, never an active password form.
 - In-app password changes require re-authentication first:

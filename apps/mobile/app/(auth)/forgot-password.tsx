@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, View, Text, StyleSheet, Alert } from 'r
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { supabase } from '@/lib/supabase'
+import { recoverySupabase } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useContextualBackHandler } from '@/lib/use-contextual-back'
 import { AuthBackButton } from '@/components/auth/AuthBackButton'
@@ -49,7 +49,7 @@ export default function ForgotPasswordScreen() {
     setSecurityError('')
 
     setLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+    const { error } = await recoverySupabase.auth.resetPasswordForEmail(normalizedEmail, {
       redirectTo: getPasswordRecoveryRedirectUrl(),
       captchaToken,
     })
