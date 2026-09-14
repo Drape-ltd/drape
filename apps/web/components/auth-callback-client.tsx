@@ -11,7 +11,7 @@ import {
 } from '@drape/shared/auth-role'
 import { IDENTITY_CONSENT_POLICY_VERSION } from '@drape/shared'
 import { createClient } from '../lib/supabase'
-import { RECOVERY_INTENT_KEY } from '../lib/auth-recovery-intent'
+import { RECOVERY_HANDOFF_KEY, RECOVERY_INTENT_KEY } from '../lib/auth-recovery-intent'
 import {
   bootstrapWebOnboarding,
   persistedWebOnboardingPayload,
@@ -137,6 +137,7 @@ function redirectRecoveryCallback(searchParams: {
   searchParams.forEach((value, key) => recoveryUrl.searchParams.set(key, value))
   recoveryUrl.searchParams.set('flow', 'recovery')
   const hash = window.location.hash
+  window.localStorage.setItem(RECOVERY_HANDOFF_KEY, JSON.stringify({ handedOffAt: Date.now() }))
   window.localStorage.removeItem(RECOVERY_INTENT_KEY)
   window.location.replace(`${recoveryUrl.pathname}${recoveryUrl.search}${hash}`)
 }

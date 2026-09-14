@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '../../../lib/supabase'
+import { RECOVERY_HANDOFF_KEY } from '../../../lib/auth-recovery-intent'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
@@ -75,6 +76,30 @@ export function RecoveryBridge(): any {
         return
       }
 
+      // The browser Supabase client may consume a PKCE recovery code while it
+      // initializes. Listen for the authoritative recovery event so a second
+      // explicit exchange below is not mistaken for an expired link. An
+      // ordinary pre-existing session does not emit PASSWORD_RECOVERY.
+      let recoveryEventReceived = false
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((event) => {
+        if (event !== 'PASSWORD_RECOVERY') return
+        recoveryEventReceived = true
+        if (active) setSessionReady(true)
+      })
+
+      const recoveryHandoff = (() => {
+        const raw = window.localStorage.getItem(RECOVERY_HANDOFF_KEY)
+        if (!raw) return false
+        try {
+          const parsed = JSON.parse(raw) as { handedOffAt?: number }
+          return Number.isFinite(parsed.handedOffAt) && Date.now() - parsed.handedOffAt! <= 15 * 60_000
+        } catch {
+          return false
+        }
+      })()
+
       // token_hash flow (email link)
       if (tokenHash) {
         const { error: otpError } = await supabase.auth.verifyOtp({
@@ -82,9 +107,13 @@ export function RecoveryBridge(): any {
           type: 'recovery',
         })
         if (otpError) {
+          subscription.unsubscribe()
+          window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
           setSessionError(completedMessage)
           return
         }
+        subscription.unsubscribe()
+        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
         if (active) setSessionReady(true)
         return
       }
@@ -96,9 +125,13 @@ export function RecoveryBridge(): any {
           refresh_token: refreshToken,
         })
         if (sessionErr) {
+          subscription.unsubscribe()
+          window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
           setSessionError(completedMessage)
           return
         }
+        subscription.unsubscribe()
+        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
         if (active) setSessionReady(true)
         return
       }
@@ -107,12 +140,21 @@ export function RecoveryBridge(): any {
       if (code) {
         const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
         if (codeError) {
-          setSessionError(completedMessage)
-          return
+          const { data: sessionData } = await supabase.auth.getSession()
+          if (!recoveryEventReceived && (!recoveryHandoff || !sessionData.session)) {
+            subscription.unsubscribe()
+            window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+            setSessionError(completedMessage)
+            return
+          }
         }
+        subscription.unsubscribe()
+        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
         if (active) setSessionReady(true)
         return
       }
+
+      subscription.unsubscribe()
     }
 
     void applyRecoverySession().catch(() => {
