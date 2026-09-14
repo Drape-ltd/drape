@@ -90,7 +90,9 @@ export async function POST(request: Request) {
         p_correlation_id: requestCorrelationId,
         })
     if (error) {
-      const conflict = error.code === '40001' || error.code === '55000'
+      const versionConflict = error.code === '40001'
+        || (error.code === 'P0001' && error.message?.startsWith('CASE_VERSION_CONFLICT:'))
+      const conflict = versionConflict || error.code === '55000'
       const forbidden = error.code === '42501'
       const invalid = error.code === '22023'
       return json({

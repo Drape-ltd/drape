@@ -133,6 +133,7 @@ Deno.serve(async (request) => {
         })
     if (error) {
       const conflict = error.code === '40001'
+        || (error.code === 'P0001' && error.message?.startsWith('CASE_VERSION_CONFLICT:'))
       const forbidden = error.code === '42501'
       const terminal = error.code === '55000'
       const invalid = error.code === '22023'
