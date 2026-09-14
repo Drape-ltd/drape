@@ -659,7 +659,7 @@
 ### Confirmed
 
 - Password fields use the shared `Input` component, so show/hide eye controls are present on login/security and reset-password forms.
-- Forgot password uses `https://drapeon.co/auth/recover` as the hosted recovery bridge, which redirects into `drape://reset-password`.
+- Forgot password uses the hosted `/auth/recover?flow=recovery` bridge. The current cross-device flow completes the reset in the browser; it no longer redirects into the native `drape://reset-password` route.
 - Account deletion uses `reauth-proof-action` to issue a server-signed reauth proof, and `request-account-deletion` verifies that proof server-side with a five-minute expiry before doing any sensitive work.
 - Account security notices exist through `account-security-notification` for password changes and email-change starts.
 
@@ -669,7 +669,7 @@
   - Customer account settings payment row opens Payment history, not Help.
   - Customer name/phone edits reflect in profile, public users row, and any CRM/support view.
   - Tailor name edits reflect on live profile/search cards and public users row.
-  - Forgot-password email opens the hosted recovery bridge, then the mobile reset screen.
+  - Forgot-password email opens the hosted recovery bridge. Mobile requests explicitly explain the app-to-browser handoff, and recovery links are not claimed by native Universal/App Links.
   - Email-change confirmation round trip returns cleanly to Drape.
 
 ### Verification

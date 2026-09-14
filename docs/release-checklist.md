@@ -3,7 +3,8 @@
 ## Auth And Security
 
 - Confirm mobile sign-up, sign-in, reset-password, and in-app password change all use the shared password policy.
-- Confirm OAuth callback and recovery deep links still land in the intended screens.
+- Confirm the native OAuth callback lands in the app, while password-recovery links open the hosted `/auth/recover?flow=recovery` bridge in a browser (not the app).
+- Confirm a recovery link opened on mobile can finish on that browser or another trusted browser, then returns the user to sign-in; a used link remains expired after refresh and Back navigation.
 - Confirm Google and Apple SSO are production-ready:
   - Google sign-in works on Android and iOS release builds
   - Apple sign-in works on a real iPhone release/TestFlight build

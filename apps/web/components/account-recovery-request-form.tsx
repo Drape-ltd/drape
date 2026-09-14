@@ -32,17 +32,17 @@ function getHostedRecoveryUrl() {
     browserOrigin &&
     (browserOrigin.includes('://localhost') || browserOrigin.includes('://127.0.0.1'))
   ) {
-    return `${browserOrigin}/auth/recover`
+    return `${browserOrigin}/auth/recover?flow=recovery`
   }
 
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
   if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
-    return `${configured}/auth/recover`
+    return `${configured}/auth/recover?flow=recovery`
   }
 
-  if (browserOrigin) return `${browserOrigin}/auth/recover`
+  if (browserOrigin) return `${browserOrigin}/auth/recover?flow=recovery`
 
-  return 'https://drapeon.co/auth/recover'
+  return 'https://drapeon.co/auth/recover?flow=recovery'
 }
 
 export function AccountRecoveryRequestForm(): React.JSX.Element {

@@ -512,7 +512,7 @@ Highest-signal manual passes right now:
 - tailor quote to production-stage movement
 - shipping and local collection handoff
 - waitlist and tailor-application submission notifications
-- password reset email to hosted recovery bridge to in-app reset
+- password reset email to the hosted recovery bridge, including app-to-browser handoff and fail-closed Back navigation
 - guided fit intake to pre-cutting tailor review
 - dead job to exact Reliability case, named resolution receipt, recovered health transition, and Slack deep link
 

@@ -20,10 +20,39 @@ export function RecoveryBridge(): any {
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
 
   useEffect(() => {
+    const completedMessage = 'This reset link has expired or was already used. Request a new one.'
+    let active = true
+
+    function failClosedAfterHistoryReturn() {
+      if (typeof window === 'undefined') return false
+      const currentUrl = new URL(window.location.href)
+      if (currentUrl.searchParams.get('status') !== 'complete') return false
+
+      // A browser Back (including a bfcache restore on mobile Safari) must not
+      // resurrect the password form after a successful reset.
+      setDone(false)
+      setSessionReady(false)
+      setPassword('')
+      setSessionError(completedMessage)
+      return true
+    }
+
+    const handlePageShow = () => {
+      failClosedAfterHistoryReturn()
+    }
+
+    const handlePopState = () => {
+      failClosedAfterHistoryReturn()
+    }
+
+    window.addEventListener('pageshow', handlePageShow)
+    window.addEventListener('popstate', handlePopState)
+
     // Establish the recovery session from the email link. Web recovery stays on
     // the web; it must never require an installed mobile app to finish.
     async function applyRecoverySession() {
       if (typeof window === 'undefined') return
+      if (failClosedAfterHistoryReturn()) return
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
       const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
@@ -53,10 +82,10 @@ export function RecoveryBridge(): any {
           type: 'recovery',
         })
         if (otpError) {
-          setSessionError('This reset link has expired or was already used. Request a new one.')
+          setSessionError(completedMessage)
           return
         }
-        setSessionReady(true)
+        if (active) setSessionReady(true)
         return
       }
 
@@ -67,10 +96,10 @@ export function RecoveryBridge(): any {
           refresh_token: refreshToken,
         })
         if (sessionErr) {
-          setSessionError('This reset link has expired or was already used. Request a new one.')
+          setSessionError(completedMessage)
           return
         }
-        setSessionReady(true)
+        if (active) setSessionReady(true)
         return
       }
 
@@ -78,17 +107,27 @@ export function RecoveryBridge(): any {
       if (code) {
         const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
         if (codeError) {
-          setSessionError('This reset link has expired or was already used. Request a new one.')
+          setSessionError(completedMessage)
           return
         }
-        setSessionReady(true)
+        if (active) setSessionReady(true)
         return
       }
     }
 
     void applyRecoverySession().catch(() => {
-      setSessionError('Drapeon could not verify this reset link. Request a new one and try again.')
+      if (active) {
+        setSessionError(
+          'Drapeon could not verify this reset link. Request a new one and try again.'
+        )
+      }
     })
+
+    return () => {
+      active = false
+      window.removeEventListener('pageshow', handlePageShow)
+      window.removeEventListener('popstate', handlePopState)
+    }
   }, [])
 
   async function resetPassword() {
@@ -127,6 +166,10 @@ export function RecoveryBridge(): any {
 
     await supabase.auth.signOut({ scope: 'others' })
     await supabase.auth.signOut({ scope: 'local' })
+    // Replace the recovery history entry before showing the success state. If
+    // the user later presses Back, the bridge sees status=complete and renders
+    // the expired-link state instead of an active password form.
+    window.history.replaceState(null, '', '/auth/recover?status=complete')
     setDone(true)
   }
 

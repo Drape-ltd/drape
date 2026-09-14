@@ -165,6 +165,27 @@ test.describe('authenticated web entry contract', () => {
     await expect(page.getByText('Verifying your link…')).toHaveCount(0)
   })
 
+  test('the recovery marker routes callback codes to the reset bridge, not workspace sign-in', async ({
+    page,
+  }) => {
+    await page.goto('/?code=recovery-code&flow=recovery')
+
+    await expect(page).toHaveURL(/\/auth\/recover\?code=recovery-code&flow=recovery/)
+  })
+
+  test('Back after a completed reset cannot reopen the password form', async ({ page }) => {
+    await page.goto('/auth/recover?status=complete')
+    await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Set a new password.' })).toHaveCount(0)
+
+    await page.goto('/sign-in?password_reset=1')
+    await page.goBack()
+
+    await expect(page).toHaveURL(/\/auth\/recover\?status=complete/)
+    await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Set a new password.' })).toHaveCount(0)
+  })
+
   test('account Explore stays inside the authenticated workspace', async ({ page }) => {
     await page.goto('/account/explore')
     await expect(page).toHaveURL(/\/account\/explore|\/sign-in/)

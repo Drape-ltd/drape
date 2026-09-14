@@ -18,47 +18,31 @@
         "backgroundColor": "#1A1A18"
       }
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
       "appleTeamId": "W84Q46T4XF",
       "bundleIdentifier": "co.drapeon.app",
-      "associatedDomains": [
-        "applinks:drapeon.co",
-        "applinks:www.drapeon.co"
-      ],
+      "associatedDomains": ["applinks:drapeon.co", "applinks:www.drapeon.co"],
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
           {
             "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
-            "NSPrivacyAccessedAPITypeReasons": [
-              "CA92.1"
-            ]
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
           },
           {
             "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
-            "NSPrivacyAccessedAPITypeReasons": [
-              "35F9.1"
-            ]
+            "NSPrivacyAccessedAPITypeReasons": ["35F9.1"]
           },
           {
             "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
-            "NSPrivacyAccessedAPITypeReasons": [
-              "C617.1"
-            ]
+            "NSPrivacyAccessedAPITypeReasons": ["C617.1"]
           }
         ]
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": [
-          "audio",
-          "fetch",
-          "remote-notification",
-          "voip"
-        ],
+        "UIBackgroundModes": ["audio", "fetch", "remote-notification", "voip"],
         "NSCameraUsageDescription": "Drapeon uses your camera when you choose to take garment reference photos, record portfolio or progress videos, join protected consultation calls, or capture clothing measurements with Drapeon Vision. For example, you can photograph fabric references for a custom order.",
         "NSPhotoLibraryUsageDescription": "Drapeon accesses only the photos or videos you choose so you can add garment references, portfolio work, and order progress media. For example, you can select an inspiration photo for a custom brief.",
         "NSMicrophoneUsageDescription": "Drapeon uses your microphone when you choose to record a voice note or join a protected consultation call. For example, you can talk through fit details with your tailor during a scheduled call.",
@@ -67,9 +51,7 @@
       }
     },
     "android": {
-      "blockedPermissions": [
-        "android.permission.ACTIVITY_RECOGNITION"
-      ],
+      "blockedPermissions": ["android.permission.ACTIVITY_RECOGNITION"],
       "splash": {
         "image": "./assets/adaptive-icon-foreground.png",
         "resizeMode": "contain",
@@ -93,22 +75,12 @@
             {
               "scheme": "https",
               "host": "drapeon.co",
-              "pathPrefix": "/auth"
-            },
-            {
-              "scheme": "https",
-              "host": "drapeon.co",
               "pathPrefix": "/payments"
             },
             {
               "scheme": "https",
               "host": "drapeon.co",
               "pathPrefix": "/verify-handoff"
-            },
-            {
-              "scheme": "https",
-              "host": "www.drapeon.co",
-              "pathPrefix": "/auth"
             },
             {
               "scheme": "https",
@@ -121,10 +93,7 @@
               "pathPrefix": "/verify-handoff"
             }
           ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
+          "category": ["BROWSABLE", "DEFAULT"]
         }
       ],
       "permissions": [
@@ -182,10 +151,7 @@
         }
       ],
       "expo-apple-authentication",
-      [
-        "@stripe/stripe-react-native",
-        {}
-      ],
+      ["@stripe/stripe-react-native", {}],
       [
         "@daily-co/config-plugin-rn-daily-js",
         {

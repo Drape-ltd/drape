@@ -75,7 +75,10 @@ Where it is enforced:
 
 ## Recovery And Account Protection
 
-- Password reset uses Supabase recovery links and waits for recovery session exchange before showing the reset form.
+- Password reset uses Supabase recovery links with an explicit `flow=recovery` marker and waits for recovery session exchange before showing the reset form.
+- Recovery is completed in the hosted web bridge (`/auth/recover`) on any trusted browser. Mobile requests point at that bridge; they do not depend on a PKCE verifier or an installed app being present on the device that opens the email.
+- iOS Universal Links and Android App Links intentionally do not claim `/auth/*`, preventing a recovery URL from being intercepted by native OAuth/session handling. Older builds that do receive a recovery URL hand it back to the browser instead of exchanging it as a normal sign-in.
+- After a successful reset, the bridge replaces its history entry with `status=complete`. A browser Back or mobile Safari bfcache restore therefore renders an expired-link state, never an active password form.
 - In-app password changes require re-authentication first:
   - biometric if already enabled
   - otherwise current password
@@ -92,10 +95,11 @@ Where it is enforced:
 
 Before launch, verify:
 
-- Supabase auth redirect URLs are correct for mobile recovery and OAuth callbacks
+- Supabase auth redirect URLs are correct for the hosted web recovery bridge and the native OAuth callback
 - mobile and web environments point at the intended Supabase project
 - service-role secrets never ship in client bundles
 - edge functions derive auth from bearer tokens, not request payload claims
-- password and recovery flows work on a fresh device and from signed-out state
+- password and recovery flows work on a fresh device and from signed-out state; app-to-web recovery links open the browser, exchange PKCE on the browser, and return to sign-in after reset
+- a used recovery link stays expired after refresh and browser Back/bfcache navigation
 - a returning Apple/Google account keeps its established role regardless of which auth entry CTA is used
 - partial customer and tailor onboarding can exit, sign out, switch account, resume, and open deletion without a redirect loop

@@ -18,7 +18,10 @@ function isValidEmail(value: string) {
 
 function getHostedRecoveryUrl() {
   const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
-  return `${siteUrl}/auth/recover`
+  // Keep recovery links distinguishable from OAuth callbacks. This marker also
+  // lets a browser/app handoff route recovery into the reset screen instead of
+  // treating the one-time code as a normal sign-in.
+  return `${siteUrl}/auth/recover?flow=recovery`
 }
 
 function getPasswordRecoveryRedirectUrl() {

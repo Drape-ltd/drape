@@ -20,13 +20,21 @@ function hasAuthSignal(searchParams: URLSearchParams, hashParams: URLSearchParam
 }
 
 function isRecovery(searchParams: URLSearchParams, hashParams: URLSearchParams) {
-  return searchParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery'
+  return (
+    searchParams.get('type') === 'recovery' ||
+    hashParams.get('type') === 'recovery' ||
+    searchParams.get('flow') === 'recovery' ||
+    hashParams.get('flow') === 'recovery'
+  )
 }
 
 export function AuthLandingRedirect(): null {
   useEffect(() => {
     const currentUrl = new URL(window.location.href)
-    if (currentUrl.pathname === AUTH_CALLBACK_PATH || currentUrl.pathname === RECOVERY_CALLBACK_PATH) {
+    if (
+      currentUrl.pathname === AUTH_CALLBACK_PATH ||
+      currentUrl.pathname === RECOVERY_CALLBACK_PATH
+    ) {
       return
     }
 
@@ -35,7 +43,9 @@ export function AuthLandingRedirect(): null {
       return
     }
 
-    const targetPath = isRecovery(currentUrl.searchParams, hashParams) ? RECOVERY_CALLBACK_PATH : AUTH_CALLBACK_PATH
+    const targetPath = isRecovery(currentUrl.searchParams, hashParams)
+      ? RECOVERY_CALLBACK_PATH
+      : AUTH_CALLBACK_PATH
     const targetUrl = new URL(targetPath, currentUrl.origin)
     currentUrl.searchParams.forEach((value, key) => {
       targetUrl.searchParams.set(key, value)
