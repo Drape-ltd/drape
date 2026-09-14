@@ -17,7 +17,17 @@ export function AccountSignedInRedirect({
 
   useEffect(() => {
     let active = true
-    const supabase = createClient()
+    let supabase: ReturnType<typeof createClient>
+    try {
+      supabase = createClient()
+    } catch {
+      // Keep the public auth form usable when a local preview has not been
+      // given its public Supabase variables yet. Auth actions will surface
+      // their own actionable configuration message when submitted.
+      return () => {
+        active = false
+      }
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (!active || !data.session) return
       const params = new URLSearchParams(window.location.search)
