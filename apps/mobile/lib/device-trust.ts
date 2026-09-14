@@ -38,25 +38,28 @@ async function storedToken() {
   return sessionDeviceToken
 }
 
-async function call(body: Record<string, unknown>) {
-  const { data, error } = await invokeFunction<DeviceTrustResponse>('trusted-device-action', { body })
+async function call(body: Record<string, unknown>, session?: Session) {
+  const { data, error } = await invokeFunction<DeviceTrustResponse>('trusted-device-action', {
+    body,
+    accessToken: session?.access_token,
+  })
   if (error) throw error
   if (!data || data.error) throw new Error(data?.error || 'Device verification could not finish.')
   return data
 }
 
-export async function assessMobileDevice(_session: Session, rememberDevice: boolean) {
+export async function assessMobileDevice(session: Session, rememberDevice: boolean) {
   return call({
     action: 'assess',
     deviceToken: await storedToken() || undefined,
     rememberDevice,
     label: label(),
     platform: platform(),
-  })
+  }, session)
 }
 
-export async function verifyMobileDevice(_session: Session, challengeId: string, code: string) {
-  const result = await call({ action: 'verify', challengeId, code })
+export async function verifyMobileDevice(session: Session, challengeId: string, code: string) {
+  const result = await call({ action: 'verify', challengeId, code }, session)
   if (result.token) {
     sessionDeviceToken = result.token
     if (result.remembered) {
@@ -64,6 +67,14 @@ export async function verifyMobileDevice(_session: Session, challengeId: string,
     }
   }
   return result
+}
+
+export async function isMobileDeviceTrusted(session: Session) {
+  const result = await call({
+    action: 'list',
+    deviceToken: await storedToken() || undefined,
+  }, session)
+  return result.devices?.some((device) => device.current) === true
 }
 
 export async function listMobileTrustedDevices() {

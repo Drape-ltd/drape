@@ -339,11 +339,11 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function invokeFunction<T = any>(
   fn: string,
-  options?: { body?: object; headers?: Record<string, string>; timeoutMs?: number },
+  options?: { body?: object; headers?: Record<string, string>; timeoutMs?: number; accessToken?: string },
 ): Promise<{ data: T | null; error: Error | null }> {
-  let token: string | null = null
+  let token: string | null = options?.accessToken ?? null
   try {
-    token = await getFreshAccessToken(false)
+    if (!token) token = await getFreshAccessToken(false)
   } catch (error) {
     return {
       data: null,
@@ -396,7 +396,7 @@ export async function invokeFunction<T = any>(
     const message = (error as Error | null)?.message ?? ''
     const shouldRetryWithRefresh = /invalid jwt/i.test(message) || /401/.test(message)
 
-    if (error && shouldRetryWithRefresh) {
+    if (error && shouldRetryWithRefresh && !options?.accessToken) {
       token = await getFreshAccessToken(true)
       if (!token) {
         return {

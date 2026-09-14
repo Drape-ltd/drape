@@ -15,7 +15,7 @@ import { unregisterPushInstallation } from './push-registration'
 import { syncUserRow } from './syncUserRow'
 import { reset as resetAnalytics } from './analytics'
 import { consumeAccountDeletionDeviceMarker } from './account-deletion'
-import { assessMobileDevice, verifyMobileDevice } from './device-trust'
+import { assessMobileDevice, isMobileDeviceTrusted, verifyMobileDevice } from './device-trust'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -52,6 +52,10 @@ function normalizeEmail(email: string) {
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+function requiresDeviceTrust(session: Session) {
+  return String(session.user.app_metadata?.provider ?? '').toLowerCase() === 'email'
 }
 
 function isDrapeRole(value: unknown): value is DrapeRole {
@@ -447,6 +451,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return
         }
 
+        if (requiresDeviceTrust(session)) {
+          const trusted = await withAuthBootstrapTimeout(
+            isMobileDeviceTrusted(session),
+            'Trusted device validation',
+          ).catch(() => false)
+          if (!trusted) {
+            await clearStoredAuthSession()
+            if (!mounted) return
+            setSession(null)
+            setLoading(false)
+            return
+          }
+        }
+
         startValidatedSessionRefresh()
         setSession(session)
         setLoading(false)
@@ -684,6 +702,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const assessment = await assessMobileDevice(data.session, rememberDevice)
       if (!assessment.trusted) {
         if (!assessment.challengeId) throw new Error('A device verification code could not be created.')
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+        setSession(null)
         return {
           error: null,
           deviceChallenge: {
@@ -720,10 +740,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!pendingSession) return { error: 'Sign in again to request a new device code.' }
     try {
       await verifyMobileDevice(pendingSession, challengeId, code)
+      const { data, error: sessionError } = await supabase.auth.setSession({
+        access_token: pendingSession.access_token,
+        refresh_token: pendingSession.refresh_token,
+      })
+      if (sessionError || !data.session) {
+        throw sessionError ?? new Error('Drapeon could not restore your verified session.')
+      }
       deviceAssessmentPendingRef.current = false
       const roleError = await applyRoleIntent(pendingDeviceRoleIntentRef.current)
       if (roleError) return { error: roleError }
-      setSession(pendingSession)
+      setSession(data.session)
       pendingDeviceSessionRef.current = null
       pendingDeviceRoleIntentRef.current = null
       return { error: null }
