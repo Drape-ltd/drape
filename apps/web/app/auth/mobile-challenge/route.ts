@@ -69,7 +69,7 @@ export async function GET(request: Request) {
             sitekey: siteKey,
             action: action,
             appearance: 'interaction-only',
-            size: 'compact',
+            size: 'flexible',
             theme: 'light',
             retry: 'auto',
             'retry-interval': 2000,

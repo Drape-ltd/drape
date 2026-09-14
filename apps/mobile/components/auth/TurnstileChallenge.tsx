@@ -129,8 +129,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bone,
   },
   challengeFrameInteractive: {
-    width: 166,
-    height: 148,
+    width: '100%',
+    maxWidth: 310,
+    height: 72,
   },
   verified: {
     ...StyleSheet.absoluteFillObject,
