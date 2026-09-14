@@ -76,8 +76,9 @@ export function RecoveryBridge(): any {
       const accessToken = hashParams.get('access_token')
       const refreshToken = hashParams.get('refresh_token')
       const code = searchParams.get('code')
+      const confirmationUrl = searchParams.get('confirmation_url') || hashParams.get('confirmation_url')
 
-      if (!tokenHash && !(accessToken && refreshToken) && !code) {
+      if (!tokenHash && !(accessToken && refreshToken) && !code && !confirmationUrl) {
         setSessionError('No valid recovery token found. Request a new password reset link.')
         return
       }
@@ -106,9 +107,17 @@ export function RecoveryBridge(): any {
       const accessToken = hashParams.get('access_token')
       const refreshToken = hashParams.get('refresh_token')
       const code = searchParams.get('code')
+      const confirmationUrl = searchParams.get('confirmation_url') || hashParams.get('confirmation_url')
       let verificationError: { message?: string } | null = null
 
-      if (tokenHash) {
+      if (confirmationUrl) {
+        // Supabase's documented scanner-safe pattern wraps the one-use
+        // confirmation URL in our own page. Do not request it during render;
+        // only this explicit click may consume the URL. Supabase then sends
+        // the browser back to this route with a short-lived PKCE code.
+        window.location.assign(confirmationUrl)
+        return
+      } else if (tokenHash) {
         const result = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })
         verificationError = result.error
       } else if (accessToken && refreshToken) {
