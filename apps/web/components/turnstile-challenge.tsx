@@ -10,12 +10,14 @@ type TurnstileApi = {
     options: {
       sitekey: string
       action: string
-      appearance: 'always'
+      appearance: 'interaction-only'
       size: 'flexible'
       theme: 'light'
       callback: (token: string) => void
       'expired-callback': () => void
       'error-callback': () => void
+      'before-interactive-callback': () => void
+      'after-interactive-callback': () => void
     },
   ) => TurnstileWidgetId
   remove: (widgetId: TurnstileWidgetId) => void
@@ -44,6 +46,7 @@ export function TurnstileChallenge({
   const onTokenChangeRef = useRef(onTokenChange)
   const [scriptReady, setScriptReady] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
+  const [interactive, setInteractive] = useState(false)
   const siteKey = (
     process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
     (typeof window !== 'undefined'
@@ -93,11 +96,12 @@ export function TurnstileChallenge({
     const widgetId = window.turnstile.render(containerRef.current, {
       sitekey: siteKey,
       action,
-      appearance: 'always',
+      appearance: 'interaction-only',
       size: 'flexible',
       theme: 'light',
       callback: (token) => {
         setChallengeError(null)
+        setInteractive(false)
         onTokenChangeRef.current(token)
       },
       'expired-callback': () => {
@@ -108,6 +112,8 @@ export function TurnstileChallenge({
         onTokenChangeRef.current(null)
         setChallengeError('The security check could not finish. Retry it before continuing.')
       },
+      'before-interactive-callback': () => setInteractive(true),
+      'after-interactive-callback': () => setInteractive(false),
     })
     widgetIdRef.current = widgetId
 
@@ -131,15 +137,13 @@ export function TurnstileChallenge({
   }
 
   return (
-    <div className="grid gap-2" aria-describedby={`${reactId}-hint`}>
+    <div className={challengeError || interactive ? 'grid gap-2' : ''} aria-describedby={challengeError ? `${reactId}-hint` : undefined}>
       <div
         ref={containerRef}
         data-testid={`turnstile-${action}`}
-        className="min-h-[65px] w-full overflow-hidden rounded-lg border border-ink/8 bg-bone/45"
+        className={interactive ? 'min-h-[65px] w-full overflow-hidden rounded-lg border border-ink/8 bg-bone/45' : 'h-0 overflow-hidden'}
       />
-      <p id={`${reactId}-hint`} className={challengeError ? 'text-xs leading-5 text-rust' : 'text-xs leading-5 text-ink/52'}>
-        {challengeError ?? 'Complete the quick security check to continue. It helps block automated account abuse.'}
-      </p>
+      {challengeError ? <p id={`${reactId}-hint`} className="text-xs leading-5 text-rust">{challengeError}</p> : null}
       {challengeError ? (
         <button
           type="button"

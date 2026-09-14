@@ -54,8 +54,8 @@ export default function WelcomeScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.wordmark}>Drapeon</Text>
         <View style={styles.hero}>
-          <Text style={styles.tagline}>Your tailor.{`\n`}Anywhere in the world.</Text>
-          <Text style={styles.sub}>Discover tailors. Order when you’re ready.</Text>
+          <Text style={styles.tagline}>Custom clothing.{`\n`}Without borders.</Text>
+          <Text style={styles.sub}>Discover craftsmanship, share your vision, or bring your work to the world.</Text>
         </View>
 
         <View style={styles.actions}>

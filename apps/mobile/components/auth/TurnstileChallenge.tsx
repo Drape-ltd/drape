@@ -7,6 +7,8 @@ type ChallengeMessage =
   | { type: 'success'; token: string }
   | { type: 'expired' }
   | { type: 'error' }
+  | { type: 'interactive' }
+  | { type: 'idle' }
 
 function challengeHtml(siteKey: string, action: string) {
   return `<!doctype html>
@@ -28,12 +30,14 @@ function challengeHtml(siteKey: string, action: string) {
         window.turnstile.render('#challenge', {
           sitekey: ${JSON.stringify(siteKey)},
           action: ${JSON.stringify(action)},
-          appearance: 'always',
+          appearance: 'interaction-only',
           size: 'compact',
           theme: 'light',
           callback: function (token) { send({ type: 'success', token: token }); },
           'expired-callback': function () { send({ type: 'expired' }); },
-          'error-callback': function () { send({ type: 'error' }); }
+          'error-callback': function () { send({ type: 'error' }); },
+          'before-interactive-callback': function () { send({ type: 'interactive' }); },
+          'after-interactive-callback': function () { send({ type: 'idle' }); }
         });
       };
     </script>
@@ -50,6 +54,8 @@ export function TurnstileChallenge({
 }) {
   const siteKey = process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
   const [loaded, setLoaded] = useState(false)
+  const [interactive, setInteractive] = useState(false)
+  const [verified, setVerified] = useState(false)
   const [error, setError] = useState(siteKey ? '' : 'Security verification is not configured for this build.')
   const html = useMemo(() => challengeHtml(siteKey, action), [action, siteKey])
 
@@ -63,12 +69,26 @@ export function TurnstileChallenge({
       return
     }
 
+    if (message.type === 'interactive') {
+      setInteractive(true)
+      setVerified(false)
+      return
+    }
+
+    if (message.type === 'idle') {
+      setInteractive(false)
+      return
+    }
+
     if (message.type === 'success' && message.token) {
       setError('')
+      setInteractive(false)
+      setVerified(true)
       onTokenChange(message.token)
       return
     }
 
+    setVerified(false)
     onTokenChange(null)
     setError(
       message.type === 'expired'
@@ -79,7 +99,7 @@ export function TurnstileChallenge({
 
   return (
     <View style={styles.block} accessibilityLabel="Security check">
-      <View style={styles.challengeFrame}>
+      <View style={[styles.challengeFrame, interactive && styles.challengeFrameInteractive]}>
         {!loaded && siteKey ? (
           <View style={styles.loading}>
             <ActivityIndicator color={Colors.needleGreen} />
@@ -100,15 +120,25 @@ export function TurnstileChallenge({
             onMessage={handleMessage}
             onError={() => {
               setLoaded(true)
+              setVerified(false)
               setError('The security check could not load. Check your connection and retry.')
               onTokenChange(null)
             }}
           />
         ) : null}
+        {verified ? (
+          <View
+            style={styles.verified}
+            accessible
+            accessibilityLabel="Security check complete"
+            accessibilityLiveRegion="polite"
+          >
+            <Text style={styles.verifiedIcon}>✓</Text>
+            <Text style={styles.verifiedText}>Security check complete</Text>
+          </View>
+        ) : null}
       </View>
-      <Text style={[styles.hint, error ? styles.error : null]}>
-        {error || 'Complete the quick security check to continue. It helps block automated account abuse.'}
-      </Text>
+      {error ? <Text style={[styles.hint, styles.error]}>{error}</Text> : null}
     </View>
   )
 }
@@ -116,13 +146,36 @@ export function TurnstileChallenge({
 const styles = StyleSheet.create({
   block: { alignItems: 'center', gap: Spacing.sm },
   challengeFrame: {
-    width: 166,
-    height: 148,
+    width: 220,
+    height: 44,
     overflow: 'hidden',
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
+  },
+  challengeFrameInteractive: {
+    width: 166,
+    height: 148,
+  },
+  verified: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.bone,
+  },
+  verifiedIcon: {
+    color: Colors.needleGreen,
+    fontSize: 20,
+    fontWeight: FontWeight.bold,
+  },
+  verifiedText: {
+    color: Colors.ink,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
   },
   loading: {
     ...StyleSheet.absoluteFillObject,

@@ -102,7 +102,7 @@ export default function SignInScreen() {
       return
     }
     if (!captchaToken) {
-      Alert.alert('Security check required', 'Complete the quick security check before signing in.')
+      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
       return
     }
     setPasswordError('')
@@ -408,14 +408,6 @@ export default function SignInScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.nextCard}>
-              <Text style={styles.nextEyebrow}>Protected access</Text>
-              <Text style={styles.nextTitle}>
-                {intentLabel
-                  ? `If this account is new, we’ll start ${intentLabel} setup. Returning accounts resume their established workspace.`
-                  : 'We’ll return you to the right side of your account after sign in.'}
-              </Text>
-            </View>
           </View>
         </KeyboardAwareScrollView>
       </KeyboardAvoidingView>
@@ -452,28 +444,6 @@ const styles = StyleSheet.create({
   },
   prompt: { fontFamily: Fonts.body, fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center' },
   link: { fontFamily: Fonts.bodyMedium, color: Colors.needleGreen, fontWeight: FontWeight.medium },
-  nextCard: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    gap: 4,
-  },
-  nextEyebrow: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  nextTitle: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.sm,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 21,
-  },
   forgot: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   supportLink: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
   accountLinksRow: {

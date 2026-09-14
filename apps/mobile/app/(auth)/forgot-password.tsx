@@ -49,7 +49,7 @@ export default function ForgotPasswordScreen() {
       return
     }
     if (!captchaToken) {
-      Alert.alert('Security check required', 'Complete the quick security check before requesting a reset link.')
+      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
       return
     }
 

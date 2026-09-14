@@ -130,7 +130,7 @@ export default function SignUpScreen() {
     if (!validateEmail(email) || !validatePassword(password)) return
     if (!passwordRequirementsMet || password !== confirmPassword) return
     if (!captchaToken) {
-      Alert.alert('Security check required', 'Complete the quick security check before creating your account.')
+      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
       return
     }
 
