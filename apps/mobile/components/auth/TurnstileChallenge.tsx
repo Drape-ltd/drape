@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
@@ -23,11 +23,21 @@ export function TurnstileChallenge({
   const [interactive, setInteractive] = useState(false)
   const [verified, setVerified] = useState(false)
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const challengeUrl = useMemo(() => {
     const params = new URLSearchParams({ action })
     if (siteKey) params.set('siteKey', siteKey)
     return `${siteUrl}/auth/mobile-challenge?${params.toString()}`
   }, [action, siteKey, siteUrl])
+
+  function retryChallenge() {
+    setLoaded(false)
+    setInteractive(false)
+    setVerified(false)
+    setError('')
+    onTokenChange(null)
+    setReloadKey((current) => current + 1)
+  }
 
   function handleMessage(event: WebViewMessageEvent) {
     let message: ChallengeMessage
@@ -77,6 +87,7 @@ export function TurnstileChallenge({
           </View>
         ) : null}
         <WebView
+          key={reloadKey}
           source={{ uri: challengeUrl }}
           style={[styles.webView, !loaded && styles.webViewLoading]}
           containerStyle={styles.webViewContainer}
@@ -101,6 +112,12 @@ export function TurnstileChallenge({
             setError('The security check could not load. Check your connection and retry.')
             onTokenChange(null)
           }}
+          onHttpError={() => {
+            setLoaded(true)
+            setVerified(false)
+            setError('The security check could not load. Check your connection and retry.')
+            onTokenChange(null)
+          }}
         />
         {verified ? (
           <View
@@ -115,6 +132,16 @@ export function TurnstileChallenge({
         ) : null}
       </View>
       {error ? <Text style={[styles.hint, styles.error]}>{error}</Text> : null}
+      {error ? (
+        <Pressable
+          onPress={retryChallenge}
+          accessibilityRole="button"
+          accessibilityLabel="Retry security check"
+          style={styles.retryButton}
+        >
+          <Text style={styles.retryText}>Retry security check</Text>
+        </Pressable>
+      ) : null}
     </View>
   )
 }
@@ -178,4 +205,18 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
   },
   error: { color: Colors.error },
+  retryButton: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.white,
+  },
+  retryText: {
+    color: Colors.needleGreen,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
 })

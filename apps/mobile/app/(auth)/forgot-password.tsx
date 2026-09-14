@@ -40,6 +40,7 @@ export default function ForgotPasswordScreen() {
   const [sent, setSent] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
+  const [securityError, setSecurityError] = useState('')
 
   async function handleReset() {
     const normalizedEmail = email.trim().toLowerCase()
@@ -49,6 +50,7 @@ export default function ForgotPasswordScreen() {
       return
     }
     if (!captchaToken) return
+    setSecurityError('')
 
     setLoading(true)
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
@@ -60,14 +62,18 @@ export default function ForgotPasswordScreen() {
     setLoading(false)
     if (error) {
       const isCaptchaError = error.message.toLowerCase().includes('captcha')
-      Alert.alert(
-        'Could not start reset',
-        isCaptchaError
-          ? 'The security check expired or could not be verified. Complete it again and retry.'
-          : isLikelyConnectivityIssue(error)
+      if (isCaptchaError) {
+        setSecurityError(
+          'We refreshed the security check. Wait for it to complete, then retry. Your email is still here.',
+        )
+      } else {
+        Alert.alert(
+          'Could not start reset',
+          isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
-          : 'We could not start password reset right now. Please try again in a moment.'
-      )
+          : 'We could not start password reset right now. Please try again in a moment.',
+        )
+      }
     } else {
       setEmail(normalizedEmail)
       setSent(true)
@@ -163,8 +169,13 @@ export default function ForgotPasswordScreen() {
                 <TurnstileChallenge
                   key={captchaResetKey}
                   action="recovery"
-                  onTokenChange={setCaptchaToken}
+                  onTokenChange={(token) => {
+                    setCaptchaToken(token)
+                    if (token) setSecurityError('')
+                  }}
                 />
+
+                {securityError ? <Text style={styles.securityError}>{securityError}</Text> : null}
 
                 <Button
                   label="Send reset link"
@@ -242,6 +253,12 @@ const styles = StyleSheet.create({
   },
   emailHighlight: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   hint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  securityError: {
+    color: Colors.error,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   nextCard: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.xl,

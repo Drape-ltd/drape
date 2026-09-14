@@ -61,6 +61,7 @@ export default function SignInScreen() {
   const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null)
   const [emailError, setEmailError] = useState('')
   const [passwordError, setPasswordError] = useState('')
+  const [securityError, setSecurityError] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const [rememberDevice, setRememberDevice] = useState(true)
@@ -103,6 +104,7 @@ export default function SignInScreen() {
     }
     if (!captchaToken) return
     setPasswordError('')
+    setSecurityError('')
 
     setLoading(true)
     const { error, deviceChallenge: challenge } = await signIn(email.trim().toLowerCase(), password, roleIntent, captchaToken, rememberDevice)
@@ -124,6 +126,10 @@ export default function SignInScreen() {
             },
           },
         ])
+      } else if (error.toLowerCase().includes('security check')) {
+        setSecurityError(
+          'We refreshed the security check. Wait for it to complete, then retry. Your details are still here, or you can use Apple or Google below.',
+        )
       } else {
         Alert.alert('Sign in failed', error)
       }
@@ -315,8 +321,13 @@ export default function SignInScreen() {
             <TurnstileChallenge
               key={captchaResetKey}
               action="signin"
-              onTokenChange={setCaptchaToken}
+              onTokenChange={(token) => {
+                setCaptchaToken(token)
+                if (token) setSecurityError('')
+              }}
             />
+
+            {securityError ? <Text style={styles.securityError}>{securityError}</Text> : null}
 
             <Button
               label="Sign in"
@@ -484,4 +495,11 @@ const styles = StyleSheet.create({
   rememberCopy: { flex: 1, gap: 2 },
   rememberTitle: { fontFamily: Fonts.bodySemiBold, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
   rememberHint: { fontFamily: Fonts.body, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  securityError: {
+    color: Colors.error,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
 })

@@ -84,6 +84,7 @@ export default function SignUpScreen() {
   const [nameError, setNameError] = useState('')
   const [emailError, setEmailError] = useState('')
   const [passwordError, setPasswordError] = useState('')
+  const [securityError, setSecurityError] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const strength = passwordStrength(password)
@@ -130,6 +131,7 @@ export default function SignUpScreen() {
     if (!validateEmail(email) || !validatePassword(password)) return
     if (!passwordRequirementsMet || password !== confirmPassword) return
     if (!captchaToken) return
+    setSecurityError('')
 
     setLoading(true)
     const { error, requiresEmailConfirmation } = await signUp(
@@ -144,7 +146,13 @@ export default function SignUpScreen() {
     setLoading(false)
 
     if (error) {
-      Alert.alert('Sign up failed', error)
+      if (error.toLowerCase().includes('security check')) {
+        setSecurityError(
+          'We refreshed the security check. Wait for it to complete, then retry. Your form details are still here, or you can use Apple or Google below.',
+        )
+      } else {
+        Alert.alert('Sign up failed', error)
+      }
     } else {
       capture('sign_up', { role })
       if (requiresEmailConfirmation) {
@@ -397,8 +405,13 @@ export default function SignUpScreen() {
             <TurnstileChallenge
               key={captchaResetKey}
               action="signup"
-              onTokenChange={setCaptchaToken}
+              onTokenChange={(token) => {
+                setCaptchaToken(token)
+                if (token) setSecurityError('')
+              }}
             />
+
+            {securityError ? <Text style={styles.securityError}>{securityError}</Text> : null}
 
             <Button
               label="Create account"
@@ -557,6 +570,13 @@ const styles = StyleSheet.create({
   link: { fontFamily: Fonts.bodyMedium, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   confirmationNote: {
     color: Colors.midGrey,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  securityError: {
+    color: Colors.error,
     fontFamily: Fonts.body,
     fontSize: FontSize.xs,
     lineHeight: 18,
