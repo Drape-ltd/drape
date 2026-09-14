@@ -158,11 +158,24 @@ test.describe('authenticated web entry contract', () => {
     await page.goto('/auth/recover')
 
     await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()
+    await expect(page).toHaveURL(/\/auth\/recover\?status=expired$/)
     await expect(page.getByRole('link', { name: 'Request a new reset link' })).toHaveAttribute(
       'href',
       '/account/recovery'
     )
     await expect(page.getByText('Verifying your link…')).toHaveCount(0)
+  })
+
+  test('a provider verification error clears the callback URL and fails closed', async ({ page }) => {
+    await page.goto(
+      '/auth/recover?error=access_denied&error_code=otp_expired&error_description=expired#access_token=never-keep-this'
+    )
+
+    await expect(page).toHaveURL(/\/auth\/recover\?status=expired$/)
+    await expect(page.getByRole('heading', { name: 'Link expired' })).toBeVisible()
+    await expect(page.getByText(/expired or was already used/i)).toBeVisible()
+    expect(page.url()).not.toContain('access_token')
+    expect(page.url()).not.toContain('otp_expired')
   })
 
   test('the recovery marker routes callback codes to the reset bridge, not workspace sign-in', async ({

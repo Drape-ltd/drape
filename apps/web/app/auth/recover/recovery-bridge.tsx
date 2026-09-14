@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '../../../lib/supabase'
-import { RECOVERY_HANDOFF_KEY } from '../../../lib/auth-recovery-intent'
+import { RECOVERY_HANDOFF_KEY, RECOVERY_INTENT_KEY } from '../../../lib/auth-recovery-intent'
 import { safeAccountReturnPath } from '../../../lib/account-return-path'
 import {
   MAX_PASSWORD_LENGTH,
@@ -23,6 +23,23 @@ export function RecoveryBridge(): any {
   const [returnTo, setReturnTo] = useState('/account/orders')
 
   const passwordStrengthError = password.length > 0 ? validatePasswordStrength(password, {}) : null
+
+  function failClosedRecovery(message: string) {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+      window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+      window.sessionStorage.removeItem(RECOVERY_HANDOFF_KEY)
+      // Never leave a one-use token, an error payload, or an authenticated
+      // recovery callback in browser history after a failed verification.
+      window.history.replaceState(null, '', '/auth/recover?status=expired')
+    }
+    setAwaitingConfirmation(false)
+    setSessionReady(false)
+    setPassword('')
+    setError(null)
+    setCleanupWarning(false)
+    setSessionError(message)
+  }
 
   useEffect(() => {
     const completedMessage = 'This reset link has expired or was already used. Request a new one.'
@@ -53,9 +70,53 @@ export function RecoveryBridge(): any {
     window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('popstate', handlePopState)
 
-    // Only inspect the URL on load. Do not call Supabase here: email security
-    // scanners and browser prefetchers can visit a link before the user does.
-    // The single-use token is exchanged only after the user presses Continue.
+    async function establishRecoverySession(args: {
+      accessToken?: string | null
+      refreshToken?: string | null
+      code?: string | null
+    }) {
+      try {
+        // `createPagesBrowserClient` eagerly inspects the current URL. Strip
+        // callback material *before* constructing it so only this explicit
+        // exchange owns the one-use PKCE code; otherwise its automatic
+        // bootstrap and our manual exchange race to consume the same code.
+        if (args.code || (args.accessToken && args.refreshToken)) {
+          window.history.replaceState(null, '', '/auth/recover')
+        }
+        const supabase = createClient({ auth: { detectSessionInUrl: false }, isSingleton: false })
+        const result = args.code
+          ? await supabase.auth.exchangeCodeForSession(args.code)
+          : args.accessToken && args.refreshToken
+            ? await supabase.auth.setSession({
+                access_token: args.accessToken,
+                refresh_token: args.refreshToken,
+              })
+            : { error: new Error('missing recovery session') }
+
+        if (result.error) {
+          if (active) failClosedRecovery(completedMessage)
+          return
+        }
+
+        // The verified session is now in browser storage. Remove all callback
+        // material from the address bar before rendering the password form.
+        window.sessionStorage.removeItem(RECOVERY_HANDOFF_KEY)
+        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+        window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+        window.history.replaceState(null, '', '/auth/recover')
+        if (active) {
+          setAwaitingConfirmation(false)
+          setSessionReady(true)
+        }
+      } catch {
+        if (active) failClosedRecovery('This reset link expired or was already used. Request a new one.')
+      }
+    }
+
+    // Only inspect the URL on load. Do not call Supabase here for an email
+    // link: email security scanners and browser prefetchers can visit it
+    // before the user does. The one-use confirmation URL is requested only
+    // after the explicit Continue click below.
     function inspectRecoveryLink() {
       if (typeof window === 'undefined') return
       if (failClosedAfterHistoryReturn()) return
@@ -65,7 +126,7 @@ export function RecoveryBridge(): any {
       const providerError = searchParams.get('error') || hashParams.get('error')
       const providerErrorCode = searchParams.get('error_code') || hashParams.get('error_code')
       if (providerError || providerErrorCode) {
-        setSessionError(
+        failClosedRecovery(
           providerErrorCode === 'otp_expired' || providerError === 'access_denied'
             ? 'This reset link expired or was already used. Request a new one.'
             : 'Drapeon could not verify this reset link. Request a new one and try again.'
@@ -79,10 +140,25 @@ export function RecoveryBridge(): any {
       const confirmationUrl = searchParams.get('confirmation_url') || hashParams.get('confirmation_url')
 
       if (!tokenHash && !(accessToken && refreshToken) && !code && !confirmationUrl) {
-        setSessionError('No valid recovery token found. Request a new password reset link.')
+        failClosedRecovery('No valid recovery token found. Request a new password reset link.')
         return
       }
-      if (active) setAwaitingConfirmation(true)
+
+      if (confirmationUrl || tokenHash) {
+        if (active) setAwaitingConfirmation(true)
+        return
+      }
+
+      // Tokens or a code can only be accepted after this tab explicitly sent
+      // the user to the protected Supabase confirmation URL. This prevents a
+      // legacy/direct link or a scanner redirect from establishing a recovery
+      // session simply by loading this page.
+      if (window.sessionStorage.getItem(RECOVERY_HANDOFF_KEY) !== 'pending') {
+        failClosedRecovery('This reset link expired or was already used. Request a new one.')
+        return
+      }
+
+      void establishRecoverySession({ accessToken, refreshToken, code })
     }
 
     inspectRecoveryLink()
@@ -100,7 +176,6 @@ export function RecoveryBridge(): any {
     setSessionError(null)
     const completedMessage = 'This reset link has expired or was already used. Request a new one.'
     try {
-      const supabase = createClient({ auth: { detectSessionInUrl: false }, isSingleton: false })
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
       const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
@@ -108,6 +183,12 @@ export function RecoveryBridge(): any {
       const refreshToken = hashParams.get('refresh_token')
       const code = searchParams.get('code')
       const confirmationUrl = searchParams.get('confirmation_url') || hashParams.get('confirmation_url')
+      if (code || (accessToken && refreshToken)) {
+        // Prevent the helper client from consuming callback material during
+        // construction before this explicit verification path runs.
+        window.history.replaceState(null, '', '/auth/recover')
+      }
+      const supabase = createClient({ auth: { detectSessionInUrl: false }, isSingleton: false })
       let verificationError: { message?: string } | null = null
 
       if (confirmationUrl) {
@@ -115,6 +196,7 @@ export function RecoveryBridge(): any {
         // confirmation URL in our own page. Do not request it during render;
         // only this explicit click may consume the URL. Supabase then sends
         // the browser back to this route with a short-lived PKCE code.
+        window.sessionStorage.setItem(RECOVERY_HANDOFF_KEY, 'pending')
         window.location.assign(confirmationUrl)
         return
       } else if (tokenHash) {
@@ -134,17 +216,19 @@ export function RecoveryBridge(): any {
       }
 
       if (verificationError) {
-        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-        setSessionError(completedMessage)
+        failClosedRecovery(completedMessage)
         return
       }
       window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+      window.localStorage.removeItem(RECOVERY_INTENT_KEY)
+      window.sessionStorage.removeItem(RECOVERY_HANDOFF_KEY)
+      // `verifyOtp` has succeeded: erase the single-use token/callback URL
+      // immediately, before the password form is ever rendered.
+      window.history.replaceState(null, '', '/auth/recover')
       setAwaitingConfirmation(false)
       setSessionReady(true)
     } catch {
-      setSessionError(
-        'Account recovery is temporarily unavailable. Request a new link or try again.'
-      )
+      failClosedRecovery('This reset link expired or was already used. Request a new one.')
     } finally {
       setLoading(false)
     }

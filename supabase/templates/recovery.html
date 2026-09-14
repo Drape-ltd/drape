@@ -28,7 +28,7 @@
                 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 4px">
                   <tr>
                     <td bgcolor="#2f7557" style="border-radius:999px">
-                      <a href="{{ .RedirectTo }}&amp;confirmation_url={{ .ConfirmationURL }}" style="color:#ffffff;display:inline-block;font-family:Arial,sans-serif;font-size:16px;font-weight:700;line-height:20px;padding:15px 24px;text-decoration:none">Reset password securely</a>
+                      <a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash | urlquery }}&amp;type=recovery" style="color:#ffffff;display:inline-block;font-family:Arial,sans-serif;font-size:16px;font-weight:700;line-height:20px;padding:15px 24px;text-decoration:none">Reset password securely</a>
                     </td>
                   </tr>
                 </table>
