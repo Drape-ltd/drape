@@ -129,10 +129,7 @@ export default function SignUpScreen() {
     if (!validateName(displayName)) return
     if (!validateEmail(email) || !validatePassword(password)) return
     if (!passwordRequirementsMet || password !== confirmPassword) return
-    if (!captchaToken) {
-      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
-      return
-    }
+    if (!captchaToken) return
 
     setLoading(true)
     const { error, requiresEmailConfirmation } = await signUp(

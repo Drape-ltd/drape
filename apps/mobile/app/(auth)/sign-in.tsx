@@ -101,10 +101,7 @@ export default function SignInScreen() {
       setPasswordError('Password is required.')
       return
     }
-    if (!captchaToken) {
-      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
-      return
-    }
+    if (!captchaToken) return
     setPasswordError('')
 
     setLoading(true)
@@ -308,7 +305,9 @@ export default function SignInScreen() {
               textContentType="password"
               autoComplete="current-password"
               returnKeyType="done"
-              onSubmitEditing={() => { void handleSignIn() }}
+              onSubmitEditing={() => {
+                if (captchaToken) void handleSignIn()
+              }}
               required
               testID="password-input"
             />

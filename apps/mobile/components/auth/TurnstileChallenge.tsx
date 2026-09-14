@@ -6,44 +6,9 @@ import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constant
 type ChallengeMessage =
   | { type: 'success'; token: string }
   | { type: 'expired' }
-  | { type: 'error' }
+  | { type: 'error'; code?: string }
   | { type: 'interactive' }
   | { type: 'idle' }
-
-function challengeHtml(siteKey: string, action: string) {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-    <style>
-      html, body { margin: 0; min-height: 100%; background: transparent; }
-      body { display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    </style>
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-  </head>
-  <body>
-    <div id="challenge"></div>
-    <script>
-      function send(message) { window.ReactNativeWebView.postMessage(JSON.stringify(message)); }
-      window.onload = function () {
-        if (!window.turnstile) { send({ type: 'error' }); return; }
-        window.turnstile.render('#challenge', {
-          sitekey: ${JSON.stringify(siteKey)},
-          action: ${JSON.stringify(action)},
-          appearance: 'interaction-only',
-          size: 'compact',
-          theme: 'light',
-          callback: function (token) { send({ type: 'success', token: token }); },
-          'expired-callback': function () { send({ type: 'expired' }); },
-          'error-callback': function () { send({ type: 'error' }); },
-          'before-interactive-callback': function () { send({ type: 'interactive' }); },
-          'after-interactive-callback': function () { send({ type: 'idle' }); }
-        });
-      };
-    </script>
-  </body>
-</html>`
-}
 
 export function TurnstileChallenge({
   action,
@@ -52,12 +17,15 @@ export function TurnstileChallenge({
   action: 'signin' | 'signup' | 'recovery'
   onTokenChange: (token: string | null) => void
 }) {
-  const siteKey = process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
+  const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
   const [loaded, setLoaded] = useState(false)
   const [interactive, setInteractive] = useState(false)
   const [verified, setVerified] = useState(false)
-  const [error, setError] = useState(siteKey ? '' : 'Security verification is not configured for this build.')
-  const html = useMemo(() => challengeHtml(siteKey, action), [action, siteKey])
+  const [error, setError] = useState('')
+  const challengeUrl = useMemo(
+    () => `${siteUrl}/auth/mobile-challenge?action=${encodeURIComponent(action)}`,
+    [action, siteUrl],
+  )
 
   function handleMessage(event: WebViewMessageEvent) {
     let message: ChallengeMessage
@@ -100,32 +68,38 @@ export function TurnstileChallenge({
   return (
     <View style={styles.block} accessibilityLabel="Security check">
       <View style={[styles.challengeFrame, interactive && styles.challengeFrameInteractive]}>
-        {!loaded && siteKey ? (
+        {!loaded ? (
           <View style={styles.loading}>
             <ActivityIndicator color={Colors.needleGreen} />
             <Text style={styles.loadingText}>Loading security check…</Text>
           </View>
         ) : null}
-        {siteKey ? (
-          <WebView
-            source={{ html, baseUrl: 'https://drapeon.co' }}
-            style={[styles.webView, !loaded && styles.webViewLoading]}
-            containerStyle={styles.webViewContainer}
-            originWhitelist={['https://*']}
-            javaScriptEnabled
-            domStorageEnabled
-            scrollEnabled={false}
-            setSupportMultipleWindows={false}
-            onLoadEnd={() => setLoaded(true)}
-            onMessage={handleMessage}
-            onError={() => {
-              setLoaded(true)
-              setVerified(false)
-              setError('The security check could not load. Check your connection and retry.')
-              onTokenChange(null)
-            }}
-          />
-        ) : null}
+        <WebView
+          source={{ uri: challengeUrl }}
+          style={[styles.webView, !loaded && styles.webViewLoading]}
+          containerStyle={styles.webViewContainer}
+          originWhitelist={[
+            'https://drapeon.co',
+            'https://*.drapeon.co',
+            'https://challenges.cloudflare.com',
+            'about:blank',
+            'about:srcdoc',
+          ]}
+          javaScriptEnabled
+          domStorageEnabled
+          sharedCookiesEnabled
+          thirdPartyCookiesEnabled
+          scrollEnabled={false}
+          setSupportMultipleWindows={false}
+          onLoadEnd={() => setLoaded(true)}
+          onMessage={handleMessage}
+          onError={() => {
+            setLoaded(true)
+            setVerified(false)
+            setError('The security check could not load. Check your connection and retry.')
+            onTokenChange(null)
+          }}
+        />
         {verified ? (
           <View
             style={styles.verified}

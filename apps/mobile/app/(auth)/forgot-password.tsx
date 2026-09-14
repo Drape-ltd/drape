@@ -48,10 +48,7 @@ export default function ForgotPasswordScreen() {
       Alert.alert('Invalid email', 'Enter a valid email address and try again.')
       return
     }
-    if (!captchaToken) {
-      Alert.alert('Security check loading', 'Wait a moment for security verification, then try again.')
-      return
-    }
+    if (!captchaToken) return
 
     setLoading(true)
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
