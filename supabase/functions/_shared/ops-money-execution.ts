@@ -228,14 +228,6 @@ async function resolveOrderLinkedOpsIssues(client: ServiceRoleClient, input: { o
   await client.from('ops_audit_logs').insert(issues.map((issue) => ({ issue_id: issue.id, action_taken: input.actionTaken, performed_by: input.performedBy, performed_role: input.performedRole, reason: input.reason, before_state: { status: issue.status, assigned_to: issue.assigned_to ?? null, resolved_at: issue.resolved_at ?? null }, after_state: { status: 'RESOLVED', assigned_to: input.performedBy, resolved_at: resolvedAt } })))
 }
 
-async function resolvePayoutChangeIssue(client: ServiceRoleClient, input: { requestId: string; performedBy: string; performedRole: string; reason: string }) {
-  const { data: issue } = await client.from('ops_issues').select('id,status,assigned_to,resolved_at').eq('issue_type', 'PAYOUT_BLOCKED').eq('related_entity_type', 'payout_change_request').eq('related_entity_id', input.requestId).order('created_at', { ascending: false }).limit(1).maybeSingle()
-  if (!issue?.id) return
-  const resolvedAt = new Date().toISOString()
-  await client.from('ops_issues').update({ status: 'RESOLVED', assigned_to: input.performedBy, resolved_at: resolvedAt }).eq('id', issue.id)
-  await client.from('ops_audit_logs').insert({ issue_id: issue.id, action_taken: 'PAYOUT_CHANGE_APPROVED_AFTER_INDEPENDENT_REVIEW', performed_by: input.performedBy, performed_role: input.performedRole, reason: input.reason, before_state: { status: issue.status, assigned_to: issue.assigned_to ?? null, resolved_at: issue.resolved_at ?? null }, after_state: { status: 'RESOLVED', assigned_to: input.performedBy, resolved_at: resolvedAt } })
-}
-
 async function enqueuePayoutChangePush(client: ServiceRoleClient, input: { requestId: string; tailorUserId: string }) {
   const { error } = await client.rpc('enqueue_domain_event', {
     p_event_type: 'notification.push_requested', p_aggregate_type: 'user', p_aggregate_id: input.tailorUserId, p_actor_id: null, p_actor_role: 'OPS', p_order_id: null,
@@ -312,9 +304,8 @@ async function runAdapter(client: ServiceRoleClient, session: OpsMoneyActor, mon
       const metadata = objectValue(change?.metadata)
       if (error || !change?.id || change.status !== 'PENDING') return { ok: false, error: 'The payout destination request is no longer pending review.' }
       if (metadata.lifecycle_state !== 'OPS_REVIEW' || metadata.confirmation_status !== 'CONFIRMED') return { ok: false, error: 'The tailor must confirm this payout request before Ops can activate it.' }
-      const { error: decisionError } = await client.rpc('ops_decide_payout_change_request', { p_request_id: change.id, p_decision: 'APPROVE', p_rejection_code: null, p_reason: moneyRequest.reason, p_reviewed_by: actorLabel(session) })
+      const { error: decisionError } = await client.rpc('ops_finalize_payout_change_request', { p_request_id: change.id, p_reason: moneyRequest.reason, p_reviewed_by: actorLabel(session), p_reviewed_role: actorRole(session), p_money_desk_request_id: moneyRequest.id })
       if (decisionError) return { ok: false, error: 'The reviewed payout destination decision could not be persisted.' }
-      await resolvePayoutChangeIssue(client, { requestId: change.id, performedBy: actorLabel(session), performedRole: actorRole(session), reason: moneyRequest.reason })
       await enqueuePayoutChangePush(client, { requestId: change.id, tailorUserId: change.tailor_user_id })
       return { ok: true }
     }

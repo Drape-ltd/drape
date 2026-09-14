@@ -195,6 +195,8 @@ const BodySchema = z.discriminatedUnion('action', [
     action: z.literal('update-currency'),
     role: z.enum(['CUSTOMER', 'TAILOR']),
     currency: z.string().trim().min(3).max(3),
+    source: z.enum(['DEVICE_LOCALE', 'IP_GEO', 'USER_SELECTED', 'UNSUPPORTED_FALLBACK']).optional(),
+    regionCode: z.string().trim().length(2).optional(),
   }),
   z.object({
     action: z.literal('switch-role'),
@@ -1042,10 +1044,16 @@ Deno.serve(async (req) => {
         }, 400, cors)
       }
 
-      const { error: currencyError } = await supabase
-        .from('users')
-        .update({ default_currency: currency, updated_at: now })
-        .eq('id', caller.id)
+      const { data: currencyUpdate, error: currencyError } = await supabase.rpc(
+        'update_account_currency_with_price_conversion',
+        {
+          p_user_id: caller.id,
+          p_role: body.role,
+          p_currency: currency,
+          p_source: body.source ?? 'USER_SELECTED',
+          p_region_code: body.regionCode ?? null,
+        },
+      )
 
       if (currencyError) {
         log('error', FN, 'users.currency_update_failed', { actor_id: caller.id, error: currencyError.message })
@@ -1055,30 +1063,15 @@ Deno.serve(async (req) => {
         }, 500, cors)
       }
 
-      if (body.role === 'TAILOR') {
-        const { error: tailorCurrencyError } = await supabase
-          .from('tailor_profiles')
-          .update({ currency, updated_at: now })
-          .eq('user_id', caller.id)
-
-        if (tailorCurrencyError) {
-          log('error', FN, 'tailor_profile.currency_update_failed', { actor_id: caller.id, error: tailorCurrencyError.message })
-          return jsonResponse({
-            error: 'We saved your account currency but could not update the tailor storefront yet.',
-            message: 'We saved your account currency but could not update the tailor storefront yet.',
-          }, 500, cors)
-        }
-      }
-
       await audit(supabase, {
         event: 'account.currency_updated',
         actor_id: caller.id,
         actor_role: body.role,
         severity: 'info',
-        payload: { function: FN, currency },
+        payload: { function: FN, currency, price_range_converted: currencyUpdate?.priceRangeConverted === true },
       })
 
-      return jsonResponse({ ok: true, currency }, 200, cors)
+      return jsonResponse({ ok: true, currency, ...(currencyUpdate && typeof currencyUpdate === 'object' ? currencyUpdate : {}) }, 200, cors)
     }
 
     if (body.action === 'update-avatar') {

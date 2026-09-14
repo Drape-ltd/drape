@@ -230,7 +230,6 @@ export default function EditProfileScreen() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [errors, setErrors]               = useState<{ name?: string; location?: string; specialties?: string }>({})
   const [showSpecialtySheet, setShowSpecialtySheet] = useState(false)
-  const [showCurrencySheet, setShowCurrencySheet] = useState(false)
 
   // Location autocomplete
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([])
@@ -247,7 +246,6 @@ export default function EditProfileScreen() {
     location       !== base.location ||
     bio            !== base.bio ||
     availability   !== base.availability ||
-    currency       !== base.currency ||
     sellerType     !== base.sellerType ||
     supportsCustomOrders !== base.supportsCustomOrders ||
     supportsReadyMade !== base.supportsReadyMade ||
@@ -911,10 +909,14 @@ export default function EditProfileScreen() {
 
           <View style={styles.listDivider} />
 
-          <TouchableOpacity style={styles.listRow} activeOpacity={0.75} onPress={() => setShowCurrencySheet(true)}>
+          <TouchableOpacity
+            style={styles.listRow}
+            activeOpacity={0.75}
+            onPress={() => router.push('/(tailor)/profile/currency' as never)}
+          >
             <View style={styles.listRowBody}>
               <Text style={styles.listRowLabel}>Prices shown in</Text>
-              <Text style={styles.listRowValue}>{currencyLabel}</Text>
+              <Text style={styles.listRowValue}>{currencyLabel} · Change in account settings</Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.midGrey} />
           </TouchableOpacity>
@@ -1311,15 +1313,6 @@ export default function EditProfileScreen() {
         onChange={(v) => { setSpecialties(v); setErrors((e) => ({ ...e, specialties: undefined })) }}
         onClose={() => setShowSpecialtySheet(false)}
       />
-      <CurrencyPickerSheet
-        visible={showCurrencySheet}
-        selected={currency}
-        onSelect={(value) => {
-          setCurrency(value)
-          setShowCurrencySheet(false)
-        }}
-        onClose={() => setShowCurrencySheet(false)}
-      />
     </SafeAreaView>
   )
 }
@@ -1374,64 +1367,6 @@ function SpecialtyPickerSheet({
               searchable
             />
           </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  )
-}
-
-function CurrencyPickerSheet({
-  visible,
-  selected,
-  onSelect,
-  onClose,
-}: {
-  visible: boolean
-  selected: Currency
-  onSelect: (currency: Currency) => void
-  onClose: () => void
-}) {
-  const insets = useSafeAreaInsets()
-  const sheetBottomPadding =
-    Platform.OS === 'android'
-      ? Math.max(insets.bottom + 52, 76)
-      : Math.max(insets.bottom + Spacing.lg, Spacing.xxl)
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.sheetOverlay}>
-        <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
-        <View style={[styles.currencySheet, { paddingBottom: sheetBottomPadding }]}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.specialtySheetHeader}>
-            <View style={styles.selectorSummaryText}>
-              <Text style={styles.specialtySheetTitle}>Pricing currency</Text>
-              <Text style={styles.specialtySheetSubtitle}>
-                Choose the currency customers see on your quotes and shop items.
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.sheetClose} onPress={onClose}>
-              <Feather name="x" size={18} color={Colors.ink} />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.currencyOptionList}>
-            {CURRENCY_OPTIONS.map((option) => {
-              const active = selected === option.value
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[styles.currencyOptionRow, active && styles.currencyOptionRowActive]}
-                  activeOpacity={0.75}
-                  onPress={() => onSelect(option.value)}
-                >
-                  <Text style={[styles.currencyOptionText, active && styles.currencyOptionTextActive]}>
-                    {option.label}
-                  </Text>
-                  {active ? <Feather name="check" size={18} color={Colors.needleGreen} /> : null}
-                </TouchableOpacity>
-              )
-            })}
-          </View>
         </View>
       </View>
     </Modal>
@@ -1700,18 +1635,4 @@ const styles = StyleSheet.create({
   specialtySheetScroll: { marginHorizontal: -Spacing.xs },
   specialtySheetContent: { paddingHorizontal: Spacing.xs, paddingBottom: Spacing.md },
   selectorSummaryText: { flex: 1, gap: 3 },
-  currencySheet: {
-    backgroundColor: Colors.bone, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
-    paddingTop: Spacing.sm, paddingHorizontal: Spacing.xl, gap: Spacing.md, ...Shadow.lg,
-  },
-  currencyOptionList: { gap: Spacing.sm },
-  currencyOptionRow: {
-    minHeight: 58, borderRadius: Radius.lg, borderWidth: 1,
-    borderColor: Colors.lightGrey, backgroundColor: Colors.white,
-    paddingHorizontal: Spacing.md, flexDirection: 'row',
-    alignItems: 'center', justifyContent: 'space-between',
-  },
-  currencyOptionRowActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyOptionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  currencyOptionTextActive: { color: Colors.needleGreen },
 })

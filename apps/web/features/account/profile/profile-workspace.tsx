@@ -625,16 +625,12 @@ function Content({ userId, identity }: { userId: string; identity: AccountRouteI
             <option value="LIMITED">Limited</option>
             <option value="FULLY_BOOKED">Fully booked</option>
           </select>
-          <select
-            aria-label="Currency"
-            className={field}
-            value={form.currency}
-            onChange={(e) => update('currency', e.target.value)}
-          >
-            {['USD', 'GBP', 'EUR', 'CAD', 'NGN', 'GHS', 'KES'].map((v) => (
-              <option key={v}>{v}</option>
-            ))}
-          </select>
+          <div className={`${field} flex items-center justify-between gap-3`}>
+            <span aria-label="Currency">Prices shown in {form.currency}</span>
+            <Link href="/account/settings" className="font-semibold text-needle">
+              Change currency
+            </Link>
+          </div>
         </div>
         <button
           disabled={busy}

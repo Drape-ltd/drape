@@ -80,8 +80,16 @@ const serviceEntries = serviceRegistry.match(/\{ key: '[^']+'[^\n]+\}/g) ?? []
 const queueKeys = [...serviceCatalogue.matchAll(/\{ key: '(support|privacy|trust|money|delivery|reliability|operations)'/g)].map((match) => match[1])
 const issueTypeBlock = sharedIssueContract.match(/OPS_ISSUE_TYPES = \[([\s\S]*?)\] as const/u)?.[1] ?? ''
 const issueTypes = [...issueTypeBlock.matchAll(/'([A-Z_]+)'/g)].map((match) => match[1])
+const [webMoneyExecution, edgeMoneyExecution, payoutChangePanel, payoutFinalizationMigration] = await Promise.all([
+  readFile(new URL('../web/lib/money-desk-execution.ts', root), 'utf8'),
+  readFile(new URL('../../supabase/functions/_shared/ops-money-execution.ts', root), 'utf8'),
+  readFile(new URL('components/payout-change-case-panel.tsx', root), 'utf8'),
+  readFile(new URL('../../supabase/migrations/20260913143000_finalize_payout_change_case_receipts.sql', root), 'utf8'),
+])
 
 const checks = [
+  ['Payout destination execution closes its canonical case and receipt through one shared database transaction', [webMoneyExecution, edgeMoneyExecution].every((source) => source.includes("client.rpc('ops_finalize_payout_change_request'")) && payoutFinalizationMigration.includes("perform * from public.ops_decide_payout_change_request") && payoutFinalizationMigration.includes("canonical_status = 'RESOLVED'") && payoutFinalizationMigration.includes('insert into public.ops_case_events') && payoutFinalizationMigration.includes('insert into public.ops_action_receipts')],
+  ['Completed payout destination reviews label the immutable before/after snapshots accurately', payoutChangePanel.includes("replacementIsActive ? 'Previous destination'") && payoutChangePanel.includes("replacementIsActive ? 'Active replacement'")],
   ['The route shell owns the global command palette', shell.includes('<OpsCommandPalette destinations={commandDestinations} />')],
   ['Command destinations are derived from role-permitted navigation', shell.includes('permittedGroups.flatMap') && shell.includes('canAccessOpsArea')],
   ['The command palette exposes a labelled modal dialog', palette.includes('<dialog className="ops-command-dialog"') && palette.includes('aria-labelledby="ops-command-title"')],

@@ -227,12 +227,14 @@ function Basics({
   async function saveCurrency() {
     setBusy('currency')
     try {
-      await invoke('account-profile-action', {
+      const result = await invoke<{ priceRangeConverted?: boolean }>('account-profile-action', {
         action: 'update-currency',
         role: identity.role,
         currency,
       })
-      setNotice({ tone: 'success', text: 'Currency preference updated.' })
+      setNotice({ tone: 'success', text: result.priceRangeConverted
+        ? 'Currency updated. Your public price guide was converted; existing orders, earnings, and payout setup are unchanged.'
+        : 'Currency preference updated. Existing orders, earnings, and payout setup are unchanged.' })
       refresh()
     } catch (cause) {
       setNotice({

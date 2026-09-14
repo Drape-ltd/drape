@@ -16866,12 +16866,14 @@ function ProfileSettingsEditor({
     setSuccess(null)
     setBusy('currency')
     try {
-      await invokeAccountFunction('account-profile-action', {
+      const result = await invokeAccountFunction<{ priceRangeConverted?: boolean }>('account-profile-action', {
         action: 'update-currency',
         role,
         currency,
       })
-      setSuccess('Currency preference updated.')
+      setSuccess(result.priceRangeConverted
+        ? 'Currency updated. Your public price guide was converted; existing orders, earnings, and payout setup are unchanged.'
+        : 'Currency preference updated. Existing orders, earnings, and payout setup are unchanged.')
       onRefresh()
     } catch (currencyError) {
       setError(friendlyActionError(currencyError, 'Currency could not save. Please try again.'))

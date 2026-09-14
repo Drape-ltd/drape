@@ -914,6 +914,20 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: TAILOR_SETUP_VALIDATION.PROFILE_PHOTO_REQUIRED_MESSAGE }, 400, cors)
     }
 
+    // Existing profiles change currency through account-profile-action so the
+    // account default and public price guide are converted atomically. Ignore
+    // currency/range values from older or cached profile editors.
+    const isProfileUpdate = body.action === 'update-profile'
+    const savedCurrency = isProfileUpdate
+      ? (existingRow.currency ?? profile.currency)
+      : profile.currency
+    const savedPriceRangeMin = isProfileUpdate
+      ? (existingRow.price_range_min ?? null)
+      : (profile.priceRangeMin ?? existingRow.price_range_min ?? null)
+    const savedPriceRangeMax = isProfileUpdate
+      ? (existingRow.price_range_max ?? null)
+      : (profile.priceRangeMax ?? existingRow.price_range_max ?? null)
+
     const payload: Record<string, unknown> = {
       user_id: caller.id,
       display_name: profile.displayName,
@@ -921,9 +935,9 @@ Deno.serve(async (req) => {
       location: profile.location,
       languages: languages.length > 0 ? languages : (existingRow.languages ?? []),
       specialty_tags: specialties,
-      price_range_min: profile.priceRangeMin ?? existingRow.price_range_min ?? null,
-      price_range_max: profile.priceRangeMax ?? existingRow.price_range_max ?? null,
-      currency: profile.currency,
+      price_range_min: savedPriceRangeMin,
+      price_range_max: savedPriceRangeMax,
+      currency: savedCurrency,
       availability: normalizeAvailability(profile.availability),
       seller_type: profile.sellerType,
       supports_custom_orders: profile.supportsCustomOrders,
@@ -938,7 +952,7 @@ Deno.serve(async (req) => {
       consultation_mode: profile.consultationMode,
       consultation_requirement: profile.consultationRequirement,
       consultation_fee_amount: profile.consultationMode === 'PAID' ? profile.consultationFeeAmount : null,
-      consultation_currency: profile.consultationMode === 'PAID' ? profile.currency : null,
+      consultation_currency: profile.consultationMode === 'PAID' ? savedCurrency : null,
       consultation_duration_minutes: profile.consultationDurationMinutes,
       consultation_call_type: profile.consultationCallType,
       consultation_fee_creditable: profile.consultationMode === 'PAID' && profile.consultationFeeCreditable,
@@ -959,9 +973,6 @@ Deno.serve(async (req) => {
 
     if (body.action === 'update-profile' && existingProfile?.id && isApprovedTailorProfile(existingProfile)) {
       const now = new Date().toISOString()
-      const nextCurrency = (profile.currency ?? existingRow.currency ?? 'USD').trim().toUpperCase()
-      const existingCurrency = (existingRow.currency ?? '').trim().toUpperCase()
-      const currencyChanged = nextCurrency !== existingCurrency
       const directPayload: Record<string, unknown> = {
         availability: normalizeAvailability(profile.availability),
         seller_type: profile.sellerType,
@@ -977,18 +988,13 @@ Deno.serve(async (req) => {
         consultation_mode: profile.consultationMode,
         consultation_requirement: profile.consultationRequirement,
         consultation_fee_amount: profile.consultationMode === 'PAID' ? profile.consultationFeeAmount : null,
-        consultation_currency: profile.consultationMode === 'PAID' ? profile.currency : null,
+        consultation_currency: profile.consultationMode === 'PAID' ? savedCurrency : null,
         consultation_duration_minutes: profile.consultationDurationMinutes,
         consultation_call_type: profile.consultationCallType,
         consultation_fee_creditable: profile.consultationMode === 'PAID' && profile.consultationFeeCreditable,
         consultation_policy_version: 'consultation-2026-07-31-v1',
         consultation_policy_published_at: now,
         updated_at: now,
-      }
-
-      if (!currencyChanged) {
-        directPayload.price_range_min = profile.priceRangeMin ?? existingRow.price_range_min ?? null
-        directPayload.price_range_max = profile.priceRangeMax ?? existingRow.price_range_max ?? null
       }
 
       const { error: directProfileError } = await supabase
@@ -1037,12 +1043,6 @@ Deno.serve(async (req) => {
 
       if (!sameStringArray(languages, existingRow.languages ?? existingProfile.languages ?? [])) requestedChanges.languages = normalizeStringArray(languages)
       if (!sameStringArray(specialties, existingRow.specialty_tags ?? existingProfile.specialty_tags ?? [])) requestedChanges.specialty_tags = normalizeStringArray(specialties)
-
-      if (currencyChanged) {
-        requestedChanges.currency = nextCurrency
-        requestedChanges.price_range_min = profile.priceRangeMin ?? existingRow.price_range_min ?? null
-        requestedChanges.price_range_max = profile.priceRangeMax ?? existingRow.price_range_max ?? null
-      }
 
       if (submittedAvatarUrl.length > 0 && submittedAvatarUrl !== existingAvatarUrl) {
         requestedChanges.avatar_url = submittedAvatarUrl

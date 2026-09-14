@@ -232,30 +232,46 @@ export function useCurrency() {
     options?: {
       source?: CurrencySource
       regionCode?: string | null
+      role?: 'CUSTOMER' | 'TAILOR'
     },
   ) {
     const nextSource = options?.source ?? 'USER_SELECTED'
     const nextRegionCode = options?.regionCode?.trim().toUpperCase() || regionCode || detected.regionCode
 
-    setCurrencyState(code)
-    setSource(nextSource)
-    setRegionCode(nextRegionCode)
+    if (!user?.id) {
+      setCurrencyState(code)
+      setSource(nextSource)
+      setRegionCode(nextRegionCode)
+      return
+    }
 
-    if (!user?.id) return
-
-    const { error } = await supabase
-      .from('users')
-      .update({
-        default_currency: code,
-        currency_source: nextSource,
-        region_code: nextRegionCode,
-        currency_confirmed_at: new Date().toISOString(),
-      })
-      .eq('id', user.id)
+    const { error } = options?.role
+      ? await supabase.functions.invoke('account-profile-action', {
+          body: {
+            action: 'update-currency',
+            role: options.role,
+            currency: code,
+            source: nextSource,
+            regionCode: nextRegionCode,
+          },
+        })
+      : await supabase
+          .from('users')
+          .update({
+            default_currency: code,
+            currency_source: nextSource,
+            region_code: nextRegionCode,
+            currency_confirmed_at: new Date().toISOString(),
+          })
+          .eq('id', user.id)
 
     if (error) {
       throw error
     }
+
+    setCurrencyState(code)
+    setSource(nextSource)
+    setRegionCode(nextRegionCode)
   }
 
   const unsupportedMessage = source === 'UNSUPPORTED_FALLBACK'

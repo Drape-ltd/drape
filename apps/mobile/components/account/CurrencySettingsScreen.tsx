@@ -38,10 +38,12 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
     if (saving) return
     setSaving(true)
     try {
-      await setCurrency(selected, { source: 'USER_SELECTED' })
+      await setCurrency(selected, { source: 'USER_SELECTED', role })
       Alert.alert(
         'Currency updated',
-        'New orders and browsing totals will use this currency. Existing orders stay locked to the currency they were placed in.',
+        isTailor
+          ? 'Your public price guide was converted to the new currency. New orders and browsing totals will use it; existing orders, earnings, and payout setup stay unchanged.'
+          : 'New orders and browsing totals will use this currency. Existing orders stay locked to the currency they were placed in.',
         [{ text: 'OK', onPress: goBack }],
       )
     } catch {
