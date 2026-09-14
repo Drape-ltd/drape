@@ -4,7 +4,11 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
-import { resolveAuthenticatedRole, shouldApplyFreshSignupRole } from '@drape/shared/auth-role'
+import {
+  resolveAuthenticatedRole,
+  shouldApplyFreshSignupRole,
+  shouldChooseRoleAfterFreshProviderSignIn,
+} from '@drape/shared/auth-role'
 import { IDENTITY_CONSENT_POLICY_VERSION } from '@drape/shared'
 import { createClient } from '../lib/supabase'
 import {
@@ -541,7 +545,13 @@ export function AuthCallbackClient(): React.JSX.Element {
           createdAt: data.user.created_at,
           lastSignInAt: data.user.last_sign_in_at,
         })
-        const establishedRole = applyFreshSignupRole
+        const chooseFreshSignInRole = shouldChooseRoleAfterFreshProviderSignIn({
+          intentMode: oauthIntent?.mode,
+          createdAt: data.user.created_at,
+          lastSignInAt: data.user.last_sign_in_at,
+        })
+        const ignoreProvisionalRole = applyFreshSignupRole || chooseFreshSignInRole
+        const establishedRole = ignoreProvisionalRole
           ? null
           : metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR'
             ? metadataRole
@@ -550,8 +560,8 @@ export function AuthCallbackClient(): React.JSX.Element {
               : roleMirror?.role
         const role = resolveAuthenticatedRole({
           establishedRole,
-          onboardingRole: applyFreshSignupRole ? null : onboarding?.role,
-          entryIntent: roleIntent,
+          onboardingRole: ignoreProvisionalRole ? null : onboarding?.role,
+          entryIntent: chooseFreshSignInRole ? null : roleIntent,
         })
         const matchingOnboarding = onboarding?.role === role ? onboarding : null
 

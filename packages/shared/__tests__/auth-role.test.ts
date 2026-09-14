@@ -1,8 +1,10 @@
 import {
+  isFreshProviderAccount,
   resolveAccountRuntimeRole,
   resolveAuthenticatedRole,
   shouldApplyFreshSignupRole,
   shouldBootstrapRole,
+  shouldChooseRoleAfterFreshProviderSignIn,
 } from '../src/auth-role'
 
 describe('provider auth role resolution', () => {
@@ -87,5 +89,29 @@ describe('provider auth role resolution', () => {
         lastSignInAt: '2026-09-14T05:00:01.000Z',
       })
     ).toBe(false)
+  })
+
+  it('asks a brand-new provider user entering through sign in to choose a role', () => {
+    expect(
+      shouldChooseRoleAfterFreshProviderSignIn({
+        intentMode: 'sign-in',
+        createdAt: '2026-09-14T05:00:00.000Z',
+        lastSignInAt: '2026-09-14T05:00:01.000Z',
+      })
+    ).toBe(true)
+  })
+
+  it('does not ask an existing provider account to choose its role again', () => {
+    expect(
+      shouldChooseRoleAfterFreshProviderSignIn({
+        intentMode: 'sign-in',
+        createdAt: '2026-06-01T05:00:00.000Z',
+        lastSignInAt: '2026-09-14T05:00:01.000Z',
+      })
+    ).toBe(false)
+  })
+
+  it('rejects invalid provider account timestamps as fresh', () => {
+    expect(isFreshProviderAccount({ createdAt: 'invalid', lastSignInAt: null })).toBe(false)
   })
 })

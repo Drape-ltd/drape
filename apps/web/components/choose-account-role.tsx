@@ -29,20 +29,19 @@ export function ChooseAccountRole(): React.JSX.Element {
       return
     }
 
-    const { error: metadataError } = await supabase.auth.updateUser({ data: { role } })
-    if (metadataError) {
+    const { data: switchData, error: switchError } = await supabase.functions.invoke(
+      'account-profile-action',
+      { body: { action: 'switch-role', role } }
+    )
+    const switchPayload = (switchData ?? {}) as { error?: string; message?: string }
+    if (switchError || switchPayload.error) {
       setLoading(null)
-      setError('We could not save that choice. Try again.')
-      return
-    }
-
-    const { error: mirrorError } = await supabase
-      .from('users')
-      .update({ role, updated_at: new Date().toISOString() })
-      .eq('id', data.user.id)
-    if (mirrorError) {
-      setLoading(null)
-      setError('We could not finish account setup. Try again.')
+      setError(
+        switchPayload.message ||
+          switchPayload.error ||
+          switchError?.message ||
+          'We could not finish account setup. Try again.'
+      )
       return
     }
 
