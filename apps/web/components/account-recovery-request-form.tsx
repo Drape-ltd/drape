@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
 import { RECOVERY_INTENT_KEY } from '../lib/auth-recovery-intent'
 import { TurnstileChallenge } from './turnstile-challenge'
@@ -51,6 +51,19 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
   const captchaFailed = error?.toLowerCase().includes('security check') ?? false
+
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      // Never reuse a Turnstile token restored from browser history. The
+      // widget remount is what obtains a fresh token for this request.
+      setCaptchaToken(null)
+      setError(null)
+      setCaptchaResetKey((current) => current + 1)
+    }
+    window.addEventListener('pageshow', handlePageShow)
+    return () => window.removeEventListener('pageshow', handlePageShow)
+  }, [])
 
   async function submit() {
     if (loading) return

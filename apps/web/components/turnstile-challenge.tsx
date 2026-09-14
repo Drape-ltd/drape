@@ -117,7 +117,20 @@ export function TurnstileChallenge({
     })
     widgetIdRef.current = widgetId
 
+    // Mobile Safari and in-app browsers can restore the recovery form from
+    // bfcache after the user returns from an email link. A Turnstile token
+    // restored with that page may already be expired, so force a fresh token
+    // before the user can submit again.
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted || !widgetIdRef.current || !window.turnstile) return
+      onTokenChangeRef.current(null)
+      setChallengeError(null)
+      window.turnstile.reset(widgetIdRef.current)
+    }
+    window.addEventListener('pageshow', handlePageShow)
+
     return () => {
+      window.removeEventListener('pageshow', handlePageShow)
       window.turnstile?.remove(widgetId)
       if (widgetIdRef.current === widgetId) widgetIdRef.current = null
     }
