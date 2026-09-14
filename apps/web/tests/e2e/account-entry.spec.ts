@@ -178,6 +178,17 @@ test.describe('authenticated web entry contract', () => {
     expect(page.url()).not.toContain('token_hash')
   })
 
+  test('a fresh recovery code clears a prior validation error before verification', async ({ page }) => {
+    await page.goto('/auth/recover?flow=recovery&email=tester%40example.com')
+
+    await page.getByLabel('Reset code').fill('123')
+    await page.getByRole('button', { name: 'Verify code' }).click()
+    await expect(page.getByText('Enter the 8-digit code from the most recent reset email.')).toBeVisible()
+
+    await page.getByLabel('Reset code').fill('12345678')
+    await expect(page.getByRole('alert')).toHaveCount(0)
+  })
+
   test('a provider verification error clears the callback URL and fails closed', async ({ page }) => {
     await page.goto(
       '/auth/recover?error=access_denied&error_code=otp_expired&error_description=expired#access_token=never-keep-this'

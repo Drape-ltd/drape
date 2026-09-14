@@ -19,21 +19,6 @@ const ALLOWED_ORIGINS = new Set([
   'https://ops.drapeon.co',
 ])
 
-const DEV_ALLOWED_ORIGINS = new Set([
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
-  'http://127.0.0.1:3002',
-  'http://127.0.0.1:3003',
-  'http://127.0.0.1:3004',
-  'http://127.0.0.1:3005',
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002',
-  'http://localhost:3003',
-  'http://localhost:3004',
-  'http://localhost:3005',
-])
-
 const ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type, x-correlation-id, x-drape-ops-access-assertion'
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -43,6 +28,18 @@ const SECURITY_HEADERS = {
 function isDevProject() {
   try {
     return new URL(Deno.env.get('SUPABASE_URL') ?? '').hostname.startsWith('pqptfuqogvrajozfsqzi')
+  } catch {
+    return false
+  }
+}
+
+function isLocalDevelopmentOrigin(origin: string) {
+  try {
+    const url = new URL(origin)
+    // Development servers intentionally choose a free port. Allow only the
+    // two loopback hostnames over HTTP, and only for the Dev Supabase project.
+    // This keeps production origins on the explicit allowlist above.
+    return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')
   } catch {
     return false
   }
@@ -71,7 +68,7 @@ export function getCorsHeaders(req: Request): Record<string, string> {
 
   // Browser: return the actual origin back only if it is allowlisted
   const allowedOrigin =
-    ALLOWED_ORIGINS.has(origin) || (isDevProject() && DEV_ALLOWED_ORIGINS.has(origin))
+    ALLOWED_ORIGINS.has(origin) || (isDevProject() && isLocalDevelopmentOrigin(origin))
       ? origin
       : 'https://drapeon.co'
   return {

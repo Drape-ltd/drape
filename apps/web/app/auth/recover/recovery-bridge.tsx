@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '../../../lib/supabase'
 import { RECOVERY_HANDOFF_KEY, RECOVERY_INTENT_KEY } from '../../../lib/auth-recovery-intent'
 import { safeAccountReturnPath } from '../../../lib/account-return-path'
+import { deviceTrustRequest } from '../../../lib/device-trust-client'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
   validatePasswordStrength,
 } from '@drape/shared/auth-security'
+
+const RECOVERY_CODE_LENGTH = 8
 
 export function RecoveryBridge(): any {
   // The browser client that successfully consumed this one-use recovery
@@ -271,8 +274,8 @@ export function RecoveryBridge(): any {
       setRecoveryCodeError('Enter the email address that received this reset code.')
       return
     }
-    if (!/^\d{6,8}$/.test(token)) {
-      setRecoveryCodeError('Enter the full reset code from the email.')
+    if (!new RegExp(`^\\d{${RECOVERY_CODE_LENGTH}}$`).test(token)) {
+      setRecoveryCodeError(`Enter the ${RECOVERY_CODE_LENGTH}-digit code from the most recent reset email.`)
       return
     }
 
@@ -284,7 +287,9 @@ export function RecoveryBridge(): any {
       if (result.error || !result.data.session) {
         recoveryClientRef.current = null
         setRecoveryCode('')
-        setRecoveryCodeError('That reset code is invalid or expired. Request a new link and try again.')
+        setRecoveryCodeError(
+          'That code was not accepted. Use the code from the most recent reset email, or request a new one.'
+        )
         return
       }
 
@@ -334,7 +339,7 @@ export function RecoveryBridge(): any {
       } else {
         // Keep the verified, in-memory recovery session alive for temporary
         // transport failures. The user can retry without burning a new code.
-        setError('We could not update your password. Check your connection and try again.')
+        setError('Your password was not changed. Check your connection and try again.')
       }
       return
     }
@@ -343,21 +348,40 @@ export function RecoveryBridge(): any {
 
     let securityCleanupFailed = false
     try {
-      const [{ error: revokeError }, { error: noticeError }] = await Promise.all([
-        supabase.functions.invoke('trusted-device-action', {
-          body: { action: 'revoke-all' },
-        }),
-        supabase.functions.invoke('account-security-notification', {
-          body: { event: 'PASSWORD_CHANGED' },
-        }),
-      ])
-      securityCleanupFailed = Boolean(revokeError || noticeError)
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError || !sessionData.session) {
+        securityCleanupFailed = true
+      } else {
+        const [deviceCleanup, securityReceipt] = await Promise.allSettled([
+          // Go through Drapeon's same-origin API route rather than calling the
+          // Edge Function from the browser. It carries the recovery session
+          // server-to-server, clears the browser's remembered-device cookies,
+          // and cannot be blocked by a local development port's CORS policy.
+          deviceTrustRequest(sessionData.session, { action: 'revoke-all' }),
+          supabase.functions.invoke('account-security-notification', {
+            body: { event: 'PASSWORD_CHANGED' },
+          }),
+        ])
+        securityCleanupFailed =
+          deviceCleanup.status !== 'fulfilled' || deviceCleanup.value.ok !== true
+
+        // A receipt is useful, but delivery must never misreport a successful
+        // credential/session cleanup as a security failure. The function
+        // audits provider delivery failures server-side.
+        if (
+          securityReceipt.status === 'rejected' ||
+          securityReceipt.value.error
+        ) {
+          console.warn('Password changed security receipt was not delivered.')
+        }
+      }
     } catch {
       securityCleanupFailed = true
     }
 
-    await supabase.auth.signOut({ scope: 'others' })
-    await supabase.auth.signOut({ scope: 'local' })
+    const { error: otherSessionsError } = await supabase.auth.signOut({ scope: 'others' })
+    const { error: localSessionError } = await supabase.auth.signOut({ scope: 'local' })
+    securityCleanupFailed = securityCleanupFailed || Boolean(otherSessionsError || localSessionError)
     recoveryClientRef.current = null
     // Replace the recovery history entry before showing the success state. If
     // the user later presses Back, the bridge sees status=complete and renders
@@ -380,7 +404,7 @@ export function RecoveryBridge(): any {
               <h1 className="mt-3 text-3xl text-ink">Password updated.</h1>
               <p className="mt-3 text-sm leading-7 text-ink/66">
                 {cleanupWarning
-                  ? 'This browser was signed out. Sign in with your new password and review Login & security to confirm every remembered device is cleared.'
+                  ? 'Sign in with your new password, then review Login & security to confirm every session and remembered device was cleared.'
                   : 'Your other sessions and remembered devices have been signed out. Use your new password to sign in again.'}
               </p>
               {cleanupWarning ? (
@@ -388,8 +412,8 @@ export function RecoveryBridge(): any {
                   role="alert"
                   className="mt-4 rounded-lg border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink"
                 >
-                  Your password changed, but Drapeon could not finish every security cleanup step.
-                  Review Login & security after signing in.
+                  Your password was changed, but Drapeon could not confirm that every session and
+                  remembered device was signed out.
                 </p>
               ) : null}
               <a
@@ -430,7 +454,7 @@ export function RecoveryBridge(): any {
             <>
               <h1 className="mt-3 text-3xl text-ink">Enter your reset code.</h1>
               <p className="mt-3 text-sm leading-7 text-ink/66">
-                Enter the one-time code from the email to securely choose a new password.
+                Enter the {RECOVERY_CODE_LENGTH}-digit code from the most recent email to securely choose a new password.
               </p>
               <form
                 className="mt-6 grid gap-4"
@@ -453,11 +477,16 @@ export function RecoveryBridge(): any {
                   Reset code
                   <input
                     value={recoveryCode}
-                    onChange={(event) => setRecoveryCode(event.target.value.replace(/\s/g, ''))}
+                    onChange={(event) => {
+                      setRecoveryCode(
+                        event.target.value.replace(/\D/g, '').slice(0, RECOVERY_CODE_LENGTH)
+                      )
+                      setRecoveryCodeError(null)
+                    }}
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    maxLength={8}
-                    placeholder="Enter the code from your email"
+                    maxLength={RECOVERY_CODE_LENGTH}
+                    placeholder={`${RECOVERY_CODE_LENGTH}-digit code`}
                     className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal tracking-[0.18em] text-ink outline-none transition placeholder:tracking-normal placeholder:text-ink/36 focus:border-needle"
                   />
                 </label>
