@@ -12,6 +12,7 @@ import {
 
 export function RecoveryBridge(): any {
   const [sessionReady, setSessionReady] = useState(false)
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -52,14 +53,25 @@ export function RecoveryBridge(): any {
     window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('popstate', handlePopState)
 
-    // Establish the recovery session from the email link. Web recovery stays on
-    // the web; it must never require an installed mobile app to finish.
-    async function applyRecoverySession() {
+    // Only inspect the URL on load. Do not call Supabase here: email security
+    // scanners and browser prefetchers can visit a link before the user does.
+    // The single-use token is exchanged only after the user presses Continue.
+    function inspectRecoveryLink() {
       if (typeof window === 'undefined') return
       if (failClosedAfterHistoryReturn()) return
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
       setReturnTo(safeAccountReturnPath(searchParams.get('next')) ?? '/account/orders')
+      const providerError = searchParams.get('error') || hashParams.get('error')
+      const providerErrorCode = searchParams.get('error_code') || hashParams.get('error_code')
+      if (providerError || providerErrorCode) {
+        setSessionError(
+          providerErrorCode === 'otp_expired' || providerError === 'access_denied'
+            ? 'This reset link expired or was already used. Request a new one.'
+            : 'Drapeon could not verify this reset link. Request a new one and try again.'
+        )
+        return
+      }
       const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
       const accessToken = hashParams.get('access_token')
       const refreshToken = hashParams.get('refresh_token')
@@ -69,105 +81,10 @@ export function RecoveryBridge(): any {
         setSessionError('No valid recovery token found. Request a new password reset link.')
         return
       }
-
-      let supabase
-      try {
-        supabase = createClient()
-      } catch {
-        setSessionError(
-          'Account recovery is temporarily unavailable. Request a new link or contact support.'
-        )
-        return
-      }
-
-      // The browser Supabase client may consume a PKCE recovery code while it
-      // initializes. Listen for the authoritative recovery event so a second
-      // explicit exchange below is not mistaken for an expired link. An
-      // ordinary pre-existing session does not emit PASSWORD_RECOVERY.
-      let recoveryEventReceived = false
-      const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange((event) => {
-        if (event !== 'PASSWORD_RECOVERY') return
-        recoveryEventReceived = true
-        if (active) setSessionReady(true)
-      })
-
-      const recoveryHandoff = (() => {
-        const raw = window.localStorage.getItem(RECOVERY_HANDOFF_KEY)
-        if (!raw) return false
-        try {
-          const parsed = JSON.parse(raw) as { handedOffAt?: number }
-          return Number.isFinite(parsed.handedOffAt) && Date.now() - parsed.handedOffAt! <= 15 * 60_000
-        } catch {
-          return false
-        }
-      })()
-
-      // token_hash flow (email link)
-      if (tokenHash) {
-        const { error: otpError } = await supabase.auth.verifyOtp({
-          token_hash: tokenHash,
-          type: 'recovery',
-        })
-        if (otpError) {
-          subscription.unsubscribe()
-          window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-          setSessionError(completedMessage)
-          return
-        }
-        subscription.unsubscribe()
-        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-        if (active) setSessionReady(true)
-        return
-      }
-
-      // hash access_token flow (older Supabase email links)
-      if (accessToken && refreshToken) {
-        const { error: sessionErr } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        })
-        if (sessionErr) {
-          subscription.unsubscribe()
-          window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-          setSessionError(completedMessage)
-          return
-        }
-        subscription.unsubscribe()
-        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-        if (active) setSessionReady(true)
-        return
-      }
-
-      // code flow
-      if (code) {
-        const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
-        if (codeError) {
-          const { data: sessionData } = await supabase.auth.getSession()
-          if (!recoveryEventReceived && (!recoveryHandoff || !sessionData.session)) {
-            subscription.unsubscribe()
-            window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-            setSessionError(completedMessage)
-            return
-          }
-        }
-        subscription.unsubscribe()
-        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
-        if (active) setSessionReady(true)
-        return
-      }
-
-      subscription.unsubscribe()
+      if (active) setAwaitingConfirmation(true)
     }
 
-    void applyRecoverySession().catch(() => {
-      if (active) {
-        setSessionError(
-          'Drapeon could not verify this reset link. Request a new one and try again.'
-        )
-      }
-    })
+    inspectRecoveryLink()
 
     return () => {
       active = false
@@ -175,6 +92,54 @@ export function RecoveryBridge(): any {
       window.removeEventListener('popstate', handlePopState)
     }
   }, [])
+
+  async function verifyRecoveryLink() {
+    if (loading || sessionReady || !awaitingConfirmation) return
+    setLoading(true)
+    setSessionError(null)
+    const completedMessage = 'This reset link has expired or was already used. Request a new one.'
+    try {
+      const supabase = createClient({ auth: { detectSessionInUrl: false }, isSingleton: false })
+      const searchParams = new URLSearchParams(window.location.search)
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
+      const accessToken = hashParams.get('access_token')
+      const refreshToken = hashParams.get('refresh_token')
+      const code = searchParams.get('code')
+      let verificationError: { message?: string } | null = null
+
+      if (tokenHash) {
+        const result = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })
+        verificationError = result.error
+      } else if (accessToken && refreshToken) {
+        const result = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+        verificationError = result.error
+      } else if (code) {
+        const result = await supabase.auth.exchangeCodeForSession(code)
+        verificationError = result.error
+      } else {
+        verificationError = { message: 'missing token' }
+      }
+
+      if (verificationError) {
+        window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+        setSessionError(completedMessage)
+        return
+      }
+      window.localStorage.removeItem(RECOVERY_HANDOFF_KEY)
+      setAwaitingConfirmation(false)
+      setSessionReady(true)
+    } catch {
+      setSessionError(
+        'Account recovery is temporarily unavailable. Request a new link or try again.'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function resetPassword() {
     if (loading || !sessionReady) return
@@ -264,6 +229,22 @@ export function RecoveryBridge(): any {
               >
                 Request a new reset link
               </a>
+            </>
+          ) : awaitingConfirmation ? (
+            <>
+              <h1 className="mt-3 text-3xl text-ink">Account recovery</h1>
+              <p className="mt-3 text-sm leading-7 text-ink/66">
+                Your reset request is ready. Continue when you are ready to verify the link and
+                choose a new password.
+              </p>
+              <button
+                type="button"
+                onClick={() => void verifyRecoveryLink()}
+                disabled={loading}
+                className="mt-6 inline-flex min-h-11 w-full items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
+              >
+                {loading ? 'Verifying…' : 'Continue to reset password'}
+              </button>
             </>
           ) : !sessionReady ? (
             <>

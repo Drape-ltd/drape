@@ -21,9 +21,6 @@ function mapRecoveryError(message: string | undefined) {
 
 function getBrowserRecoveryOrigin() {
   if (typeof window === 'undefined') return null
-  if (window.location.hostname === '127.0.0.1') {
-    return `${window.location.protocol}//localhost${window.location.port ? `:${window.location.port}` : ''}`
-  }
   return window.location.origin
 }
 

@@ -42,6 +42,10 @@ additional_redirect_urls = [
   "http://localhost:3000/auth/recover",
   "http://localhost:3004/auth/callback",
   "http://localhost:3004/auth/recover",
+  "http://localhost:3013/auth/callback",
+  "http://localhost:3013/auth/recover",
+  "http://127.0.0.1:3013/auth/callback",
+  "http://127.0.0.1:3013/auth/recover",
   "https://localhost:3000/auth/callback",
   "https://localhost:3000/auth/recover",
 ]

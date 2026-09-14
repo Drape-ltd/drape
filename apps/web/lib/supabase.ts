@@ -22,7 +22,10 @@ function getBrowserPublicEnv() {
   return window.__DRAPEON_PUBLIC_ENV__ ?? null
 }
 
-export function createClient() {
+export function createClient(options?: {
+  auth?: { detectSessionInUrl?: boolean }
+  isSingleton?: boolean
+}) {
   const browserEnv = getBrowserPublicEnv()
   const supabaseUrl = inlinedSupabaseUrl || browserEnv?.supabaseUrl || getSupabaseUrl()
   const supabaseKey = inlinedSupabaseKey || browserEnv?.supabasePublishableKey || getSupabasePublishableKey()
@@ -35,10 +38,9 @@ export function createClient() {
     assertSupabaseTarget(supabaseUrl, 'production', 'browser-supabase')
   }
 
-  return createPagesBrowserClient(
-    {
-      supabaseUrl,
-      supabaseKey,
-    }
-  )
+  return createPagesBrowserClient({
+    supabaseUrl,
+    supabaseKey,
+    ...(options ? ({ options, isSingleton: options.isSingleton } as any) : {}),
+  })
 }
