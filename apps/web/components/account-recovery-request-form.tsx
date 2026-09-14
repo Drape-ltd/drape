@@ -53,6 +53,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
   const [message, setMessage] = useState<string | null>(null)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaResetKey, setCaptchaResetKey] = useState(0)
+  const captchaFailed = error?.toLowerCase().includes('security check') ?? false
 
   async function submit() {
     if (loading) return
@@ -131,7 +132,14 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
           className="min-h-12 rounded-lg border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
         />
       </label>
-      <TurnstileChallenge key={captchaResetKey} action="recovery" onTokenChange={setCaptchaToken} />
+      <TurnstileChallenge
+        key={captchaResetKey}
+        action="recovery"
+        onTokenChange={(token) => {
+          setCaptchaToken(token)
+          if (token) setError(null)
+        }}
+      />
       {error ? (
         <div
           role="alert"
@@ -145,6 +153,19 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
         <div className="rounded-lg border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
           {message}
         </div>
+      ) : null}
+      {captchaFailed ? (
+        <button
+          type="button"
+          onClick={() => {
+            setError(null)
+            setCaptchaToken(null)
+            setCaptchaResetKey((current) => current + 1)
+          }}
+          className="w-fit rounded-full border border-ink/10 bg-white px-3 py-2 text-xs font-semibold text-needle transition hover:bg-bone"
+        >
+          Retry security check
+        </button>
       ) : null}
       <button
         type="submit"
