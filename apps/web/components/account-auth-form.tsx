@@ -136,8 +136,17 @@ function accountHomeForRole(role: DrapeRole) {
   return role === 'TAILOR' ? '/account/work' : '/account/orders'
 }
 
-function mapAuthError(message: string | undefined) {
+function mapAuthError(message: string | undefined, status?: number) {
   const normalized = (message ?? '').toLowerCase()
+  if (
+    (status === 401 || status === 403) &&
+    (normalized.includes('session') ||
+      normalized.includes('jwt') ||
+      normalized.includes('refresh token') ||
+      normalized.includes('auth token'))
+  ) {
+    return 'Your session has expired. Sign in again to continue.'
+  }
   if (
     normalized.includes('invalid login credentials') ||
     normalized.includes('invalid credentials')
@@ -170,7 +179,7 @@ function mapAuthError(message: string | undefined) {
     return 'Sign-in is taking too long. Check the connection and try again.'
   }
   if (normalized.includes('network') || normalized.includes('fetch')) {
-    return 'Connection looks weak. Try again when the signal improves.'
+    return 'We could not reach Drapeon. Check your connection and try again.'
   }
   return 'We could not complete this step right now. Please try again.'
 }
@@ -1845,6 +1854,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     }
 
     let signInError: string | undefined
+    let signInErrorStatus: number | undefined
     let signedInRole: DrapeRole | null = null
     let signedInSession: Session | null = null
     try {
@@ -1858,6 +1868,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         options: { captchaToken },
       })
       signInError = error?.message
+      signInErrorStatus = error?.status
       signedInSession = data?.session ?? null
       const metadataRole = data?.user?.user_metadata?.role
       signedInRole = metadataRole === 'TAILOR' || metadataRole === 'CUSTOMER' ? metadataRole : null
@@ -1866,6 +1877,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       }
     } catch (signInFailure) {
       signInError = signInFailure instanceof Error ? signInFailure.message : String(signInFailure)
+      signInErrorStatus =
+        typeof signInFailure === 'object' && signInFailure !== null && 'status' in signInFailure
+          ? Number((signInFailure as { status?: unknown }).status) || undefined
+          : undefined
     }
 
     setCaptchaToken(null)
@@ -1877,7 +1892,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       if (isEmailNotConfirmedError(signInError)) {
         setPendingConfirmationEmail(normalizedEmail)
       }
-      setError(mapAuthError(signInError))
+      setError(mapAuthError(signInError, signInErrorStatus))
       return
     }
 

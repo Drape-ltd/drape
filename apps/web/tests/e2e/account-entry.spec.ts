@@ -13,6 +13,16 @@ test.describe('authenticated web entry contract', () => {
     }
   })
 
+  test('signed-out account entry preserves the tailor query for sign-in return', async ({
+    page,
+  }) => {
+    await page.goto('/account/shop?tailor=3412a4b5-7fea-4191-bf98-97171d31aff6')
+    await expect(page.getByRole('main').getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+      'href',
+      '/sign-in?next=%2Faccount%2Fshop%3Ftailor%3D3412a4b5-7fea-4191-bf98-97171d31aff6'
+    )
+  })
+
   test('customer entry exposes account creation without waitlist language', async ({ page }) => {
     await page.goto('/account/customer')
     await expect(page.getByRole('link', { name: 'Create customer account' })).toBeVisible()
@@ -178,18 +188,24 @@ test.describe('authenticated web entry contract', () => {
     expect(page.url()).not.toContain('token_hash')
   })
 
-  test('a fresh recovery code clears a prior validation error before verification', async ({ page }) => {
+  test('a fresh recovery code clears a prior validation error before verification', async ({
+    page,
+  }) => {
     await page.goto('/auth/recover?flow=recovery&email=tester%40example.com')
 
     await page.getByLabel('Reset code').fill('123')
     await page.getByRole('button', { name: 'Verify code' }).click()
-    await expect(page.getByText('Enter the 8-digit code from the most recent reset email.')).toBeVisible()
+    await expect(
+      page.getByText('Enter the 8-digit code from the most recent reset email.')
+    ).toBeVisible()
 
     await page.getByLabel('Reset code').fill('12345678')
     await expect(page.getByRole('alert')).toHaveCount(0)
   })
 
-  test('a provider verification error clears the callback URL and fails closed', async ({ page }) => {
+  test('a provider verification error clears the callback URL and fails closed', async ({
+    page,
+  }) => {
     await page.goto(
       '/auth/recover?error=access_denied&error_code=otp_expired&error_description=expired#access_token=never-keep-this'
     )

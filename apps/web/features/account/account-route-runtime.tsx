@@ -282,6 +282,10 @@ function loadIdentityCached(session: Session) {
 
 function SignedOut() {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const currentPath = pathname || '/account'
+  const query = searchParams.toString()
+  const returnPath = query ? `${currentPath}?${query}` : currentPath
   return (
     <main className="min-h-screen bg-ui-canvas">
       <div className="mx-auto max-w-xl px-5 py-20">
@@ -292,7 +296,7 @@ function SignedOut() {
             Access your protected orders, messages, measurements, payments, and saved work.
           </p>
           <Link
-            href={`/sign-in?next=${encodeURIComponent(pathname || '/account')}`}
+            href={`/sign-in?next=${encodeURIComponent(returnPath)}`}
             className="mt-6 inline-flex h-10 items-center rounded-[8px] bg-drape-green px-4 text-sm font-semibold text-white"
           >
             Sign in
@@ -320,10 +324,14 @@ function StandaloneAccountRouteRuntime({
   useEffect(() => {
     const supabase = createClient()
     let active = true
+    let initialized = false
+    let pendingSession: Session | null | undefined
+    let validationId = 0
     async function acceptSession(session: Session | null) {
+      const currentValidationId = ++validationId
       if (!active) return
       if (!session) {
-        setState({ status: 'signed-out' })
+        if (currentValidationId === validationId) setState({ status: 'signed-out' })
         return
       }
       setState({ status: 'loading' })
@@ -338,21 +346,35 @@ function StandaloneAccountRouteRuntime({
           identityRequests.clear()
           invalidateAccountData()
           await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
-          if (active) setState({ status: 'signed-out' })
+          if (active && currentValidationId === validationId) setState({ status: 'signed-out' })
           return
         }
         const identity = await loadIdentityCached(session)
-        if (active) setState({ status: 'ready', session, identity })
+        if (active && currentValidationId === validationId)
+          setState({ status: 'ready', session, identity })
       } catch (error) {
-        if (active)
+        if (active && currentValidationId === validationId)
           setState({
             status: 'error',
             message: error instanceof Error ? error.message : 'Your account could not load.',
           })
       }
     }
-    void supabase.auth.getSession().then(({ data }) => acceptSession(data.session))
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      // Supabase emits INITIAL_SESSION while the first getSession() call is
+      // still resolving. Ignore that duplicate event, but retain any real
+      // sign-out/token event so it cannot race the initial validation.
+      if (!initialized) {
+        if (event !== 'INITIAL_SESSION') pendingSession = session
+        return
+      }
+      void acceptSession(session)
+    })
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!active) return
+      initialized = true
+      const session = pendingSession === undefined ? data.session : pendingSession
+      pendingSession = undefined
       void acceptSession(session)
     })
     return () => {

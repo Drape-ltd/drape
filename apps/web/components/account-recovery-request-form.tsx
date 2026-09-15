@@ -11,7 +11,7 @@ function mapRecoveryError(message: string | undefined) {
     return 'Please wait a minute before requesting another reset link.'
   }
   if (normalized.includes('network') || normalized.includes('fetch')) {
-    return 'Connection looks weak. Try again when the signal improves.'
+    return 'We could not reach Drapeon. Check your connection and try again.'
   }
   if (normalized.includes('captcha') || normalized.includes('security verification')) {
     return 'The security check expired or could not be verified. Complete it again and retry.'

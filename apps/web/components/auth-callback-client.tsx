@@ -58,8 +58,11 @@ function normalizeEmailOtpType(value: string | null): EmailOtpType | null {
   return value && emailOtpTypes.has(value as EmailOtpType) ? (value as EmailOtpType) : null
 }
 
-function mapCallbackError(message: string | undefined) {
+function mapCallbackError(message: string | undefined, status?: number) {
   const normalized = (message ?? '').toLowerCase()
+  if (status === 401 || status === 403) {
+    return 'Your session has expired. Return to sign in and try again.'
+  }
   if (normalized.includes('access_denied') || normalized.includes('cancel')) {
     return 'Account access was cancelled. Nothing was changed.'
   }
@@ -67,7 +70,7 @@ function mapCallbackError(message: string | undefined) {
     return 'This account link has expired or was already used. Request a fresh link and try again.'
   }
   if (normalized.includes('network') || normalized.includes('fetch')) {
-    return 'Connection looks weak. Try again when the signal improves.'
+    return 'We could not reach Drapeon. Check your connection and try again.'
   }
   return 'We could not finish this account link. Return to sign in and try again.'
 }
@@ -731,7 +734,14 @@ export function AuthCallbackClient(): React.JSX.Element {
       } catch (error) {
         if (active) {
           setFailed(true)
-          setMessage(mapCallbackError(error instanceof Error ? error.message : undefined))
+          setMessage(
+            mapCallbackError(
+              error instanceof Error ? error.message : undefined,
+              typeof error === 'object' && error !== null && 'status' in error
+                ? Number((error as { status?: unknown }).status) || undefined
+                : undefined
+            )
+          )
         }
         return
       }

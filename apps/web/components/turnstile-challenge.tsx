@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 
 type TurnstileWidgetId = string
 
@@ -18,7 +18,7 @@ type TurnstileApi = {
       'error-callback': () => void
       'before-interactive-callback': () => void
       'after-interactive-callback': () => void
-    },
+    }
   ) => TurnstileWidgetId
   remove: (widgetId: TurnstileWidgetId) => void
   reset: (widgetId: TurnstileWidgetId) => void
@@ -32,6 +32,31 @@ declare global {
 
 const SCRIPT_ID = 'drapeon-turnstile-script'
 const SCRIPT_URL = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+// Cloudflare's documented non-production key always passes and is safe to use
+// only on loopback dev hosts. Production and preview deployments must still
+// provide their real site key through the public environment endpoint.
+const LOCAL_DEV_SITE_KEY = '1x00000000000000000000AA'
+
+function isLoopbackDevHost() {
+  if (typeof window === 'undefined') return false
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+}
+
+function subscribeToPublicEnv() {
+  return () => undefined
+}
+
+function getClientSiteKey() {
+  return (
+    process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
+    window.__DRAPEON_PUBLIC_ENV__?.turnstileSiteKey?.trim() ||
+    (isLoopbackDevHost() ? LOCAL_DEV_SITE_KEY : '')
+  )
+}
+
+function getServerSiteKey() {
+  return process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
+}
 
 export function TurnstileChallenge({
   action,
@@ -47,15 +72,11 @@ export function TurnstileChallenge({
   const [scriptReady, setScriptReady] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const [interactive, setInteractive] = useState(false)
-  const siteKey = (
-    process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
-    (typeof window !== 'undefined'
-      ? window.__DRAPEON_PUBLIC_ENV__?.turnstileSiteKey?.trim()
-      : '')
-  )
-  const [challengeError, setChallengeError] = useState<string | null>(
-    siteKey ? null : 'Security verification is not configured for this environment.',
-  )
+  const siteKey = useSyncExternalStore(subscribeToPublicEnv, getClientSiteKey, getServerSiteKey)
+  const [challengeError, setChallengeError] = useState<string | null>(null)
+  const visibleChallengeError =
+    challengeError ??
+    (!siteKey ? 'Security verification is not configured for this environment.' : null)
 
   useEffect(() => {
     onTokenChangeRef.current = onTokenChange
@@ -69,7 +90,8 @@ export function TurnstileChallenge({
 
     let script = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null
     const onLoad = () => setScriptReady(true)
-    const onError = () => setChallengeError('The security check could not load. Check your connection and retry.')
+    const onError = () =>
+      setChallengeError('The security check could not load. Check your connection and retry.')
 
     if (!script) {
       script = document.createElement('script')
@@ -150,14 +172,25 @@ export function TurnstileChallenge({
   }
 
   return (
-    <div className={challengeError || interactive ? 'grid gap-2' : ''} aria-describedby={challengeError ? `${reactId}-hint` : undefined}>
+    <div
+      className={visibleChallengeError || interactive ? 'grid gap-2' : ''}
+      aria-describedby={visibleChallengeError ? `${reactId}-hint` : undefined}
+    >
       <div
         ref={containerRef}
         data-testid={`turnstile-${action}`}
-        className={interactive ? 'min-h-[65px] w-full overflow-hidden rounded-lg border border-ink/8 bg-bone/45' : 'h-0 overflow-hidden'}
+        className={
+          interactive
+            ? 'min-h-[65px] w-full overflow-hidden rounded-lg border border-ink/8 bg-bone/45'
+            : 'h-0 overflow-hidden'
+        }
       />
-      {challengeError ? <p id={`${reactId}-hint`} className="text-xs leading-5 text-rust">{challengeError}</p> : null}
-      {challengeError ? (
+      {visibleChallengeError ? (
+        <p id={`${reactId}-hint`} className="text-xs leading-5 text-rust">
+          {visibleChallengeError}
+        </p>
+      ) : null}
+      {visibleChallengeError ? (
         <button
           type="button"
           onClick={retryChallenge}
