@@ -1,5 +1,6 @@
 export function safeAccountReturnPath(value: string | null | undefined): string | null {
-  if (!value || !value.startsWith('/account/') || value.startsWith('//') || value.includes('\\')) return null
+  const isSafePrefix = value?.startsWith('/account/') || value?.startsWith('/referral/') || value?.startsWith('/group-invite/')
+  if (!value || !isSafePrefix || value.startsWith('//') || value.includes('\\')) return null
 
   try {
     const parsed = new URL(value, 'https://drapeon.local')

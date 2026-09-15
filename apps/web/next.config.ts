@@ -128,15 +128,14 @@ const nextConfig: NextConfig = {
     ]
   },
   images: {
-    remotePatterns: supabaseStorageHostname
-      ? [
-          {
-            protocol: 'https',
-            hostname: supabaseStorageHostname,
-            pathname: '/storage/v1/object/public/**',
-          },
-        ]
-      : [],
+    remotePatterns: [
+      ...(supabaseStorageHostname
+        ? [{ protocol: 'https' as const, hostname: supabaseStorageHostname, pathname: '/storage/v1/object/public/**' }]
+        : []),
+      // Existing public records may still point at the project Supabase host.
+      // Keep those URLs renderable while records migrate to auth.drapeon.co.
+      { protocol: 'https', hostname: '**.supabase.co', pathname: '/storage/v1/object/public/**' },
+    ],
   },
 }
 

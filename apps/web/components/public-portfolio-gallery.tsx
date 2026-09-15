@@ -1,10 +1,10 @@
 'use client'
 
-import Image from 'next/image'
 import { ChevronLeft, ChevronRight, Expand, Play, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createClient } from '@/lib/supabase'
+import { PublicMediaImage, PublicMediaVideo } from './public-media'
 
 export type PublicPortfolioMedia = {
   id: string
@@ -106,9 +106,9 @@ export function PublicPortfolioGallery({ items, makerName, presentation = 'grid'
             aria-label={`Open ${makerName} portfolio ${item.kind} ${index + 1} of ${items.length}`}
           >
             {item.kind === 'video' ? (
-              <video src={item.source} poster={item.posterSource ?? undefined} className="h-full w-full object-cover" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} muted playsInline preload="metadata" />
+              <PublicMediaVideo src={item.source} poster={item.posterSource ?? undefined} label={`${makerName} portfolio video ${index + 1}`} className="h-full w-full object-cover" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} />
             ) : (
-              <Image src={item.source} alt={item.altText ?? `${makerName} portfolio work ${index + 1}`} fill sizes="(min-width:1280px) 20vw,(min-width:640px) 33vw,50vw" className="object-cover transition duration-300 group-hover:scale-[1.015] motion-reduce:transition-none" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} />
+              <PublicMediaImage src={item.source} alt={item.altText ?? `${makerName} portfolio work ${index + 1}`} fill sizes="(min-width:1280px) 20vw,(min-width:640px) 33vw,50vw" className="object-cover transition duration-300 group-hover:scale-[1.015] motion-reduce:transition-none" style={{ objectPosition: `${item.focalX * 100}% ${item.focalY * 100}%` }} />
             )}
             <span className="absolute bottom-2 right-2 inline-flex size-8 items-center justify-center rounded-full bg-black/[0.68] text-white opacity-90 backdrop-blur-sm transition group-hover:bg-black/[0.82]">
               {item.kind === 'video' ? <Play aria-hidden="true" size={14} fill="currentColor" /> : <Expand aria-hidden="true" size={14} />}
@@ -133,7 +133,7 @@ export function PublicPortfolioGallery({ items, makerName, presentation = 'grid'
             {activeItem.kind === 'video' ? (
               <video key={activeItem.id} src={activeItem.source} poster={activeItem.posterSource ?? undefined} className="max-h-full max-w-full" controls autoPlay playsInline preload="metadata" />
             ) : (
-              <Image key={activeItem.id} src={activeItem.source} alt={activeItem.altText ?? `${makerName} portfolio work ${(activeIndex ?? 0) + 1}`} fill sizes="100vw" className="object-contain" priority />
+              <PublicMediaImage key={activeItem.id} src={activeItem.source} alt={activeItem.altText ?? `${makerName} portfolio work ${(activeIndex ?? 0) + 1}`} fill sizes="100vw" className="object-contain" priority />
             )}
           </div>
 

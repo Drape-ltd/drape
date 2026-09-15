@@ -1,6 +1,5 @@
 'use client'
 
-import Image from 'next/image'
 import Link from 'next/link'
 import type { Route } from 'next'
 import {
@@ -14,8 +13,9 @@ import {
 } from 'lucide-react'
 import { formatMoney } from '@drape/shared'
 import { useRouter } from 'next/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PublicTailor } from '../lib/public-marketplace'
+import { PublicMediaImage, reportPublicMediaFailure } from './public-media'
 
 export type TailorDirectoryParams = {
   q?: string
@@ -84,6 +84,7 @@ function ViewportVideo({
   position: string
 }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     const video = ref.current
     if (!video) return
@@ -110,6 +111,9 @@ function ViewportVideo({
       window.removeEventListener('drapeon:marketplace-video-play', stopOthers)
     }
   }, [src])
+  if (failed) {
+    return <div className="grid size-full place-items-center bg-[#e7dfd0] px-4 text-center text-xs font-semibold text-ink/48" role="img" aria-label={`${label} unavailable`}>Media temporarily unavailable</div>
+  }
   return (
     <video
       ref={ref}
@@ -122,6 +126,10 @@ function ViewportVideo({
       className="size-full object-cover"
       style={{ objectPosition: position }}
       aria-label={label}
+      onError={() => {
+        setFailed(true)
+        reportPublicMediaFailure(src)
+      }}
     />
   )
 }
@@ -322,7 +330,7 @@ export function TailorDirectory({
                         label={cover?.altText ?? `Portfolio video by ${tailor.displayName}`}
                       />
                     ) : source ? (
-                      <Image
+                      <PublicMediaImage
                         src={source}
                         alt={cover?.altText ?? `Selected work by ${tailor.displayName}`}
                         fill
