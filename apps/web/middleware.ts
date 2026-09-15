@@ -104,6 +104,9 @@ function contentSecurityPolicy(nonce: string) {
   const shouldUpgradeInsecureRequests = siteUrl.startsWith('https://') && !siteUrl.includes('localhost')
   const connectSrc = [
     "'self'",
+    // Production uses the Supabase custom auth domain. Keep it explicitly
+    // allow-listed because `https://*.supabase.co` does not cover it.
+    getSupabaseStorageOrigin(),
     'https://*.supabase.co',
     'wss://*.supabase.co',
     'https://*.sentry.io',
