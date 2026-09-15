@@ -316,10 +316,13 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   const userPhone =
     typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : null
   usePushNotifications(userId)
-  const segments = useSegments()
-  const rootSegment = segments[0] as string | undefined
-  const secondSegment = segments[1] as string | undefined
-  const thirdSegment = segments[2] as string | undefined
+  // Expo Router's generated type can narrow useSegments to the currently
+  // known route tuple in a clean checkout. Route guards inspect dynamic
+  // depth, so widen it deliberately before indexing beyond the first segment.
+  const segments = useSegments() as readonly string[]
+  const rootSegment = segments[0]
+  const secondSegment = segments[1]
+  const thirdSegment = segments[2]
   const pathname = usePathname()
   const router = useRouter()
   const splashHidden = useRef(false)
