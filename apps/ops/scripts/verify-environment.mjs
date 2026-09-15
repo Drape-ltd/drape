@@ -12,6 +12,7 @@ const requiredSecrets = new Set(config.secrets?.required ?? [])
 const failures = []
 
 function projectRef(url) {
+  if (url === 'https://auth.drapeon.co') return productionProjectRef
   return url?.match(/^https:\/\/([a-z0-9]+)\.supabase\.co$/u)?.[1] ?? null
 }
 

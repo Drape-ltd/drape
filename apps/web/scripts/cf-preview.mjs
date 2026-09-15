@@ -36,6 +36,7 @@ function parseEnvFile(content) {
 }
 
 function getSupabaseProjectRef(url) {
+  if (url === 'https://auth.drapeon.co') return 'wkfsrunetmgjdtcurmoj'
   const match = url?.match(/^https:\/\/([a-z0-9]+)\.supabase\.co$/u)
   return match?.[1] ?? null
 }

@@ -18,7 +18,7 @@
     "DRAPE_WEB_ENV": "production",
     "DRAPE_EXPECTED_SUPABASE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",
     "NEXT_PUBLIC_SITE_URL": "https://drapeon.co",
-    "NEXT_PUBLIC_SUPABASE_URL": "https://wkfsrunetmgjdtcurmoj.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_URL": "https://auth.drapeon.co",
     "NEXT_PUBLIC_AUTH_GOOGLE_ENABLED": "true",
     "NEXT_PUBLIC_AUTH_APPLE_ENABLED": "true",
     "SUPABASE_SERVICE_ROLE_PROJECT_REF": "wkfsrunetmgjdtcurmoj",

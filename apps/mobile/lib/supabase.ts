@@ -10,6 +10,7 @@ const PRODUCTION_DATA_APP_VARIANTS = new Set(['testflight', 'production'])
 function getSupabaseProjectRef(url: string) {
   try {
     const hostname = new URL(url).hostname
+    if (hostname === 'auth.drapeon.co') return 'wkfsrunetmgjdtcurmoj'
     const [ref, provider] = hostname.split('.')
     return provider === 'supabase' ? (ref ?? null) : null
   } catch {

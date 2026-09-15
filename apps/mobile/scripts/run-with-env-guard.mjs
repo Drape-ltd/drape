@@ -60,6 +60,7 @@ function loadEnvFiles(appVariant) {
 function getSupabaseProjectRef(url) {
   try {
     const hostname = new URL(url).hostname
+    if (hostname === 'auth.drapeon.co') return 'wkfsrunetmgjdtcurmoj'
     const [ref, provider] = hostname.split('.')
     return provider === 'supabase' ? ref ?? null : null
   } catch {

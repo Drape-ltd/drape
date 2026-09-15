@@ -1,5 +1,6 @@
 export const DEVELOPMENT_SUPABASE_PROJECT_REF = 'pqptfuqogvrajozfsqzi'
 export const PRODUCTION_SUPABASE_PROJECT_REF = 'wkfsrunetmgjdtcurmoj'
+export const PRODUCTION_SUPABASE_CUSTOM_DOMAIN = 'auth.drapeon.co'
 
 const PRODUCTION_WEB_HOSTNAMES = new Set([
   'drapeon.co',
@@ -14,6 +15,9 @@ export function getSupabaseProjectRef(url: string | null | undefined) {
 
   try {
     const hostname = new URL(url).hostname.toLowerCase()
+    if (hostname === PRODUCTION_SUPABASE_CUSTOM_DOMAIN) {
+      return PRODUCTION_SUPABASE_PROJECT_REF
+    }
     const suffix = '.supabase.co'
 
     if (!hostname.endsWith(suffix)) return null

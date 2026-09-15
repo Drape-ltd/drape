@@ -6,6 +6,7 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1'])
 function projectRef(value) {
   try {
     const url = new URL(value ?? '')
+    if (url.protocol === 'https:' && url.hostname === 'auth.drapeon.co') return 'wkfsrunetmgjdtcurmoj'
     const match = url.hostname.match(/^([a-z0-9]+)\.supabase\.co$/u)
     return url.protocol === 'https:' ? match?.[1] ?? null : null
   } catch {
