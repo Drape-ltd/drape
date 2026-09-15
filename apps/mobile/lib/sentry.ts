@@ -11,6 +11,7 @@
  */
 
 import * as Sentry from '@sentry/react-native'
+import Constants from 'expo-constants'
 
 const SENSITIVE_EVENT_KEYS = /authorization|cookie|password|token|secret|phone|email|address|message_body|voice_url/iu
 const GENERIC_OBJECT_EXCEPTION = /object captured as exception/iu
@@ -78,12 +79,49 @@ function captureNormalizedException(
   hint?: Parameters<typeof Sentry.captureException>[1],
 ) {
   const normalized = normalizeCapturedException(exception)
-  if (!normalized.diagnostic) return Sentry.captureException(normalized.error, hint)
+  const metadata = releaseTelemetry()
+  const context = (hint && typeof hint === 'object' ? hint : {}) as {
+    tags?: Record<string, string>
+    extra?: Record<string, unknown>
+  }
+  const enrichedHint = {
+    ...(context as object),
+    tags: { ...(context.tags ?? {}), ...metadata },
+    extra: { ...(context.extra ?? {}), releaseMetadata: metadata },
+  }
+  if (!normalized.diagnostic) return Sentry.captureException(normalized.error, enrichedHint)
 
   return Sentry.withScope((scope) => {
     scope.setContext('original_failure', scrubDiagnosticValue(normalized.diagnostic) as Record<string, unknown>)
-    return Sentry.captureException(normalized.error, hint)
+    return Sentry.captureException(normalized.error, enrichedHint)
   })
+}
+
+function releaseTelemetry() {
+  const appVariant = process.env.EXPO_PUBLIC_APP_VARIANT ?? (__DEV__ ? 'development' : 'production')
+  const environment = process.env.EXPO_PUBLIC_SENTRY_ENVIRONMENT ?? appVariant
+  const releaseSha =
+    process.env.EXPO_PUBLIC_RELEASE_SHA?.trim() ||
+    process.env.EAS_BUILD_GIT_COMMIT_HASH?.trim() ||
+    (typeof Constants.expoConfig?.extra?.releaseSha === 'string'
+      ? Constants.expoConfig.extra.releaseSha.trim()
+      : '') ||
+    'unknown'
+  const buildNumber =
+    process.env.EXPO_PUBLIC_BUILD_NUMBER?.trim() ||
+    String(Constants.expoConfig?.ios?.buildNumber ?? Constants.expoConfig?.android?.versionCode ?? 'unknown')
+
+  return {
+    environment,
+    releaseSha,
+    buildNumber,
+    surface: 'mobile',
+    flow: 'unknown',
+    route: 'unknown',
+    correlationId: `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    provider: 'sentry',
+    statusClass: 'client_error',
+  }
 }
 
 export function initSentry() {
@@ -96,12 +134,18 @@ export function initSentry() {
   Sentry.init({
     dsn,
     environment,
+    release: releaseTelemetry().releaseSha === 'unknown' ? undefined : releaseTelemetry().releaseSha,
     tracesSampleRate: __DEV__ ? 0 : 0.2,
     enabled: !__DEV__,
     sendDefaultPii: false,
     attachStacktrace: true,
     enableAutoSessionTracking: true,
     beforeSend(event) {
+      // Apply the release contract metadata to automatic/unhandled events too,
+      // not only to calls made through the DrapeSentry wrapper below.
+      const metadata = releaseTelemetry()
+      event.tags = { ...event.tags, ...metadata }
+      event.extra = { ...(event.extra ?? {}), releaseMetadata: metadata }
       // Sentry serializes rejected provider/database objects under __serialized__
       // and otherwise titles them "Object captured as exception". Recover the
       // actionable, non-sensitive fields even for automatic/unhandled captures.
@@ -150,12 +194,35 @@ export function initSentry() {
 
   Sentry.setTag('app.variant', appVariant)
   Sentry.setTag('supabase.environment', process.env.EXPO_PUBLIC_SUPABASE_ENV ?? 'unknown')
+  const metadata = releaseTelemetry()
+  for (const [key, value] of Object.entries(metadata)) Sentry.setTag(key, value)
 }
 
 const DrapeSentry = {
   addBreadcrumb: Sentry.addBreadcrumb,
   captureException: captureNormalizedException,
-  captureMessage: Sentry.captureMessage,
+  captureMessage: (
+    message: string,
+    hint?: Parameters<typeof Sentry.captureMessage>[1],
+  ) => {
+    const metadata = releaseTelemetry()
+    if (typeof hint === 'string') {
+      return Sentry.withScope((scope) => {
+        for (const [key, value] of Object.entries(metadata)) scope.setTag(key, value)
+        scope.setExtra('releaseMetadata', metadata)
+        return Sentry.captureMessage(message, hint)
+      })
+    }
+    const context = (hint && typeof hint === 'object' ? hint : {}) as {
+      tags?: Record<string, string>
+      extra?: Record<string, unknown>
+    }
+    return Sentry.captureMessage(message, {
+      ...(context as object),
+      tags: { ...(context.tags ?? {}), ...metadata },
+      extra: { ...(context.extra ?? {}), releaseMetadata: metadata },
+    })
+  },
   setUser: Sentry.setUser,
 }
 

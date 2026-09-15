@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "productionSupabaseProjectRef": "wkfsrunetmgjdtcurmoj",
+  "developmentSupabaseProjectRef": "pqptfuqogvrajozfsqzi",
+  "requiredChecks": [
+    "mobile-release-target",
+    "build-profile-parity",
+    "app-identity",
+    "web-environment",
+    "happy-and-negative-matrix"
+  ],
+  "criticalFlows": {
+    "auth.sign-in": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["valid email/password reaches the intended role home"],
+      "negative": ["invalid credentials do not create a session", "expired or revoked session is cleared without account content"]
+    },
+    "auth.sign-up": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["customer and tailor registration reach the correct onboarding"],
+      "negative": ["invalid email/password is rejected", "duplicate email is routed to sign-in without a second account"]
+    },
+    "auth.oauth": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["Google and Apple callbacks preserve role and return path"],
+      "negative": ["cancelled or invalid callback returns safely", "stale callback cannot grant access"]
+    },
+    "auth.recovery": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["request link, explicit verify, set password, sign in with the new password"],
+      "negative": ["prefetch/replay/expired token is rejected", "back/reload cannot reopen an authorized reset form"]
+    },
+    "account.onboarding": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["customer and tailor setup persist and open the correct workspace"],
+      "negative": ["incomplete setup blocks protected workspace actions", "wrong role cannot access the other role's surface"]
+    },
+    "commerce.payment": {
+      "surfaces": ["web", "ios", "android", "ops"],
+      "happy": ["payment callback produces one durable receipt"],
+      "negative": ["cancelled/failed provider return does not mark paid", "duplicate submit is idempotent"]
+    },
+    "account.deletion": {
+      "surfaces": ["web", "ios", "android", "ops"],
+      "happy": ["deletion request reaches a durable terminal receipt"],
+      "negative": ["unauthorized deletion is denied", "re-entry cannot duplicate a deletion request"]
+    },
+    "marketplace.media": {
+      "surfaces": ["web", "ios", "android"],
+      "happy": ["critical images/video render with correct alt/poster metadata"],
+      "negative": ["broken media renders the approved fallback", "three consecutive asset failures create one actionable incident"]
+    },
+    "notifications.delivery": {
+      "surfaces": ["ios", "android", "ops"],
+      "happy": ["one notification opens the exact contextual route"],
+      "negative": ["registration failure is bounded and retryable", "duplicate incident/notification work is deduplicated"]
+    }
+  }
+}

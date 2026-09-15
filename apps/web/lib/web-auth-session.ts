@@ -35,6 +35,7 @@ function clearAccessibleCookies() {
     .split(';')
     .map((cookie) => cookie.split('=')[0]?.trim())
     .filter((name): name is string => Boolean(name))
+    .filter((name) => /^sb-[^-]+-auth-token(?:\.\d+)?$/u.test(name))
 
   if (cookieNames.length === 0) return
 
@@ -66,16 +67,29 @@ export function clearBrowserAuthState() {
   clearWebSessionScope()
   clearAccessibleCookies()
 
-  try {
-    window.localStorage.clear()
-  } catch (error) {
-    console.warn('[web-auth] Could not clear localStorage during sign-out.', error)
-  }
+  // Supabase's browser helper stores auth under `sb-<project>-auth-token`
+  // (with numbered chunks for large sessions). Remove only those keys. A
+  // global storage clear silently destroys customer carts, onboarding drafts,
+  // invite context, and other non-auth state during stale-session recovery.
+  const authKey = /^sb-[^-]+-auth-token(?:\.\d+)?$/u
+  const transientAuthKeys = new Set([
+    'drapeon.web.auth.sessionOnly',
+    'drapeon.web.auth.sessionScope',
+    'drapeon.web.auth.oauthIntent.v1',
+    'drapeon.web.auth.roleIntent',
+    'drapeon.web.auth.recoveryIntent.v1',
+  ])
 
-  try {
-    window.sessionStorage.clear()
-  } catch (error) {
-    console.warn('[web-auth] Could not clear sessionStorage during sign-out.', error)
+  for (const storageName of ['localStorage', 'sessionStorage'] as const) {
+    try {
+      const storage = window[storageName]
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+      for (const key of keys) {
+        if (key && (authKey.test(key) || transientAuthKeys.has(key))) storage.removeItem(key)
+      }
+    } catch (error) {
+      console.warn(`[web-auth] Could not clear Supabase ${storageName}.`, error)
+    }
   }
 }
 

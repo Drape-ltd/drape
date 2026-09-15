@@ -1,0 +1,72 @@
+{
+  "releaseId": null,
+  "producerFunctionVersions": {},
+  "appliedMigrationVersions": [
+    "20260910182000",
+    "20260910183500",
+    "20260910185000",
+    "20260910190000",
+    "20260910191500",
+    "20260910192000",
+    "20260910193000",
+    "20260910194000",
+    "20260910195000",
+    "20260910200000",
+    "20260910201000",
+    "20260910202000",
+    "20260910203000",
+    "20260910204000",
+    "20260910205000",
+    "20260910206000",
+    "20260910207000",
+    "20260910208000",
+    "20260910209000",
+    "20260910210000",
+    "20260910211000",
+    "20260910212000",
+    "20260910213000",
+    "20260910214000",
+    "20260911010000",
+    "20260911011000"
+  ],
+  "accessProof": {
+    "normalAudience": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "sensitiveAudience": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "freshMfa": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "revocationBeforeExpiry": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "crossEnvironmentDenial": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null }
+  },
+  "deviceProof": {
+    "iphone": {
+      "installed": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "permissionGranted": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "notificationReceived": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "exactCaseDeepLink": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "restrictedActionsDenied": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "signOutRevoked": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null }
+    },
+    "android": {
+      "installed": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "permissionGranted": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "notificationReceived": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "exactCaseDeepLink": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "restrictedActionsDenied": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+      "signOutRevoked": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null }
+    }
+  },
+  "releaseProof": {
+    "moneyMakerChecker": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "parallelRunReconciled": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "rollbackWindowObserved": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null },
+    "operatorSignOff": { "passed": false, "evidenceRef": null, "observedAt": null, "releaseId": null }
+  },
+  "cloudflareProof": {
+    "identityProviderId": null,
+    "normalAccessApplicationId": null,
+    "sensitiveAccessApplicationId": null,
+    "opsWorkerVersionId": null,
+    "healthMonitorWorkerVersionId": null,
+    "opsRoutePattern": null,
+    "healthSchedule": null
+  }
+}

@@ -34,7 +34,7 @@ export function TailorProfileProvider({ children }: { children: React.ReactNode 
 
   const refreshAvatar = useCallback(async () => {
     if (!user?.id || !isTailor) return
-    const { data, error } = await fetchOwnTailorProfileGuard()
+    const { data, error } = await fetchOwnTailorProfileGuard(user.id)
     if (error) return
     const profile = data as TailorAvatarRow | null
     setAvatarUrl(profile?.avatar_url ?? null)

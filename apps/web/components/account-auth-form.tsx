@@ -138,13 +138,7 @@ function accountHomeForRole(role: DrapeRole) {
 
 function mapAuthError(message: string | undefined, status?: number) {
   const normalized = (message ?? '').toLowerCase()
-  if (
-    (status === 401 || status === 403) &&
-    (normalized.includes('session') ||
-      normalized.includes('jwt') ||
-      normalized.includes('refresh token') ||
-      normalized.includes('auth token'))
-  ) {
+  if (status === 401 || status === 403) {
     return 'Your session has expired. Sign in again to continue.'
   }
   if (

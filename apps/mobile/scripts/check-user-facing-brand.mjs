@@ -32,13 +32,20 @@ try {
   if (error?.status !== 1) throw error
 }
 
-if (output) {
+// `Drape` is also an intentional protocol/vendor prefix in internal
+// diagnostic headers (for example `X-Drape-Correlation-Id`). Those headers
+// are not customer-facing copy and should not make the brand gate fail.
+const customerFacingFindings = output
+  .split('\n')
+  .filter((line) => !/['"]X-Drape-[A-Za-z0-9-]+['"]/.test(line))
+
+if (customerFacingFindings.length > 0) {
   console.error(
     [
       'Forbidden customer-facing brand name found.',
       'Use "Drapeon" for visible copy. Technical identifiers such as @drape/* and drape:// are allowed.',
       '',
-      output,
+      customerFacingFindings.join('\n'),
     ].join('\n')
   )
   process.exit(1)

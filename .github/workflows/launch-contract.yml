@@ -1,0 +1,59 @@
+name: Drapeon Launch Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: drapeon-launch-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.1.4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release and test contracts
+        run: pnpm release:contract
+
+      - name: Verify all lane and code contracts
+        run: pnpm launch:contracts
+
+      - name: Publish contract summary
+        if: always()
+        run: |
+          {
+            echo '## Required release evidence'
+            echo ''
+            echo '- Every critical flow must record a passing happy path.'
+            echo '- Every critical flow must record a passing negative path.'
+            echo '- Every critical flow must include visual evidence before promotion.'
+            echo '- A release evidence bundle is checked with `pnpm release:evidence -- --evidence-root=...`.'
+          } >> "$GITHUB_STEP_SUMMARY"

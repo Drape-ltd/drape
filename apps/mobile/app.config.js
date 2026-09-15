@@ -66,6 +66,15 @@ module.exports = ({ config = {} } = {}) => {
       ...appJson.expo.android,
       ...config.android,
     },
+    extra: {
+      ...appJson.expo.extra,
+      ...config.extra,
+      releaseSha:
+        process.env.EXPO_PUBLIC_RELEASE_SHA ||
+        process.env.EAS_BUILD_GIT_COMMIT_HASH ||
+        appJson.expo.extra?.releaseSha ||
+        "unknown",
+    },
   };
   const googleServicesFile = findGoogleServicesFile();
 

@@ -444,7 +444,7 @@ export default function TailorSetupScreen() {
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
-    fetchOwnTailorProfileGuard().then(({ data, error }) => {
+    fetchOwnTailorProfileGuard(user.id).then(({ data, error }) => {
         if (cancelled) return
         if (error || !data) return
         if (

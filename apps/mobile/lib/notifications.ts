@@ -48,6 +48,8 @@ const EXPO_PROJECT_ID =
 
 type NotificationSubscription = ReturnType<typeof Notifications.addNotificationReceivedListener>
 const pushRegistrationByUser = new Map<string, Promise<void>>()
+const pushRegistrationBlockedUntil = new Map<string, number>()
+const PUSH_REGISTRATION_COOLDOWN_MS = 60_000
 
 export type ForegroundCallInvite = {
   notificationId: string
@@ -282,6 +284,9 @@ export function usePushNotifications(userId: string | null) {
 export function syncPushRegistration(userId: string) {
   const activeRegistration = pushRegistrationByUser.get(userId)
   if (activeRegistration) return activeRegistration
+  const blockedUntil = pushRegistrationBlockedUntil.get(userId) ?? 0
+  if (blockedUntil > Date.now()) return Promise.resolve()
+  pushRegistrationBlockedUntil.delete(userId)
 
   const registration = registerAndStore(userId).finally(() => {
     pushRegistrationByUser.delete(userId)
@@ -370,6 +375,10 @@ async function registerAndStore(userId: string) {
         fallbackProjectIdUsed: !process.env.EXPO_PUBLIC_PROJECT_ID?.trim(),
       },
     })
+    // AppState can fire repeatedly while a device is offline. Keep the
+    // registration path retryable, but never let one provider outage become a
+    // request storm or a stream of duplicate Sentry events.
+    pushRegistrationBlockedUntil.set(userId, Date.now() + PUSH_REGISTRATION_COOLDOWN_MS)
   }
 }
 

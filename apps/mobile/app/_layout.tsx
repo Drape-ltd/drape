@@ -93,6 +93,7 @@ function isAuthFailure(error: unknown): boolean {
 
   return (
     status === 401 ||
+    status === 403 ||
     code === 'PGRST301' ||
     message.includes('jwt') ||
     message.includes('invalid api key') ||
@@ -473,7 +474,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
       setTailorProfileChecking(true)
       setTailorProfileChecked(false)
       withRouteGuardTimeout(
-        fetchOwnTailorProfileGuard(),
+        fetchOwnTailorProfileGuard(userId),
         'Tailor profile guard lookup'
       )
         .then(({ data, error }) => {
